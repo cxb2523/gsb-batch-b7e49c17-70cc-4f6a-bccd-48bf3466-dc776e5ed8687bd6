@@ -1,0 +1,343 @@
+# Spec: VOD recording — wire Strom Recorder to MinIO for live-to-VOD archiving
+
+**Status: Proposed** (architect draft for epic #5; covers sub-issues #41 and #42)
+**Author:** architect agent
+**Related issues:** #5 (epic), #41 (MinIO config + recorder wiring), #42 (VOD listing/playback endpoint)
+
+> This is a proposed spec, not an accepted decision. Open Questions below must be
+> resolved with a maintainer before implementation sub-issues (#41, #42) are picked up.
+
+## Problem Statement
+
+Open Live can ingest and mix live streams and egress them (SRT via `mpegtssrt`/`efpsrt`,
+WebRTC via `whep`), but it cannot archive a production to durable object storage and expose
+the recording as a playable VOD afterwards. There is no integration between the Strom
+Recorder and MinIO/S3 in `open-live` today.
+
+Grounding in the current code:
+- Strom already exposes a recorder control surface. The client wraps a single call:
+  `recorder.splitNow(flowId, blockId)` → `POST /api/flows/:flowId/blocks/:blockId/recorder/split`
+  (`src/lib/strom.ts:896-899`). There is no `builtin.recorder` block emitted by
+  `src/lib/flow-generator.ts` today — output blocks emitted are `builtin.mpegtssrt_output`,
+  `builtin.efpsrt_output`, and `builtin.whep_output` (`src/lib/flow-generator.ts:197,228-229`).
+- Outputs are modelled as `OutputDoc` with `outputType: 'mpegtssrt' | 'efpsrt' | 'whep'`
+  (`src/db/types.ts:60-72`) and validated by a zod enum (`src/routes/outputs.ts:13`).
+- Production lifecycle: `POST /api/v1/productions/:id/activate` builds the flow and
+  `POST /api/v1/productions/:id/deactivate` tears it down (`src/routes/productions.ts:502,592`).
+  On activate the doc gets `stromFlowId`, `mixerBlockId`, `audioMixerBlockId`, etc.; these are
+  cleared on deactivate (`src/db/types.ts:151,168-169`).
+
+The epic is cross-service: it requires a Strom recorder-to-object-storage block plus new
+`open-live` API surface and data model, so it needs a spec before implementation.
+
+## Scope
+
+- **#41**: add MinIO/S3 configuration to service config; emit + wire a recorder block into the
+  flow on activate; start/stop recording tied to the production lifecycle.
+- **#42**: expose a REST endpoint that lists recorded VOD assets for a production and returns
+  playback-ready URLs.
+- **Out of scope**: transcoding recordings to adaptive formats, retention/lifecycle policies
+  beyond a simple prefix convention, and a Studio VOD browser UI (separate dependent ticket).
+
+## API Design
+
+All new routes follow the existing conventions: `/api/v1` prefix, zod-validated bodies,
+`toApi()`-style id mapping (`_id` → `id`), `503 { error: 'Database unavailable' }` on DB
+failure, and auth via the existing `API_KEY` bearer gate in `src/server.ts`.
+
+### Recording as an output type (#41)
+
+Model recording as a new output type rather than a bespoke resource, to reuse the existing
+output-assignment machinery (`ProductionOutputAssignment`, `POST /api/v1/productions/:id/outputs`).
+
+Add `'recording'` to `OutputType` and the zod enum:
+
+```
+OutputType = 'mpegtssrt' | 'efpsrt' | 'whep' | 'recording'
+```
+
+`OutputDoc` for a recording output carries no `url` (destination is derived from MinIO config +
+production id). Assigning a `recording` output to a production causes the flow generator to emit
+a recorder block on activate.
+
+Recording control is lifecycle-driven (starts on activate, stops on deactivate). No new
+start/stop endpoints are strictly required for v1; segment rollover reuses the existing
+`recorder.splitNow` Strom call. (Open Question 3 asks whether explicit manual start/stop is wanted.)
+
+### VOD listing + playback (#42)
+
+```
+GET /api/v1/productions/:id/recordings
+  200 → [ { id, productionId, key, sizeBytes, durationMs?, startedAt, endedAt?, playbackUrl?, downloadUrl?, playbackUnavailable? } ]
+  404 → { error: 'Production not found' }
+  503 → { error: 'Database unavailable' }   (#534: no longer returned for missing MINIO_* env)
+
+GET /api/v1/recordings                (optional: list across all productions)
+  200 → [ RecordingAsset, ... ]
+
+GET /api/v1/recordings/:id
+  200 → RecordingAsset
+  404 → { error: 'Recording not found' }
+
+DELETE /api/v1/recordings/:id         (#550, see "Deleting a recording" below)
+  204 | 404 | 409 { reason } | 502 { reason } | 503
+```
+
+`playbackUrl` is either a presigned GET URL (when the bucket is private) or a public URL (when
+the bucket is public) — see Open Question 2. Field naming mirrors existing docs: `id`,
+`createdAt`/`updatedAt` ISO strings, camelCase.
+
+### Connection-only targets, downloads and upload outcome (#534)
+
+Amendment for recording end to end from Studio (issue #534). All changes are additive.
+
+- **Creating a recording output** (`POST /api/v1/outputs`, `outputType: "recording"`) needs a
+  storage target: the `MINIO_*` env store (no `connectionId`, or `"default"`) or a storage
+  connection (`connectionId`, see `storage-connections.md`). With neither →
+  `400 "Recording needs object storage: set the MINIO_* environment variables or choose a storage connection (connectionId)"`.
+  An unknown `connectionId` on `POST` or `PATCH` → `400 "Storage connection not found"`; a
+  connection without a default bucket → `400 "Storage connection has no default bucket"`.
+  Nothing is written in either case. A recording output with no target at all (disk-only, PR
+  #404) stays refused unless the operator sets `RECORDING_LOCAL_ONLY=true` (default off).
+- **Recordings routes** no longer return `503 "Object storage unavailable"` when the `MINIO_*`
+  env is incomplete: they return the stored `RecordingDoc`s (or `[]`). `503` is kept for a
+  database failure only (all three routes).
+- **Each recording** carries, next to `playbackUrl`, a `downloadUrl`: the same presigned GET
+  (same TTL) with `response-content-disposition=attachment; filename="<basename>.mp4"` in the
+  signed query, so a browser saves the file under the object key's basename. When neither URL
+  can be signed, `playbackUnavailable` gives the reason instead: `connection-missing`,
+  `connection-no-bucket`, `storage-not-configured` (default-connection recording, no `MINIO_*`),
+  `bucket-mismatch` (default-connection recording in a bucket other than `MINIO_BUCKET`) or
+  `signing-failed`.
+- **`durationMs`** is written on new recordings, read from the MP4 movie header (`moov/mvhd`, or
+  `mvex/mehd` for a fragmented file) at upload. `startedAt` comes from the segment's file name
+  (#407), falling back to the activation start.
+- **Upload target snapshot.** At activation, next to `recorderBlockId`, the production stores
+  `recording: { outputId, connectionId?, startedAt }`. Deactivate uploads to that target rather
+  than re-reading the output assignments, so removing or re-pointing the recording output on a
+  live production cannot change or drop the running recording's upload. Cleared on deactivate.
+  A production activated before this field existed falls back to its current assignments.
+- **Upload outcome.** Each deactivate that had a recorder stores
+  `lastRecordingUpload: { finishedAt, outputId?, connectionId?, bucket?, uploaded, failed: [{ file, error }], reason?, message? }`
+  on the production, returned by `GET /api/v1/productions/:id` and kept until the next such
+  deactivate. `reason` is one of `no-storage-target`, `connection-not-found`,
+  `connection-no-bucket`, `auth-error` (the store rejected the key; sweep aborted) or
+  `upload-error`. Files that failed stay on Strom for the next sweep. No secrets or presigned
+  URLs are stored.
+
+### Deleting a recording (#550)
+
+```
+DELETE /api/v1/recordings/:id
+  204 → (no body)  object deleted (or already gone) and RecordingDoc removed
+  404 → { error: 'Recording not found' }
+  409 → { error, reason }  reason ∈ connection-missing | connection-no-bucket | storage-not-configured | bucket-mismatch
+  502 → { error, reason }  reason ∈ storage-denied (403 / auth error) | storage-failed (any other store error)
+  503 → { error: 'Database unavailable' }
+```
+
+- The storage target is resolved exactly as for playback (`resolveRecordingTarget`, shared with
+  `presignRecording`): the recording's `connectionId` + stored bucket, or the `MINIO_*` default
+  when the stored bucket matches `MINIO_BUCKET`. An unresolvable target is refused with 409, the
+  same reason names as `playbackUnavailable`; there is no "remove from list only" in v1.
+- The object is deleted first with a signed DeleteObject (`deleteObject` in
+  `recording-uploader.ts`). A 2xx or a 404 `NoSuchKey` counts as done, so the delete is
+  idempotent; a 404 `NoSuchBucket` is a `storage-failed` (the target may be misconfigured).
+- Then the `RecordingDoc` is destroyed. If that fails the route returns 503 and the retry
+  succeeds, because the object delete is idempotent. Every error leaves the `RecordingDoc` in
+  place.
+- 502 bodies carry a short message only: no S3 response body, credentials or URLs.
+- On success the id, bucket and key are logged at info level.
+- Not in scope: bulk delete, retention, undo, deleting older versions in a versioned bucket
+  (DeleteObject only adds a delete marker there).
+
+### Error codes
+
+| Code | Condition |
+|------|-----------|
+| 400  | invalid body (zod) |
+| 401  | missing/invalid `API_KEY` bearer (when configured) |
+| 404  | production or recording not found |
+| 409  | recording output already assigned / active conflict; recording delete with an unresolvable storage target (#550) |
+| 502  | recording delete refused (`storage-denied`) or failed (`storage-failed`) by the object store (#550) |
+| 503  | CouchDB unreachable (the recordings routes no longer 503 on a missing `MINIO_*` env, #534) |
+
+## Data Model
+
+New CouchDB doc type `recording`, stored in a dedicated DB (mirroring `getOutputsDb()` /
+`getSourcesDb()` in `src/db/index.ts`), written when a recording segment finalizes:
+
+```ts
+export interface RecordingDoc {
+  _id: string;            // "recording-<uuid>"
+  _rev?: string;
+  type: 'recording';
+  productionId: string;   // references ProductionDoc._id
+  outputId?: string;      // the 'recording' OutputDoc that produced it
+  bucket: string;
+  key: string;            // object key, e.g. "<productionId>/<flowId>/<segment>.mp4"
+  sizeBytes?: number;
+  durationMs?: number;
+  startedAt: string;      // ISO 8601
+  endedAt?: string;       // ISO 8601, set when finalized
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+`ProductionDoc` gains one optional lifecycle field, matching the existing pattern of
+activate-set/deactivate-cleared ids (`stromFlowId`, `mixerBlockId`, …):
+
+```ts
+/** ID of the builtin recorder block — set on activate, cleared on deactivate */
+recorderBlockId?: string;
+```
+
+### Migration
+
+- New doc type and DB are additive; no rewrite of existing docs. CouchDB is schemaless so no
+  ALTER-style migration is needed. The DB is created on first boot alongside the others in
+  `src/db/index.ts`.
+- Adding `'recording'` to the `OutputType` enum is backward compatible (existing outputs keep
+  their values). The OpenAPI enum in `docs/openapi.yaml` must be extended in lockstep.
+
+## Service Interactions
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant OpenLive as open-live API
+    participant Strom
+    participant MinIO as MinIO/S3
+
+    Client->>OpenLive: POST /api/v1/productions/:id/activate
+    OpenLive->>Strom: create flow (recorder block wired to MinIO sink)
+    Strom->>MinIO: write segment object(s)
+    OpenLive->>OpenLive: persist recorderBlockId on ProductionDoc
+    OpenLive-->>Client: 200 activated
+
+    Note over Strom,MinIO: recording runs for the live session
+
+    Client->>OpenLive: POST /api/v1/productions/:id/deactivate
+    OpenLive->>Strom: recorder.splitNow + teardown flow
+    Strom->>MinIO: finalize + flush last segment
+    OpenLive->>MinIO: list objects under <productionId>/ prefix
+    OpenLive->>OpenLive: upsert RecordingDoc(s)
+    OpenLive-->>Client: 200 deactivated
+
+    Client->>OpenLive: GET /api/v1/productions/:id/recordings
+    OpenLive->>MinIO: presign GET (if private bucket)
+    OpenLive-->>Client: 200 [ RecordingAsset w/ playbackUrl ]
+```
+
+### Input recordings (OL-32)
+
+An assignment with `record: "transcode"` (WHIP, SRT and EFP sources only) gets its own
+`builtin.liverecorder`, tapped before the input's lipsync offset, on the Live Recorder path
+only and only beside a program recording (see [`iso-input-recording.md`](iso-input-recording.md)).
+Layout on Strom and in the bucket:
+
+```
+recordings/<productionId>/                 program: <productionId>_<YYYYmmdd_HHMMSS>_<nnnnn>.mp4
+recordings/<productionId>/<mixerInput>/    input:   <productionId>_<mixerInput>_<YYYYmmdd_HHMMSS>_<nnnnn>.mp4
+
+[RECORDING_KEY_PREFIX/]<productionId>/<fileName>                program key
+[RECORDING_KEY_PREFIX/]<productionId>/<mixerInput>/<fileName>   input key
+```
+
+Input parts use the same storage target (the activation's `recording` snapshot), the same live
+part upload (one session per recorder, events matched by exact directory) and the same
+idempotent registration as program. Their `RecordingDoc`s carry `kind: "input"`, `mixerInput`,
+`sourceId`, `sourceName`, `streamType` and, for WHIP inputs, `guests` / `guestLabel`.
+Deactivate sweeps every `<mixerInput>` directory first (leftovers of earlier activations too),
+then the program directory, so the program directory is empty when its sweep deletes it.
+Each recorded input adds roughly `RECORDING_INPUT_VIDEO_BITRATE_KBPS` + 128 kbit/s of AAC
+(about 1.9 GB/h at the default) to the Strom host's disk until its parts are uploaded.
+
+`GET /api/v1/recordings` and `GET /api/v1/productions/:id/recordings` take optional
+exact-match filters `productionId` (first route only), `activationId`, `kind`, `mixerInput`
+and `sourceId`, and return the list sorted by `startedAt`, program before inputs, then
+`mixerInput`, then `partIndex`.
+
+### Segments left on Strom
+
+Deactivate uploads every file under Strom's `recordings/<productionId>/` (and, since OL-32,
+under each `recordings/<productionId>/<mixerInput>/`), not only the
+segments the ending session wrote. Files earlier sessions left there (a failed upload, or a
+session recorded before object storage was configured) are uploaded by the next deactivate
+that has storage, then deleted from Strom like the rest. The first deactivate after storage is
+added therefore uploads the whole backlog at once.
+
+Each `RecordingDoc.startedAt` comes from the timestamp Strom's recorder puts in the segment
+name (`{filename_prefix}_{YYYYmmdd_HHMMSS}_%05d.{ext}`), so a backlog segment keeps the date of
+the session that recorded it. Strom writes that stamp in its host's local time with no offset;
+open-live reads it as UTC, which is correct for Strom's container image. A name without a stamp
+falls back to the start of the activation being deactivated. `endedAt` is the time of the upload.
+
+## Configuration (env vars)
+
+Added to `src/config.ts` (same `process.env` + optional-fallback style used there today):
+
+| Env var | Required | Default | Purpose |
+|---------|----------|---------|---------|
+| `MINIO_ENDPOINT` / `S3_ENDPOINT` | yes (to enable recording) | — | Object storage endpoint URL |
+| `MINIO_ACCESS_KEY` | yes | — | Access key |
+| `MINIO_SECRET_KEY` | yes | — | Secret key (never logged; add to `src/lib/log-redact.ts`) |
+| `MINIO_BUCKET` | yes | — | Target bucket for recordings |
+| `MINIO_REGION` | no | `us-east-1` | S3 region |
+| `MINIO_USE_SSL` | no | `true` | TLS to endpoint |
+| `RECORDING_KEY_PREFIX` | no | `""` | Optional prefix for all recording keys |
+| `RECORDING_PRESIGN_TTL_S` | no | `3600` | Presigned playback URL TTL |
+| `RECORDING_SEGMENT_SECS` | no | `600` | Length of each recording part in seconds (Strom recorder `max_size_time_secs`); `0` = one file per activation; integer 0-86400 (#553) |
+| `RECORDING_BLOCK` | no | `auto` | Which Strom block records program: `auto` = `builtin.liverecorder` (Live Recorder, fragmented MP4) when the Strom's block list has it, else `builtin.recorder`; `recorder` = always `builtin.recorder`. Any other value fails startup (OL-32a, [`iso-input-recording.md`](iso-input-recording.md) §4.1, ADR-011) |
+| `RECORDING_LOCAL_ONLY` | no | `false` | Accept a `recording` output with no storage target (no `connectionId` or `"default"`, and no `MINIO_*`). The recording stays on Strom's media path with no upload and no retention |
+| `RECORDING_MAX_INPUTS` | no | `4` | Most inputs one production may record to their own files (OL-32, [`iso-input-recording.md`](iso-input-recording.md) §10.1); integer 0-16; `0` turns input recording off (every enable returns 409 `record-cap-reached`). Provisional until the load measurement (OL-32c) |
+| `RECORDING_INPUT_VIDEO_BITRATE_KBPS` | no | `4000` | `bitrate` of each input recorder's H.264 encode (`builtin.videoenc`); integer 500-50000 |
+
+When the MinIO vars are unset and the output names no storage connection, creating a `recording`
+output is refused with `400` unless `RECORDING_LOCAL_ONLY=true` (default off). With the opt-in,
+Strom's recorder writes local files (Open Question 1) and nothing uploads them: the segments stay
+on Strom's media path with no retention, deactivate skips the upload, and there is no
+`RecordingDoc` to list.
+
+## Open Questions (need a human/maintainer decision)
+
+1. **Does Strom actually have an object-storage recorder sink today?** The `open-live` client
+   only exposes `recorder.splitNow`; the flow-generator emits no recorder block. Confirm which
+   Strom block writes to MinIO/S3 (its `block_definition_id`, properties, and whether it does
+   the S3 write itself or writes local files that `open-live` must upload). This determines
+   whether #41 is "wire an existing block" or "blocked on a Strom feature" (cf. the pattern in
+   #171 where the Open Live change was blocked on `strom#694`).
+2. **Bucket access model:** public bucket (public playback URLs) vs private bucket with
+   `open-live`-issued presigned URLs. Presigned is the safer default; confirm.
+3. **Manual vs automatic recording:** is lifecycle-tied auto-record (start on activate/stop on
+   deactivate) sufficient for v1, or is explicit `POST .../recordings/start|stop` required?
+4. **Segmentation & final container:** single object per session vs segmented (using
+   `recorder.splitNow`), and the container/codec written (bearing on whether the VOD is directly
+   web-playable — relates to the CMAF discussion in #171).
+   **Decided (#551 / #553):** time-based parts. The flow generator sets the Strom recorder's
+   `max_size_time_secs` from `RECORDING_SEGMENT_SECS`, default 600 (10 minutes), so a session
+   becomes consecutive `{filename_prefix}_{timestamp}_%05d.mp4` files. Each part is uploaded and
+   listed as its own `RecordingDoc`; there is no concatenation into one object in v1.
+   `RECORDING_SEGMENT_SECS=0` leaves the property unset (one file per activation, the earlier
+   behaviour). Upload still happens at deactivate.
+5. **Retention:** does `open-live` own lifecycle/expiry, or is that left to the bucket policy?
+
+## Risks
+
+- **Strom dependency risk:** if no object-storage recorder block exists, #41 is externally
+  blocked; do not implement `open-live` glue until the Strom side is confirmed.
+- **Credential leakage:** MinIO secret must be redacted in logs (`src/lib/log-redact.ts`) and
+  never embedded in returned URLs beyond time-boxed presigned tokens.
+- **Playback compatibility:** MPEG-TS/fMP4 written by Strom may not be directly browser-playable;
+  a naive `playbackUrl` could 200 but fail in a `<video>` element. Tie the final-container
+  decision (Open Question 4) to acceptance criteria.
+- **Orphaned objects:** a crash between segment write and `RecordingDoc` upsert leaves objects
+  unlisted. Mitigate by having the listing endpoint reconcile against the bucket prefix rather
+  than trusting the DB alone.
+
+## Sub-issue guidance
+
+- **#41** implements config + recorder block wiring + `recorderBlockId` lifecycle. Blocked on
+  Open Question 1.
+- **#42** implements the listing/playback endpoints and `RecordingDoc`. Depends on #41.

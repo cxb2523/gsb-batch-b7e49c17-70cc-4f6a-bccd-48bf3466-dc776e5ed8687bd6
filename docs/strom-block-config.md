@@ -1,0 +1,235 @@
+# Strom Block Configuration Reference
+
+> **Agent rule**: Always use the generated Strom OpenAPI client to read and update flows/blocks/properties.  
+> Do NOT hand-edit flow JSON, do NOT call REST endpoints with raw fetch, and do NOT invent endpoint paths.  
+> Prefer values fetched live from `GET /api/blocks` (`BlockDefinition[].exposed_properties`) over the values here — the OpenAPI schema is authoritative at runtime.
+
+---
+
+## `builtin.vision_mixer`
+
+Video vision mixer with DSK overlay support.
+
+| Property | Type | Notes |
+|---|---|---|
+| `num_inputs` | string (enum) | `"2"`, `"4"`, `"6"`, `"8"`, `"10"` — **non-live**, set at creation |
+| `num_dsk_inputs` | string (enum) | `"0"`, `"1"`, `"2"` — number of downstream keyer inputs, **non-live** |
+| `pgm_resolution` | string (enum) | `"3840x2160"`, `"1920x1080"`, `"1280x720"`, `"720x576"`, `"720x480"` |
+| `multiview_resolution` | string (enum) | same values as `pgm_resolution` |
+| `pgm_framerate` | string (enum) | `"24000/1001"`, `"24/1"`, `"25/1"`, `"30000/1001"`, `"30/1"`, `"50/1"`, `"60000/1001"`, `"60/1"` |
+| `input_N_alpha` | number | Alpha for video input N (0.0–1.0), live |
+
+**Pads** (depend on `num_inputs` and `num_dsk_inputs`):
+- Video inputs: `video_in_0` … `video_in_{num_inputs-1}`
+- DSK inputs: `dsk_in_0` … `dsk_in_{num_dsk_inputs-1}`
+- Audio inputs: `audio_in_0` … `audio_in_{num_inputs-1}`, `pgm_audio_in`
+- Outputs: `pgm_out`, `multiview_out`
+
+---
+
+## `builtin.mixer`
+
+Audio mixer with channel strips, aux buses, and groups.
+
+| Property | Type | Notes |
+|---|---|---|
+| `num_channels` | integer | Number of input channels (1-indexed pads `input_1` … `input_N`), **non-live** |
+| `num_aux_buses` | integer | Number of aux buses, **non-live** |
+| `num_groups` | integer | Number of group buses, **non-live** |
+
+**Pads** (verified from live `GET /api/blocks` — authoritative):
+- Inputs: `input_1` … `input_{num_channels}` (1-indexed)
+- Outputs: `main_out` (programme mix), `monitor_out` (headphone/PFL bus)
+
+**Note**: AUX and GRP buses are internal to the block; they have no external output pads and cannot be wired to downstream blocks. Only `main_out` and `monitor_out` are externally connectable. The previously documented `pfl_out` pad does not exist — the correct name is `monitor_out`.
+
+**Wiring note**: Set `num_channels` = number of SRT/EFP sources at activation. Wire each SRT source `audio_out_0` → `input_{N}` (1-indexed).
+
+---
+
+## `builtin.mpegtssrt_input`
+
+Receives an MPEG-TS stream over SRT.
+
+| Property | Type | Notes |
+|---|---|---|
+| `srt_uri` | string | Full SRT URI, e.g. `srt://192.168.1.10:9000?mode=caller` |
+| `latency` | integer (ms) | 20–8000, default 125 |
+| `num_video_tracks` | uint | Number of video outputs. Default 1 |
+| `num_audio_tracks` | uint | Number of audio outputs (`audio_out_0` … `audio_out_{N-1}`). Default 1 |
+| `map_audio_by_pid` | bool | Feed `audio_out_k` from the k-th audio stream in ascending PID order (both modes, stable across reconnects); an output with no stream of its own carries the first stream. Default false. Strom v0.8.0-alpha.1+ (Eyevinn/strom#1081, #1120) |
+| `decode` | bool | Decode streams (true) or pass through encoded elementary streams (false). Default true |
+| `tsdemux_latency` | int (ms) | MPEG-TS demuxer latency |
+| `ignore_pcr` | bool | Ignore MPEG-TS PCR timestamps. Default true |
+| `wait_for_connection` | bool | Block the stream until a peer connects. Default false |
+| `auto_reconnect` | bool | Reconnect when the connection fails. Default true |
+| `keep_listening` | bool | Keep the SRT source alive after peer disconnect. Default true |
+
+(Verified from Strom `backend/src/blocks/builtin/mpegtssrt_input.rs`.)
+
+**Pads**: outputs `video_out`, `audio_out_0` … `audio_out_{N-1}` (N = `num_audio_tracks`)
+
+Open Live sets `srt_uri` and `latency` and links `audio_out_0` — unchanged for
+every source whose `audioStreamIndex` is absent or 0. For an `srt` source with
+`0 < audioStreamIndex = k <= 7` it also sets `num_audio_tracks: k + 1` and
+`map_audio_by_pid: true`, links `audio_out_<k>` to the per-source audio
+`time_offset`, and drains every `audio_out_<j != k>` into its own `fakesink`
+element (`e-audio-drain-<padIndex>-<j>-<suffix>`, `sync: false`, `async: false`)
+(`docs/specs/audio-stream-selection.md` §5.3). This only happens when Strom's
+`GET /api/blocks` lists `map_audio_by_pid` in the `exposed_properties` of
+`builtin.mpegtssrt_input` (`stromMapsAudioByPid()` in `src/lib/flow-generator.ts`).
+Without it (Strom v0.7.2 and earlier, or an unreadable block list) — and for
+`efp` sources or k > 7 — the selection is clamped to `audio_out_0` and reported
+as an `audio-stream-not-applied` activation warning (§5.4). Without
+`map_audio_by_pid`, `num_audio_tracks > 1` maps streams in arrival order (the
+#510 hazard), so never set it on its own. Every `audio_out_N` that is created
+must be linked — an unconnected output pad can fail the flow. Strom also posts a
+`strom-mpegtssrt-audio-map` element message (per-output `pids` / `fallback`)
+when it assigns outputs, but does not expose it through the flows API yet. Confirm
+property names and defaults against live `GET /api/blocks` before relying on them.
+
+---
+
+## `builtin.mpegtssrt_output`
+
+Sends MPEG-TS program output over SRT. Supports multiple audio tracks as separate PIDs in the transport stream. Auto-encodes raw audio to AAC.
+
+| Property | Type | Notes |
+|---|---|---|
+| `srt_uri` | string | Full SRT URI, e.g. `srt://:6000?mode=listener` |
+| `num_audio_tracks` | uint | Number of audio input tracks. Default 1 |
+| `num_video_tracks` | uint | Number of video input tracks. Default 1 |
+| `latency` | int (ms) | SRT latency. Default 125 |
+
+**Pads** (verified from live `GET /api/blocks`):
+- Video input: `video_in` (V0)
+- Audio inputs: `audio_in_0` (A0), `audio_in_1` (A1) … one per track
+
+---
+
+## `builtin.efpsrt_output`
+
+Sends EFP-muxed audio/video over SRT. Supports multiple audio tracks.
+
+| Property | Type | Notes |
+|---|---|---|
+| `srt_uri` | string | Full SRT URI |
+| `num_audio_tracks` | uint | Number of audio input tracks. Default 1 |
+| `num_video_tracks` | uint | Number of video input tracks. Default 1 |
+| `latency` | int (ms) | SRT latency. Default 125 |
+
+**Pads** (verified from live `GET /api/blocks`):
+- Video input: `video_in` (V0)
+- Audio inputs: `audio_in_0` (A0), `audio_in_1` (A1) … one per track
+
+---
+
+## `builtin.whep_output`
+
+WebRTC WHEP output endpoint for browser playback. Supports multiple audio tracks — each track is a separate WebRTC audio track in the stream.
+
+| Property | Type | Notes |
+|---|---|---|
+| `endpoint_id` | string | Unique endpoint name; flow-generator appends a per-production suffix |
+| `num_video_tracks` | uint | Number of video input tracks; 0 disables video. Default 1 |
+| `num_audio_tracks` | uint | Number of audio input tracks; 0 disables audio. Default 1 |
+| `ts_offset_ms` | int | Timestamp offset for playout timing (negative = earlier release) |
+
+**Pads** (verified from live `GET /api/blocks`):
+- Video inputs: `video_in` (V0), `video_in_1` (V1) … for each video track
+- Audio inputs: `audio_in` (A0), `audio_in_1` (A1) … for each audio track
+- No outputs
+
+**Multi-track audio**: set `num_audio_tracks: 2` to carry programme + monitor bus on the same WHEP endpoint. Connect `main_out` (via loudness) → `audio_in`, `monitor_out` → `audio_in_1`.
+
+---
+
+## `builtin.videoenc`
+
+Encodes raw video to H.264/H.265 for downstream consumers.
+
+| Property | Type | Notes |
+|---|---|---|
+| `bitrate` | integer (kbps) | 100–100000 |
+
+**Pads**: input `video_in`, output `encoded_out`
+
+---
+
+## `builtin.videoformat`
+
+Converts/scales video to a target resolution.
+
+| Property | Type | Notes |
+|---|---|---|
+| `resolution` | string | e.g. `"1920x1080"`, `"1280x720"` |
+
+**Pads**: input `video_in`, output `video_out`
+
+---
+
+## `builtin.whip_input`
+
+Receives a WebRTC stream via WHIP protocol.
+
+| Property | Type | Notes |
+|---|---|---|
+| `endpoint_id` | string | Unique WHIP endpoint name |
+
+**Pads**: output `video_out`
+
+---
+
+## `builtin.media_player`
+
+File/object-storage media player used for `streamType: 'clip'` sources. Served by Strom's
+`backend/src/api/mediaplayer.rs`. The flow-generator injects one media_player block per clip
+source (`src/lib/flow-generator.ts`), and the clip cue/play control surface (issues #277/#278)
+drives it through Strom's player API (`src/lib/strom.ts` `player.*`).
+
+| Property | Type | Notes |
+|---|---|---|
+| `decode` | boolean | Decode media on load. flow-generator sets `true` |
+| `sync` | boolean | Sync playback to the pipeline clock. flow-generator sets `true` |
+| `loop_playlist` | boolean | Loop the playlist when it reaches the end. flow-generator sets `false` (cue-then-play stories play once) |
+| `position_update_interval` | integer (ms) | How often the block emits position updates. flow-generator sets `500` |
+
+**Pads**: outputs `video_out`, `audio_out` (wired through the same `builtin.time_offset` /
+audio-mixer path as every other source, so lipsync trims and audio channels behave identically).
+
+**Player control endpoints** (used via the generated client, never raw `fetch`):
+`GET .../player/state`, `POST .../player/control` (`play`/`pause`/`stop`/`next`/`previous`),
+`POST .../player/playlist`, `POST .../player/seek`, `POST .../player/goto`.
+
+> Confirm the exact property set and enum values against `GET /api/blocks`
+> (`BlockDefinition[].exposed_properties`) on the deployed Strom version — the OpenAPI schema is
+> authoritative at runtime and this table may lag it.
+
+---
+
+## `builtin.loudness`
+
+EBU R128 loudness meter. Audio passes through unchanged — use as an in-line measurement tap.
+
+| Property | Type | Notes |
+|---|---|---|
+| `interval` | string (enum) | `"100"`, `"200"`, `"500"`, `"1000"` (ms) — **must be a string**, not a number |
+
+**Pads** (verified from live `GET /api/blocks`):
+- Input: `audio_in`
+- Output: `audio_out`
+
+---
+
+## Agent Rules
+
+1. Always match blocks by `block_definition_id`, never by `id` or `name`.
+2. Use the OpenAPI client exclusively — never raw `fetch`/`curl`.
+3. `num_inputs`, `num_dsk_inputs`, `num_channels`, `num_aux_buses`, `num_groups` are **non-live** — must be set at flow creation, cannot be changed on a running flow.
+4. `srt_uri` values must be valid SRT URIs (`srt://…`), not plain host:port strings.
+5. `latency` must be an integer (not a float).
+6. `bitrate` must be an integer in kbps.
+7. All resolution strings use `WxH` format (e.g. `"1920x1080"`).
+8. Audio mixer inputs are 1-indexed (`input_1`, `input_2`, …). Vision mixer audio inputs are 0-indexed (`audio_in_0`, `audio_in_1`, …).
+9. Prefer live `GET /api/blocks` schema over this file for valid enum values — this file may lag runtime.
+10. Always flag drift between this file and the live OpenAPI schema.

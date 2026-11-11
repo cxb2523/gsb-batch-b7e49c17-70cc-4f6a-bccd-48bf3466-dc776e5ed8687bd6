@@ -1,0 +1,656 @@
+// NOTE: this import forms an intentional cycle (config ↔ guest-signing-key ↔ db).
+// It is safe under ESM because none of these bindings are used at module-eval
+// time — `isGuestCallingEnabled()` only calls `isGuestSigningKeyAvailable()` at
+// runtime, by which point every module in the cycle is fully initialised.
+import { isGuestSigningKeyAvailable } from './lib/guest-signing-key.js';
+import { resolveGpuMetering } from './lib/gpu-metering-defaults.js';
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
+
+/**
+ * Reads an optional env var, trimmed. Empty or whitespace-only values (e.g. a
+ * compose-style `MINIO_BUCKET=`) read as unset, so `??` fallbacks and
+ * truthiness checks downstream treat them the same as a missing var.
+ */
+function optionalEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
+function parseBoolEnv(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return defaultValue;
+  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+
+function parsePositiveIntEnv(name: string, defaultValue: number, max = Number.MAX_SAFE_INTEGER): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return defaultValue;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    const limit = max < Number.MAX_SAFE_INTEGER ? ` up to ${max}` : '';
+    throw new Error(`Environment variable ${name} must be a positive integer${limit}, got "${raw}"`);
+  }
+  return value;
+}
+
+function parseNonNegativeIntEnv(name: string, defaultValue: number, max = Number.MAX_SAFE_INTEGER): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return defaultValue;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > max) {
+    const limit = max < Number.MAX_SAFE_INTEGER ? ` up to ${max}` : '';
+    throw new Error(`Environment variable ${name} must be a non-negative integer${limit}, got "${raw}"`);
+  }
+  return value;
+}
+
+/** Values `RECORDING_BLOCK` accepts (OL-32a, spec iso-input-recording.md §10.1). */
+export type RecordingBlockSetting = 'auto' | 'recorder';
+
+/**
+ * Parses `RECORDING_BLOCK`: `auto` (default) records with Strom's
+ * `builtin.liverecorder` when the Strom has it, else `builtin.recorder`;
+ * `recorder` always uses `builtin.recorder`. Anything else fails startup.
+ */
+function parseRecordingBlockEnv(name: string): RecordingBlockSetting {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return 'auto';
+  const value = raw.trim().toLowerCase();
+  if (value === 'auto' || value === 'recorder') return value;
+  throw new Error(`Environment variable ${name} must be "auto" or "recorder", got "${raw}"`);
+}
+
+/** Parses an optional integer env var that must lie in `[min, max]`; anything else fails startup. */
+function parseIntRangeEnv(name: string, defaultValue: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return defaultValue;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`Environment variable ${name} must be an integer from ${min} to ${max}, got "${raw}"`);
+  }
+  return value;
+}
+
+/** Longest recording part `RECORDING_SEGMENT_SECS` accepts: 24 hours. */
+const MAX_RECORDING_SEGMENT_SECS = 86_400;
+
+/** Longest delay Node's timers accept; a larger one fires after 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * Redact any `user:pass@` userinfo segment from a URL-ish string so a malformed
+ * value can be safely echoed in an error message without leaking credentials.
+ * Operates on the raw string (the value may not be parseable), replacing the
+ * password — and, defensively, the username — with `***`.
+ */
+function redactUrlCredentials(raw: string): string {
+  // Match an authority userinfo segment: scheme://[user[:pass]]@host...
+  return raw.replace(
+    /(^[^:/?#\s]+:\/\/)([^/?#@]*)@/,
+    (_full, scheme: string, userinfo: string) => {
+      const user = userinfo.split(':', 1)[0];
+      return `${scheme}${user ? `${user}:***` : '***'}@`;
+    },
+  );
+}
+
+/**
+ * Parse `COUCHDB_URL`. On OSC the value is derived by osc-entrypoint.sh, which
+ * can produce a truncated string like `https:/` when the operator's DatabaseUrl
+ * has no `/dbname` path (issue #288). `new URL()` then throws an opaque
+ * `TypeError: Invalid URL` that is very hard to diagnose. Wrap the parse so the
+ * failure names the env var and shows the (credential-redacted) value plus the
+ * expected form.
+ */
+export function buildCouchdbUrl(): string {
+  const raw = requireEnv('COUCHDB_URL');
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(
+      `Invalid COUCHDB_URL: "${redactUrlCredentials(raw)}" is not a valid URL. ` +
+        `Expected the form http(s)://[user:pass@]host[:port]/dbname.`,
+    );
+  }
+  // If credentials are already embedded in the URL, leave them as-is.
+  if (url.password) return raw;
+  const user = process.env['COUCHDB_USER'];
+  const password = process.env['COUCHDB_PASSWORD'];
+  if (!password) return raw;
+  if (user) url.username = encodeURIComponent(user);
+  url.password = encodeURIComponent(password);
+  return url.toString();
+}
+
+/** Database used when `COUCHDB_NAME` is unset or empty (today's behaviour). */
+export const DEFAULT_COUCHDB_NAME = 'open-live';
+
+/** CouchDB's database-name rule; names are at most 238 characters. */
+const COUCHDB_NAME_PATTERN = /^[a-z][a-z0-9_$()+/-]*$/;
+const COUCHDB_NAME_MAX_LENGTH = 238;
+
+/**
+ * Why `name` is not a valid CouchDB database name, or `null` when it is. The
+ * value itself is never part of the message: on OSC `COUCHDB_NAME` is the tail
+ * of `DatabaseUrl`, which for a URL with no database path can be part of the
+ * credentials.
+ */
+export function couchdbNameProblem(name: string): string | null {
+  if (name.length <= COUCHDB_NAME_MAX_LENGTH && COUCHDB_NAME_PATTERN.test(name)) return null;
+  return (
+    `Invalid COUCHDB_NAME (value not shown, ${name.length} characters). A CouchDB database name must start with a lowercase letter ` +
+    `(a-z), contain only lowercase letters, digits and the characters _ $ ( ) + - /, ` +
+    `and be at most ${COUCHDB_NAME_MAX_LENGTH} characters long.`
+  );
+}
+
+/**
+ * Parse `COUCHDB_NAME` (OL-49, issue #619): the CouchDB database this instance
+ * keeps its data in. Unset or empty means `open-live`. The name is NOT
+ * validated here: an existing OSC instance whose `DatabaseUrl` tail is not a
+ * valid name (e.g. `/OpenLive`) ran on `open-live` before this setting was
+ * honoured and must keep doing so (#619 AC4), which needs a look at the server.
+ * `resolveDbName()` (`src/db/index.ts`) applies `couchdbNameProblem()`: it
+ * falls back to an `open-live` that holds data, and otherwise stops startup
+ * with a non-retried `FatalStartupError` (AC3).
+ */
+export function buildCouchdbName(): string {
+  return optionalEnv('COUCHDB_NAME') ?? DEFAULT_COUCHDB_NAME;
+}
+
+/**
+ * Parse `STROM_PUBLIC_URL`, trailing slashes removed. It is the base of the
+ * WHEP URLs given to browsers, so it must be an absolute http(s) URL: without
+ * a scheme (`strom.example.com`) the stored links would be relative.
+ */
+export function buildStromPublicUrl(): string | undefined {
+  const raw = optionalEnv('STROM_PUBLIC_URL');
+  if (!raw) return undefined;
+  // new URL() also accepts `https:host` and `https:/host`, but the raw value is what gets stored.
+  let valid = /^https?:\/\//i.test(raw);
+  if (valid) {
+    try {
+      new URL(raw);
+    } catch {
+      valid = false;
+    }
+  }
+  if (!valid) {
+    throw new Error(
+      `Invalid STROM_PUBLIC_URL: "${redactUrlCredentials(raw)}" is not an http(s) URL. ` +
+        `Expected the form http(s)://host[:port][/path].`,
+    );
+  }
+  return raw.replace(/\/+$/, '');
+}
+
+// Resolved once at import, like the rest of `config` (issues #537, #547).
+const gpuMetering = resolveGpuMetering({
+  gpuPoolEnv: optionalEnv('GPU_POOL'),
+  gpuClassEnv: optionalEnv('GPU_CLASS'),
+  oscHostname: optionalEnv('OSC_HOSTNAME'),
+  stromUrl: process.env['STROM_URL'],
+});
+
+export const config = {
+  port: parseInt(process.env['PORT'] ?? '3000', 10),
+  couchdbUrl: buildCouchdbUrl(),
+  /** CouchDB database name, from `COUCHDB_NAME` (default `open-live`). */
+  couchdbName: buildCouchdbName(),
+  stromUrl: process.env['STROM_URL'] ?? 'http://localhost:7000',
+  /**
+   * Base URL browsers use to reach Strom, when it differs from `STROM_URL`
+   * (e.g. Open Live reaches Strom in-cluster, browsers through a public
+   * ingress). Used for the WHEP URLs stored on an active production
+   * (`whepEndpoint`, `pgmWhepEndpoint`, `whepOutputUrls`); the WHEP proxy maps
+   * URLs under it back to `STROM_URL` before forwarding. Unset: `STROM_URL`.
+   */
+  stromPublicUrl: buildStromPublicUrl(),
+  stromToken: process.env['STROM_AUTH_TOKEN'] ?? process.env['STROM_TOKEN'] ?? undefined,
+  /** 'osc' = PAT→SAT exchange via token.svc.prod.osaas.io (default for OSC-hosted Strom)
+   *  'direct' = API key used as Bearer token directly (self-hosted / non-OSC Strom) */
+  stromAuthMode: (process.env['STROM_AUTH_MODE'] ?? 'osc') as 'osc' | 'direct',
+  /**
+   * How long (ms) a read of a Strom block's properties may wait for an answer;
+   * past this the read counts as no answer. Writes have no limit. Default 5s.
+   */
+  stromBlockPropertiesReadTimeoutMs: parsePositiveIntEnv('STROM_BLOCK_PROPERTIES_READ_TIMEOUT_MS', 5000, MAX_TIMER_MS),
+  logLevel: process.env['LOG_LEVEL'] ?? 'info',
+  /**
+   * Optional static API key. When set, all /api/v1 routes require:
+   *   Authorization: Bearer <API_KEY>
+   * Leave unset when running behind OSC's reverse-proxy auth wall.
+   */
+  apiKey: process.env['API_KEY'] ?? undefined,
+  /**
+   * OSC Personal Access Token, held server-side only. Exchanged for a
+   * short-lived SAT via POST /api/v1/auth/token (issue #204) so browser
+   * clients (e.g. open-live-studio) never hold the PAT. NEVER returned to a
+   * client.
+   *
+   * Read from `OSC_PAT` first (the original var), falling back to
+   * `OSC_ACCESS_TOKEN` — the env the OSC platform maps the `OscAccessToken`
+   * service config option onto. The funnel provisions the token via
+   * `OscAccessToken` (mirroring the studio service's param of the same name),
+   * so without this fallback a correctly-provisioned instance still returned
+   * `503 "Token exchange is not configured"` because nothing set `OSC_PAT`
+   * (issue #318).
+   */
+  oscPat: process.env['OSC_PAT'] ?? process.env['OSC_ACCESS_TOKEN'] ?? undefined,
+  /**
+   * The OSC serviceId that SATs minted via /api/v1/auth/token are scoped to.
+   * Fixed server-side config (never caller-supplied) so the token endpoint
+   * cannot be redirected at an arbitrary service (anti-SSRF / privilege
+   * escalation).
+   *
+   * Must be `eyevinn-open-live` — open-live-studio's sat.ts sets the SAT this
+   * endpoint returns as the `eyevinn-open-live.sat` cookie, the name OSC's
+   * reverse proxy expects for open-live REST/WS auth. This previously
+   * defaulted to `eyevinn-strom` (copied from strom-token.ts's own PAT→SAT
+   * exchange, used for the backend's unrelated server-to-Strom calls), which
+   * fails for funnel-provisioned tenants: their PAT is scoped to their own
+   * `eyevinn-open-live`/`eyevinn-open-live-studio` subscriptions, not the
+   * shared `eyevinn-strom` service, so the exchange was rejected upstream and
+   * surfaced as a 502 on every fresh instance.
+   */
+  oscSatServiceId: process.env['OSC_SAT_SERVICE_ID'] ?? 'eyevinn-open-live',
+  /**
+   * Explicit acknowledgement that this deployment intentionally has no
+   * API_KEY because an external layer (e.g. OSC's reverse proxy) handles
+   * authentication instead. Must be set independently of NODE_ENV — the
+   * deployment tier (NODE_ENV=production) says nothing about whether an
+   * external auth layer is present, so it cannot double as this signal.
+   * Only meaningful when API_KEY is unset; ignored otherwise.
+   */
+  trustExternalAuth: parseBoolEnv('TRUST_EXTERNAL_AUTH', false),
+  /**
+   * Allowed CORS origin(s). Comma-separated list or '*' (wildcard).
+   * Defaults to unset (no wildcard): when omitted, cross-origin requests are
+   * not permitted rather than being opened to any origin. Set an explicit
+   * origin (or comma-separated list) for browser clients.
+   */
+  corsOrigin: process.env['CORS_ORIGIN'] ?? undefined,
+  /**
+   * Public base URL used to construct WHIP callback URLs stored in CouchDB.
+   * Set this to the externally reachable URL of this service (e.g. https://live.example.com).
+   * When not set, falls back to deriving the URL from the incoming request — safe only
+   * when Fastify's trustProxy is configured correctly for your reverse proxy setup.
+   */
+  publicBaseUrl: process.env['PUBLIC_BASE_URL'] ?? undefined,
+  /**
+   * Optional public hostname on which the shared Strom instance's SRT listener
+   * ports are reachable from external SRT callers. Used to build the read-only
+   * `connect` dial-in address surfaced on `mpegtssrt`/`efpsrt` outputs.
+   *
+   * The SRT-facing host is conceptually independent of the HTTP API host
+   * (`STROM_URL`): the SRT listener is a separate raw transport port, and in
+   * NATed / shared-GPU topologies it may be published on a different hostname.
+   * When unset, the host is derived from the `STROM_URL` hostname; when that is
+   * loopback/private the `connect` address is returned as `null` with a reason
+   * rather than emitting a misleading address. Set this to override for
+   * deployments where the SRT port is reachable on a distinct public host.
+   */
+  srtPublicHost: process.env['SRT_PUBLIC_HOST'] || undefined,
+  /**
+   * Optional allow-list of hostnames that may be used to build request-derived
+   * WHIP callback URLs when PUBLIC_BASE_URL is not set. Comma-separated
+   * (e.g. "live.example.com,live2.example.com"). When set, a request whose
+   * derived host (from X-Forwarded-Host / Host, via Fastify's trustProxy) is
+   * not on this list is rejected rather than persisted — preventing an attacker
+   * from injecting X-Forwarded-Host: attacker.com to redirect WHIP clients.
+   */
+  trustedHosts: (process.env['TRUSTED_HOSTS'] ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+  /**
+   * Number of consecutive SRT listener ports to lease from the shared Strom
+   * instance at startup. Listener sources must use a port inside the leased range.
+   */
+  stromPortLeaseSize: parsePositiveIntEnv('STROM_PORT_LEASE_SIZE', 10),
+  /**
+   * Optional override for the lease client id sent to Strom. Defaults to the
+   * hostname of PUBLIC_BASE_URL, or `open-live-<hostname>` when that is unset.
+   */
+  stromPortLeaseClientId: process.env['STROM_PORT_LEASE_CLIENT_ID'] || undefined,
+  /** Set to true to skip port leasing entirely (single-tenant Strom setups). */
+  stromPortLeaseDisabled: parseBoolEnv('STROM_PORT_LEASE_DISABLED', false),
+  // --- OL-5 Studio Gateways Phase 1 (issue #263, docs/specs/studio-gateways.md) ---
+  /**
+   * Heartbeat age (seconds) past which a gateway reads as `down`. Health is
+   * derived on read from `lastSeenAt`; there is no persisted health flag. The
+   * default tolerates two missed 5s heartbeats.
+   */
+  gatewayDownAfterSeconds: parsePositiveIntEnv('GATEWAY_DOWN_AFTER_SECONDS', 15),
+  /**
+   * Recommended heartbeat cadence (seconds) advertised to the gateway in the
+   * HELLO frame. Advisory only — the gateway drives its own timer.
+   */
+  gatewayHeartbeatIntervalSeconds: parsePositiveIntEnv('GATEWAY_HEARTBEAT_INTERVAL_SECONDS', 5),
+  /**
+   * Minimum interval (ms) between CouchDB writes of a gateway's snapshot, to
+   * cap heartbeat write amplification. Identical back-to-back heartbeats within
+   * this window debounce to at most one write.
+   */
+  gatewayHeartbeatPersistMinIntervalMs: parsePositiveIntEnv('GATEWAY_HEARTBEAT_PERSIST_MIN_INTERVAL_MS', 5000),
+  /**
+   * Minimum offline duration (seconds) before DELETE /api/v1/gateways/:id is
+   * allowed — the "zombie-sources escape hatch" that must not delete a live
+   * gateway out from under a running show.
+   */
+  gatewayForgetMinOfflineSeconds: parsePositiveIntEnv('GATEWAY_FORGET_MIN_OFFLINE_SECONDS', 300),
+  /**
+   * MinIO / S3 object storage for VOD recordings (epic #5, issue #41).
+   *
+   * Strom's recorder writes local files only ({media_path}/{output_dir}/{filename_prefix}_{timestamp}_%05d.{ext},
+   * backend/src/blocks/builtin/recorder.rs) — it has no native S3/MinIO sink. So open-live
+   * uploads the recorder's local segments to object storage after a production deactivates,
+   * fetching them via Strom's existing media download API (`GET /api/media/file/:path`).
+   *
+   * Object storage is optional: recording itself needs only Strom. When these vars are
+   * unset, recordings stay on Strom's media path and deactivate skips the upload.
+   * `MINIO_ENDPOINT` falls back to `S3_ENDPOINT` for S3-compatible naming. Empty or
+   * whitespace-only values count as unset (see `optionalEnv`).
+   */
+  minioEndpoint: optionalEnv('MINIO_ENDPOINT') ?? optionalEnv('S3_ENDPOINT'),
+  minioAccessKey: optionalEnv('MINIO_ACCESS_KEY'),
+  minioSecretKey: optionalEnv('MINIO_SECRET_KEY'),
+  minioBucket: optionalEnv('MINIO_BUCKET'),
+  minioRegion: optionalEnv('MINIO_REGION') ?? 'us-east-1',
+  minioUseSsl: parseBoolEnv('MINIO_USE_SSL', true),
+  /**
+   * Opt-in (default off): accept a `recording` output with no storage target, so
+   * the recording stays on Strom's media path with no upload and no retention.
+   * Without it, such an output is refused with 400.
+   */
+  recordingLocalOnly: parseBoolEnv('RECORDING_LOCAL_ONLY', false),
+  /** Optional prefix prepended to every recording object key. */
+  recordingKeyPrefix: process.env['RECORDING_KEY_PREFIX'] ?? '',
+  /**
+   * Length in seconds of each recording part (issue #553). Sets Strom's recorder
+   * `max_size_time_secs`, so a session is cut into consecutive
+   * `{prefix}_{timestamp}_%05d.mp4` files that deactivate uploads one by one.
+   * `0` leaves the property unset: one file per activation. Must be an integer
+   * from 0 to 86400; startup fails otherwise.
+   */
+  recordingSegmentSecs: parseNonNegativeIntEnv('RECORDING_SEGMENT_SECS', 600, MAX_RECORDING_SEGMENT_SECS),
+  /**
+   * Which Strom block records program (OL-32a, ADR-011). `auto`: Live Recorder
+   * (`builtin.liverecorder`) when the Strom's block list has it, else
+   * `builtin.recorder`. `recorder`: always `builtin.recorder` — an operator
+   * escape hatch if Live Recorder misbehaves, without a rollback.
+   */
+  recordingBlock: parseRecordingBlockEnv('RECORDING_BLOCK'),
+  /**
+   * Most inputs one production may record to their own files (OL-32, spec
+   * iso-input-recording.md §10.1, Q3). Integer 0-16, default 4; `0` turns input
+   * recording off. Each recorded input adds one H.264 encode on Strom.
+   */
+  recordingMaxInputs: parseIntRangeEnv('RECORDING_MAX_INPUTS', 4, 0, 16),
+  /** `bitrate` (kbit/s) of each input recorder's H.264 encode (OL-32). Integer 500-50000, default 4000. */
+  recordingInputVideoBitrateKbps: parseIntRangeEnv('RECORDING_INPUT_VIDEO_BITRATE_KBPS', 4000, 500, 50_000),
+  // --- Storage connections (issue #520, OL-21, docs/specs/storage-connections.md, ADR-009) ---
+  /**
+   * SSRF allowlist for operator-supplied storage-connection endpoints (ADR-009
+   * Decision 2, §5). Comma-separated private/loopback/link-local IP literals or
+   * CIDR ranges that a `StorageConnection` endpoint MAY resolve to, for
+   * self-hosted MinIO on a private LAN (e.g. "192.168.1.0/24,10.10.0.5"). Empty
+   * by default: every private/loopback/link-local endpoint is rejected — the
+   * safe cloud/OSC posture. Parsed with the existing `TRUSTED_HOSTS` idiom and
+   * matched by the same CIDR / IPv4-mapped-IPv6 logic
+   * (`src/lib/url-validation.ts`). Never relaxes http/graphic/SRT SSRF checks.
+   * NEVER add 169.254.0.0/16 (cloud metadata) or 0.0.0.0/0.
+   */
+  trustedStorageHosts: (process.env['TRUSTED_STORAGE_HOSTS'] ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+  /**
+   * Server-side page-size cap for `GET /api/v1/storage-connections/:id/objects`
+   * (spec §2.8). A caller-requested `max-keys` is clamped to this. Bounds
+   * listing enumeration / cost on a huge bucket. Default 1000.
+   */
+  storageListMaxKeys: parsePositiveIntEnv('STORAGE_LIST_MAX_KEYS', 1000),
+  /** Presigned playback URL TTL in seconds (used by #42's listing endpoint). */
+  recordingPresignTtlS: parsePositiveIntEnv('RECORDING_PRESIGN_TTL_S', 3600),
+  /**
+   * AES-256 key (base64 or hex, 32 bytes) used to encrypt authenticated-HTML-
+   * source auth material at rest (issue #314, `docs/specs/authenticated-html-
+   * sources.md`, ADR-003 OQ3). Falls back to `SRT_PASSPHRASE_KEY` when unset so
+   * existing deployments keep working. Fail-closed in production when neither is
+   * set and any `auth` secret exists. Consumed by `src/lib/html-auth-crypto.ts`;
+   * never returned to a client and redacted in logs (`src/lib/log-redact.ts`).
+   */
+  htmlAuthKey: process.env['HTML_AUTH_KEY'] ?? process.env['SRT_PASSPHRASE_KEY'] ?? undefined,
+  /**
+   * Interval (ms) at which the WS layer polls `player.getState` to detect clip
+   * completion when Strom does not push player-state changes (epic #206,
+   * issues #277/#278; spec §"Configuration"). Completion latency is bounded by
+   * one poll interval (≤ this value). Default 250 ms.
+   */
+  clipStatePollMs: parsePositiveIntEnv('CLIP_STATE_POLL_MS', 250),
+  /**
+   * Timeout (ms) for the preflight reachability check `cueClip` performs
+   * against a clip's resolved URL (the `url` reference as-is, or the `s3`
+   * reference's presigned GET URL) before handing it to Strom (issue #351).
+   * Strom's `setPlaylist`/`goto` accept the load before it knows the fetch
+   * will fail — the HTTP fetch happens asynchronously inside its pipeline —
+   * so without this check an unfetchable URL (HTTP 403, DNS failure, refused
+   * connection, …) silently cued the operator into a clip that could never
+   * load (`CUED` forever, then `PLAYING` at 0:00/0:00). Default 5s.
+   */
+  clipPreflightTimeoutMs: parsePositiveIntEnv('CLIP_PREFLIGHT_TIMEOUT_MS', 5000),
+  /**
+   * Total time (ms), after `setPlaylist`/`goto` return, that `cueClip` will
+   * poll `player.getState` waiting for Strom to report a non-zero
+   * `duration_ms` before failing the cue (issue #351). A reachable URL can
+   * still fail to load inside Strom's pipeline (unsupported codec, truncated
+   * file, …); `MediaPlayerState::state()` reports a ready/playing state
+   * regardless, so a confirmed non-zero duration is the only reliable "media
+   * actually loaded" signal. Polled every 250 ms. Default 5s.
+   */
+  clipCueReadyTimeoutMs: parsePositiveIntEnv('CLIP_CUE_READY_TIMEOUT_MS', 5000),
+  /**
+   * Max time (ms) a `playing` clip's Strom-reported position may stay
+   * unchanged before the controller moves it to `error` (issue #351). Strom's
+   * media-player reports `playing` whenever the player is not paused and the
+   * playlist is non-empty, even when the pipeline never produced a frame —
+   * so a stalled playhead, observed on the existing completion-poll cadence
+   * (`clipStatePollMs`), is the only signal available to detect a stuck
+   * player without a Strom-side pipeline-error event (tracked separately as
+   * issue #360). Default 5s.
+   */
+  clipStallTimeoutMs: parsePositiveIntEnv('CLIP_STALL_TIMEOUT_MS', 5000),
+  /**
+   * Idle auto-deactivation deadline in seconds (issue #290). A production with
+   * zero subscribers for this long is auto-deactivated with
+   * `endedReason: 'idle'` / `autoDeactivated: true`. Defaults to 300s, matching
+   * the previous hardcoded `IDLE_TIMEOUT_MS` — do not change runtime behavior.
+   */
+  idleTimeoutSec: parsePositiveIntEnv('IDLE_TIMEOUT_SEC', 300),
+  /**
+   * Lead time in seconds before the idle deadline at which the watchdog emits a
+   * single `IDLE_WARNING` over the controller WS so clients can keep the show
+   * up (issue #290). The frontend (open-live-studio#130/#131) surfaces the
+   * remaining-seconds countdown. Clamped to the deadline at read time via
+   * `getIdleWarningLeadMs()` so it can never exceed `idleTimeoutSec`.
+   */
+  idleWarningLeadSec: parsePositiveIntEnv('IDLE_WARNING_LEAD_SEC', 60),
+  // --- Guest calling (epic #208, issue #299, docs/specs/guest-calling-intercom.md) ---
+  /**
+   * HMAC secret used to sign production-scoped guest invite tokens. Now an
+   * OPTIONAL override (issue #391): when set it wins over the backend-generated
+   * stored key (`src/lib/guest-signing-key.ts`), so existing self-hosted setups
+   * keep working unchanged. When unset, the backend generates and stores its own
+   * key, so guest calling is on by default. Only the SHA-256 hash of each token
+   * is persisted (`GuestInviteDoc.tokenHash`); the raw token is returned to the
+   * operator once and never stored (spec §Risks). Redacted in
+   * `src/lib/log-redact.ts` and the Fastify logger's redact paths.
+   */
+  guestInviteSecret: process.env['GUEST_INVITE_SECRET'] ?? undefined,
+  /** Default guest invite lifetime in seconds. */
+  guestInviteTtlS: parsePositiveIntEnv('GUEST_INVITE_TTL_S', 86400),
+  /**
+   * Base URL of the Open Intercom manager (Eyevinn/intercom-manager), **including
+   * `/api/v1`** (e.g. `https://intercom.example.com/api/v1`). Optional: when
+   * unset, guest calling still works with WHIP video + WHEP return but no
+   * talkback line (the fallback is first-class by design — spec §Configuration).
+   */
+  intercomManagerUrl: process.env['INTERCOM_MANAGER_URL'] ?? undefined,
+  /**
+   * Auth token for the Open Intercom manager. Optional; held server-side only
+   * and redacted in `src/lib/log-redact.ts`. In `direct` auth mode it is the
+   * manager's `API_KEY`; in `osc` mode it is an OSC Personal Access Token.
+   */
+  intercomManagerToken: process.env['INTERCOM_MANAGER_TOKEN'] ?? undefined,
+  /**
+   * How `INTERCOM_MANAGER_TOKEN` is used (issue #598, guest-talkback spec OQ3):
+   * - `direct` (default): sent as-is as `Authorization: Bearer <token>`.
+   * - `osc`: the token is an OSC PAT, exchanged for a Service Access Token
+   *   scoped to `eyevinn-intercom-manager` and sent as the Bearer (OSC-hosted,
+   *   SAT-gated manager; leave the instance's `whipAuthKey` unset in that mode).
+   * Any value other than `osc` means `direct`.
+   */
+  intercomManagerAuthMode: (process.env['INTERCOM_MANAGER_AUTH_MODE'] === 'osc' ? 'osc' : 'direct') as
+    | 'osc'
+    | 'direct',
+  /**
+   * Bearer for intercom-manager's per-line WHIP/WHEP endpoints (the manager's
+   * `WHIP_AUTH_KEY`; guest-talkback spec §7, issue #599). Used only by the
+   * talkback proxy in `direct` auth mode; when unset the proxy sends no
+   * `Authorization` (manager WHIP auth off). In `osc` mode the SAT is sent
+   * instead and this is ignored. Held server-side only — never sent to a
+   * browser — and redacted in `src/lib/log-redact.ts` and the logger paths.
+   */
+  intercomWhipAuthKey: process.env['INTERCOM_WHIP_AUTH_KEY'] || undefined,
+  /**
+   * SSRF allowlist for an operator-supplied intercom-manager URL set at runtime
+   * through `/api/v1/intercom-connection` (issue #617, OL-47,
+   * `docs/specs/intercom-connection.md` §6, ADR-013). Comma-separated
+   * private/loopback/link-local IP literals or CIDR ranges the manager URL MAY
+   * point at (a self-hosted manager on a private LAN, e.g. "192.168.1.0/24").
+   * Empty by default: every private/loopback/link-local manager URL is
+   * rejected. Same parsing idiom as `TRUSTED_STORAGE_HOSTS` and matched by the
+   * same `isTrustedHost` matcher (`src/lib/url-validation.ts`). Applies only to
+   * the stored runtime connection; the `INTERCOM_MANAGER_URL` env var is
+   * operator config and is not gated. NEVER add 169.254.0.0/16 or 0.0.0.0/0.
+   */
+  trustedIntercomHosts: (process.env['TRUSTED_INTERCOM_HOSTS'] ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+  // --- Shared-GPU usage metering (issue #500, docs/specs/shared-gpu-usage-metering.md, ADR-005) ---
+  /**
+   * Shared-GPU pool label (e.g. `se-sto01`) surfaced as the `gpu_pool` label /
+   * `gpuPool` field. **Metering is enabled iff this is set.** Resolved by
+   * `resolveGpuMetering` (`src/lib/gpu-metering-defaults.ts`, issues #537, #547):
+   * - an explicit `GPU_POOL` env value (internal operator/test configuration)
+   *   sets the pool label and enables metering anywhere (source `env`); it
+   *   cannot turn metering off;
+   * - otherwise an OSC-managed instance (`OSC_HOSTNAME`, platform-injected)
+   *   whose `STROM_URL` is the platform-hosted shared Strom always gets a pool
+   *   derived from the Strom host (source `platform-default`). There is no
+   *   switch;
+   * - otherwise unset, so self-hosted / BYO-Strom deployments report zero
+   *   shared-GPU time (`/api/v1/usage/gpu` → `hours: []`, `/metrics` emits no
+   *   `osc_gpu_*` samples).
+   * No published service option maps to `GPU_POOL`; nothing else may read
+   * `process.env.GPU_POOL`.
+   */
+  gpuPool: gpuMetering?.pool,
+  /**
+   * `gpu_class` label value (default `shared`). Always `shared` when
+   * `STROM_URL` is the platform-hosted shared Strom (#547; `GPU_CLASS` is
+   * ignored there). Elsewhere `GPU_CLASS` overrides it as a dashboard label;
+   * only the shared class is metered to tokens.
+   */
+  gpuClass: gpuMetering?.class ?? optionalEnv('GPU_CLASS') ?? 'shared',
+  /** Where `gpuPool` came from (`env` / `platform-default`); undefined when metering is off. Logged at startup. */
+  gpuMeteringSource: gpuMetering?.source,
+  /**
+   * Settle-sweep cadence in ms (default 5 min). The sweep writes each fully
+   * elapsed UTC hour's GPU-seconds into the owning production's append-only
+   * `gpuHours` buckets. A lower value bounds the worst-case partial hour lost on
+   * a hard crash between sweeps; a higher value reduces CouchDB writes.
+   */
+  gpuSettleIntervalMs: parsePositiveIntEnv('GPU_SETTLE_INTERVAL_MS', 300_000, MAX_TIMER_MS),
+  /**
+   * How long (hours, default 2160 = 90 days) closed `gpuHours` buckets are
+   * retained and returned by `/api/v1/usage/gpu`. Old buckets are pruned on
+   * settle. Must exceed the platform's re-poll + dead-letter window.
+   */
+  gpuUsageRetentionHours: parsePositiveIntEnv('GPU_USAGE_RETENTION_HOURS', 2160),
+  /**
+   * Optional OSC workspace id. When the platform injects one, it is emitted as
+   * the `tenantId` / `tenant` label. Unset (the expected case today — open-live
+   * has no tenant id of its own) → `"unattributed"`, and the platform poller
+   * resolves instance→tenant on its side. A bucket is NEVER dropped for lack of
+   * a tenant.
+   */
+  oscWorkspaceId: optionalEnv('OSC_WORKSPACE_ID'),
+} as const;
+
+/**
+ * True once a guest-invite signing key is available — the env override
+ * (`GUEST_INVITE_SECRET`) OR the backend-generated stored key loaded at startup
+ * (issue #391, `src/lib/guest-signing-key.ts`). Because the backend generates
+ * and stores a key on first start, this is true by default on every instance;
+ * the invite/join/guest-management routes only degrade to 503 if no key is
+ * available at all (e.g. the DB was unreachable at startup and no env override).
+ */
+export function isGuestCallingEnabled(): boolean {
+  return isGuestSigningKeyAvailable();
+}
+
+/**
+ * True when shared-GPU usage metering is enabled, i.e. `config.gpuPool` is
+ * resolved: from an explicit `GPU_POOL`, or from the platform default for an
+ * OSC-managed instance on the platform-hosted shared Strom (issues #537,
+ * #547; always, there is no switch). When false (every self-hosted /
+ * BYO-Strom deployment, and any instance off the platform shared Strom with
+ * no `GPU_POOL` set), no GPU-seconds accrue,
+ * `/api/v1/usage/gpu` returns `hours: []`, and `/metrics` emits no `osc_gpu_*`
+ * samples. This is the single predicate for all accrual AND the zero-balance
+ * start gate (`production-gate.ts`), so the metered set and the gated set are
+ * the same by construction.
+ */
+export function isGpuMeteringEnabled(): boolean {
+  return Boolean(config.gpuPool);
+}
+
+/**
+ * True when all required MinIO vars are present, i.e. recordings are uploaded to
+ * object storage on deactivate and the VOD listing/playback endpoints are served.
+ * Recording itself does not depend on this: without object storage, Strom's
+ * recorder still writes segments to its media path and they stay there.
+ */
+export function isObjectStorageConfigured(): boolean {
+  return Boolean(
+    config.minioEndpoint &&
+      config.minioAccessKey &&
+      config.minioSecretKey &&
+      config.minioBucket,
+  );
+}
+
+/**
+ * Names of the required MinIO vars that are unset. Empty when object storage is
+ * fully configured or not configured at all (no var set) — a non-empty result
+ * means a partial config, which silently disables upload, so startup warns.
+ */
+export function objectStorageMissingVars(): string[] {
+  const vars: Array<[string, string | undefined]> = [
+    ['MINIO_ENDPOINT', config.minioEndpoint],
+    ['MINIO_ACCESS_KEY', config.minioAccessKey],
+    ['MINIO_SECRET_KEY', config.minioSecretKey],
+    ['MINIO_BUCKET', config.minioBucket],
+  ];
+  const missing = vars.filter(([, v]) => !v).map(([name]) => name);
+  return missing.length === vars.length ? [] : missing;
+}

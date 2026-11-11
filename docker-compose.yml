@@ -1,0 +1,29 @@
+services:
+  couchdb:
+    image: couchdb:3
+    environment:
+      COUCHDB_USER: ${COUCHDB_USER:-admin}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?Set COUCHDB_PASSWORD in .env (see .env.example)}
+    ports:
+      - "127.0.0.1:5984:5984"
+    volumes:
+      - couchdb_data:/opt/couchdb/data
+
+  open-live:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      COUCHDB_URL: http://${COUCHDB_USER:-admin}:${COUCHDB_PASSWORD}@couchdb:5984
+      COUCHDB_NAME: open-live
+      CORS_ORIGIN: http://localhost:5173
+      LOG_LEVEL: info
+      # Required for production deployments — set a strong random secret.
+      # Omit (or leave unset) only when running behind an external auth layer.
+      API_KEY: ${API_KEY:?Set API_KEY in .env (see .env.example)}
+    depends_on:
+      - couchdb
+
+volumes:
+  couchdb_data:

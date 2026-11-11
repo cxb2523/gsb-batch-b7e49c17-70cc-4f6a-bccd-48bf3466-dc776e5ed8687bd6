@@ -1,0 +1,606 @@
+/**
+ * Tests for async activation state machine and ICE servers route.
+ *
+ * CouchDB, Strom client, and flow-generator are mocked — no real services required.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { buildServer } from '../server.js';
+import { resetIceServersCache } from '../lib/ice-servers.js';
+
+// ---------------------------------------------------------------------------
+// Mock CouchDB
+// ---------------------------------------------------------------------------
+
+const mockGet = vi.fn();
+const mockInsert = vi.fn();
+const mockFind = vi.fn();
+
+vi.mock('../db/index.js', () => ({
+  getDb: () => ({ get: mockGet, insert: mockInsert, find: mockFind }),
+  getSourcesDb: () => ({ get: mockGet }),
+  connectDb: vi.fn().mockResolvedValue(undefined),
+  isDbReady: vi.fn().mockResolvedValue(true),
+  isDbConnected: vi.fn().mockReturnValue(true),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock WebSocket controller (avoids startup side effects)
+// ---------------------------------------------------------------------------
+
+vi.mock('../ws/controller.js', () => ({
+  default: async () => {},
+  // The deactivate route imports these live-state cleanup helpers; without them
+  // the mock is missing exports and the handler throws (→ 500) instead of 200.
+  clearAudioState: vi.fn(),
+  clearPipState: vi.fn(),
+  clearFxState: vi.fn(),
+  clearClipStateForProduction: vi.fn(),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock flow-generator
+// ---------------------------------------------------------------------------
+
+const mockActivateStromFlow = vi.fn();
+const mockDeactivateStromFlow = vi.fn();
+
+vi.mock('../lib/flow-generator.js', () => ({
+  activateStromFlow: (...args: unknown[]) => mockActivateStromFlow(...args),
+  deactivateStromFlow: (...args: unknown[]) => mockDeactivateStromFlow(...args),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock StromClient
+// ---------------------------------------------------------------------------
+
+const mockStromFlowsGet = vi.fn();
+const mockStromMixerMultiviewEndpoint = vi.fn();
+const mockStromSystemIceServers = vi.fn();
+const mockStromSystemVersion = vi.fn();
+
+vi.mock('../lib/strom.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/strom.js')>();
+  class MockStromClient {
+    system = {
+      version: mockStromSystemVersion,
+      iceServers: mockStromSystemIceServers,
+    };
+    flows = {
+      get: mockStromFlowsGet,
+      start: vi.fn().mockResolvedValue({}),
+      stop: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue({}),
+    };
+    mixer = {
+      multiviewEndpoint: mockStromMixerMultiviewEndpoint,
+    };
+  }
+  return {
+    ...actual,
+    StromClient: MockStromClient,
+  };
+});
+
+const mockBroadcast = vi.fn();
+vi.mock('../services/tally.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/tally.service.js')>();
+  return { ...actual, broadcast: (...args: unknown[]) => mockBroadcast(...args) };
+});
+
+// Mock strom-token
+vi.mock('../lib/strom-token.js', () => ({
+  getStromToken: vi.fn().mockResolvedValue('test-token'),
+}));
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeProductionDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: 'prod-test-1',
+    _rev: '1-abc',
+    type: 'production',
+    name: 'Test Production',
+    status: 'inactive',
+    sources: [],
+    pipeline: { stromConfig: null, status: 'stopped' },
+    graphics: [],
+    macros: [],
+    tally: { pgm: null, pvw: null },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** A promise whose resolution we control, to park an async run mid-flight. */
+function makeDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Minimal shape returned by activateStromFlow, enough to drive runActivationFlow. */
+function makeActivationResult(flowId: string, mixerBlockId: string) {
+  return {
+    flowId,
+    mixerBlockId,
+    audioMixerBlockId: undefined,
+    loudnessMainBlockId: undefined,
+    recorderBlockId: undefined,
+    whepOutputEntries: [],
+    pgmWhepEndpointId: undefined,
+    warnings: [],
+    sourceOffsetBlockIds: {},
+    sourceAudioOffsetBlockIds: {},
+    clipPlayerBlockIds: {},
+    returnBuses: [],
+    returnWhepEntries: [],
+    previewWhepEntries: [],
+    mixerInputMap: {},
+  };
+}
+
+const noAudioWarning = { type: 'recording-no-audio', message: 'Recording "VOD" has no sound' };
+
+function activationResultWithWarning() {
+  return {
+    ...makeActivationResult('flow-abc', ''),
+    mixerBlockId: null,
+    audioMixerBlockId: null,
+    loudnessMainBlockId: null,
+    warnings: [noAudioWarning],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/v1/productions/:id/activate
+// ---------------------------------------------------------------------------
+
+describe('POST /api/v1/productions/:id/activate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFind.mockResolvedValue({ docs: [] });
+  });
+
+  it('returns 200 with status "activating" immediately', async () => {
+    const doc = makeProductionDoc();
+    mockGet.mockResolvedValue(doc);
+    mockInsert.mockResolvedValue({ rev: '2-bcd', ok: true, id: doc._id });
+    // The async polling loop will call activateStromFlow — we just let it
+    // resolve slowly so it doesn't interfere with this test
+    mockActivateStromFlow.mockResolvedValue('flow-abc');
+    mockStromFlowsGet.mockResolvedValue({ flow: { id: 'flow-abc', state: 'idle' } });
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/productions/prod-test-1/activate',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('activating');
+    expect(body.id).toBe('prod-test-1');
+  });
+
+  it('saves activation warnings, and sends each as an ERROR frame once the production is live', async () => {
+    const doc = makeProductionDoc();
+    mockGet.mockResolvedValue(doc);
+    mockInsert.mockResolvedValue({ rev: '2-bcd', ok: true, id: doc._id });
+    mockActivateStromFlow.mockResolvedValue(activationResultWithWarning());
+    mockStromFlowsGet.mockResolvedValue({ flow: { id: 'flow-abc', running: true, blocks: [] } });
+
+    const app = await buildServer();
+    await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+
+    await vi.waitFor(() => {
+      expect(mockBroadcast).toHaveBeenCalledWith('prod-test-1', { type: 'ERROR', error: noAudioWarning.message });
+    });
+    const saved = mockInsert.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(saved.some((d) => d['stromFlowId'] === 'flow-abc' && (d['activationWarnings'] as unknown[])?.length === 1)).toBe(true);
+    await app.close();
+  });
+
+  it('persists both activation-warning variants and sends each message as an ERROR frame (#516)', async () => {
+    const audioWarning = {
+      type: 'audio-stream-not-applied',
+      sourceId: 'src-cam-1',
+      mixerInput: 'video_in_3',
+      requestedIndex: 1,
+      appliedIndex: 0,
+      reason: 'strom-capability-missing',
+      message: 'Cam 1 (SRT): audio stream 2 was not applied, using stream 1. This Strom cannot select an audio stream by PID yet.',
+    };
+    const doc = makeProductionDoc();
+    mockGet.mockResolvedValue(doc);
+    mockInsert.mockResolvedValue({ rev: '2-bcd', ok: true, id: doc._id });
+    mockActivateStromFlow.mockResolvedValue({ ...activationResultWithWarning(), warnings: [noAudioWarning, audioWarning] });
+    mockStromFlowsGet.mockResolvedValue({ flow: { id: 'flow-abc', running: true, blocks: [] } });
+
+    const app = await buildServer();
+    await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+
+    await vi.waitFor(() => {
+      expect(mockBroadcast).toHaveBeenCalledWith('prod-test-1', { type: 'ERROR', error: audioWarning.message });
+    });
+    expect(mockBroadcast).toHaveBeenCalledWith('prod-test-1', { type: 'ERROR', error: noAudioWarning.message });
+    const saved = mockInsert.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    const live = saved.find((d) => d['stromFlowId'] === 'flow-abc' && d['activationWarnings']);
+    expect(live?.['activationWarnings']).toEqual([noAudioWarning, audioWarning]);
+    await app.close();
+  });
+
+  it('does not send the warning if the production is deactivated before it goes live', async () => {
+    const doc = makeProductionDoc();
+    mockGet.mockResolvedValue(doc);
+    let releaseStep2!: () => void;
+    const step2Gate = new Promise<void>((r) => { releaseStep2 = r; });
+    let step2Reached = false;
+    mockInsert.mockImplementation(async (d: Record<string, unknown>) => {
+      if (d['stromFlowId'] === 'flow-abc' && d['activationWarnings']) {
+        step2Reached = true;
+        await step2Gate;
+      }
+      return { rev: '2-bcd', ok: true, id: doc._id };
+    });
+    mockActivateStromFlow.mockResolvedValue(activationResultWithWarning());
+    mockStromFlowsGet.mockResolvedValue({ flow: { id: 'flow-abc', running: true, blocks: [] } });
+    mockDeactivateStromFlow.mockResolvedValue(undefined);
+
+    const app = await buildServer();
+    await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+    await vi.waitFor(() => expect(step2Reached).toBe(true));
+    await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/deactivate' });
+    releaseStep2();
+
+    await vi.waitFor(() => expect(mockDeactivateStromFlow).toHaveBeenCalledWith('flow-abc', expect.anything()));
+    const types = mockBroadcast.mock.calls.map((c) => (c[1] as { type: string }).type);
+    expect(types).toContain('PRODUCTION_DEACTIVATED');
+    expect(types).not.toContain('ERROR');
+    await app.close();
+  });
+
+  it('clears the previous activation warnings when the production is activated again', async () => {
+    const doc = makeProductionDoc({ status: 'ended', activationWarnings: [noAudioWarning] });
+    mockGet.mockResolvedValue(doc);
+    mockInsert.mockResolvedValue({ rev: '2-bcd', ok: true, id: doc._id });
+    mockActivateStromFlow.mockReturnValue(new Promise(() => {}));
+
+    const app = await buildServer();
+    await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+
+    const activating = mockInsert.mock.calls[0]![0] as Record<string, unknown>;
+    expect(activating['status']).toBe('activating');
+    expect(activating['activationWarnings']).toBeUndefined();
+    await app.close();
+  });
+
+  it('drops the previous recorder fields when this activation has no recorder', async () => {
+    const doc = makeProductionDoc({ status: 'ended', recorderBlockId: 'b-old', recorderType: 'recorder' });
+    mockGet.mockResolvedValue(doc);
+    mockInsert.mockResolvedValue({ rev: '2-bcd', ok: true, id: doc._id });
+    mockActivateStromFlow.mockResolvedValue(activationResultWithWarning());
+    mockStromFlowsGet.mockResolvedValue({ flow: { id: 'flow-abc', running: true, blocks: [] } });
+
+    const app = await buildServer();
+    await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+
+    await vi.waitFor(() => {
+      const saved = mockInsert.mock.calls.map((c) => c[0] as Record<string, unknown>);
+      const live = saved.find((d) => d['stromFlowId'] === 'flow-abc');
+      expect(live).toBeDefined();
+      expect(live!['recorderBlockId']).toBeUndefined();
+      expect(live!['recorderType']).toBeUndefined();
+    });
+    await app.close();
+  });
+
+  it('clears activation warnings when activation fails', async () => {
+    const doc = makeProductionDoc({ recorderBlockId: 'b-old' });
+    mockGet.mockImplementation(async () => mockInsert.mock.calls.at(-1)?.[0] ?? doc);
+    mockInsert.mockResolvedValue({ rev: '2-bcd', ok: true, id: doc._id });
+    mockActivateStromFlow.mockResolvedValue(activationResultWithWarning());
+    mockStromFlowsGet.mockRejectedValue(new Error('Strom down'));
+    mockDeactivateStromFlow.mockResolvedValue(undefined);
+
+    const app = await buildServer();
+    await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+
+    await vi.waitFor(() => {
+      const last = mockInsert.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      expect(last['status']).toBe('inactive');
+      expect(last['activationWarnings']).toBeUndefined();
+      expect(last['recorderBlockId']).toBeUndefined();
+    });
+    await app.close();
+  });
+
+  it('returns 409 if production is already active', async () => {
+    const doc = makeProductionDoc({ status: 'active' });
+    mockGet.mockResolvedValue(doc);
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/productions/prod-test-1/activate',
+    });
+
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.error).toContain("already 'active'");
+  });
+
+  it('returns 409 if production is already activating', async () => {
+    const doc = makeProductionDoc({ status: 'activating' });
+    mockGet.mockResolvedValue(doc);
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/productions/prod-test-1/activate',
+    });
+
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.error).toContain("already 'activating'");
+  });
+
+  it('returns 500 if CouchDB write fails', async () => {
+    const doc = makeProductionDoc();
+    mockGet.mockResolvedValue(doc);
+    mockInsert.mockRejectedValue(new Error('CouchDB connection error'));
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/productions/prod-test-1/activate',
+    });
+
+    expect(res.statusCode).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/v1/productions/:id/deactivate
+// ---------------------------------------------------------------------------
+
+describe('POST /api/v1/productions/:id/deactivate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFind.mockResolvedValue({ docs: [] });
+  });
+
+  it('clears whepEndpoint, stromFlowId, and mixerBlockId on deactivate', async () => {
+    const doc = makeProductionDoc({
+      status: 'active',
+      stromFlowId: 'flow-abc',
+      mixerBlockId: 'mixer-1',
+      whepEndpoint: 'https://strom.example.com/whep/flow-abc/mixer-1',
+    });
+    mockGet.mockResolvedValue(doc);
+    mockDeactivateStromFlow.mockResolvedValue(undefined);
+    mockInsert.mockResolvedValue({ rev: '3-cde', ok: true, id: doc._id });
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/productions/prod-test-1/deactivate',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    // Deactivating an *active* production now yields `ended` (issue #255): it ran
+    // a broadcast that has finished, distinct from a never-started `inactive`.
+    expect(body.status).toBe('ended');
+
+    // Verify the doc written to CouchDB cleared the fields
+    const insertedDoc = mockInsert.mock.calls[0][0];
+    expect(insertedDoc.whepEndpoint).toBeUndefined();
+    expect(insertedDoc.stromFlowId).toBeUndefined();
+    expect(insertedDoc.mixerBlockId).toBeUndefined();
+  });
+
+  it('clears commentator preview WHEP URLs on deactivate', async () => {
+    const doc = makeProductionDoc({
+      status: 'active',
+      stromFlowId: 'flow-abc',
+      previewWhepUrls: [{ mixerInput: 'video_in_0', url: 'http://strom/whep/p', endpointId: 'p' }],
+    });
+    mockGet.mockResolvedValue(doc);
+    mockDeactivateStromFlow.mockResolvedValue(undefined);
+    mockInsert.mockResolvedValue({ rev: '3-cde', ok: true, id: doc._id });
+
+    const app = await buildServer();
+    const res = await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/deactivate' });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockInsert.mock.calls[0][0].previewWhepUrls).toBeUndefined();
+  });
+
+  it('clears clipPlayerBlockIds on deactivate (issue #276)', async () => {
+    // A production with an active clip source carries a clipPlayerBlockIds map
+    // (mixerInput → builtin.media_player block ID) set at activation. Deactivate
+    // must clear it, mirroring sourceOffsetBlockIds / sourceAudioOffsetBlockIds.
+    const doc = makeProductionDoc({
+      status: 'active',
+      stromFlowId: 'flow-clip',
+      mixerBlockId: 'mixer-1',
+      clipPlayerBlockIds: { video_in_1: 'b-clip-1-flowclip' },
+      sourceOffsetBlockIds: { video_in_1: 'b-offset-1-flowclip' },
+      sourceAudioOffsetBlockIds: { video_in_1: 'b-audio-offset-1-flowclip' },
+    });
+    mockGet.mockResolvedValue(doc);
+    mockDeactivateStromFlow.mockResolvedValue(undefined);
+    mockInsert.mockResolvedValue({ rev: '3-cde', ok: true, id: doc._id });
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/productions/prod-test-1/deactivate',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const insertedDoc = mockInsert.mock.calls[0][0];
+    expect(insertedDoc.clipPlayerBlockIds).toBeUndefined();
+    expect(insertedDoc.sourceOffsetBlockIds).toBeUndefined();
+    expect(insertedDoc.sourceAudioOffsetBlockIds).toBeUndefined();
+  });
+
+  it('returns 200 even if production has no stromFlowId', async () => {
+    const doc = makeProductionDoc({ status: 'inactive' });
+    mockGet.mockResolvedValue(doc);
+    mockInsert.mockResolvedValue({ rev: '2-bcd', ok: true, id: doc._id });
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/productions/prod-test-1/deactivate',
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: activate → deactivate → activate → deactivate abort race (#371)
+// ---------------------------------------------------------------------------
+
+describe('activate → deactivate → activate → deactivate abort-controller race (issue #371)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFind.mockResolvedValue({ docs: [] });
+  });
+
+  it('a slow aborted first run must not delete the second run\'s abort controller', async () => {
+    // Stateful doc store so status transitions written by one route are seen by
+    // the next (both routes and updateProductionDoc go through get + insert).
+    let currentDoc: Record<string, unknown> = makeProductionDoc();
+    mockGet.mockImplementation(async () => ({ ...currentDoc }));
+    mockInsert.mockImplementation(async (d: Record<string, unknown>) => {
+      currentDoc = { ...d };
+      return { rev: `rev-${Date.now()}`, ok: true, id: d._id as string };
+    });
+
+    // Both activation runs park at `await activateStromFlow(...)` until we
+    // resolve their deferreds — this lets us interleave the routes precisely so
+    // the FIRST (aborted) run's `finally` fires only after the SECOND run has
+    // registered its own controller.
+    const firstRun = makeDeferred<ReturnType<typeof makeActivationResult>>();
+    const secondRun = makeDeferred<ReturnType<typeof makeActivationResult>>();
+    mockActivateStromFlow
+      .mockReturnValueOnce(firstRun.promise)
+      .mockReturnValueOnce(secondRun.promise);
+    mockDeactivateStromFlow.mockResolvedValue(undefined);
+    // If the second run is (wrongly) left un-aborted, it polls a running flow and
+    // writes status 'active' — exactly the bug this guard prevents.
+    mockStromFlowsGet.mockResolvedValue({ flow: { id: 'flow-2', running: true, blocks: [] } });
+    mockStromMixerMultiviewEndpoint.mockResolvedValue({ endpoint: '/whep/flow-2/mixer-2' });
+
+    const app = await buildServer();
+    const flush = async (n = 6) => {
+      for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
+    };
+
+    // 1) First activation — parks at activateStromFlow with controller #1 registered.
+    const act1 = await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+    expect(act1.statusCode).toBe(200);
+    await flush();
+
+    // 2) First deactivation — aborts and removes controller #1.
+    const deact1 = await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/deactivate' });
+    expect(deact1.statusCode).toBe(200);
+    await flush();
+
+    // 3) Second activation — parks at activateStromFlow with controller #2 registered.
+    const act2 = await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/activate' });
+    expect(act2.statusCode).toBe(200);
+    await flush();
+
+    // 4) The slow first run now completes. Its `finally` must NOT delete
+    //    controller #2 (it is aborted, so it just returns cleanly).
+    firstRun.resolve(makeActivationResult('flow-1', 'mixer-1'));
+    await flush();
+
+    // 5) Second deactivation — must still find controller #2 in the map to abort it.
+    const deact2 = await app.inject({ method: 'POST', url: '/api/v1/productions/prod-test-1/deactivate' });
+    expect(deact2.statusCode).toBe(200);
+    await flush();
+
+    // 6) Let the second run resume. Because step 5 aborted it, it must bail out
+    //    and must NOT overwrite the deactivated doc with status 'active'.
+    secondRun.resolve(makeActivationResult('flow-2', 'mixer-2'));
+    await flush();
+
+    expect(currentDoc.status).toBe('inactive');
+    expect(currentDoc.status).not.toBe('active');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/v1/ice-servers
+// ---------------------------------------------------------------------------
+
+describe('GET /api/v1/ice-servers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFind.mockResolvedValue({ docs: [] });
+    // The ice-servers route keeps a module-level stale-on-error cache that
+    // survives across buildServer() instances. Clear it so a cached success
+    // from an earlier test can't be served in place of a mocked error (502).
+    resetIceServersCache();
+  });
+
+  it('returns 200 with iceServers array from Strom', async () => {
+    mockStromSystemIceServers.mockResolvedValue({
+      ice_servers: [
+        { urls: ['turn:turn.example.com:3478'], username: 'user', credential: 'pass' },
+        { urls: ['stun:stun.example.com:3478'] },
+      ],
+    });
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/ice-servers',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.iceServers).toHaveLength(2);
+    expect(body.iceServers[0].urls).toContain('turn:turn.example.com:3478');
+    expect(body.iceServers[0].username).toBe('user');
+    expect(body.iceServers[0].credential).toBe('pass');
+  });
+
+  it('returns 502 if Strom is unreachable', async () => {
+    mockStromSystemIceServers.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/ice-servers',
+    });
+
+    expect(res.statusCode).toBe(502);
+    const body = JSON.parse(res.body);
+    expect(body.statusCode).toBe(502);
+  });
+
+  it('returns 502 if Strom returns a StromClientError', async () => {
+    const { StromClientError } = await import('../lib/strom.js');
+    mockStromSystemIceServers.mockRejectedValue(new StromClientError(503, 'Service unavailable'));
+
+    const app = await buildServer();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/ice-servers',
+    });
+
+    expect(res.statusCode).toBe(502);
+  });
+});

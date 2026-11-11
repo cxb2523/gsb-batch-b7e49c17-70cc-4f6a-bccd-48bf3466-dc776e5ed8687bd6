@@ -1,0 +1,4884 @@
+openapi: 3.1.0
+info:
+  title: Open Live API
+  version: 1.0.0
+  description: |
+    REST API for the Open Live broadcast production platform.
+
+    **Authentication**: Pass an API key via `Authorization: Bearer <key>` header or `?key=<key>` query parameter.
+    The following paths are exempt from authentication: `/health`, `/ready`, `/api/v1/status`, `/api/v1/server-info`.
+
+servers:
+  - url: /
+
+security:
+  - bearerAuth: []
+  - apiKeyQuery: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    apiKeyQuery:
+      type: apiKey
+      in: query
+      name: key
+
+  schemas:
+    # ── Primitives ──────────────────────────────────────────────────────────────
+
+    IntercomConnectionStatus:
+      type: object
+      description: Status of the intercom connection in effect (issue #617). Never carries a secret.
+      required: [source, configured, url, mode, modeOverridden, tokenSet, whipKeySet, patSource, oscPatSet, problem, updatedAt]
+      properties:
+        source:
+          type: string
+          enum: [stored, env, none]
+        configured:
+          type: boolean
+        url:
+          type: [string, 'null']
+        mode:
+          type: [string, 'null']
+          enum: [osc, direct, null]
+        modeOverridden:
+          type: boolean
+        tokenSet:
+          type: boolean
+        whipKeySet:
+          type: boolean
+        patSource:
+          type: [string, 'null']
+          enum: [OscAccessToken, INTERCOM_MANAGER_TOKEN, null]
+        oscPatSet:
+          type: boolean
+        problem:
+          type: [string, 'null']
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+
+    StreamType:
+      type: string
+      enum: [srt, efp, whip, html, clip]
+      description: >-
+        Source stream kind. `clip` (epic #206) is a cue-then-play file/story
+        source whose typed `ClipReference` is stored serialized in the source's
+        `address` field. Clients must ignore unknown enum values (forward-compat).
+
+    ClipReference:
+      description: >-
+        Typed, versioned reference for a `clip` source (epic #206, issue #275).
+        A discriminated union on `type`; stored serialized as a JSON string in
+        `SourceDoc.address`. v1 implements `url` and `s3`; `tams` is reserved and
+        rejected at runtime (501). Any variant may carry an optional `timerange`
+        — nothing assumes a fixed media length.
+      oneOf:
+        - $ref: '#/components/schemas/ClipReferenceUrl'
+        - $ref: '#/components/schemas/ClipReferenceS3'
+        - $ref: '#/components/schemas/ClipReferenceTams'
+      discriminator:
+        propertyName: type
+
+    ClipReferenceUrl:
+      type: object
+      required: [type, url]
+      properties:
+        type:
+          type: string
+          enum: [url]
+        url:
+          type: string
+          description: Any fetchable file / object-storage URL (a presigned URL reduces to this).
+        timerange:
+          type: string
+          description: Optional; no fixed-length assumption.
+
+    ClipReferenceS3:
+      type: object
+      required: [type, bucket, key]
+      properties:
+        type:
+          type: string
+          enum: [s3]
+        bucket:
+          type: string
+        key:
+          type: string
+        timerange:
+          type: string
+
+    ClipReferenceTams:
+      type: object
+      description: BBC Time-Addressable Media Store. Reserved — rejected (501) in v1.
+      required: [type, store, flowId, timerange]
+      properties:
+        type:
+          type: string
+          enum: [tams]
+        store:
+          type: string
+        flowId:
+          type: string
+        timerange:
+          type: string
+
+    ClipState:
+      type: object
+      description: >-
+        Live clip playback state for a `clip` source assigned to a mixer input
+        (epic #206, issues #277/#278). CamelCased mirror of Strom's media-player
+        state plus the cue/play/completed clip state machine.
+      required: [mixerInput, state]
+      properties:
+        mixerInput:
+          type: string
+          example: video_in_0
+        state:
+          type: string
+          enum: [idle, cued, playing, paused, stopped, completed, error]
+        clipId:
+          type: string
+        positionMs:
+          type: integer
+        durationMs:
+          type: integer
+        error:
+          type: string
+
+    SourceStatus:
+      type: string
+      enum: [active, inactive]
+
+    OutputType:
+      type: string
+      enum: [mpegtssrt, efpsrt, whep, recording]
+      description: >
+        Output kind. 'recording' records the programme with Strom's builtin
+        recorder to Strom's media path. The segments are uploaded on deactivate to
+        a storage connection named by `connectionId`, or to the MinIO/S3 store
+        when MinIO/S3 is configured, and listed by the /recordings endpoints.
+        With neither, creating the output returns 400 unless the server sets
+        `RECORDING_LOCAL_ONLY=true` (default off); then the segments stay on
+        Strom's media path with no upload and no retention.
+
+    OutputStatus:
+      type: string
+      description: >-
+        Derived output health (issue #255). `healthy` = the owning production is
+        active with a running flow; `down` = not running; `unknown` = health
+        could not be determined (or field absent, which is equivalent to
+        `unknown`). `degraded` is reserved in the enum for a future per-output
+        signal and is never emitted today. Clients must ignore unknown enum
+        values (forward-compat).
+      enum: [healthy, degraded, down, unknown]
+
+    ProductionStatus:
+      type: string
+      description: >-
+        Production lifecycle status. `ended` (issue #255) means the production
+        ran a broadcast that has finished, distinct from `inactive` (never
+        started / clean idle). Clients must ignore unknown enum values
+        (forward-compat).
+      enum: [active, inactive, activating, ended]
+
+    MacroActionType:
+      type: string
+      enum: [CUT, TRANSITION, TAKE, GRAPHIC_ON, GRAPHIC_OFF, DSK_TOGGLE]
+
+    ConfigValues:
+      type: object
+      additionalProperties:
+        oneOf:
+          - type: string
+          - type: number
+          - type: boolean
+
+    # ── Source ──────────────────────────────────────────────────────────────────
+
+    Source:
+      type: object
+      required: [id, name, address, streamType, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+        streamType:
+          $ref: '#/components/schemas/StreamType'
+        status:
+          $ref: '#/components/schemas/SourceStatus'
+        liveCamera:
+          type: boolean
+        latency:
+          type: integer
+          minimum: 20
+          maximum: 8000
+          description: SRT latency in milliseconds
+        audioStreamIndex:
+          type: integer
+          minimum: 0
+          description: >-
+            0-based index of the audio elementary stream this srt/efp source uses
+            (issue #515). Absent means 0 (the first stream). Only valid for `srt`
+            and `efp` sources (400 otherwise). Applied at the next activation; a
+            value that cannot be applied is clamped to the first stream and
+            reported as an `audio-stream-not-applied` activation warning (#516).
+        liveIngest:
+          type: object
+          description: >-
+            Read-only, server-observed WHIP live-ingest state (issue #439,
+            interim — parent #437). Separate from the client-writable `status`
+            field and NEVER overwrites it; clients cannot set `liveIngest`.
+            Present only once a WHIP offer/teardown has been observed for this
+            source and only for `whip` sources; absent otherwise. In-memory
+            only — resets on server restart. KNOWN INTERIM LIMITATION: a
+            publisher that drops without sending a WHIP DELETE stays
+            `connected`; a robust version keying off Strom session events is a
+            separate out-of-scope issue.
+          required: [state, changedAt]
+          properties:
+            state:
+              type: string
+              enum: [connected, disconnected]
+            changedAt:
+              type: string
+              format: date-time
+              description: ISO-8601 UTC time of the last ingest-state transition.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SourceInput:
+      type: object
+      required: [name, address, streamType]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        address:
+          type: string
+        streamType:
+          $ref: '#/components/schemas/StreamType'
+        status:
+          $ref: '#/components/schemas/SourceStatus'
+          default: inactive
+        liveCamera:
+          type: boolean
+        latency:
+          type: integer
+          minimum: 20
+          maximum: 8000
+        audioStreamIndex:
+          type: integer
+          minimum: 0
+          description: >-
+            0-based index of the audio elementary stream this srt/efp source uses
+            (issue #515). Absent means 0 (the first stream). Only valid for `srt`
+            and `efp` sources (400 otherwise). Applied at the next activation; a
+            value that cannot be applied is clamped to the first stream and
+            reported as an `audio-stream-not-applied` activation warning (#516).
+
+    SourcePatch:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        address:
+          type: string
+        streamType:
+          $ref: '#/components/schemas/StreamType'
+        status:
+          $ref: '#/components/schemas/SourceStatus'
+        liveCamera:
+          type: boolean
+        latency:
+          type: integer
+          minimum: 20
+          maximum: 8000
+        audioStreamIndex:
+          type: integer
+          minimum: 0
+          description: >-
+            0-based index of the audio elementary stream this srt/efp source uses
+            (issue #515). Absent means 0 (the first stream). Only valid for `srt`
+            and `efp` sources (400 otherwise). Applied at the next activation; a
+            value that cannot be applied is clamped to the first stream and
+            reported as an `audio-stream-not-applied` activation warning (#516).
+
+    # ── Graphic ─────────────────────────────────────────────────────────────────
+
+    Graphic:
+      type: object
+      required: [id, name, url, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    GraphicInput:
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        url:
+          type: string
+
+    GraphicPatch:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        url:
+          type: string
+
+    # ── Output ──────────────────────────────────────────────────────────────────
+
+    Output:
+      type: object
+      required: [id, name, outputType, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        outputType:
+          $ref: '#/components/schemas/OutputType'
+        url:
+          type: string
+          description: >-
+            Operator-authored SRT bind/listen URI (e.g. srt://:43524?mode=listener).
+            Undefined for whep outputs. Round-tripped by POST/PATCH.
+        connect:
+          $ref: '#/components/schemas/SrtConnect'
+        status:
+          allOf:
+            - $ref: '#/components/schemas/OutputStatus'
+          description: >-
+            Derived output health (issue #255). Read-only; computed on read from
+            the owning production's live flow state, not persisted. Optional —
+            an absent value is equivalent to `unknown`.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RecordingAsset:
+      type: object
+      description: >-
+        A recorded VOD asset archived to MinIO/S3 (epic #5, issue #42). One asset
+        is persisted per uploaded object when a production with a `recording`
+        output deactivates. `playbackUrl` is a time-boxed presigned GET URL
+        (TTL = RECORDING_PRESIGN_TTL_S) so a private bucket's recordings can be
+        played without exposing storage credentials; it is omitted when a
+        presigned URL cannot be produced (e.g. bucket reconfigured).
+      required: [id, productionId, bucket, key, startedAt, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        productionId:
+          type: string
+        outputId:
+          type: string
+          description: The 'recording' output that produced this asset, when known.
+        bucket:
+          type: string
+        key:
+          type: string
+          description: Object key within the bucket.
+        sizeBytes:
+          type: integer
+        durationMs:
+          type: integer
+        activationId:
+          type: string
+          description: >-
+            The activation (Strom flow id) that recorded this part. Absent on
+            older recordings and on files an earlier activation left on Strom.
+        partIndex:
+          type: integer
+          description: >-
+            Part number from the file name's `_%05d` suffix, from 0. With
+            RECORDING_SEGMENT_SECS > 0, parts are uploaded and listed while the
+            production is still live.
+        kind:
+          type: string
+          enum: [program, input]
+          description: >-
+            Program recording or one input's own recording (OL-32). Recordings
+            stored before the field existed are backfilled to and read as
+            `program`. Clients must accept other values added later.
+        mixerInput:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+          description: >-
+            Input recordings only: the stored assignment key of the recorded
+            input (never the compacted Strom pad). Its files are keyed
+            `<productionId>/<mixerInput>/<file>`.
+        sourceId:
+          type: string
+          description: >-
+            Input recordings only: the recorded source (`Whip` for a WHIP
+            input). Absent on a leftover file of an earlier activation.
+        sourceName:
+          type: string
+          description: >-
+            Input recordings only: the label the multiviewer showed at
+            activation (`Guest N · In M` for a WHIP guest slot, else the source
+            name). A snapshot; a later rename does not change it.
+        streamType:
+          type: string
+          enum: [whip, srt, efp]
+          description: "Input recordings only: the source's type at activation."
+        guests:
+          type: array
+          description: >-
+            WHIP inputs only: the guest sessions on this input that overlap the
+            part, joined at the session start and left when the session ended
+            (absent while still joined).
+          items:
+            type: object
+            required: [inviteId, joinedAt]
+            properties:
+              inviteId:
+                type: string
+              label:
+                type: string
+              joinedAt:
+                type: string
+                format: date-time
+              leftAt:
+                type: string
+                format: date-time
+        guestLabel:
+          type: string
+          description: The first of `guests` with a label.
+        recorderType:
+          type: string
+          enum: [liverecorder, recorder]
+          description: >-
+            The Strom block that wrote the file: `liverecorder`
+            (`builtin.liverecorder`, fragmented MP4) or `recorder`
+            (`builtin.recorder`). Set on parts of the activation that recorded
+            them; absent on older recordings and on leftovers of earlier
+            activations.
+        startedAtSource:
+          type: string
+          enum: [strom, event, chained, filename]
+          description: >-
+            How `startedAt` was derived, best first: `strom` (the file's own
+            start reported by Strom), `event` (when open-live received the
+            recorder's file-opened event), `chained` (the previous part's start
+            + duration), `filename` (the session stamp in the file name +
+            earlier parts' durations). On Live Recorder, a part after a split
+            prefers `chained` over `event`. Absent on older recordings
+            (= `filename`).
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        playbackUrl:
+          type: string
+          description: Presigned GET URL for playback. Omitted when unavailable.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SrtConnect:
+      type: object
+      description: >-
+        Read-only, server-derived dial-in address an external SRT caller uses to
+        reach this output. Present only on mpegtssrt/efpsrt outputs that have a
+        well-formed bind URL. `uri`/`host` are null (with a `reason`) when the
+        Strom SRT host cannot be resolved server-side; `port` is always present.
+      required: [uri, host, port, mode, source]
+      properties:
+        uri:
+          type: string
+          nullable: true
+          description: Assembled srt://host:port?mode=… dial-in string, or null when host is unresolved.
+        host:
+          type: string
+          nullable: true
+          description: Resolved SRT host external callers dial, or null when unresolved.
+        port:
+          type: integer
+          description: SRT port parsed from the authored bind URI.
+        mode:
+          type: string
+          enum: [caller, listener]
+          description: The SRT mode the EXTERNAL side should use (inverse of the authored mode).
+        source:
+          type: string
+          enum: [authored-host, srt-public-host, strom-host, unknown]
+          description: Provenance of the resolved host.
+        reason:
+          type: string
+          enum: [srt-host-not-configured, srt-host-not-loopback-reachable, strom-url-not-parseable]
+          description: Present only when `uri` is null — why the host could not be resolved.
+
+    OutputInput:
+      type: object
+      required: [name, outputType]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        outputType:
+          $ref: '#/components/schemas/OutputType'
+        url:
+          type: string
+
+    OutputPatch:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        url:
+          type: string
+
+    # ── Production Config ────────────────────────────────────────────────────────
+
+    ProductionConfig:
+      type: object
+      required: [id, name, values, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        values:
+          $ref: '#/components/schemas/ConfigValues'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ProductionConfigInput:
+      type: object
+      required: [name, values]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        values:
+          $ref: '#/components/schemas/ConfigValues'
+
+    ProductionConfigPatch:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        values:
+          $ref: '#/components/schemas/ConfigValues'
+
+    # ── Macro ────────────────────────────────────────────────────────────────────
+
+    MacroAction:
+      type: object
+      required: [type]
+      properties:
+        type:
+          $ref: '#/components/schemas/MacroActionType'
+        sourceId:
+          type: string
+        transitionType:
+          type: string
+        durationMs:
+          type: integer
+          minimum: 1
+        overlayId:
+          type: string
+        layer:
+          type: integer
+          minimum: 0
+        visible:
+          type: boolean
+
+    Macro:
+      type: object
+      required: [id, slot, label, color, actions]
+      properties:
+        id:
+          type: string
+        slot:
+          type: integer
+          minimum: 0
+          maximum: 7
+        label:
+          type: string
+        color:
+          type: string
+          pattern: '^#[0-9a-fA-F]{6}$'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MacroAction'
+
+    MacroInput:
+      type: object
+      required: [slot, label, color]
+      properties:
+        slot:
+          type: integer
+          minimum: 0
+          maximum: 7
+        label:
+          type: string
+          minLength: 1
+          maxLength: 50
+        color:
+          type: string
+          pattern: '^#[0-9a-fA-F]{6}$'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MacroAction'
+          default: []
+
+    MacroPatch:
+      type: object
+      properties:
+        slot:
+          type: integer
+          minimum: 0
+          maximum: 7
+        label:
+          type: string
+          minLength: 1
+          maxLength: 50
+        color:
+          type: string
+          pattern: '^#[0-9a-fA-F]{6}$'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MacroAction'
+
+    # ── Production ───────────────────────────────────────────────────────────────
+
+    ProductionSourceAssignment:
+      type: object
+      required: [sourceId, mixerInput]
+      properties:
+        sourceId:
+          type: string
+        mixerInput:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+        returnFeed:
+          type: object
+          description: >-
+            Present when this assignment is a guest slot (issue #381): a per-guest
+            mix-minus return built into the flow as a return bus at activation.
+            Absent for an ordinary source assignment. v1 supports the synced
+            (picture-switch) return only (`lowLatency: false`).
+          required: [synced]
+          properties:
+            synced:
+              type: string
+              enum: [program, program-minus]
+              default: program-minus
+            lowLatency:
+              type: boolean
+              enum: [false]
+              default: false
+        commentatorPreview:
+          type: boolean
+          description: >-
+            Present (true) when the source has a commentator preview: an extra
+            WHEP output of the source fed from its input block, before its time
+            offsets and outside the mixer, built at activation. SRT, EFP and
+            clip sources only.
+        record:
+          type: string
+          enum: ['off', transcode, passthrough]
+          description: >-
+            Record this input to its own files beside the program recording
+            (OL-32): `transcode` re-encodes the input as it arrived (before the
+            lipsync offset) to H.264 + AAC. Absent = `off`; `off` is stored as
+            absent. `passthrough` is reserved and refused with 400
+            `record-mode-unsupported`. Only WHIP, SRT and EFP sources can be
+            recorded. Read at activation: a change applies from the next
+            activation. Needs a `recording` output on the production and a
+            Strom with Live Recorder (`builtin.liverecorder`); otherwise the
+            activation raises `input-recording-no-output` or
+            `input-recording-unavailable`.
+
+    InputRecordingState:
+      type: object
+      description: One input the running activation records to its own files (OL-32).
+      required: [mixerInput, sourceId, sourceName, streamType]
+      properties:
+        mixerInput:
+          type: string
+          description: Stored assignment key, never the compacted Strom pad.
+        sourceId:
+          type: string
+        sourceName:
+          type: string
+          description: The multiviewer label at activation.
+        streamType:
+          type: string
+          enum: [whip, srt, efp]
+
+    SourceRecordInput:
+      type: object
+      required: [record]
+      properties:
+        record:
+          type: string
+          enum: ['off', transcode, passthrough]
+          description: '`passthrough` is reserved and refused with 400 `record-mode-unsupported`.'
+
+    SourceRecordResult:
+      type: object
+      required: [mixerInput, sourceId, record, appliesFrom, currentlyRecording, recordingOutputAssigned, _rev]
+      properties:
+        mixerInput:
+          type: string
+        sourceId:
+          type: string
+        record:
+          type: string
+          enum: ['off', transcode]
+        appliesFrom:
+          type: string
+          enum: [next-activation]
+          description: Always `next-activation` in v1; a running production keeps recording what it was activated with.
+        currentlyRecording:
+          type: boolean
+          description: Whether the running activation records this input. `false` when the production is not live.
+        recordingOutputAssigned:
+          type: boolean
+          description: >-
+            Whether the production has a `recording` output now. `false` with
+            `record: transcode` means the next activation records nothing for
+            this input and raises `input-recording-no-output`.
+        _rev:
+          type: string
+
+    InputRecordingError:
+      type: object
+      description: A refused `record` setting (OL-32).
+      required: [error, statusCode, reason]
+      properties:
+        error:
+          type: string
+        statusCode:
+          type: integer
+        reason:
+          type: string
+          enum: [record-mode-unsupported, record-source-unsupported, record-cap-reached]
+          description: >-
+            `record-mode-unsupported` (400): `passthrough`.
+            `record-source-unsupported` (400): the source is not WHIP, SRT or EFP.
+            `record-cap-reached` (409): more than RECORDING_MAX_INPUTS recorded
+            inputs on this production, or RECORDING_MAX_INPUTS is 0.
+
+    ProductionGraphicAssignment:
+      type: object
+      required: [graphicId, dskInput]
+      properties:
+        graphicId:
+          type: string
+        dskInput:
+          type: string
+
+    ProductionOutputAssignment:
+      type: object
+      required: [outputId]
+      properties:
+        outputId:
+          type: string
+
+    Pipeline:
+      type: object
+      required: [status]
+      properties:
+        stromConfig:
+          type: object
+          nullable: true
+          additionalProperties: true
+        status:
+          type: string
+          enum: [stopped, running]
+
+    Tally:
+      type: object
+      properties:
+        pgm:
+          type: string
+          nullable: true
+        pvw:
+          type: string
+          nullable: true
+
+    # Audio processing (issue #527, OL-25). Ranges mirror Strom exactly; a
+    # running Strom's GET /api/blocks is authoritative. All numeric params are
+    # partial so a single knob can move per request.
+    AudioProcessingStageParams:
+      type: object
+      description: >
+        Params for one processing stage. Which keys apply depends on the stage:
+        gain → {gain}; hpf → {enabled, freq}; gate → {enabled, threshold,
+        attack, release}; comp → {enabled, threshold, ratio, attack, release,
+        makeup, knee}; eq → {enabled, bands[]}; limiter → {enabled, threshold}.
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        gain:
+          type: number
+          description: Channel input gain, dB (-20 to +20).
+          minimum: -20
+          maximum: 20
+        freq:
+          type: number
+          description: HPF cutoff, Hz (20 to 500). Live; the hpf enable flag takes effect on next activation.
+          minimum: 20
+          maximum: 500
+        threshold:
+          type: number
+          description: "Gate/comp threshold dB (-60 to 0); limiter threshold dB (-20 to 0)."
+        ratio:
+          type: number
+          description: Compressor ratio (1:1 to 20:1).
+          minimum: 1
+          maximum: 20
+        attack:
+          type: number
+          description: Gate/comp attack, ms (0.1 to 200).
+          minimum: 0.1
+          maximum: 200
+        release:
+          type: number
+          description: Gate/comp release, ms (10 to 1000).
+          minimum: 10
+          maximum: 1000
+        makeup:
+          type: number
+          description: Compressor makeup gain, dB (0 to 24).
+          minimum: 0
+          maximum: 24
+        knee:
+          type: number
+          description: Compressor knee, dB (-24 to 0).
+          minimum: -24
+          maximum: 0
+        bands:
+          type: array
+          maxItems: 4
+          items:
+            type: object
+            additionalProperties: false
+            required: [band]
+            properties:
+              band:
+                type: integer
+                minimum: 1
+                maximum: 4
+              freq:
+                type: number
+                description: EQ band frequency, Hz (20 to 20000).
+                minimum: 20
+                maximum: 20000
+              gain:
+                type: number
+                description: EQ band gain, dB (-15 to +15).
+                minimum: -15
+                maximum: 15
+              q:
+                type: number
+                description: EQ band Q (0.1 to 10).
+                minimum: 0.1
+                maximum: 10
+
+    AudioProcessing:
+      type: object
+      description: Current processing state keyed by stage (gain/hpf/gate/comp/eq on a channel; comp/eq/limiter on main).
+      additionalProperties:
+        $ref: '#/components/schemas/AudioProcessingStageParams'
+
+    ActivationWarning:
+      description: >-
+        A problem found while going on air that did not stop activation. Each
+        `message` is also sent as a WS `ERROR` frame on controller connect while
+        the production is live. Clients should ignore unknown `type` values.
+      oneOf:
+        - $ref: '#/components/schemas/RecordingNoAudioWarning'
+        - $ref: '#/components/schemas/AudioStreamNotAppliedWarning'
+        - $ref: '#/components/schemas/InputRecordingInputsWarning'
+        - $ref: '#/components/schemas/InputRecordingUnsupportedSourceWarning'
+      discriminator:
+        propertyName: type
+        mapping:
+          recording-no-audio: '#/components/schemas/RecordingNoAudioWarning'
+          audio-stream-not-applied: '#/components/schemas/AudioStreamNotAppliedWarning'
+          input-recording-unavailable: '#/components/schemas/InputRecordingInputsWarning'
+          input-recording-no-output: '#/components/schemas/InputRecordingInputsWarning'
+          input-recording-capped: '#/components/schemas/InputRecordingInputsWarning'
+          input-recording-unsupported-source: '#/components/schemas/InputRecordingUnsupportedSourceWarning'
+
+    InputRecordingInputsWarning:
+      type: object
+      description: >-
+        Inputs set to record that this activation does not record (OL-32).
+        `input-recording-unavailable`: this Strom has no Live Recorder (or
+        RECORDING_BLOCK=recorder); program still records. `input-recording-no-output`:
+        the production has no `recording` output. `input-recording-capped`: more
+        recorded inputs than RECORDING_MAX_INPUTS; `mixerInputs` lists the ones
+        skipped (the first N by pad number record). Never raised for a
+        production that records no inputs.
+      required: [type, mixerInputs, message]
+      properties:
+        type:
+          type: string
+          enum: [input-recording-unavailable, input-recording-no-output, input-recording-capped]
+        mixerInputs:
+          type: array
+          items:
+            type: string
+        message:
+          type: string
+
+    InputRecordingUnsupportedSourceWarning:
+      type: object
+      description: >-
+        An input set to record whose source is no longer WHIP, SRT or EFP (the
+        source was edited after the setting); that input is not recorded (OL-32).
+      required: [type, mixerInput, sourceId, message]
+      properties:
+        type:
+          type: string
+          enum: [input-recording-unsupported-source]
+        mixerInput:
+          type: string
+        sourceId:
+          type: string
+        message:
+          type: string
+
+    RecordingNoAudioWarning:
+      type: object
+      required: [type, message]
+      properties:
+        type:
+          type: string
+          enum: [recording-no-audio]
+        message:
+          type: string
+
+    AudioStreamNotAppliedWarning:
+      type: object
+      description: >-
+        A source's `audioStreamIndex` was not applied on one input; the input
+        was built on the first audio stream instead (issue #516). One warning
+        per affected `mixerInput`.
+      required: [type, sourceId, mixerInput, requestedIndex, appliedIndex, reason, message]
+      properties:
+        type:
+          type: string
+          enum: [audio-stream-not-applied]
+        sourceId:
+          type: string
+        mixerInput:
+          type: string
+          description: Stored assignment key (e.g. `video_in_3`), matching the input in Studio.
+        requestedIndex:
+          type: integer
+          minimum: 1
+          description: The source's effective `audioStreamIndex` (0-based).
+        appliedIndex:
+          type: integer
+          enum: [0]
+          description: Always 0 (the first stream) in v1.
+        reason:
+          type: string
+          enum: [stream-type-unsupported, strom-capability-missing, stream-not-present]
+          description: >-
+            `stream-type-unsupported`: `efp` source (selection is MPEG-TS/SRT only).
+            `strom-capability-missing`: this Strom cannot map audio outputs by PID
+            order (its `builtin.mpegtssrt_input` has no `map_audio_by_pid`, i.e.
+            Strom before v0.8.0-alpha.1, or the block list could not be read).
+            `stream-not-present`: the index is above the supported ceiling (more
+            than 8 audio streams). Reporting a feed that lacks the selected
+            stream at runtime is not wired yet.
+        message:
+          type: string
+          description: Human text with 1-based stream numbers.
+
+    AudioStreamDiscovery:
+      type: object
+      required: [selectedIndex, discovery, streams]
+      properties:
+        selectedIndex:
+          type: integer
+          minimum: 0
+          description: The persisted `audioStreamIndex`, or 0 when absent.
+        discovery:
+          type: string
+          enum: [available, unavailable]
+        reason:
+          type: string
+          enum: [no-live-flow, strom-probe-unsupported]
+          description: Present when `discovery` is `unavailable`.
+        streams:
+          type: array
+          nullable: true
+          description: Derived at read time, never persisted. `null` when discovery is unavailable.
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              codec:
+                type: string
+              channels:
+                type: integer
+              language:
+                type: string
+
+    Production:
+      type: object
+      required: [id, name, status, sources, pipeline, macros, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/ProductionStatus'
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductionSourceAssignment'
+        outputAssignments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductionOutputAssignment'
+        graphicAssignments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductionGraphicAssignment'
+        stromFlowId:
+          type: string
+        whepEndpoint:
+          type: string
+          description: Multiview WHEP endpoint URL
+        pgmWhepEndpoint:
+          type: string
+          description: Programme output WHEP endpoint URL
+        whipEndpoints:
+          type: array
+          items:
+            type: object
+            properties:
+              mixerInput:
+                type: string
+              url:
+                type: string
+        srtOutputUri:
+          type: string
+        values:
+          $ref: '#/components/schemas/ConfigValues'
+        airTime:
+          type: string
+          format: date-time
+          nullable: true
+        pipeline:
+          $ref: '#/components/schemas/Pipeline'
+        macros:
+          type: array
+          items:
+            $ref: '#/components/schemas/Macro'
+        tally:
+          $ref: '#/components/schemas/Tally'
+        recorderType:
+          type: string
+          enum: [liverecorder, recorder]
+          description: >-
+            Which Strom block records program in the running activation (OL-32a):
+            `liverecorder` when the Strom has `builtin.liverecorder` and
+            RECORDING_BLOCK is `auto`, else `recorder`. Set on activate when a
+            `recording` output is assigned, cleared on deactivate. Input
+            recordings use the same block.
+        inputRecordings:
+          type: array
+          description: >-
+            The inputs the running activation records to their own files
+            (OL-32). Set on activate, cleared on deactivate; absent when none.
+          items:
+            $ref: '#/components/schemas/InputRecordingState'
+        activationWarnings:
+          type: array
+          description: >-
+            Problems found while going on air that did not stop activation.
+            Cleared when a new activation starts or activation fails.
+          items:
+            $ref: '#/components/schemas/ActivationWarning'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ProductionInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+
+    ProductionPatch:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        values:
+          $ref: '#/components/schemas/ConfigValues'
+        airTime:
+          type: string
+          format: date-time
+          nullable: true
+
+    # ── Misc ─────────────────────────────────────────────────────────────────────
+
+    IceServer:
+      type: object
+      required: [urls]
+      properties:
+        urls:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        username:
+          type: string
+        credential:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        statusCode:
+          type: integer
+
+    RecordingDeleteError:
+      type: object
+      description: Error body of DELETE /api/v1/recordings/{id} for 409 and 502 (issue #550).
+      required: [error, reason, statusCode]
+      properties:
+        error:
+          type: string
+        reason:
+          type: string
+          enum:
+            - connection-missing
+            - connection-no-bucket
+            - storage-not-configured
+            - bucket-mismatch
+            - storage-denied
+            - storage-failed
+        statusCode:
+          type: integer
+
+    # ── Guest calling (epic #208, issue #299) ─────────────────────────────────────
+
+    GuestInviteCreate:
+      type: object
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 256
+        expiresInS:
+          type: integer
+          minimum: 60
+          maximum: 604800
+          description: Override the default invite TTL (GUEST_INVITE_TTL_S). Bounded so invites stay short-lived.
+        mixerInput:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+          maxLength: 64
+          description: >-
+            The guest slot this invite pins the guest to (issue #381). Required in
+            practice: it must name a declared guest slot on this production (a
+            source assignment carrying a `returnFeed`); an invite with no slot, or
+            one whose input is not a guest slot, is rejected with 400.
+
+    GuestInviteCreated:
+      type: object
+      required: [id, productionId, joinUrl, token, expiresAt]
+      properties:
+        id:
+          type: string
+        productionId:
+          type: string
+        joinUrl:
+          type: string
+        token:
+          type: string
+          description: The raw HMAC-signed invite token. Returned exactly once and NEVER stored — only its SHA-256 hash is persisted.
+        expiresAt:
+          type: string
+          format: date-time
+        mixerInput:
+          type: string
+
+    GuestInvite:
+      type: object
+      required: [id, productionId, expiresAt, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        productionId:
+          type: string
+        label:
+          type: string
+        mixerInput:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    GuestSession:
+      type: object
+      required: [id, productionId, inviteId, mixerInput, state, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        productionId:
+          type: string
+        inviteId:
+          type: string
+        mixerInput:
+          type: string
+        state:
+          type: string
+          enum: [joined, previewing, on-air, left, error]
+        intercomLineId:
+          type: string
+        whipSessionId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    GuestReturnMode:
+      type: object
+      required: [key, label, synced, delivery]
+      properties:
+        key:
+          type: string
+          enum: [program, program-minus, low-latency-minus]
+        label:
+          type: string
+        synced:
+          type: boolean
+        excludesMixerInput:
+          type: string
+        delivery:
+          type: object
+
+    ReturnModeBody:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [program, program-minus, low-latency-minus]
+          description: >-
+            `program` opens the guest's own send; `program-minus` (default) closes it
+            for mix-minus. `low-latency-minus` is a client-side feed choice not built in
+            v1 and returns 400.
+
+    ReturnModeResult:
+      type: object
+      required: [mixerInput, mode]
+      properties:
+        mixerInput:
+          type: string
+        mode:
+          type: string
+          enum: [program, program-minus]
+
+    GuestReturnState:
+      type: object
+      required: [mixerInput, mode, modes, defaultMode]
+      properties:
+        mixerInput:
+          type: string
+        mode:
+          type: string
+          enum: [program, program-minus]
+          description: Current mode of the guest's picture-feed audio.
+        modes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuestReturnMode'
+        defaultMode:
+          type: string
+
+    GuestSessionStatus:
+      type: object
+      required: [onAir]
+      additionalProperties: false
+      properties:
+        onAir:
+          type: boolean
+          description: >-
+            True while the guest's input contributes to the program picture (main
+            PGM input or a layer of the PiP on PGM). Always false on a return-only
+            slot.
+
+    GuestJoinResult:
+      type: object
+      required: [guestId, returnOnly, feeds, previews, modes, defaultMode, returnMode]
+      properties:
+        guestId:
+          type: string
+        whipUrl:
+          type: string
+          description: >-
+            WHIP publish URL on the EXISTING `/api/v1/productions/{id}/whip/{mixerInput}` contract.
+            Absent on a return-only slot.
+        returnOnly:
+          type: boolean
+          description: >-
+            True when the slot's source is not WHIP (e.g. an SRT encoder): the guest's picture
+            and voice reach the slot another way, so the guest only receives the return.
+        feeds:
+          type: array
+          description: >-
+            Per-guest return feeds. In v1 this carries the `picture` feed (program
+            video over WHEP with a single mix-minus audio track) when the production
+            is active and a return aux bus exists for the guest's input; otherwise empty.
+          items:
+            type: object
+            required: [id, url, video]
+            properties:
+              id:
+                type: string
+              url:
+                type: string
+              video:
+                type: boolean
+        previews:
+          type: array
+          description: >-
+            Commentator previews of this production: undelayed WHEP feeds of the
+            sources marked `commentatorPreview`, taken before their time offsets.
+            Empty unless the production is active.
+          items:
+            type: object
+            required: [mixerInput, label, url]
+            properties:
+              mixerInput:
+                type: string
+              label:
+                type: string
+                description: The source's display name (falls back to the mixerInput).
+              url:
+                type: string
+                description: Guest-scoped WHEP URL (`/api/v1/guests/{inviteId}/previews/{mixerInput}/whep`).
+        modes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuestReturnMode'
+        defaultMode:
+          type: string
+        returnMode:
+          type: string
+          enum: [program, program-minus]
+        intercomLine:
+          type: object
+          description: >-
+            The guest slot's Open Intercom talkback line (one line per slot, named
+            `guest-<mixerInput>`, reused on rejoin and by the slot's next
+            occupant). Present only when intercom is configured and the line was
+            provisioned or reused. Absent when intercom is unconfigured or the
+            intercom manager failed (unreachable, error, unexpected response):
+            join still succeeds, without talkback (issue #598).
+          required: [id, productionId, name]
+          properties:
+            id:
+              type: string
+              description: intercom-manager line id.
+            productionId:
+              type: string
+              description: intercom-manager production id grouping this production's lines.
+            name:
+              type: string
+              description: Line name on the intercom manager (`guest-<mixerInput>`).
+        talkback:
+          type: object
+          description: >-
+            Server-built talkback proxy URLs (guest-talkback spec §3.4, issue
+            #599). Present exactly when `intercomLine` is (a line was
+            provisioned or reused); the guest page shows talkback only when it
+            is present. Clients never build these URLs.
+          required: [whepUrl]
+          properties:
+            whipUrl:
+              type: string
+              format: uri
+              description: >-
+                `<base>/api/v1/guests/{inviteId}/talkback/whip` — publish the
+                guest's talkback mic into the line. Absent on a return-only slot
+                (the guest only listens).
+            whepUrl:
+              type: string
+              format: uri
+              description: '`<base>/api/v1/guests/{inviteId}/talkback/whep` — listen to the line.'
+        iceServers:
+          type: array
+          description: >-
+            The ICE servers for the guest page's PeerConnections: Strom's
+            `STROM_SERVER_ICE_SERVERS`, the same list `GET /api/v1/ice-servers`
+            gives crew, TURN credentials included. Absent when Strom cannot give
+            it within a few seconds; the page then uses a public STUN server.
+          items:
+            $ref: '#/components/schemas/IceServer'
+
+paths:
+  # ── Health ──────────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      summary: Liveness probe
+      operationId: getHealth
+      security: []
+      tags: [Health]
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /ready:
+    get:
+      summary: Readiness probe
+      operationId: getReady
+      security: []
+      tags: [Health]
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        '503':
+          description: Service not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ── Status ──────────────────────────────────────────────────────────────────
+
+  /api/v1/ping:
+    get:
+      summary: Ping
+      operationId: ping
+      security: []
+      tags: [Status]
+      responses:
+        '200':
+          description: Pong
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+
+  /api/v1/status:
+    get:
+      summary: Dependency health status
+      operationId: getStatus
+      security: []
+      tags: [Status]
+      responses:
+        '200':
+          description: Current connectivity status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  db:
+                    type: boolean
+                  strom:
+                    type: boolean
+
+  /api/v1/server-info:
+    get:
+      summary: Server information
+      operationId: getServerInfo
+      security: []
+      tags: [Status]
+      responses:
+        '200':
+          description: Server info
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stromHost, srtPorts, srtPortState]
+                properties:
+                  stromHost:
+                    type: string
+                    description: Hostname of the Strom media server
+                  srtPorts:
+                    type: array
+                    nullable: true
+                    description: >-
+                      SRT listener ports this instance has reserved from the shared
+                      Strom's port pool. Hostless listener sources and outputs
+                      (`srt://:PORT?mode=listener`) must use one of them;
+                      `srt://:0?mode=listener` asks the server to assign the lowest free
+                      one. An explicit list, not a range — Strom's pool can have holes,
+                      so these are not necessarily contiguous. Null unless
+                      `srtPortState` is `reserved`.
+                    items:
+                      type: integer
+                  srtPortState:
+                    type: string
+                    enum: [reserved, pending, unsupported, disabled]
+                    description: >-
+                      State of this instance's port reservation. `pending` — not held yet,
+                      listener sources are rejected with 503 until they are; `unsupported` —
+                      Strom has no port pool API, or reserving kept failing; ports are not
+                      enforced and Strom is re-checked every 10 min; `disabled` — turned off
+                      via STROM_PORT_LEASE_DISABLED, or Strom has no port pool configured;
+                      ports are not enforced.
+
+  /api/v1/reconnect:
+    post:
+      summary: Reconnect to database and Strom
+      operationId: reconnect
+      tags: [Status]
+      responses:
+        '200':
+          description: Reconnect result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  db:
+                    type: boolean
+                  strom:
+                    type: boolean
+
+  # ── Sources ─────────────────────────────────────────────────────────────────
+
+  /api/v1/sources:
+    get:
+      summary: List sources
+      operationId: listSources
+      tags: [Sources]
+      parameters:
+        - name: streamType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [srt, efp, whip, html, clip]
+          description: >-
+            Only return sources of this stream type. `streamType=clip` lists the
+            available clips a controller can Cue into a clip slot (OL-19).
+      responses:
+        '200':
+          description: Array of sources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Source'
+    post:
+      summary: Create source
+      operationId: createSource
+      tags: [Sources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceInput'
+      responses:
+        '201':
+          description: Created source
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Hostless SRT listener port is outside this instance's leased range (see /api/v1/server-info)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >-
+            Hostless SRT listener port is already held by another source or output, or no
+            port is free in the range for a port-0 assignment request; or the source is a
+            `clip` source currently `playing` in a slot of an active production and the patch
+            changes its `address` (stop the clip first)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: SRT port range not yet allocated from Strom — retry shortly
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sources/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get source
+      operationId: getSource
+      tags: [Sources]
+      responses:
+        '200':
+          description: Source
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '404':
+          description: Not found
+    patch:
+      summary: Update source
+      description: >-
+        A `clip` source's `address` may be changed while the source is assigned or cued in
+        an active production; the change takes effect at the NEXT Cue of that source (the
+        player keeps what it already loaded). The patch is rejected with 409 only while the
+        clip is currently `playing` in some slot (OL-19).
+      operationId: updateSource
+      tags: [Sources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourcePatch'
+      responses:
+        '200':
+          description: Updated source
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '404':
+          description: Not found
+        '422':
+          description: Hostless SRT listener port is outside this instance's leased range (see /api/v1/server-info)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >-
+            Hostless SRT listener port is already held by another source or output, or no
+            port is free in the range for a port-0 assignment request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: SRT port range not yet allocated from Strom — retry shortly
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete source
+      operationId: deleteSource
+      tags: [Sources]
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+
+  /api/v1/sources/{id}/audio-streams:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Discover a source's audio streams
+      description: >-
+        Read-only (issue #515). Until Strom can report the stream list this
+        always returns `discovery: unavailable` with
+        `reason: strom-probe-unsupported` and `streams: null`.
+      operationId: getSourceAudioStreams
+      tags: [Sources]
+      responses:
+        '200':
+          description: Audio-stream discovery result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioStreamDiscovery'
+        '404':
+          description: Not found
+
+  # ── Graphics ─────────────────────────────────────────────────────────────────
+
+  /api/v1/graphics:
+    get:
+      summary: List graphics
+      operationId: listGraphics
+      tags: [Graphics]
+      responses:
+        '200':
+          description: Array of graphics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Graphic'
+    post:
+      summary: Create graphic
+      operationId: createGraphic
+      tags: [Graphics]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GraphicInput'
+      responses:
+        '201':
+          description: Created graphic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Graphic'
+        '400':
+          description: Validation error
+
+  /api/v1/graphics/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get graphic
+      operationId: getGraphic
+      tags: [Graphics]
+      responses:
+        '200':
+          description: Graphic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Graphic'
+        '404':
+          description: Not found
+    patch:
+      summary: Update graphic
+      operationId: updateGraphic
+      tags: [Graphics]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GraphicPatch'
+      responses:
+        '200':
+          description: Updated graphic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Graphic'
+        '404':
+          description: Not found
+    delete:
+      summary: Delete graphic
+      operationId: deleteGraphic
+      tags: [Graphics]
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+
+  # ── Outputs ──────────────────────────────────────────────────────────────────
+
+  /api/v1/outputs:
+    get:
+      summary: List outputs
+      operationId: listOutputs
+      tags: [Outputs]
+      responses:
+        '200':
+          description: Array of outputs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Output'
+    post:
+      summary: Create output
+      operationId: createOutput
+      tags: [Outputs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutputInput'
+      responses:
+        '201':
+          description: Created output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Output'
+        '400':
+          description: Validation error
+        '422':
+          description: Hostless SRT listener port is outside this instance's leased range (see /api/v1/server-info)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >-
+            Hostless SRT listener port is already held by another source or output, or no
+            port is free in the range for a port-0 assignment request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: SRT port range not yet allocated from Strom — retry shortly
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/outputs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get output
+      operationId: getOutput
+      tags: [Outputs]
+      responses:
+        '200':
+          description: Output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Output'
+        '404':
+          description: Not found
+    patch:
+      summary: Update output
+      operationId: updateOutput
+      tags: [Outputs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutputPatch'
+      responses:
+        '200':
+          description: Updated output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Output'
+        '404':
+          description: Not found
+        '422':
+          description: Hostless SRT listener port is outside this instance's leased range (see /api/v1/server-info)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >-
+            Hostless SRT listener port is already held by another source or output, or no
+            port is free in the range for a port-0 assignment request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: SRT port range not yet allocated from Strom — retry shortly
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete output
+      operationId: deleteOutput
+      tags: [Outputs]
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+
+  # ── Recordings (VOD) ─────────────────────────────────────────────────────────
+
+  /api/v1/productions/{id}/recordings:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List a production's recordings
+      operationId: listProductionRecordings
+      tags: [Recordings]
+      description: >-
+        Optional filters (OL-32) are exact-match and combined with AND; unknown
+        parameters are ignored. Sorted by `startedAt`, then program before
+        inputs, then `mixerInput` by pad number, then `partIndex`. At most 500.
+      parameters:
+        - name: activationId
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 128 }
+          description: Only parts of this activation (Strom flow id).
+        - name: kind
+          in: query
+          schema: { type: string, enum: [program, input] }
+          description: Program or input recordings. `program` includes recordings stored before `kind` existed.
+        - name: mixerInput
+          in: query
+          schema: { type: string, pattern: '^video_in_\d{1,2}$' }
+          description: Only this input's own recordings (implies `kind=input`).
+        - name: sourceId
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 128 }
+          description: Only input recordings of this source.
+      responses:
+        '200':
+          description: Array of recording assets, each with a presigned playbackUrl
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RecordingAsset'
+        '400':
+          description: Invalid filter value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Object storage or database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/recordings:
+    get:
+      summary: List recordings across all productions
+      operationId: listRecordings
+      tags: [Recordings]
+      description: >-
+        Optional filters (OL-32) are exact-match and combined with AND; unknown
+        parameters are ignored. Sorted by `startedAt`, then program before
+        inputs, then `mixerInput` by pad number, then `partIndex`, so a client
+        can group by `activationId`. At most 500.
+      parameters:
+        - name: productionId
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 128 }
+          description: Only recordings of this production.
+        - name: activationId
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 128 }
+          description: Only parts of this activation (Strom flow id).
+        - name: kind
+          in: query
+          schema: { type: string, enum: [program, input] }
+          description: Program or input recordings. `program` includes recordings stored before `kind` existed.
+        - name: mixerInput
+          in: query
+          schema: { type: string, pattern: '^video_in_\d{1,2}$' }
+          description: Only this input's own recordings (implies `kind=input`).
+        - name: sourceId
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 128 }
+          description: Only input recordings of this source.
+      responses:
+        '200':
+          description: Array of recording assets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RecordingAsset'
+        '400':
+          description: Invalid filter value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Object storage or database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/recordings/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get a single recording
+      operationId: getRecording
+      tags: [Recordings]
+      responses:
+        '200':
+          description: Recording asset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingAsset'
+        '404':
+          description: Recording not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Object storage unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete a recording
+      description: >-
+        Deletes the recording's stored object (signed DeleteObject against the
+        same storage target playback uses) and then its list entry (issue #550).
+        The object delete is idempotent: a key that is already gone counts as
+        deleted, so retrying after a 503 succeeds. On every error the recording
+        stays listed. In a versioned bucket only a delete marker is added.
+      operationId: deleteRecording
+      tags: [Recordings]
+      responses:
+        '204':
+          description: Object and list entry deleted
+        '404':
+          description: Recording not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >-
+            The storage target cannot be resolved; nothing was deleted.
+            `reason` is `connection-missing`, `connection-no-bucket`,
+            `storage-not-configured` or `bucket-mismatch` (same values as
+            `playbackUnavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingDeleteError'
+        '502':
+          description: >-
+            The object store refused or failed the delete; the recording is
+            kept. `reason` is `storage-denied` (403 or another auth error) or
+            `storage-failed` (any other store error). No S3 response body,
+            credentials or URLs are returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingDeleteError'
+        '503':
+          description: >-
+            Database unavailable. If the object was already deleted, a retry
+            succeeds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ── Production Configs ───────────────────────────────────────────────────────
+
+  /api/v1/production-configs:
+    get:
+      summary: List production configs
+      operationId: listProductionConfigs
+      tags: [Production Configs]
+      responses:
+        '200':
+          description: Array of production configs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductionConfig'
+    post:
+      summary: Create production config
+      operationId: createProductionConfig
+      tags: [Production Configs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductionConfigInput'
+      responses:
+        '201':
+          description: Created config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionConfig'
+        '400':
+          description: Validation error
+
+  /api/v1/production-configs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      summary: Update production config
+      operationId: updateProductionConfig
+      tags: [Production Configs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductionConfigPatch'
+      responses:
+        '200':
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionConfig'
+        '404':
+          description: Not found
+    delete:
+      summary: Delete production config
+      operationId: deleteProductionConfig
+      tags: [Production Configs]
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+
+  # ── Productions ──────────────────────────────────────────────────────────────
+
+  /api/v1/productions:
+    get:
+      summary: List productions
+      operationId: listProductions
+      tags: [Productions]
+      responses:
+        '200':
+          description: Array of productions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Production'
+    post:
+      summary: Create production
+      operationId: createProduction
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductionInput'
+      responses:
+        '201':
+          description: Created production
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Production'
+        '400':
+          description: Validation error
+
+  /api/v1/productions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get production
+      operationId: getProduction
+      tags: [Productions]
+      responses:
+        '200':
+          description: Production
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Production'
+        '404':
+          description: Not found
+    patch:
+      summary: Update production
+      operationId: updateProduction
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductionPatch'
+      responses:
+        '200':
+          description: Updated production
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Production'
+        '404':
+          description: Not found
+    delete:
+      summary: Delete production
+      operationId: deleteProduction
+      tags: [Productions]
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+
+  /api/v1/productions/{id}/activate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Activate production
+      description: Starts the Strom flow for the production. Status transitions to `activating` immediately and then to `active` once the flow reaches the playing state.
+      operationId: activateProduction
+      tags: [Productions]
+      responses:
+        '200':
+          description: Production activating
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  status:
+                    type: string
+                    enum: [activating]
+                  stromFlowId:
+                    type: string
+        '404':
+          description: Not found
+        '409':
+          description: Already active
+
+  /api/v1/productions/{id}/deactivate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Deactivate production
+      description: Stops the Strom flow and tears down the pipeline.
+      operationId: deactivateProduction
+      tags: [Productions]
+      responses:
+        '200':
+          description: Production deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  status:
+                    type: string
+                    enum: [inactive, ended]
+        '404':
+          description: Not found
+
+  /api/v1/productions/{id}/controllers:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get connected controller count
+      operationId: getProductionControllers
+      tags: [Productions]
+      responses:
+        '200':
+          description: Controller count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                    description: Operator controller connections
+                  watchers:
+                    type: integer
+                    description: Watch-only connections (`?mode=watch`)
+
+  # Production — Source assignments
+
+  /api/v1/productions/{id}/sources:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Assign source to production
+      description: >-
+        Assigns a catalogue source (or the virtual `Whip` source) to a mixer
+        input. Include `returnFeed` to declare the assignment as a guest slot
+        (issue #381): a mix-minus return reserved for a guest and built into the
+        flow at activation. Guest invites may only target a declared guest slot.
+        Set `commentatorPreview` to build an undelayed WHEP preview of the
+        source (before its time offsets) at activation; it is accepted on SRT,
+        EFP and clip sources only and rejected with 400 on any other source.
+        Replaces any assignment on the same `mixerInput`: a request without
+        `returnFeed`, `record` or `commentatorPreview` turns those off for the
+        input. To toggle recording alone, use `PUT .../sources/{mixerInput}/record`.
+      operationId: assignSource
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId, mixerInput]
+              properties:
+                sourceId:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                mixerInput:
+                  type: string
+                  pattern: '^video_in_\d{1,2}$'
+                  maxLength: 20
+                returnFeed:
+                  type: object
+                  description: Declares this assignment as a guest slot (mix-minus return).
+                  properties:
+                    synced:
+                      type: string
+                      enum: [program, program-minus]
+                      default: program-minus
+                    lowLatency:
+                      type: boolean
+                      enum: [false]
+                      default: false
+                commentatorPreview:
+                  type: boolean
+                  description: >-
+                    Build an undelayed commentator preview WHEP output of this
+                    source at activation (SRT, EFP and clip sources only).
+                record:
+                  type: string
+                  enum: ['off', transcode, passthrough]
+                  description: >-
+                    Record this input to its own files (OL-32). Absent or `off`
+                    = not recorded. See ProductionSourceAssignment.record.
+      responses:
+        '201':
+          description: Assignment created; the stored assignment plus `_rev`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionSourceAssignment'
+        '400':
+          description: >-
+            Invalid body, `commentatorPreview` on a source kind that does not
+            support it (`Error`), or a refused `record`
+            (`record-mode-unsupported`, `record-source-unsupported`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Error'
+                  - $ref: '#/components/schemas/InputRecordingError'
+        '404':
+          description: Production not found
+        '409':
+          description: '`record-cap-reached`: over RECORDING_MAX_INPUTS recorded inputs.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InputRecordingError'
+
+  /api/v1/productions/{id}/sources/{mixerInput}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+        description: e.g. `video_in_1`
+    delete:
+      summary: Remove source from production
+      operationId: unassignSource
+      tags: [Productions]
+      responses:
+        '204':
+          description: Removed
+        '404':
+          description: Not found
+
+  /api/v1/productions/{id}/sources/{mixerInput}/record:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+    put:
+      summary: Record one input to its own files, or stop
+      description: >-
+        Sets or clears `record` on one assignment without touching the rest of
+        it (OL-32). Read at activation: a running production keeps recording
+        exactly the inputs it was activated with. Setting `off` never fails for
+        the cap or the source type.
+      operationId: setSourceRecord
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceRecordInput'
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceRecordResult'
+        '400':
+          description: >-
+            Invalid body or mixerInput, or a refused `record`
+            (`record-mode-unsupported`, `record-source-unsupported`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InputRecordingError'
+        '404':
+          description: Production not found, or no assignment on `mixerInput` (`Source assignment not found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: '`record-cap-reached`: over RECORDING_MAX_INPUTS recorded inputs.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InputRecordingError'
+        '503':
+          description: Database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Production — Clip cue/play control (epic #206, issue #277)
+
+  /api/v1/productions/{id}/clips/{mixerInput}/cue:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+        description: Mixer input the clip source is assigned to, e.g. `video_in_0`
+    post:
+      summary: Cue a clip into the ready state
+      description: >-
+        Preflight-checks the clip's resolved URL for reachability, loads it into the
+        media-player block, seeks to index 0 (Strom
+        `player.setPlaylist({files:[clip]}) + player.goto({index:0})`), then waits for
+        Strom to confirm a loaded duration before reporting `cued`.
+
+        `clipId` selects WHICH clip to load (OL-19): it is a clip SOURCE id (see
+        `GET /api/v1/sources?streamType=clip`). The slot is a player; the clip is chosen
+        at Cue time. The source must exist and be `streamType: clip` (else 404). Without
+        `clipId` the source assigned to `mixerInput` is loaded (unchanged). The returned
+        `ClipState.clipId` and the persisted cue (used to restore on reactivate/reconnect)
+        follow the loaded source; the production's source assignment stays the slot's
+        default. On-air guard: a Cue carrying `clipId` is refused with 409 while the slot's
+        player is `playing` — Stop first. A non-2xx/unreachable
+        URL or a duration that never arrives fails the cue with a 502 rather than
+        reporting `cued` for media that cannot play (issue #351).
+      operationId: cueClip
+      tags: [Productions]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clipId:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: >-
+                    Id of the clip source (`streamType: clip`) to load into this slot.
+                    Omit to load the source assigned to the mixer input.
+      responses:
+        '200':
+          description: Clip cued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClipState'
+        '400':
+          description: Invalid body or mixerInput
+        '401':
+          description: Missing/invalid API key (when configured)
+        '404':
+          description: Production not found, or `clipId` names no source / a non-clip source
+        '409':
+          description: Production is not activated, or `clipId` given while the slot is playing
+        '502':
+          description: >-
+            Strom returned an error, or the clip's media could not be reached/loaded
+            (issue #351). Like other 5xx responses the body carries a generic message
+            (`src/server.ts`'s error handler never leaks internals on 5xx); the specific
+            reason (e.g. `Clip URL returned HTTP 403`) is surfaced over the WebSocket
+            controller's `CLIP_STATE`/`ERROR` frames for this same cue.
+        '503':
+          description: Strom is unreachable
+
+  /api/v1/productions/{id}/clips/{mixerInput}/play:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+    post:
+      summary: Play the currently cued clip
+      description: Maps to Strom `player.control({action:'play'})`.
+      operationId: playClip
+      tags: [Productions]
+      responses:
+        '200':
+          description: Clip playing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClipState'
+        '401':
+          description: Missing/invalid API key (when configured)
+        '404':
+          description: Production or clip source not found
+        '409':
+          description: Production is not activated, or no clip cued
+        '502':
+          description: Strom returned an error
+        '503':
+          description: Strom is unreachable
+
+  /api/v1/productions/{id}/clips/{mixerInput}/stop:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+    post:
+      summary: Stop clip playback
+      description: Maps to Strom `player.control({action:'stop'})`.
+      operationId: stopClip
+      tags: [Productions]
+      responses:
+        '200':
+          description: Clip stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClipState'
+        '401':
+          description: Missing/invalid API key (when configured)
+        '404':
+          description: Production or clip source not found
+        '409':
+          description: Production is not activated
+        '502':
+          description: Strom returned an error
+        '503':
+          description: Strom is unreachable
+
+  /api/v1/productions/{id}/clips/{mixerInput}/state:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^video_in_\d{1,2}$'
+    get:
+      summary: Get current clip state
+      operationId: getClipState
+      tags: [Productions]
+      responses:
+        '200':
+          description: Current clip state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClipState'
+        '401':
+          description: Missing/invalid API key (when configured)
+        '404':
+          description: Production or clip source not found
+        '409':
+          description: Production is not activated
+        '502':
+          description: Strom returned an error
+        '503':
+          description: Strom is unreachable
+
+  # Production — Graphic assignments
+
+  /api/v1/productions/{id}/graphics:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Assign graphic to production
+      operationId: assignGraphic
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [graphicId, dskInput]
+              properties:
+                graphicId:
+                  type: string
+                  minLength: 1
+                dskInput:
+                  type: string
+                  minLength: 1
+      responses:
+        '200':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionGraphicAssignment'
+
+  /api/v1/productions/{id}/graphics/{dskInput}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: dskInput
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Remove graphic from production
+      operationId: unassignGraphic
+      tags: [Productions]
+      responses:
+        '204':
+          description: Removed
+        '404':
+          description: Not found
+
+  # Production — Output assignments
+
+  /api/v1/productions/{id}/outputs:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Assign output to production
+      operationId: assignOutput
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outputId]
+              properties:
+                outputId:
+                  type: string
+                  minLength: 1
+      responses:
+        '200':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionOutputAssignment'
+
+  /api/v1/productions/{id}/outputs/{outputId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: outputId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Remove output from production
+      operationId: unassignOutput
+      tags: [Productions]
+      responses:
+        '204':
+          description: Removed
+        '404':
+          description: Not found
+
+  # Production — Macros
+
+  /api/v1/productions/{id}/macros:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List macros
+      operationId: listMacros
+      tags: [Productions]
+      responses:
+        '200':
+          description: Array of macros
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Macro'
+    post:
+      summary: Create macro
+      operationId: createMacro
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MacroInput'
+      responses:
+        '201':
+          description: Created macro
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Macro'
+
+  /api/v1/productions/{id}/macros/{macroId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: macroId
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      summary: Update macro
+      operationId: updateMacro
+      tags: [Productions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MacroPatch'
+      responses:
+        '200':
+          description: Updated macro
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Macro'
+        '404':
+          description: Not found
+    delete:
+      summary: Delete macro
+      operationId: deleteMacro
+      tags: [Productions]
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+
+  # Production — Pipeline
+
+  /api/v1/productions/{id}/pipeline:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get pipeline state
+      operationId: getPipeline
+      tags: [Pipeline]
+      responses:
+        '200':
+          description: Pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+        '404':
+          description: Not found
+
+  /api/v1/productions/{id}/pipeline/config:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      summary: Update pipeline Strom config
+      operationId: updatePipelineConfig
+      tags: [Pipeline]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stromConfig]
+              properties:
+                stromConfig:
+                  type: object
+                  additionalProperties:
+                    oneOf:
+                      - type: string
+                        maxLength: 1024
+                      - type: number
+                      - type: boolean
+                      - type: 'null'
+      responses:
+        '200':
+          description: Updated pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+
+  /api/v1/productions/{id}/pipeline/start:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Start pipeline
+      operationId: startPipeline
+      tags: [Pipeline]
+      responses:
+        '200':
+          description: Pipeline started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+
+  /api/v1/productions/{id}/pipeline/stop:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Stop pipeline
+      operationId: stopPipeline
+      tags: [Pipeline]
+      responses:
+        '200':
+          description: Pipeline stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+
+  # Production — Audio
+
+  /api/v1/productions/{id}/audio:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List audio elements
+      operationId: listAudioElements
+      tags: [Audio]
+      responses:
+        '200':
+          description: Audio elements
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    elementId:
+                      type: string
+                    blockId:
+                      type: string
+                    label:
+                      type: string
+                    mixerInput:
+                      type: string
+                      nullable: true
+
+  /api/v1/productions/{id}/audio/{elementId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: elementId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get audio element properties
+      operationId: getAudioElement
+      tags: [Audio]
+      responses:
+        '200':
+          description: Audio element properties
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  element_id:
+                    type: string
+                  properties:
+                    type: object
+                    properties:
+                      volume:
+                        type: number
+                      mute:
+                        type: boolean
+        '404':
+          description: Not found
+    patch:
+      summary: Update audio element property
+      operationId: updateAudioElement
+      tags: [Audio]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [property, value]
+              properties:
+                property:
+                  type: string
+                  enum: [volume, mute]
+                value:
+                  oneOf:
+                    - type: number
+                      minimum: 0
+                      maximum: 10
+                    - type: boolean
+      responses:
+        '200':
+          description: Updated properties
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  element_id:
+                    type: string
+                  properties:
+                    type: object
+                    additionalProperties: true
+        '404':
+          description: Not found
+
+  /api/v1/productions/{id}/audio/{elementId}/processing:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: elementId
+        in: path
+        required: true
+        description: "'ch1', 'ch2', … for a channel strip, or 'main' for the main bus."
+        schema:
+          type: string
+    get:
+      summary: Get audio processing state
+      description: >
+        Returns the current audio processing state for the element — every stage
+        valid on it (gain, hpf, gate, comp, eq on a channel; comp, eq, limiter on
+        main) with the Strom defaults overlaid by any persisted operator changes.
+      operationId: getAudioProcessing
+      tags: [Audio]
+      responses:
+        '200':
+          description: Audio processing state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  element_id:
+                    type: string
+                  processing:
+                    $ref: '#/components/schemas/AudioProcessing'
+        '400':
+          description: Invalid channel id
+        '404':
+          description: Not found
+    patch:
+      summary: Update audio processing
+      description: >
+        Sets one processing stage for the element. `params` is partial (move one
+        knob) and validated against the Strom ranges — an out-of-range value is
+        rejected with 400 and nothing reaches Strom (no silent clamp). The
+        setting is persisted on the production and re-applied on activation; it is
+        applied live to the running pipeline and broadcast to controller WS
+        clients as `AUDIO_PROC_STATE`. Stage/element rules: `limiter` and the main
+        `comp`/`eq` are main-only; `gain`/`hpf`/`gate` are channel-only. The HPF
+        on/off flag (`hpf.enabled`) is a construction-time Strom property — it is
+        persisted but only takes effect on the next activation (the HPF cutoff
+        `hpf.freq` is live). The main limiter sits before the master fader until
+        Eyevinn/strom#1023 is fixed.
+      operationId: updateAudioProcessing
+      tags: [Audio]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage, params]
+              properties:
+                stage:
+                  type: string
+                  enum: [gain, hpf, gate, comp, eq, limiter]
+                params:
+                  $ref: '#/components/schemas/AudioProcessingStageParams'
+      responses:
+        '200':
+          description: Updated stage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  element_id:
+                    type: string
+                  stage:
+                    type: string
+                  params:
+                    $ref: '#/components/schemas/AudioProcessingStageParams'
+                  applied:
+                    type: boolean
+                    description: true when the value reached the running Strom pipeline; false when stored for the next activation.
+        '400':
+          description: Invalid channel id, stage not valid on element, or param out of range
+        '404':
+          description: Not found
+        '422':
+          description: Strom refused the write (e.g. a required audio plugin is not available)
+
+  # Production — Stats
+
+  /api/v1/productions/{id}/stats/streaming:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get streaming statistics
+      operationId: getStreamingStats
+      tags: [Productions]
+      responses:
+        '200':
+          description: Streaming stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active:
+                    type: boolean
+                  rtpStats:
+                    type: object
+                    additionalProperties: true
+                  webrtcStats:
+                    type: object
+                    additionalProperties: true
+                  error:
+                    type: string
+
+  # ── ICE Servers ──────────────────────────────────────────────────────────────
+
+  /api/v1/ice-servers:
+    get:
+      summary: Get ICE server configuration
+      operationId: getIceServers
+      tags: [WebRTC]
+      responses:
+        '200':
+          description: ICE servers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  iceServers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IceServer'
+        '502':
+          description: Could not reach Strom for ICE config
+
+  # ── WHEP Proxy ───────────────────────────────────────────────────────────────
+
+  /api/v1/whep-proxy:
+    post:
+      summary: WHEP offer proxy
+      description: Proxies a WHEP SDP offer to the target Strom WHEP endpoint.
+      operationId: whepProxyOffer
+      tags: [WebRTC]
+      parameters:
+        - name: target
+          in: query
+          required: true
+          schema:
+            type: string
+          description: URL-encoded target WHEP endpoint URL
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema:
+              type: string
+          text/plain:
+            schema:
+              type: string
+      responses:
+        '201':
+          description: SDP answer
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/sdp:
+              schema:
+                type: string
+        '502':
+          description: Upstream error
+    delete:
+      summary: WHEP session teardown proxy
+      operationId: whepProxyDelete
+      tags: [WebRTC]
+      parameters:
+        - name: target
+          in: query
+          required: true
+          schema:
+            type: string
+          description: URL-encoded target WHEP session URL
+      responses:
+        '204':
+          description: Session closed
+
+  # ── WHIP ────────────────────────────────────────────────────────────────────
+
+  /api/v1/productions/{id}/whip/{mixerInput}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+        description: e.g. `video_in_1`
+    post:
+      summary: WHIP offer (start ingest)
+      description: Initiates a WebRTC ingest session for the given mixer input slot.
+      operationId: whipOffer
+      tags: [WebRTC]
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema:
+              type: string
+      responses:
+        '201':
+          description: SDP answer
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/sdp:
+              schema:
+                type: string
+    patch:
+      summary: WHIP ICE trickle
+      operationId: whipIceTrickle
+      tags: [WebRTC]
+      parameters:
+        - name: session
+          in: query
+          schema:
+            type: string
+          description: URL-encoded session URL
+      requestBody:
+        required: true
+        content:
+          application/trickle-ice-sdpfrag:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: ICE candidate accepted
+    delete:
+      summary: WHIP session teardown
+      operationId: whipDelete
+      tags: [WebRTC]
+      parameters:
+        - name: session
+          in: query
+          schema:
+            type: string
+          description: URL-encoded session URL
+      responses:
+        '204':
+          description: Session closed
+
+  # ── Guest calling (epic #208, issue #299) ─────────────────────────────────────
+
+  /api/v1/productions/{id}/guests/invites:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Create a production-scoped guest invite
+      description: |
+        Mints an HMAC-signed, expiring invite token. The raw token is returned
+        exactly once; only its SHA-256 hash is persisted. Requires the shared
+        API key. Guest calling is on by default (the backend generates and stores
+        its own signing key); 503 only occurs if no signing key could be loaded at
+        startup (e.g. the database was unreachable and no `GUEST_INVITE_SECRET`
+        override is set).
+      operationId: createGuestInvite
+      tags: [Guests]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuestInviteCreate'
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestInviteCreated'
+        '400':
+          description: >-
+            Invalid body, or the invite does not target a declared guest slot
+            (issue #381: `mixerInput` must name a source assignment with a
+            `returnFeed` on this production).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled or database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      summary: List guest invites for a production
+      operationId: listGuestInvites
+      tags: [Guests]
+      responses:
+        '200':
+          description: Invites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GuestInvite'
+        '404':
+          description: Production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled or database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/guests/invites/{inviteId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Revoke a guest invite
+      operationId: deleteGuestInvite
+      tags: [Guests]
+      responses:
+        '204':
+          description: Invite revoked
+        '403':
+          description: Invite belongs to a different production
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Invite not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/slot:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: What the guest's slot takes (token-authed, read-only)
+      description: |
+        Lets the guest page decide, before asking for a camera or microphone,
+        whether the slot takes WHIP from the browser or is return-only. Creates
+        no session. Authenticates with the per-invite token, like join.
+      operationId: guestSlot
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The slot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mixerInput, returnOnly, previews]
+                properties:
+                  mixerInput:
+                    type: string
+                  returnOnly:
+                    type: boolean
+                  previews:
+                    type: array
+                    description: >-
+                      Commentator previews of this production (as on join);
+                      watchable once joined. Empty unless the production is active.
+                    items:
+                      type: object
+                      required: [mixerInput, label, url]
+                      properties:
+                        mixerInput:
+                          type: string
+                        label:
+                          type: string
+                        url:
+                          type: string
+        '401':
+          description: Missing, invalid, or revoked invite token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invite expired, production ended, or the slot is no longer a guest slot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled or database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/join:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Guest join (token-authed)
+      description: |
+        Called by the guest browser via the invite link. Authenticates with the
+        per-invite HMAC token in `Authorization: Bearer <token>` — NOT the shared
+        API key. `whipUrl` reuses the existing WHIP proxy contract; it is absent
+        (and `returnOnly` is true) when the slot's source is not WHIP.
+
+        Intercom never fails a join: when the Open Intercom manager is
+        unreachable or errors, join answers `200` without `intercomLine` and the
+        server logs a warning (issue #598).
+      operationId: guestJoin
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Join accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestJoinResult'
+        '401':
+          description: Missing, invalid, or revoked invite token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >-
+            Invite expired, its guest slot is no longer available, or the slot is
+            occupied by another live guest (`Guest slot occupied` — issue #381:
+            one guest per slot; a reconnect on the same invite is not a conflict).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: >-
+            Guest calling disabled or database unavailable. Never returned for
+            an intercom-manager failure (join degrades to `200` without
+            `intercomLine`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/session:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Guest leaves (token-authed)
+      operationId: guestLeave
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Session ended
+        '401':
+          description: Missing, invalid, or revoked invite token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled or database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/session/return:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Guest reads their own return mode (token-authed)
+      description: >-
+        The current return mode of the guest's slot. The guest page polls this to
+        follow changes the crew makes. Needs the invite's live session; the
+        mixerInput is the session's.
+      operationId: guestGetReturnMode
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current return mode
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestReturnState'
+        '401':
+          description: Missing, invalid, revoked or expired invite token, or the guest has left or been removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No return on that input, or production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Guest switches their own return mode (token-authed)
+      description: >-
+        Switches the guest's return feed between `program` and `program-minus`
+        (mix-minus). Needs the invite's live session, and changes the session's
+        mixerInput, so a guest who has left cannot change the return of whoever
+        holds the slot now. `low-latency-minus` is not built in v1 and returns 400.
+      operationId: guestSetReturnMode
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnModeBody'
+      responses:
+        '200':
+          description: Return mode applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnModeResult'
+        '400':
+          description: Invalid or unsupported mode (`low-latency-minus`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing, invalid, revoked or expired invite token, or the guest has left or been removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No return on that input, or production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/session/status:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Guest reads whether they are on program (token-authed)
+      description: >-
+        Whether the guest's own input is on program right now: the main PGM input,
+        or a layer (background or zone source) of the PiP on PGM. The guest page
+        polls this while live to show its ON AIR badge. Returns only the guest's
+        own boolean, no other tally details. Needs the invite's live session; the
+        mixerInput is the session's. A return-only slot (its source is not WHIP)
+        always reads `false`.
+      operationId: guestGetSessionStatus
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The guest's on-air state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestSessionStatus'
+        '401':
+          description: Missing, invalid, revoked or expired invite token, or the guest has left or been removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled, or the source lookup failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/talkback/{kind}:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: kind
+        in: path
+        required: true
+        description: '`whip` publishes into the line (talk); `whep` subscribes to it (listen).'
+        schema:
+          type: string
+          enum: [whip, whep]
+    post:
+      summary: Guest opens a talkback WHIP (talk) or WHEP (listen) session (token-authed)
+      description: >-
+        Proxies the offer to intercom-manager's per-line WHIP/WHEP endpoint
+        (guest-talkback spec §3.2, ADR-012, issue #599). The intercom production
+        and line come from the guest's live session, never from the request;
+        the manager-side username is the invite label (sanitized to
+        `[\w .-]`, at most 200 characters; fallback `Guest <slot number>`).
+        open-live holds the manager key (`INTERCOM_WHIP_AUTH_KEY`, or the SAT in
+        `osc` mode). On `201` the session id is bound to the guest; a new POST
+        replaces it and ends the previous manager session. No PATCH: the
+        manager has no trickle ICE.
+      operationId: guestTalkbackOffer
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        description: Complete SDP offer (ICE gathered; no trickle), at most 64 KiB, passed through opaque
+        content:
+          application/sdp:
+            schema:
+              type: string
+      responses:
+        '201':
+          description: >-
+            SDP answer. `Location` is the open-live resource for DELETE;
+            `ETag` is the session id. The manager's `Location` and `Link`
+            (ICE servers, possibly TURN credentials) are never forwarded.
+          headers:
+            Location:
+              description: '`/api/v1/guests/{inviteId}/talkback/{kind}/{sessionId}`'
+              schema:
+                type: string
+            ETag:
+              description: The talkback session id (a UUID)
+              schema:
+                type: string
+          content:
+            application/sdp:
+              schema:
+                type: string
+        '400':
+          description: '`Malformed SDP` — empty body, or the manager rejected the offer'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: '`Invalid or expired invite` — missing/invalid/revoked/expired token, or the guest left or was removed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: '`This guest slot does not take WHIP` — WHIP on a return-only slot (WHEP still works)'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: >-
+            `Talkback unavailable` — intercom unconfigured, no line provisioned
+            for the guest, production ended, or the manager answered 404
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '406':
+          description: The manager could not negotiate an m= section (its message is passed through)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: SDP offer larger than 64 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: '`Unsupported Media Type` — the body is not `application/sdp`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: open-live's own limit (10 offers per minute per route and client IP)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: >-
+            `Intercom manager unreachable` — network error or timeout, a manager
+            5xx, a manager 401 (`INTERCOM_WHIP_AUTH_KEY` mismatch; logged as
+            `talkback: intercom-manager rejected INTERCOM_WHIP_AUTH_KEY`), or a
+            manager `Location`/`ETag` that is not
+            `/api/v1/{kind}/<p>/<l>/<uuid>` on the manager origin (R4)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: >-
+            `Intercom manager busy` (the manager rate-limited open-live; a
+            `Retry-After` header is set, default 5 s), guest calling disabled,
+            or database unavailable
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (manager rate limit only)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/talkback/{kind}/{sessionId}:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: kind
+        in: path
+        required: true
+        description: '`whip` publishes into the line (talk); `whep` subscribes to it (listen).'
+        schema:
+          type: string
+          enum: [whip, whep]
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Guest ends their own talkback session (token-authed)
+      description: >-
+        Ends the manager session bound to this guest. Only the id returned by
+        the guest's own last POST is accepted.
+      operationId: guestTalkbackDelete
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Ended (also when the manager says the session is already gone)
+        '400':
+          description: '`sessionId` is not a UUID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing, invalid, revoked or expired invite token, or the guest has left or been removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: '`Session does not belong to this guest`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: '`Intercom manager unreachable` — network error, manager 5xx or 401'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: '`Intercom manager busy` (with `Retry-After`), guest calling disabled, or database unavailable'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/returns/{mixerInput}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get the crew/guest join-shape view of a return on an input
+      operationId: getReturn
+      tags: [Returns]
+      responses:
+        '200':
+          description: Return join shape (publish input, modes, current mode, feeds)
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Production not found, or no assignment on that input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/returns/{mixerInput}/mode:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      summary: Crew sets the return mode for an input (persist + apply live + broadcast RETURN_STATE)
+      operationId: setReturnMode
+      tags: [Returns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnModeBody'
+      responses:
+        '200':
+          description: Return mode applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnModeResult'
+        '400':
+          description: Invalid or unsupported mode (`low-latency-minus`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No return on that input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/returns/{mixerInput}/picture/whep:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Establish the return picture WHEP session (server-scoped signaling proxy)
+      description: >-
+        Proxies a WHEP offer to the Strom return output derived SERVER-SIDE from the
+        production's persisted `returnWhepUrls` (scoped to the input). Returns a
+        `Location` header rewritten to a session subpath under this route so a guest
+        can only tear down their own session.
+      operationId: startReturnPictureWhep
+      tags: [Returns]
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema:
+              type: string
+      responses:
+        '201':
+          description: WHEP answer SDP
+          content:
+            application/sdp:
+              schema:
+                type: string
+        '404':
+          description: Production not found, or feed unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Production inactive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Upstream Strom unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/returns/{mixerInput}/picture/whep/{sessionId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Tear down the return picture WHEP session
+      operationId: stopReturnPictureWhep
+      tags: [Returns]
+      responses:
+        '204':
+          description: Session torn down (idempotent)
+
+  /api/v1/productions/{id}/previews/{mixerInput}/whep:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Establish a commentator preview WHEP session (server-scoped signaling proxy)
+      description: >-
+        Proxies a WHEP offer to the source's commentator preview output — the
+        source's own video and audio, before its time offsets and outside the
+        mixer — derived SERVER-SIDE from the production's persisted
+        `previewWhepUrls`. Only for an assignment still marked
+        `commentatorPreview`. Shared API key only; guests use
+        `/api/v1/guests/{inviteId}/previews/{mixerInput}/whep`.
+      operationId: startPreviewWhep
+      tags: [Returns]
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema:
+              type: string
+      responses:
+        '201':
+          description: WHEP answer SDP
+          content:
+            application/sdp:
+              schema:
+                type: string
+        '404':
+          description: Production not found, or no commentator preview on the input (`feed_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Production inactive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Upstream Strom unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/previews/{mixerInput}/whep/{sessionId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Tear down a commentator preview WHEP session
+      operationId: stopPreviewWhep
+      tags: [Returns]
+      responses:
+        '204':
+          description: Session torn down (idempotent)
+
+  /api/v1/guests/{inviteId}/previews/{mixerInput}/whep:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Guest commentator preview WHEP (token-authed)
+      description: >-
+        Guest alias of the crew preview route. Authenticates with the per-invite
+        token and needs the invite's live session. The production is the
+        invite's own, so a guest can watch any commentator preview of their
+        production and none of another's. The minted session id is bound to the
+        guest's session for the matching DELETE.
+      operationId: guestStartPreviewWhep
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema:
+              type: string
+      responses:
+        '201':
+          description: WHEP answer SDP
+          content:
+            application/sdp:
+              schema:
+                type: string
+        '401':
+          description: Missing, invalid, revoked or expired invite token, or no live guest session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Production not found, or no commentator preview on the input (`feed_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Production inactive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled, or upstream Strom unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/guests/{inviteId}/previews/{mixerInput}/whep/{sessionId}:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mixerInput
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Tear down the guest's own commentator preview WHEP session
+      operationId: guestStopPreviewWhep
+      tags: [Guests]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Session torn down (idempotent)
+        '401':
+          description: Missing, invalid, revoked or expired invite token, or no live guest session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The session id is not bound to this guest's session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/guests:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List live guest sessions for a production
+      operationId: listGuestSessions
+      tags: [Guests]
+      responses:
+        '200':
+          description: Guest sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GuestSession'
+        '404':
+          description: Production not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Guest calling disabled or database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/guests/{guestId}/talkback/{kind}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: guestId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: kind
+        in: path
+        required: true
+        description: '`whip` publishes into the line (talk); `whep` subscribes to it (listen).'
+        schema:
+          type: string
+          enum: [whip, whep]
+    post:
+      summary: Crew opens a talkback WHIP (talk) or WHEP (listen) session on a guest's line
+      description: >-
+        Studio's side of talkback (guest-talkback spec §3.3, issue #599). Same
+        contract as the guest route, behind the shared `API_KEY` gate. Crew
+        sessions are not persisted; Studio owns them. WHIP is allowed on a
+        return-only guest's line (it carries the operator's mic).
+      operationId: crewTalkbackOffer
+      tags: [Guests]
+      parameters:
+        - name: name
+          in: query
+          required: false
+          description: Display name on the line, sanitized to `[\w .-]` (at most 200 characters). Default `Producer`
+          schema:
+            type: string
+      requestBody:
+        required: true
+        description: Complete SDP offer (ICE gathered; no trickle), at most 64 KiB, passed through opaque
+        content:
+          application/sdp:
+            schema:
+              type: string
+      responses:
+        '201':
+          description: >-
+            SDP answer. `Location` is the open-live resource for DELETE;
+            `ETag` is the session id. The manager's `Location` and `Link`
+            (ICE servers, possibly TURN credentials) are never forwarded.
+          headers:
+            Location:
+              description: '`/api/v1/productions/{id}/guests/{guestId}/talkback/{kind}/{sessionId}`'
+              schema:
+                type: string
+            ETag:
+              description: The talkback session id (a UUID)
+              schema:
+                type: string
+          content:
+            application/sdp:
+              schema:
+                type: string
+        '400':
+          description: '`Malformed SDP` — empty body, or the manager rejected the offer'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: >-
+            `Talkback unavailable` — intercom unconfigured, no line provisioned
+            for the guest, production ended, or the manager answered 404; or `Guest not found` — no such guest session, another production, or the guest has left
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '406':
+          description: The manager could not negotiate an m= section (its message is passed through)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: SDP offer larger than 64 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: '`Unsupported Media Type` — the body is not `application/sdp`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: open-live's own limit (10 offers per minute per route and client IP)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: >-
+            `Intercom manager unreachable` — network error or timeout, a manager
+            5xx, a manager 401 (`INTERCOM_WHIP_AUTH_KEY` mismatch; logged as
+            `talkback: intercom-manager rejected INTERCOM_WHIP_AUTH_KEY`), or a
+            manager `Location`/`ETag` that is not
+            `/api/v1/{kind}/<p>/<l>/<uuid>` on the manager origin (R4)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: >-
+            `Intercom manager busy` (the manager rate-limited open-live; a
+            `Retry-After` header is set, default 5 s), guest calling disabled,
+            or database unavailable
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (manager rate limit only)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/guests/{guestId}/talkback/{kind}/{sessionId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: guestId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: kind
+        in: path
+        required: true
+        description: '`whip` publishes into the line (talk); `whep` subscribes to it (listen).'
+        schema:
+          type: string
+          enum: [whip, whep]
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Crew ends a talkback session on a guest's line
+      description: Works after the guest has left (Studio tears down on `GUEST_STATE` `left`).
+      operationId: crewTalkbackDelete
+      tags: [Guests]
+      responses:
+        '204':
+          description: Ended (also when the manager says the session is already gone, or no line exists)
+        '400':
+          description: '`sessionId` is not a UUID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '`Guest not found`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: '`Intercom manager unreachable` — network error, manager 5xx or 401'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: '`Intercom manager busy` (with `Retry-After`), guest calling disabled, or database unavailable'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/productions/{id}/guests/{guestId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: guestId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Kick a guest
+      description: Marks the guest session `left`. Take-to-air/preview reuse the existing vision-mixer `SET_PVW`/`TAKE`; no new switching commands are introduced.
+      operationId: kickGuest
+      tags: [Guests]
+      responses:
+        '204':
+          description: Guest kicked
+        '403':
+          description: Guest is in a different production
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Guest not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/storage-connections/{id}/capacity:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Storage connection id, or `default` for the env-derived connection.
+        schema:
+          type: string
+    get:
+      summary: Storage connection free space and recording-minutes estimate
+      description: |
+        Reads free space through the MinIO admin API (`storageinfo`, plus `get-bucket-quota` for
+        the connection's `defaultBucket`), SigV4-signed with the connection's credentials. Upstream
+        failures are reported in the body with HTTP 200, never as a 5xx. Results are cached per
+        connection for 30 s. See `docs/specs/storage-connections.md` §2.8a.
+      operationId: getStorageConnectionCapacity
+      tags: [Storage connections]
+      responses:
+        '200':
+          description: Capacity result (`available`) or a classified upstream failure (`unavailable`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [status, totalBytes, freeBytes, scope, referenceBitrateKbps, estimatedMinutes, checkedAt]
+                    properties:
+                      status:
+                        type: string
+                        const: available
+                      totalBytes:
+                        type: number
+                      freeBytes:
+                        type: number
+                      scope:
+                        type: string
+                        enum: [server, bucket-quota]
+                      referenceBitrateKbps:
+                        type: number
+                        description: Bitrate the estimate assumes (the Enc PGM default, 10000).
+                      estimatedMinutes:
+                        type: number
+                        description: floor(freeBytes * 8 / (referenceBitrateKbps * 1000) / 60)
+                      checkedAt:
+                        type: string
+                        format: date-time
+                  - type: object
+                    required: [status, reason, checkedAt]
+                    properties:
+                      status:
+                        type: string
+                        const: unavailable
+                      reason:
+                        type: string
+                        enum: [forbidden, not-supported, unreachable]
+                      checkedAt:
+                        type: string
+                        format: date-time
+        '404':
+          description: Storage connection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/intercom-connection:
+    get:
+      summary: Intercom connection status
+      description: |
+        The intercom-manager connection in effect: the stored runtime setting, else the
+        `INTERCOM_MANAGER_*` env vars, else none (`source`). Never returns a secret value — only
+        `tokenSet` / `whipKeySet`. See `docs/specs/intercom-connection.md` §2.1.
+      operationId: getIntercomConnection
+      tags: [Intercom connection]
+      responses:
+        '200':
+          description: Connection status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntercomConnectionStatus'
+        '503':
+          description: Database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Set or replace the intercom connection
+      description: |
+        Stores the connection; applies to the next provisioning, proxy call and teardown without a
+        restart and wins over the env vars. On OSC only `url` is needed (mode `osc` is inferred and
+        the instance's `OscAccessToken` is used). A `direct` manager needs `apiKey`; a stored key is
+        kept when omitted only if the manager origin is unchanged. Private addresses need
+        `TRUSTED_INTERCOM_HOSTS`. See `docs/specs/intercom-connection.md` §2.2.
+      operationId: putIntercomConnection
+      tags: [Intercom connection]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  description: Manager URL, with or without `/api/v1`.
+                mode:
+                  type: string
+                  enum: [osc, direct]
+                  description: Advanced override; inferred from the host when omitted.
+                apiKey:
+                  type: string
+                  writeOnly: true
+                  description: Manager API key (`direct` mode only).
+                whipKey:
+                  type: [string, 'null']
+                  writeOnly: true
+                  description: Manager WHIP/WHEP key (`direct` mode only). `null` clears it.
+      responses:
+        '200':
+          description: Stored; the new status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntercomConnectionStatus'
+        '400':
+          description: Invalid URL, SSRF refusal, wrong inputs for the mode, or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Concurrent update; retry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Clear the intercom connection
+      description: Idempotent. The env vars, if set, apply again; otherwise talkback is off.
+      operationId: deleteIntercomConnection
+      tags: [Intercom connection]
+      responses:
+        '204':
+          description: Cleared
+
+  /api/v1/intercom-connection/test:
+    post:
+      summary: Test an intercom connection
+      description: |
+        Tests unsaved form values (`{ url, apiKey?, whipKey?, mode? }`, never persisted or logged) or,
+        with an empty body, the connection in effect. Creates no state on the manager and does not
+        use `GET /productionlist`. The WHIP key is reported as `not-verifiable`. See
+        `docs/specs/intercom-connection.md` §2.4.
+      operationId: testIntercomConnection
+      tags: [Intercom connection]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                mode:
+                  type: string
+                  enum: [osc, direct]
+                apiKey:
+                  type: string
+                  writeOnly: true
+                whipKey:
+                  type: string
+                  writeOnly: true
+      responses:
+        '200':
+          description: Structured test result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, status, message, source]
+                properties:
+                  ok:
+                    type: boolean
+                  status:
+                    type: string
+                    enum: [ok, unreachable, auth-failed, sat-exchange-failed, missing-credential, unexpected-response, not-configured]
+                  message:
+                    type: string
+                  httpStatus:
+                    type: integer
+                  mode:
+                    type: string
+                    enum: [osc, direct]
+                  patSource:
+                    type: [string, 'null']
+                    enum: [OscAccessToken, INTERCOM_MANAGER_TOKEN, null]
+                  url:
+                    type: string
+                  whipKey:
+                    type: string
+                    enum: [not-verifiable, not-set, not-used]
+                  source:
+                    type: string
+                    enum: [unsaved, stored, env, none]
+        '400':
+          description: Invalid unsaved values (including SSRF refusal)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

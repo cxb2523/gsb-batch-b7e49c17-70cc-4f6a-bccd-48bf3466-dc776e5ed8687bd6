@@ -1,0 +1,280 @@
+[![Try on OSC](https://img.shields.io/badge/Try%20on-Open%20Source%20Cloud-blue)](https://openlive.apps.osaas.io)
+
+# open-live
+
+Open Live is an open source, browser-based live production suite: vision mixer, audio mixer and multiviewer for remote and cloud production, with SRT and WHIP contribution. This repository is the API server; the production controller is [open-live-studio](https://github.com/Eyevinn/open-live-studio) and the media engine is [Strom](https://github.com/Eyevinn/strom).
+
+## Try it on OSC
+
+The quickest way to try it is the managed version on Open Source Cloud at [openlive.apps.osaas.io](https://openlive.apps.osaas.io). Plans and included production hours are listed in the [pricing section](https://openlive.apps.osaas.io/#pricing) on that page. You can also self-host it: see the [self-hosting guide](https://openlive.apps.osaas.io/guides/self-hosting-open-live).
+
+For dedicated GPU capacity, see the **Hosted GPU** add-on in the same
+[pricing section](https://openlive.apps.osaas.io/#pricing).
+
+The in-app **Create New Open Live** flow provisions CouchDB for you and generates its admin
+password automatically. You do not choose or handle that password yourself on this path.
+The `COUCHDB_URL` environment variable documented under [Configuration](#configuration)
+below is only for a self-hosted deployment where you run CouchDB yourself; it does not apply
+to the managed OSC flow above.
+
+**Before you start, one thing that is not obvious from the pricing section:** if you connect
+your own ("BYO") Strom instance, its URL must be publicly reachable. A plain local-network or
+loopback address is rejected, and so is any address that is not reachable from OSC, including
+a plain Tailscale or other mesh-VPN address in the `100.64.0.0/10` range even though it clears
+the initial check. To expose a locally hosted Strom instance without port-forwarding, use a
+public ingress feature such as [Tailscale Funnel](https://tailscale.com/kb/1223/funnel)
+(opt-in, off by default; also implemented by self-hosted
+[Headscale](https://github.com/juanfont/headscale)), which gives the instance a genuinely
+public `ts.net` hostname.
+
+## Features
+
+- **Vision mixing** — cuts, auto transitions, DSK layers, picture-in-picture, graphics overlays, and fade-to-black
+- **Graphics** — HTML/image overlays keyed onto the programme via DSK, including [OGraf](https://github.com/ebu/ograf) (EBU HTML-graphics spec) templates; see the [graphics guide](docs/graphics.md)
+- **Audio mixer** — per-channel faders with EBU R128 loudness metering
+- **Multiviewer** — sub-500ms WebRTC glass-to-glass latency
+- **Stream Deck control** — hardware button panel integration
+- **Up to 16 sources** per production
+- **REMI / remote production** — crews work from anywhere via browser; eliminates travel and equipment shipping
+- **Self-hostable** on any Kubernetes cluster, zero vendor lock-in
+
+## Running it yourself
+
+This repository is the API server. On its own it exposes a REST API and a WebSocket
+channel — to actually cut a show you also need the two pieces below.
+
+**What you need**
+
+- Node.js 22 and pnpm 10.33+
+- A **CouchDB** instance (local or remote) — all productions, sources and config live here
+- A **Strom** instance — the GStreamer engine that does the real work: mixing video and
+  audio, compositing graphics, and encoding the programme and multiview outputs. Open Live
+  drives it over its REST and WebSocket APIs and never touches media itself. Run one
+  locally with Docker, or point at an existing instance. See the
+  [Strom setup guide](https://github.com/EyevinnOSC/community/wiki/User-Guide:-Open-Live-Setup#strom).
+- [open-live-studio](https://github.com/Eyevinn/open-live-studio) — the browser UI. Without
+  it you have an API and no controls.
+
+**Quickstart**
+
+```bash
+pnpm install
+cp .env.example .env
+```
+
+The minimum to get a server running locally:
+
+```env
+COUCHDB_URL=http://admin:password@localhost:5984
+STROM_URL=http://localhost:8080
+API_KEY=$(openssl rand -base64 32)
+```
+
+Then start it, and point the studio at it:
+
+```bash
+pnpm dev                                  # this server, on http://localhost:3000
+# in open-live-studio: OPEN_LIVE_URL=http://localhost:3000
+```
+
+The database is named by `COUCHDB_NAME` (default `open-live`) and is created on first
+start if it is missing. On a CouchDB server shared by several studios, give each instance its
+own `COUCHDB_NAME`; if the server already has an `open-live` database with data, pre-claim each
+new studio's database before its first start, or that studio will use `open-live` (see
+`COUCHDB_NAME` in [Configuration](#configuration)):
+
+```bash
+curl -X PUT "$COUCHDB_URL/<name>"                                  # create the database
+curl -X PUT "$COUCHDB_URL/<name>/open-live-database" -d '{}'       # claim it for Open Live
+```
+ Everything else in
+[Configuration](#configuration) is optional for local development — but read
+[Operating in production](#operating-in-production) before exposing this to a network.
+
+**Commands**
+
+```bash
+pnpm dev          # development server with hot reload
+pnpm typecheck    # type-check without emitting
+pnpm build        # compile TypeScript to dist/
+pnpm start        # run the compiled server
+```
+
+## Configuration
+
+All configuration is via environment variables. Copy `.env.example` to `.env`
+and fill in the values:
+
+| Variable | Description | Default |
+|---|---|---|
+| `PORT` | Port the server listens on | `3000` |
+| `COUCHDB_URL` | Full CouchDB connection URL. Credentials may be embedded, or supplied via `COUCHDB_USER`/`COUCHDB_PASSWORD` | required |
+| `COUCHDB_USER` | CouchDB username, injected into `COUCHDB_URL` at startup when the URL has no embedded credentials (only applied if `COUCHDB_PASSWORD` is also set) | _(empty)_ |
+| `COUCHDB_PASSWORD` | CouchDB password, injected into `COUCHDB_URL` at startup when the URL has no embedded credentials | _(empty)_ |
+| `COUCHDB_NAME` | CouchDB database this instance keeps its data in. Must be a valid CouchDB name (lowercase letter first, then `a-z 0-9 _ $ ( ) + - /`, max 238 chars). An invalid name is a fatal startup error (not retried), **except** when the server's `open-live` database holds data: then the instance keeps using `open-live`, as it did before this setting was honoured, and logs an error naming `COUCHDB_NAME` and the rule. **On a CouchDB server that already has an `open-live` database with data, you must pre-claim this database by creating it with the marker document `open-live-database` in it (`PUT /<name>` then `PUT /<name>/open-live-database` with body `{}`), or the instance will use `open-live` and share it with whichever instance owns that data** (logging an error). This is the upgrade rule: while this database is missing or has no `open-live-database` document and `open-live` holds data, the instance keeps using `open-live` and does not create or write this database, so an existing instance never switches to an empty or foreign database. Otherwise the database is created if missing, the marker is written, and it is used from then on | `open-live` |
+| `CORS_ORIGIN` | Allowed CORS origin(s): a single origin, a comma-separated list, or `*` for wildcard. **When unset, cross-origin requests are disabled** (`origin: false`) and a `[security]` warning is logged — there is no default origin | _(empty — cross-origin disabled)_ |
+| `PUBLIC_BASE_URL` | Externally reachable base URL of this service, used to build WHIP callback URLs. **Required in production** (`NODE_ENV=production`): the server refuses to start without it, because otherwise WHIP URLs are derived from the `X-Forwarded-Host` header, enabling host-header injection. Outside production, logs a warning and falls back to request-derived URLs | _(empty)_ |
+| `TRUSTED_HOSTS` | Comma-separated allow-list of hostnames permitted when building request-derived WHIP URLs (used only when `PUBLIC_BASE_URL` is unset). A request whose derived host is not on this list is rejected rather than persisted | _(empty)_ |
+| `STROM_URL` | Base URL of the Strom pipeline engine | `http://localhost:7000` |
+| `STROM_PUBLIC_URL` | Base URL browsers use to reach Strom, when it differs from `STROM_URL` (e.g. Open Live reaches Strom in-cluster, browsers through a public ingress). Used for the WHEP URLs on an active production (`whepEndpoint`, `pgmWhepEndpoint`, `whepOutputUrls`); `/api/v1/whep-proxy` maps targets under it back to `STROM_URL` | _(empty — `STROM_URL`)_ |
+| `SRT_PUBLIC_HOST` | Public hostname on which the shared Strom instance's SRT listener ports are reachable from external SRT callers. Used to build the read-only `connect` dial-in address surfaced on `mpegtssrt`/`efpsrt` outputs (`GET /api/v1/outputs`). When unset, the host is derived from the `STROM_URL` hostname; if that is loopback/private the `connect.uri` is returned as `null` with a `reason` rather than a misleading address. Set this when the SRT port is published on a different public host than the HTTP API (e.g. NATed / shared-GPU topologies) | _(empty — derived from `STROM_URL`)_ |
+| `STROM_AUTH_TOKEN` | Token for authenticating against Strom. See [Strom authentication](#strom-authentication) below. `STROM_TOKEN` is accepted as a legacy fallback | _(empty — not needed for local Strom)_ |
+| `STROM_AUTH_MODE` | How `STROM_AUTH_TOKEN` is used: `osc` exchanges an OSC Personal Access Token for a short-lived SAT (OSC-hosted Strom); `direct` sends the token as a Bearer key (self-hosted / non-OSC Strom) | `osc` |
+| `STROM_BLOCK_PROPERTIES_READ_TIMEOUT_MS` | How long (ms) a read of a Strom block's properties (e.g. reading a mute back after an unclear write) waits before it counts as no answer. Writes have no limit. Must be a positive integer up to 2147483647; startup fails otherwise | `5000` |
+| `API_KEY` | Static API key protecting all `/api/v1` routes, the WebSocket controller, and the Swagger UI. **Required for any network-accessible deployment** (see below) | _(empty — routes unauthenticated)_ |
+| `TRUST_EXTERNAL_AUTH` | Acknowledges that `API_KEY` is intentionally unset because another layer (e.g. OSC's reverse proxy) handles auth instead. See below | `false` |
+| `SRT_PASSPHRASE_KEY` | **Optional override** for the AES-256 key (32 bytes, base64 or hex) that encrypts SRT source passphrases at rest (issue #438). When unset the backend generates a credential encryption key on first start and stores it in its own CouchDB, reusing it on every restart — so credential storage works out of the box without provisioning a key. Set this only to pin a specific key (e.g. a pre-existing self-hosted deployment); if set it wins over the stored key. `HTML_AUTH_KEY` falls back to this value when unset. Generate with `openssl rand -base64 32` | _(empty — backend auto-generates and stores a key)_ |
+| `LOG_LEVEL` | Fastify log level (`trace`, `debug`, `info`, `warn`, `error`) | `info` |
+| `STROM_PORT_LEASE_SIZE` | Number of SRT listener ports to reserve from a shared Strom — see [`docs/port-reservation.md`](docs/port-reservation.md) | `10` |
+| `STROM_PORT_LEASE_CLIENT_ID` | Stable owner id sent to Strom | hostname of `PUBLIC_BASE_URL`, else `open-live-<hostname>` |
+| `STROM_PORT_LEASE_DISABLED` | Set to `true` to turn off port reservation | `false` |
+| `IDLE_TIMEOUT_SEC` | Seconds a production may have zero connected clients before it is auto-deactivated (`endedReason: 'idle'`). A `KEEP_ALIVE` from any client resets this timer | `300` |
+| `IDLE_WARNING_LEAD_SEC` | Lead time before the idle deadline at which the backend emits a single `IDLE_WARNING` (with `remainingSec` + `deadlineMs`) over the controller WS so clients can keep the show up. Clamped to `IDLE_TIMEOUT_SEC` | `60` |
+| `GUEST_INVITE_SECRET` | **Optional override** for the HMAC key that signs production-scoped guest invite tokens. Guest calling is **on by default** (issue #391): when this is unset the backend generates a signing key on first start and stores it in its own CouchDB, reusing it on every restart. Set this only to pin a specific key (e.g. a pre-existing self-hosted deployment); if set it wins over the stored key. Only the SHA-256 hash of each token is persisted; the raw token is returned once and never stored. Generate with `openssl rand -base64 32` | _(empty — backend auto-generates and stores a key)_ |
+| `GUEST_INVITE_TTL_S` | Default guest invite lifetime in seconds (invites stay short-lived on purpose) | `86400` |
+| `INTERCOM_MANAGER_URL` | **Fallback.** The intercom connection is normally set at runtime inside Open Live — `PUT /api/v1/intercom-connection` (on OSC just the manager URL; self-hosted adds the manager API key), applied without a restart and taking precedence over these `INTERCOM_*` vars; see [`docs/specs/intercom-connection.md`](docs/specs/intercom-connection.md). When no connection is stored: base URL of the Open Intercom manager ([`Eyevinn/intercom-manager`](https://github.com/Eyevinn/intercom-manager)) for operator↔guest talkback, **including `/api/v1`** (e.g. `https://intercom.example.com/api/v1`). Optional: when unset, guest calling still works with WHIP video + WHEP return but no talkback line. When set but the manager is unreachable or errors, guest join still succeeds without a talkback line and logs a warning | _(empty — talkback disabled)_ |
+| `INTERCOM_MANAGER_TOKEN` | Auth token for the Open Intercom manager: the manager's `API_KEY` in `direct` mode, an OSC Personal Access Token in `osc` mode. Optional; held server-side only and redacted from logs | _(empty)_ |
+| `INTERCOM_MANAGER_AUTH_MODE` | How `INTERCOM_MANAGER_TOKEN` is used: `direct` sends it as the Bearer; `osc` exchanges it (an OSC PAT) for a Service Access Token scoped to `eyevinn-intercom-manager`, for an OSC-hosted manager behind OSC auth. In `osc` mode leave the manager instance's `whipAuthKey` unset — the SAT and a WHIP key would both need the `Authorization` header | `direct` |
+| `INTERCOM_WHIP_AUTH_KEY` | Bearer for the manager's per-line WHIP/WHEP endpoints (the manager's `WHIP_AUTH_KEY`, OSC option `whipAuthKey`). open-live proxies talkback signalling for the guest page (`/api/v1/guests/:inviteId/talkback/{whip,whep}`, invite token) and Studio (`/api/v1/productions/:id/guests/:guestId/talkback/{whip,whep}`, `API_KEY`), so the key never reaches a browser; it is redacted from logs. Unset: the proxy sends no `Authorization` (manager WHIP auth off). Ignored in `INTERCOM_MANAGER_AUTH_MODE=osc`, where the SAT is sent instead. A manager `401` is logged as `talkback: intercom-manager rejected INTERCOM_WHIP_AUTH_KEY` and answered `502`. See [`docs/specs/guest-talkback.md`](docs/specs/guest-talkback.md) | _(empty — no WHIP auth)_ |
+| `TRUSTED_INTERCOM_HOSTS` | Comma-separated private/loopback/link-local IP literals or CIDR ranges a runtime intercom-manager URL (`/api/v1/intercom-connection`) may point at, for a self-hosted manager on a private LAN (e.g. `192.168.1.0/24`). Empty: such URLs are refused. Does not apply to `INTERCOM_MANAGER_URL`. Never add `169.254.0.0/16` or `0.0.0.0/0` | _(empty)_ |
+| `RECORDING_SEGMENT_SECS` | Length in seconds of each recording part. Strom's recorder cuts a recording into consecutive `<productionId>_<timestamp>_0000N.mp4` files of this length (its `max_size_time_secs`); deactivate uploads every part as its own recording. `0` turns cutting off: one file per activation. Must be an integer from 0 to 86400; startup fails otherwise. See [`docs/specs/vod-recording-minio.md`](docs/specs/vod-recording-minio.md) | `600` |
+| `RECORDING_BLOCK` | Which Strom block records program. `auto`: Strom's Live Recorder (`builtin.liverecorder`, a live fragmented-MP4 muxer that does not stall when a track goes quiet) when the Strom has it, else `builtin.recorder`. `recorder`: always `builtin.recorder` — an escape hatch if Live Recorder misbehaves. Any other value fails startup. See [`docs/specs/iso-input-recording.md`](docs/specs/iso-input-recording.md) | `auto` |
+| `RECORDING_MAX_INPUTS` | Most inputs one production may record to their own files (ISO recording, `record: "transcode"` on a source assignment). Integer 0-16; `0` turns input recording off. Each recorded input adds one H.264 encode on Strom. See [`docs/specs/iso-input-recording.md`](docs/specs/iso-input-recording.md) | `4` |
+| `RECORDING_INPUT_VIDEO_BITRATE_KBPS` | Video bitrate (kbit/s) of each recorded input's H.264 encode. Integer 500-50000 | `4000` |
+| `MINIO_ENDPOINT` | Object storage (MinIO/S3) endpoint for uploading recordings, as `host[:port]` or a full URL. `S3_ENDPOINT` is accepted as a fallback. A `recording` output needs a storage target: these vars or a storage connection (`connectionId`); with neither, creating it returns 400 unless `RECORDING_LOCAL_ONLY=true`. Recording itself does not need object storage: the output writes segments to Strom's media path (`recordings/<productionId>/`). When `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` and `MINIO_BUCKET` are all set, deactivate uploads those segments to the bucket; otherwise (and with no storage connection on the output) the segments stay on Strom and deactivate skips the upload. A partial set logs a startup warning and is treated as unset | _(empty — recordings stay on Strom)_ |
+| `MINIO_ACCESS_KEY` | Object storage access key (see `MINIO_ENDPOINT`) | _(empty)_ |
+| `MINIO_SECRET_KEY` | Object storage secret key (see `MINIO_ENDPOINT`) | _(empty)_ |
+| `MINIO_BUCKET` | Bucket that recordings are uploaded to (see `MINIO_ENDPOINT`) | _(empty)_ |
+| `MINIO_REGION` | S3 region used for request signing | `us-east-1` |
+| `MINIO_USE_SSL` | Use TLS to the endpoint when `MINIO_ENDPOINT` has no scheme | `true` |
+| `RECORDING_LOCAL_ONLY` | Set to `true` to accept a `recording` output with no storage target. Its segments stay on Strom's media path with no upload and **no retention**, so they accumulate until removed by hand | `false` |
+| `RECORDING_KEY_PREFIX` | Prefix prepended to every uploaded recording's object key | _(empty)_ |
+| `RECORDING_PRESIGN_TTL_S` | Lifetime in seconds of the presigned `playbackUrl` returned by the VOD endpoints | `3600` |
+
+> **Never commit `.env`** — it is gitignored. Use `.env.example` as the reference.
+
+## API
+
+The REST API is documented in [`docs/openapi.yaml`](docs/openapi.yaml) and served as
+interactive Swagger UI at **`/documentation`**. That is the authoritative reference — the
+list below is a map of what exists, not a complete signature listing.
+
+| Area | Routes |
+|---|---|
+| Health | `/health`, `/healthz` (OSC probe alias), `/ready` (requires CouchDB) |
+| Service status | `/api/v1/status`, `/api/v1/ping`, `/api/v1/server-info`, `POST /api/v1/reconnect` |
+| Productions | `/api/v1/productions`, `/api/v1/productions/:id`, plus `:id/activate` and `:id/deactivate` |
+| Production contents | `:id/sources`, `:id/outputs`, `:id/graphics`, `:id/macros`, `:id/whip/:mixerInput` |
+| Production runtime | `:id/pipeline`, `:id/audio`, `:id/stats/streaming`, `:id/controllers` |
+| Resources | `/api/v1/sources`, `/api/v1/outputs`, `/api/v1/graphics`, `/api/v1/production-configs` |
+| WebRTC | `/api/v1/ice-servers`, `/api/v1/whep-proxy` |
+| WebSocket | `/ws/productions/:id/controller` — the controller channel |
+
+The WebSocket controller channel — its authentication, inbound message types, and outbound
+broadcasts — is documented separately in [`docs/controller-websocket.md`](docs/controller-websocket.md).
+
+### Source model
+
+Sources represent individual video/audio feeds. Each source has a `streamType` — `srt`, `efp`, `whip`, `html`, or the built-in test patterns `test1` / `test2` — and an `address` (SRT URI, WHIP endpoint URL, or page URL for `html`). The test-pattern types need no address and are useful for bringing a production up without any ingest.
+
+SRT passphrases are embedded in the source `address` and encrypted at rest before being stored in CouchDB. For rotating a passphrase or responding to a suspected compromise, see the operator runbook in [`docs/srt-passphrase-rotation.md`](docs/srt-passphrase-rotation.md).
+
+### Activation flow
+
+1. A production is given source assignments (`POST /api/v1/productions/:id/sources`), plus any outputs and graphics.
+2. `POST /api/v1/productions/:id/activate` builds a Strom flow from the built-in topology in [`src/lib/default-flow.ts`](src/lib/default-flow.ts) — vision mixer, audio mixer, encoders and WHEP endpoints sized to the production's config — patches each assigned source's address into the matching block, then creates and starts the flow in Strom. The `stromFlowId` is stored on the production.
+3. `POST /api/v1/productions/:id/deactivate` stops and deletes the Strom flow and clears `stromFlowId`. If the production records and object storage is configured, it first uploads the recordings on Strom, including any that earlier sessions left there (see [Segments left on Strom](docs/specs/vod-recording-minio.md#segments-left-on-strom)).
+
+The flow topology is generated, not user-supplied: productions are configured through their sources, outputs, graphics and config values rather than by editing flow JSON.
+
+### Graphics
+
+Graphics are HTML or image overlays rendered by the pipeline and keyed onto the programme
+output through a downstream keyer (DSK). This supports standards-based HTML templates such as
+[OGraf](https://github.com/ebu/ograf) (the EBU spec, authored with the
+[OGraf Template Editor](https://github.com/Eyevinn/ograf-editor)). See the end-to-end
+[**Graphics in Open Live** guide](docs/graphics.md) for authoring, registering, assigning to a
+DSK, and taking graphics on air — including an honest note on what is not yet integrated
+(e.g. the SPX graphics controller).
+
+## Operating in production
+
+The defaults are tuned for local development. Before this service is reachable from a
+network, both of the following apply.
+
+### API authentication
+
+All `/api/v1` routes, the WebSocket controller (`/ws/`), and the Swagger UI
+(`/documentation`) are protected by a static API key when `API_KEY` is set. Clients
+must send it as a bearer token:
+
+```
+Authorization: Bearer <API_KEY>
+```
+
+Browser WebSocket clients cannot set custom headers, so they carry the key through the
+`Sec-WebSocket-Protocol` header instead: offer the two sentinel subprotocols
+`openlive.bearer` and `openlive.bearer.<API_KEY>` via `new WebSocket(url, protocols)`.
+The server extracts the key from the second (`extractSubprotocolKey()`) and echoes back
+only the plain `openlive.bearer` marker, keeping the secret out of the request URL and
+access logs. The `?key=<API_KEY>` query parameter is **not** accepted — it was removed
+in #49 because it leaks the key into proxy/CDN/DevTools logs. See
+[`docs/controller-websocket.md`](docs/controller-websocket.md) for details.
+
+> **`API_KEY` must be set for any network-accessible deployment.** When `API_KEY` is
+> unset, every API route is unauthenticated — any client that can reach the service can
+> create, modify, delete, and activate productions. The server **refuses to start** when
+> `NODE_ENV=production` and `API_KEY` is unset, unless `TRUST_EXTERNAL_AUTH=true`
+> acknowledges that a trusted external auth layer (e.g. the OSC reverse proxy) is handling
+> it instead — `NODE_ENV` reflects the deployment tier, not the auth architecture, so it
+> can't be used as that signal by itself. Outside production it logs a prominent warning
+> instead of refusing to start. The reference `docker-compose.yml` requires `API_KEY` to
+> be set in your `.env` before the stack will start — generate a strong random value with
+> `openssl rand -base64 32`.
+
+### Strom authentication
+
+Strom authentication is configured with `STROM_AUTH_TOKEN` and `STROM_AUTH_MODE`.
+(`STROM_TOKEN` is still read as a legacy fallback for `STROM_AUTH_TOKEN`, but new
+deployments should use `STROM_AUTH_TOKEN`.)
+
+- **`STROM_AUTH_MODE=osc`** (the default) — for a Strom instance behind OSC authentication. Set
+  `STROM_AUTH_TOKEN` to your OSC Personal Access Token; the server automatically
+  exchanges it for a short-lived Service Access Token (SAT) and refreshes it before
+  expiry. No extra steps needed. Note that an `eyevinn-strom` instance from the OSC
+  catalogue is not a supported backend — see [OSC deployment](#osc-deployment).
+- **`STROM_AUTH_MODE=direct`** — for the shared Eyevinn instance and any self-hosted
+  Strom. `STROM_AUTH_TOKEN` is sent directly as the `Authorization: Bearer` token with
+  no exchange step.
+
+Leave `STROM_AUTH_TOKEN` unset when running Strom locally without authentication.
+
+### Guests and TURN
+
+Browsers get their ICE servers from Strom's `STROM_SERVER_ICE_SERVERS`: the
+studio through `GET /api/v1/ice-servers`, and guests in their join response.
+A guest whose browser cannot reach Strom's own candidates (Strom behind NAT,
+or in Kubernetes without host networking) connects only through a TURN
+server on that list. A browser takes a TURN server only with a username and
+credential (`turn:user:pass@host` in Strom's list); the guest page leaves out
+a TURN entry without them. With a TURN server on the list, the page waits up
+to 6s for ICE gathering, so a guest who cannot reach it goes live that much
+later.
+
+A TURN server there with long-term credentials (`turn:user:pass@host`) hands
+those credentials to every guest who joins, and an invite link is a bearer
+token that travels through chat and email. Whoever holds a valid invite can
+use the TURN server to relay traffic, for as long as its credentials stay the
+same, after the invite has expired or been revoked. Limit that on the TURN
+server: let it relay only to Strom's addresses (coturn `denied-peer-ip` /
+`allowed-peer-ip`), cap allocations and bandwidth per user, and rotate the
+credentials. Strom cannot mint time-limited TURN credentials (the TURN REST
+API scheme, coturn `use-auth-secret`) yet.
+
+## OSC deployment
+
+The app is deployed on [Open Source Cloud](https://www.osaas.io). Environment variables are injected at runtime via an OSC parameter store — no `.env` file is needed on the server.
+
+Required services: CouchDB (`apache-couchdb`), parameter store (`eyevinn-app-config-svc` + `valkey`).
+
+Strom is **not** deployed as an OSC service instance. `STROM_URL` points at a GPU host outside the OSC catalogue (the shared Eyevinn instance, or your own) — see [Strom authentication](#strom-authentication) above. The `eyevinn-strom` catalogue service is not a supported backend.
