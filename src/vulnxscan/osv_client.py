@@ -46,8 +46,14 @@ class OSV:
             setcol(cols.COMPONENT_REF, []).append(package.get(cols.COMPONENT_REF, ""))
 
     def _parse_batch_response(self, packages, results):
-        # Preserve the previous tolerant behavior if the API returns fewer results.
-        for package, vulns in zip(packages, results, strict=False):
+        # OSV returns one result per query, positionally. Pair each request with
+        # its result by index so that a short response only means "no result"
+        # for the missing tail: later results must not shift to earlier queries.
+        for index, package in enumerate(packages):
+            if index >= len(results):
+                LOG.debug("no result returned for package: %s", package)
+                continue
+            vulns = results[index]
             if not package or not vulns:
                 continue
             LOG.debug("package: %s", package)
@@ -79,7 +85,7 @@ class OSV:
         setcol = components_dict.setdefault
         for component in components:
             setcol(cols.NAME, []).append(component["name"])
-            setcol(cols.VERSION, []).append(component["version"])
+            setcol(cols.VERSION, []).append(component.get("version", ""))
             setcol(cols.COMPONENT_REF, []).append(component.get("bom-ref", ""))
         df_components = pd.DataFrame(components_dict)
         df_components.fillna("", inplace=True)
@@ -105,8 +111,13 @@ class OSV:
             name = component[cols.NAME]
             version = component.get(cols.VERSION, "")
             if not version:
-                LOG.debug("skipping osv query (unknown version): %s", name)
+                LOG.warning("skipping osv query (unknown version): %s", name)
                 continue
+            # Build all ecosystem queries for this component up front: batching
+            # decisions are made per component so its queries never straddle
+            # two requests. Each query is still sent exactly once.
+            component_queries = []
+            component_packages = []
             for ecosystem in ecosystems:
                 query = {
                     "version": version,
@@ -115,14 +126,22 @@ class OSV:
                         "ecosystem": ecosystem,
                     },
                 }
-                batchquery["queries"].append(query)
-                packages.append(
+                component_queries.append(query)
+                component_packages.append(
                     {**query, cols.COMPONENT_REF: component[cols.COMPONENT_REF]}
                 )
-                if len(batchquery["queries"]) >= max_queries:
-                    self._post_batch_query(batchquery, packages)
-                    batchquery["queries"] = []
-                    packages = []
+            if batchquery["queries"] and (
+                len(batchquery["queries"]) + len(component_queries) > max_queries
+            ):
+                self._post_batch_query(batchquery, packages)
+                batchquery = {"queries": []}
+                packages = []
+            batchquery["queries"].extend(component_queries)
+            packages.extend(component_packages)
+            if len(batchquery["queries"]) >= max_queries:
+                self._post_batch_query(batchquery, packages)
+                batchquery = {"queries": []}
+                packages = []
         if batchquery["queries"]:
             self._post_batch_query(batchquery, packages)
 
