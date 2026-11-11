@@ -1,0 +1,19 @@
+# Self-host 3Dokploy:  docker compose up -d  →  http://localhost:3000
+# Settings come from a .env file next to this one (see .env.example).
+# DOKPLOY_URL and DOKPLOY_API_KEY are required.
+services:
+  3dokploy:
+    build: .
+    # Or skip the build and use the published image:
+    # image: ghcr.io/suleyman/3dokploy:latest
+    restart: unless-stopped
+    ports:
+      # Dokploy itself listens on 3000: on the same machine, use e.g. "3100:3000".
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      DOKPLOY_URL: ${DOKPLOY_URL:?set DOKPLOY_URL in .env}
+      DOKPLOY_API_KEY: ${DOKPLOY_API_KEY:?set DOKPLOY_API_KEY in .env}
+      BASIC_AUTH: ${BASIC_AUTH:-}
+    extra_hosts:
+      # Lets DOKPLOY_URL=http://host.docker.internal:3000 reach a Dokploy on the same machine.
+      - host.docker.internal:host-gateway
