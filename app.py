@@ -1,0 +1,85 @@
+"""Command-line entry point for Anyworld."""
+
+import argparse
+import logging
+import os
+import sys
+
+import uvicorn
+
+from core.config import settings
+from core.console_logging import ConsoleHandler, LOGGING_CONFIG
+from api.tls_bootstrap import ensure_cert
+
+LOGGER = logging.getLogger("app")
+
+
+def main() -> None:
+    """Parse CLI arguments, configure logging and launch the HTTPS gateway."""
+    try:
+        settings.server.validate_passwords()
+    except ValueError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    parser = argparse.ArgumentParser(description="LLM RPG Orchestrator Gateway")
+    parser.add_argument(
+        "--host", type=str, default=settings.server.host, help="Bind socket to this host."
+    )
+    parser.add_argument(
+        "--port", type=int, default=settings.server.port, help="Bind socket to this port."
+    )
+    parser.add_argument("--reload", action="store_true", help="Enable development auto-reload.")
+    parser.add_argument(
+        "--tls-address",
+        action="append",
+        default=None,
+        help="Certificate IP/hostname (repeatable; skips address discovery).",
+    )
+    parser.add_argument("--tls-certfile", default=settings.server.tls_certfile)
+    parser.add_argument("--tls-keyfile", default=settings.server.tls_keyfile)
+    parser.add_argument(
+        "--debug-raw-responses",
+        "--debug",
+        action="store_true",
+        help="Save private raw LLM responses under .debug/llm/.",
+    )
+    args = parser.parse_args()
+    if args.debug_raw_responses:
+        settings.llm.debug_raw_responses = True
+        # Uvicorn reload starts a fresh interpreter; carry the launch override there too.
+        os.environ["ANYWORLD_DEBUG_RAW_RESPONSES"] = "1"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[ConsoleHandler()],
+    )
+    try:
+        addresses = args.tls_address or settings.server.tls_addresses
+        if addresses or args.tls_certfile or args.tls_keyfile:
+            ip, cert_path, key_path = ensure_cert(addresses, args.tls_certfile, args.tls_keyfile)
+        else:
+            ip, cert_path, key_path = ensure_cert()
+    except (ValueError, OSError) as exc:
+        LOGGER.error("TLS configuration error: %s", exc)
+        raise SystemExit(1) from exc
+    LOGGER.info("Launching Anyworld on %s:%s (https://%s:%s)", args.host, args.port, ip, args.port)
+    uvicorn.run(
+        "api.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_config=LOGGING_CONFIG,
+        ssl_certfile=cert_path,
+        ssl_keyfile=key_path,
+        # Keep idle WAN WebSocket connections alive through NAT/proxies.
+        ws_ping_interval=20,
+        ws_ping_timeout=20,
+        ws_max_size=settings.server.max_message_bytes,
+        # Preserve the direct peer; application admission validates the proxy chain.
+        proxy_headers=False,
+    )
+
+
+if __name__ == "__main__":
+    main()

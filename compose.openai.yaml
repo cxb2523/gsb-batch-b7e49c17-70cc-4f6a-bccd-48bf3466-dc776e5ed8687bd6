@@ -1,0 +1,3 @@
+# Legacy no-op overlay. Select provider and model in config.yaml; credentials come from .env.
+# Remote APIs need only compose.yaml. This remains for older COMPOSE_FILE values.
+services: {}

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anyworld</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=24">
+  <link rel="icon" type="image/png" href="/static/favicon/favicon-96x96.png" sizes="96x96" />
+  <link rel="shortcut icon" href="/static/favicon/favicon.ico" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png" />
+  <link rel="manifest" href="/static/favicon/site.webmanifest" />
+</head>
+
+<body>
+  <main id="grid-container" hidden>
+    <section id="chat-pane" aria-label="Players and party chat">
+      <div id="player-roster" aria-label="Current players">
+        <h2>Players</h2>
+        <ul id="player-list"></ul>
+      </div>
+      <div id="chat-messages" aria-label="Party chat" aria-live="polite"></div>
+      <form id="chat-form">
+        <input id="chat-input" maxlength="1000" autocomplete="off" placeholder="Chat with the party..."
+          aria-label="Chat message">
+      </form>
+    </section>
+    <header id="title-pane">
+      <span id="scenario-title">Awaiting scenario initialization...</span>
+      <details id="token-usage" hidden>
+        <summary aria-label="Show token accounting"><span id="token-chart" role="img"
+            aria-label="Estimated retained context"></span><span id="token-count"></span></summary>
+        <div id="token-details"></div>
+      </details>
+      <span id="player-identity" aria-label="Current player"></span>
+      <button id="history-button" type="button">History</button>
+    </header>
+    <section id="log-pane" data-pane-title="Game State" aria-label="Game state: scenario state and player actions"
+      aria-live="polite">
+      <img id="game-banner" src="/static/media/AnyworldBanner.jpg" alt="Anyworld" width="1376" height="322"
+        fetchpriority="high">
+    </section>
+    <form id="input-pane">
+      <input type="text" id="action-input" maxlength="4000" disabled autocomplete="off"
+        placeholder="Waiting for your turn..." aria-label="Your character action">
+    </form>
+  </main>
+
+  <div id="login-modal" class="modal" role="dialog" aria-modal="true">
+    <form id="login-form" class="modal-card">
+      <h1>Anyworld</h1>
+      <p>The first user must enter the host password. Other users join afterward.</p>
+      <label for="name-input">Player name</label>
+      <input id="name-input" maxlength="40" required autocomplete="nickname">
+      <label for="password-input">Password</label>
+      <input id="password-input" type="password" maxlength="200" required autocomplete="current-password">
+      <button type="submit">Join game</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </div>
+
+  <div id="host-modal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-card">
+      <section id="scenario-step">
+        <h2>Create the scenario</h2>
+        <form id="scenario-form">
+          <label for="scenario-input">Describe the setting, characters, and opening situation</label>
+          <textarea id="scenario-input" maxlength="20000" required></textarea>
+          <fieldset aria-describedby="chance-rule-tips">
+            <legend>Chance-based event rule (optional)</legend>
+            <p id="chance-rule-tips">Set the chance of an event happening and describe its effect.
+              Choose when to check, who is eligible, and whether to roll once for everyone or separately
+              for each eligible player. The roll is private; its outcome shapes the story.
+              Leave the chance blank to turn the rule off.</p>
+            <div class="chance-field">
+              <label for="chance-percent">Chance, whole percent (leave blank to disable)</label>
+              <input id="chance-percent" type="number" min="0" max="100" step="1">
+            </div>
+            <div class="chance-field">
+              <label for="chance-cadence">Cadence</label>
+              <select id="chance-cadence">
+                <option value="per_round">Once each round</option>
+                <option value="condition">On a triggering occurrence</option>
+              </select>
+            </div>
+            <div class="chance-field">
+              <label for="chance-trigger">Occurrence trigger (conditional cadence only)</label>
+              <input id="chance-trigger" maxlength="240" placeholder="A player enters a building">
+            </div>
+            <div class="chance-field">
+              <label for="chance-eligibility">Eligibility (optional; does not change cadence)</label>
+              <input id="chance-eligibility" maxlength="500" placeholder="The building is unstable">
+            </div>
+            <div class="chance-field">
+              <label for="chance-effect">Effect</label>
+              <input id="chance-effect" maxlength="500" placeholder="The building collapses onto the player">
+            </div>
+            <div class="chance-field">
+              <label for="chance-scope">Roll scope</label>
+              <select id="chance-scope">
+                <option value="shared">One shared roll</option>
+                <option value="per_player">One roll per eligible player</option>
+              </select>
+            </div>
+          </fieldset>
+          <label for="guidance-input">Additional freeform DM guidance (optional)</label>
+          <textarea id="guidance-input" maxlength="5000" aria-describedby="guidance-tips"
+            placeholder="Example: 'Keep the world coherent while steering toward eerie discoveries.'"></textarea>
+          <div id="guidance-tips">
+            Use this field only for secret steering instructions:
+            <ul>
+              <li><strong>Story Guidance:</strong> Non-probabilistic instructions to steer the world or direction.
+                <em>Example: "Steer responses toward the absurd, as if the scenario happened in a universe that
+                  does not conform to basic logic." or for comedic purposes: "Introduce a sunglasses-wearing half-naked
+                  dwarf with a brief visible cameo early in the journey, then let him disappear from view for a while.
+                  Bring him back at suitable later moments, separated by stretches without sightings. Each cameo is a
+                  single incidental sentence of visual comedy; it should not become a threat, mystery to solve, or
+                  obstacle.</em>
+              </li>
+            </ul>
+            Use the chance-based event rule above for percentage-based events;
+            the AI follows this guidance to shape the story.
+          </div>
+          <div id="scenario-library">
+            <p>Save scenarios in this browser or as JSON files for reuse on another browser or device.
+              Saves include private DM guidance and chance rules.</p>
+            <label for="saved-scenarios">Saved scenarios</label>
+            <select id="saved-scenarios">
+              <option value="">Choose a saved scenario</option>
+            </select>
+            <div class="scenario-library-actions">
+              <button id="load-scenario" type="button" disabled>Load</button>
+              <button id="delete-scenario" type="button" disabled>Delete</button>
+            </div>
+            <label for="scenario-save-name">Save name</label>
+            <input id="scenario-save-name" maxlength="100" autocomplete="off">
+            <button id="save-scenario" type="button">Save scenario</button>
+            <div class="scenario-library-actions">
+              <button id="export-scenario" type="button">Save to file</button>
+              <button id="import-scenario" type="button">Load from file</button>
+            </div>
+            <input id="scenario-file" type="file" accept=".json,application/json" hidden>
+            <p id="scenario-storage-status" role="status"></p>
+          </div>
+          <button type="submit">Generate scenario</button>
+        </form>
+      </section>
+      <section id="lobby-step" hidden>
+        <h2>Scenario ready</h2>
+        <p>Players may now join. Start when everyone is ready.</p>
+        <div id="lobby-roster" aria-label="Players in the lobby">
+          <p id="lobby-player-count" role="status"></p>
+          <ul id="lobby-player-list"></ul>
+        </div>
+        <button id="start-button" type="button">Start game</button>
+      </section>
+      <p id="host-status" role="status"></p>
+    </div>
+  </div>
+
+  <div id="history-modal" class="modal" role="dialog" aria-modal="true" aria-label="Public game history" hidden>
+    <div class="modal-card">
+      <button id="history-close" type="button">Close history</button>
+      <h2>Public game history</h2>
+      <form id="history-form"><input id="history-search" maxlength="200" aria-label="Search public history">
+        <button type="submit">Search from beginning</button>
+      </form>
+      <div id="history-entries"></div>
+      <button id="history-next" type="button">Next page</button>
+      <button id="history-export" type="button">Export public history</button>
+    </div>
+  </div>
+  <div id="dm-thinking" hidden role="status">
+    <span class="thinking-orb" aria-hidden="true"></span>
+    The Dungeon Master is weaving the outcome…
+  </div>
+  <button id="end-game-button" type="button" hidden>End game</button>
+  <button id="new-game-button" type="button" hidden>Start new game</button>
+  <button id="retry-round-button" type="button" hidden>Retry paused round</button>
+  <button id="reclaim-button" type="button" hidden>Reclaim this player</button>
+  <div id="connection-status" role="status">Connecting...</div>
+  <script src="/static/js/state.js?v=recovery-7"></script>
+  <script src="/static/js/identity.js?v=recovery-4"></script>
+  <script src="/static/js/rendering.js?v=recovery-5"></script>
+  <script src="/static/js/transport.js?v=recovery-4"></script>
+  <script src="/static/js/accessibility.js?v=recovery-2"></script>
+  <script src="/static/js/journal.js?v=recovery-3"></script>
+  <script src="/static/js/scenarios.js?v=4"></script>
+  <script src="/static/js/app.js?v=recovery-9"></script>
+</body>
+
+</html>
