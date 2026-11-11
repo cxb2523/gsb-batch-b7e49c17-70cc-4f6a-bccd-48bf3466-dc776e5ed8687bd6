@@ -25,27 +25,35 @@ class NavaThread(threading.Thread):
         self._force_stop = False
         self._engine = engine
         self._nava_exception = None
+        self._proc_lock = threading.Lock()
+        self._stop_requested = False
 
-    def _terminate_process(self) -> None:
-        """Terminate play process and clean up its standard streams."""
+    def _terminate_process(self, proc: Any) -> None:
+        """
+        Terminate play process and clean up its standard streams.
+
+        :param proc: play process to terminate
+        """
         try:
-            self._play_process.stdout.close()
-            self._play_process.stdin.close()
-            self._play_process.stderr.close()
+            proc.stdout.close()
+            proc.stdin.close()
+            proc.stderr.close()
         except Exception:  # nosec B110 - Best effort cleanup
             pass
 
         try:
-            self._play_process.terminate()
-            self._play_process.wait(timeout=1)
+            proc.terminate()
+            proc.wait(timeout=1)
         except Exception:
             try:
-                self._play_process.kill()
-                self._play_process.wait()
+                proc.kill()
+                proc.wait()
             except Exception:  # nosec B110 - Best effort cleanup
                 pass
         finally:
-            self._play_process = None
+            with self._proc_lock:
+                if self._play_process is proc:
+                    self._play_process = None
 
     def run(self) -> None:
         """Run target function."""
@@ -55,8 +63,19 @@ class NavaThread(threading.Thread):
                     self._target(*self._args, **self._kwargs)
                 else:
                     while True:
-                        self._play_process = self._target(*self._args, **self._kwargs)
-                        self._play_process.wait()
+                        # Checking the stop flag and creating/assigning the new
+                        # process is a single critical section: a stop() call can
+                        # never slip in between "old process finished" and
+                        # "new process assigned" without being seen.
+                        with self._proc_lock:
+                            if self._stop_requested:
+                                break
+                            self._play_process = self._target(*self._args, **self._kwargs)
+                            proc = self._play_process
+                        proc.wait()
+                        with self._proc_lock:
+                            if self._play_process is proc:
+                                self._play_process = None
                         if not self._loop:
                             break
         except Exception:  # pragma: no cover
@@ -74,5 +93,8 @@ class NavaThread(threading.Thread):
             # The alias is scoped to the MCI (Media Control Interface) context of the thread that created it.
             # So the main thread can't "see" the alias created in the worker thread.
         else:
-            if self._play_process:
-                self._terminate_process()
+            with self._proc_lock:
+                self._stop_requested = True
+                proc = self._play_process
+            if proc is not None:
+                self._terminate_process(proc)
