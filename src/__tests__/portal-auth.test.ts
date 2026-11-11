@@ -1,0 +1,518 @@
+/**
+ * Tests for Magic Link auth flow (send, verify, logout) and /portal/ HTML.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:sockets", () => ({
+  connect: vi.fn(),
+}));
+
+import worker from "../index";
+import { createMockEnv, mockCtx } from "./test-helpers";
+import { sha256Hex } from "../helpers/crypto";
+
+function createMockD1(): {
+  db: D1Database;
+  tables: {
+    accounts: Map<string, any>;
+    api_keys: Map<string, any>;
+    sessions: Map<string, any>;
+    magic_link_tokens: Map<string, any>;
+  };
+} {
+  const tables = {
+    accounts: new Map<string, any>(),
+    api_keys: new Map<string, any>(),
+    sessions: new Map<string, any>(),
+    magic_link_tokens: new Map<string, any>(),
+  };
+
+  const prepare = (sql: string) => {
+    let binds: any[] = [];
+    const stmt = {
+      bind(...args: any[]) {
+        binds = args;
+        return stmt;
+      },
+      async first<T = any>(): Promise<T | null> {
+        // Magic link token lookup
+        if (sql.includes("FROM magic_link_tokens")) {
+          const [tokenHash] = binds;
+          for (const [_, t] of tables.magic_link_tokens) {
+            if (t.token_hash === tokenHash) {
+              return {
+                id: t.id,
+                email: t.email,
+                expires_at: t.expires_at,
+                used_at: t.used_at,
+                source: t.source ?? "",
+              } as T;
+            }
+          }
+          return null;
+        }
+        // Account lookup by email
+        if (sql.includes("FROM accounts WHERE email")) {
+          const [email] = binds;
+          for (const [_, a] of tables.accounts) {
+            if (a.email === email) return { id: a.id } as T;
+          }
+          return null;
+        }
+        // Session + account join
+        if (sql.includes("FROM sessions s") && sql.includes("JOIN accounts")) {
+          const [tokenHash] = binds;
+          for (const [_, s] of tables.sessions) {
+            if (s.token_hash === tokenHash) {
+              const account = tables.accounts.get(s.account_id);
+              if (!account) return null;
+              return {
+                session_id: s.id,
+                account_id: s.account_id,
+                expires_at: s.expires_at,
+                email: account.email,
+                tier: account.tier,
+                github_id: account.github_id,
+              } as T;
+            }
+          }
+          return null;
+        }
+        return null;
+      },
+      async all<T = any>(): Promise<{ results: T[] }> {
+        return { results: [] };
+      },
+      async run() {
+        // INSERT magic_link_tokens
+        if (sql.includes("INSERT INTO magic_link_tokens")) {
+          const [id, email, token_hash, expires_at, created_at, source] = binds;
+          tables.magic_link_tokens.set(id, {
+            id, email, token_hash, expires_at, created_at, used_at: null, source,
+          });
+          return {};
+        }
+        // UPDATE magic_link_tokens used_at
+        if (sql.includes("UPDATE magic_link_tokens SET used_at")) {
+          const [used_at, id] = binds;
+          const t = tables.magic_link_tokens.get(id);
+          if (!t || t.used_at) {
+            return { meta: { changes: 0 } };
+          }
+          t.used_at = used_at;
+          return { meta: { changes: 1 } };
+        }
+        // INSERT accounts
+        if (sql.includes("INSERT INTO accounts")) {
+          const [id, email, tier, monthly_credits_used, monthly_credits_reset_at, created_at, updated_at, signup_source] = binds;
+          tables.accounts.set(id, {
+            id, email, tier, monthly_credits_used, monthly_credits_reset_at,
+            created_at, updated_at, github_id: null, signup_source,
+          });
+          return {};
+        }
+        // INSERT sessions
+        if (sql.includes("INSERT INTO sessions")) {
+          const [id, account_id, token_hash, expires_at, created_at] = binds;
+          tables.sessions.set(id, { id, account_id, token_hash, expires_at, created_at });
+          return {};
+        }
+        // DELETE sessions
+        if (sql.includes("DELETE FROM sessions")) {
+          const [id] = binds;
+          tables.sessions.delete(id);
+          return {};
+        }
+        return {};
+      },
+    };
+    return stmt;
+  };
+
+  return {
+    db: { prepare, batch: async () => [] } as unknown as D1Database,
+    tables,
+  };
+}
+
+describe("Magic Link: POST /api/auth/magic-link", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("rejects invalid email", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request("https://md.example.com/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "not-an-email" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects missing body", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request("https://md.example.com/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "",
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(400);
+  });
+
+  it("stores token hash and returns 200 for valid email", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const req = new Request("https://md.example.com/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "user@example.com" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(d1.tables.magic_link_tokens.size).toBe(1);
+    const stored = Array.from(d1.tables.magic_link_tokens.values())[0];
+    expect(stored.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored.email).toBe("user@example.com");
+    expect(stored.used_at).toBeNull();
+    const warning = JSON.stringify(warnSpy.mock.calls);
+    expect(warning).not.toContain("/api/auth/verify?token=");
+    expect(warning).not.toContain(stored.token_hash);
+  });
+
+  it("keeps a well-formed signup source on the token and drops anything else", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const send = (email: string, source: unknown) => worker.fetch(new Request("https://md.example.com/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, source }),
+    }), env, mockCtx());
+    expect((await send("a@example.com", "Blocked")).status).toBe(200);
+    expect((await send("b@example.com", "<script>")).status).toBe(200);
+    expect((await send("c@example.com", undefined)).status).toBe(200);
+    const sources = Object.fromEntries(Array.from(d1.tables.magic_link_tokens.values()).map((t) => [t.email, t.source]));
+    expect(sources).toEqual({ "a@example.com": "blocked", "b@example.com": "", "c@example.com": "" });
+  });
+
+  it("normalizes email to lowercase", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request("https://md.example.com/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "USER@Example.COM" }),
+    });
+    await worker.fetch(req, env, mockCtx());
+    const stored = Array.from(d1.tables.magic_link_tokens.values())[0];
+    expect(stored.email).toBe("user@example.com");
+  });
+
+  it("sends the sign-in link from noreply@mdget.dev through the EMAIL binding", async () => {
+    const d1 = createMockD1();
+    const send = vi.fn().mockResolvedValue({ messageId: "m-1" });
+    const { env } = createMockEnv({ AUTH_DB: d1.db, EMAIL: { send } as unknown as SendEmail });
+
+    const req = new Request("https://mdget.dev/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "user@example.com" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    expect(send).toHaveBeenCalledTimes(1);
+    const message = send.mock.calls[0][0];
+    expect(message).toMatchObject({ from: "mdget.dev <noreply@mdget.dev>", to: "user@example.com" });
+    expect(message.text).toMatch(/https:\/\/mdget\.dev\/api\/auth\/verify\?token=[0-9a-f]{64}/);
+  });
+
+  it("still returns 200 when sending fails (don't leak errors)", async () => {
+    const d1 = createMockD1();
+    const send = vi.fn().mockRejectedValue(new Error("sender not configured"));
+    const { env } = createMockEnv({ AUTH_DB: d1.db, EMAIL: { send } as unknown as SendEmail });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const req = new Request("https://md.example.com/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "user@example.com" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Magic Link: GET /api/auth/verify", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  async function seedToken(d1: ReturnType<typeof createMockD1>, overrides: {
+    email?: string;
+    expiresAt?: string;
+    usedAt?: string | null;
+    source?: string;
+  } = {}): Promise<string> {
+    const token = "a".repeat(64);
+    const tokenHash = await sha256Hex(token);
+    const id = crypto.randomUUID();
+    d1.tables.magic_link_tokens.set(id, {
+      id,
+      email: overrides.email ?? "user@example.com",
+      token_hash: tokenHash,
+      expires_at: overrides.expiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      used_at: overrides.usedAt ?? null,
+      created_at: new Date().toISOString(),
+      source: overrides.source ?? "",
+    });
+    return token;
+  }
+
+  it("rejects missing token with redirect", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request("https://md.example.com/api/auth/verify");
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toContain("error=invalid_token");
+  });
+
+  it("rejects invalid format token", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request("https://md.example.com/api/auth/verify?token=not-hex");
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toContain("error=invalid_token");
+  });
+
+  it("rejects expired token", async () => {
+    const d1 = createMockD1();
+    const token = await seedToken(d1, {
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request(`https://md.example.com/api/auth/verify?token=${token}`);
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toContain("error=link_expired");
+  });
+
+  it("rejects already-used token", async () => {
+    const d1 = createMockD1();
+    const token = await seedToken(d1, { usedAt: new Date().toISOString() });
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request(`https://md.example.com/api/auth/verify?token=${token}`);
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toContain("error=link_already_used");
+  });
+
+  it("creates account on first verify, sets session cookie, redirects to /portal/", async () => {
+    const d1 = createMockD1();
+    const token = await seedToken(d1);
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request(`https://md.example.com/api/auth/verify?token=${token}`);
+    const res = await worker.fetch(req, env, mockCtx());
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toBe("https://md.example.com/portal/");
+    const cookie = res.headers.get("Set-Cookie") || "";
+    expect(cookie).toContain("md_session=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).toContain("Secure");
+
+    // Account was created
+    expect(d1.tables.accounts.size).toBe(1);
+    const account = Array.from(d1.tables.accounts.values())[0];
+    expect(account.email).toBe("user@example.com");
+    expect(account.tier).toBe("free");
+
+    // Session was created
+    expect(d1.tables.sessions.size).toBe(1);
+
+    // Token was marked as used
+    const storedToken = Array.from(d1.tables.magic_link_tokens.values())[0];
+    expect(storedToken.used_at).not.toBeNull();
+  });
+
+  it("records the token's signup source on a newly created account", async () => {
+    const d1 = createMockD1();
+    const token = await seedToken(d1, { source: "blocked" });
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const res = await worker.fetch(new Request(`https://md.example.com/api/auth/verify?token=${token}`), env, mockCtx());
+    expect(res.status).toBe(302);
+    expect(Array.from(d1.tables.accounts.values())[0].signup_source).toBe("blocked");
+  });
+
+  it("reuses existing account for known email", async () => {
+    const d1 = createMockD1();
+    const existingId = crypto.randomUUID();
+    d1.tables.accounts.set(existingId, {
+      id: existingId,
+      email: "user@example.com",
+      tier: "pro",
+      github_id: null,
+      monthly_credits_used: 0,
+      monthly_credits_reset_at: new Date().toISOString(),
+    });
+    const token = await seedToken(d1);
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request(`https://md.example.com/api/auth/verify?token=${token}`);
+    const res = await worker.fetch(req, env, mockCtx());
+
+    expect(res.status).toBe(302);
+    expect(d1.tables.accounts.size).toBe(1);
+    // Session was created for the existing account
+    const session = Array.from(d1.tables.sessions.values())[0];
+    expect(session.account_id).toBe(existingId);
+  });
+
+  it("token becomes unusable after first verify", async () => {
+    const d1 = createMockD1();
+    const token = await seedToken(d1);
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+
+    // First verify succeeds
+    const res1 = await worker.fetch(
+      new Request(`https://md.example.com/api/auth/verify?token=${token}`),
+      env, mockCtx(),
+    );
+    expect(res1.status).toBe(302);
+    expect(res1.headers.get("Location")).toBe("https://md.example.com/portal/");
+
+    // Second verify with same token → already used
+    const res2 = await worker.fetch(
+      new Request(`https://md.example.com/api/auth/verify?token=${token}`),
+      env, mockCtx(),
+    );
+    expect(res2.headers.get("Location")).toContain("error=link_already_used");
+  });
+});
+
+describe("POST /api/auth/logout", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("returns 200 and clears cookie even without session", async () => {
+    const d1 = createMockD1();
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request("https://md.example.com/api/auth/logout", { method: "POST" });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    const cookie = res.headers.get("Set-Cookie") || "";
+    expect(cookie).toContain("md_session=");
+    expect(cookie).toContain("Expires=Thu, 01 Jan 1970");
+  });
+
+  it("destroys session in D1 when valid cookie provided", async () => {
+    const d1 = createMockD1();
+    const accountId = crypto.randomUUID();
+    d1.tables.accounts.set(accountId, {
+      id: accountId,
+      email: "user@example.com",
+      tier: "free",
+      github_id: null,
+    });
+    const sessionToken = "test-token";
+    const tokenHash = await sha256Hex(sessionToken);
+    const sessionId = crypto.randomUUID();
+    d1.tables.sessions.set(sessionId, {
+      id: sessionId,
+      account_id: accountId,
+      token_hash: tokenHash,
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      created_at: new Date().toISOString(),
+    });
+
+    const { env } = createMockEnv({ AUTH_DB: d1.db });
+    const req = new Request("https://md.example.com/api/auth/logout", {
+      method: "POST",
+      headers: { Cookie: `md_session=${sessionToken}` },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    expect(d1.tables.sessions.size).toBe(0);
+  });
+});
+
+describe("GET /portal/ — HTML page", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("serves HTML at /portal/", async () => {
+    const { env } = createMockEnv();
+    const req = new Request("https://md.example.com/portal/");
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    // The portal shows plaintext API keys, so no third-party scripts, analytics included.
+    expect(res.headers.get("Content-Security-Policy")).not.toContain("cloudflareinsights");
+    const body = await res.text();
+    expect(body).toContain("Developer Portal");
+    // The portal client (which calls /api/me) ships in the hydration bundle.
+    expect(body).toContain('<script type="module" src="/_app/portal.js"></script>');
+    expect(body).toContain('"view":"portal"');
+  });
+
+  it("server-renders the sign-in form when there is no session cookie", async () => {
+    const { env } = createMockEnv();
+    const res = await worker.fetch(new Request("https://md.example.com/portal/?error=link_expired"), env, mockCtx());
+    const html = (await res.text()).split('<script type="application/json"')[0];
+    expect(html).toMatch(/<input[^>]*name="email"/);
+    // Disabled until the script runs, so Enter cannot submit the form natively with the email in the URL.
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
+    expect(html).toContain("This sign-in link has expired.");
+  });
+
+  it("waits for /api/me before showing the form when a session cookie is present", async () => {
+    const { env } = createMockEnv();
+    const req = new Request("https://md.example.com/portal/", { headers: { Cookie: "theme=dark; md_session=abc" } });
+    const html = (await (await worker.fetch(req, env, mockCtx())).text()).split('<script type="application/json"')[0];
+    expect(html).not.toContain('name="email"');
+  });
+
+  it("still serves the sign-in form when the session cookie does not decode", async () => {
+    const { env } = createMockEnv();
+    const req = new Request("https://md.example.com/portal/", { headers: { Cookie: "md_session=%" } });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    expect(await res.text()).toMatch(/<input[^>]*name="email"/);
+  });
+
+  it("serves HTML at /portal (no trailing slash)", async () => {
+    const { env } = createMockEnv();
+    const req = new Request("https://md.example.com/portal");
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+  });
+
+  it("serves HTML at /portal/keys (client-side routing)", async () => {
+    const { env } = createMockEnv();
+    const req = new Request("https://md.example.com/portal/keys");
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+  });
+
+  it("sets security headers", async () => {
+    const { env } = createMockEnv();
+    const req = new Request("https://md.example.com/portal/");
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.headers.get("X-Frame-Options")).toBe("DENY");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  it("indexing is disabled via noindex meta", async () => {
+    const { env } = createMockEnv();
+    const req = new Request("https://md.example.com/portal/");
+    const res = await worker.fetch(req, env, mockCtx());
+    const body = await res.text();
+    expect(body).toContain("noindex");
+  });
+});

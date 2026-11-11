@@ -1,0 +1,670 @@
+import type { Env } from "../types";
+import type {
+  AccessRow,
+  AdminQuery,
+  AdminReport,
+  ConversionDetail,
+  ConversionRow,
+  DayRow,
+  DaySplit,
+  LeadRow,
+  PairRow,
+} from "../../web/contract";
+import { ACCESS_SURFACES, classifyAccessPath } from "./classify";
+import { AE_COUNT, aeCountIf, aeIso, aeText, aeTime, queryAccessEvents } from "./access-ae";
+import { loadProviderHealth } from "../observability/provider-attempts";
+import { loadSuspiciousIps } from "./ip-risk";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type { AdminQuery, AdminReport, ConversionDetail, ConversionRow };
+
+const PAGE_SIZE = 40;
+const LEAD_LIMIT = 200;
+const ANON_SQL = "(auth_tier = 'anonymous' OR auth_tier = '')";
+const SIGNED_SQL = "(auth_tier != 'anonymous' AND auth_tier != '')";
+const LIST_EXCERPT = 700;
+const DAY_CHOICES = [1, 7, 14, 30, 90] as const;
+const VIEWS = ["all", "failures", "access", "conversions", "pages", "api"] as const;
+const OUTCOMES = ["success", "convert_error", "unexpected_error"] as const;
+const ROUTES = ["convert", "stream"] as const;
+const SURFACES = ACCESS_SURFACES;
+
+const FAIL_SQL = "(outcome != 'success' OR status_code >= 400)";
+const DEGRADED_SQL = "(COALESCE(output_chars, -1) = 0 OR COALESCE(fallbacks, '') != '' OR duration_ms >= 30000 OR COALESCE(paywall, 0) = 1)";
+const ANOMALY_SQL = `(outcome = 'success' AND status_code < 400 AND ${DEGRADED_SQL})`;
+const PROBLEM_SQL = `(${FAIL_SQL} OR ${ANOMALY_SQL})`;
+const CLEAN_SQL = `(outcome = 'success' AND status_code < 400 AND NOT ${DEGRADED_SQL})`;
+
+type SqlBind = string | number | null;
+
+interface CountRow { n: number | null }
+interface AccessTotals {
+  pages_today: number | null;
+  pages_window: number | null;
+  api_today: number | null;
+  api_window: number | null;
+  account_window: number | null;
+  probe_window: number | null;
+  asset_window: number | null;
+  page_errors: number | null;
+  api_errors: number | null;
+}
+interface ConversionTotals {
+  today_n: number | null;
+  window_n: number | null;
+  useful_today: number | null;
+  useful_window: number | null;
+  success_n: number | null;
+  fail_n: number | null;
+  signed_fail_n: number | null;
+  anomaly_n: number | null;
+  anon_n: number | null;
+  signed_n: number | null;
+  credits_n: number | null;
+}
+interface LedgerTotals { requests: number | null; credits: number | null }
+interface AggregateTotals { n: number | null }
+
+
+export function parseAdminQuery(url: URL): AdminQuery {
+  const daysRaw = Number(url.searchParams.get("days"));
+  const viewRaw = url.searchParams.get("view") || "all";
+  const outcomeRaw = url.searchParams.get("outcome") || "";
+  const routeRaw = url.searchParams.get("route") || "";
+  const surfaceRaw = url.searchParams.get("surface") || url.searchParams.get("kind") || "";
+  const platformRaw = (url.searchParams.get("platform") || "").trim().toLowerCase();
+  const tierRaw = url.searchParams.get("tier") || "";
+  const statusRaw = url.searchParams.get("status");
+  const statusNum = statusRaw == null || statusRaw === "" ? Number.NaN : Number(statusRaw);
+  return {
+    days: (DAY_CHOICES as readonly number[]).includes(daysRaw) ? daysRaw : 14,
+    view: (VIEWS as readonly string[]).includes(viewRaw) ? viewRaw as AdminQuery["view"] : "all",
+    outcome: (OUTCOMES as readonly string[]).includes(outcomeRaw) ? outcomeRaw : "",
+    route: (ROUTES as readonly string[]).includes(routeRaw) ? routeRaw : "",
+    surface: (SURFACES as readonly string[]).includes(surfaceRaw) ? surfaceRaw : "",
+    platform: /^[a-z0-9_+.-]{1,40}$/.test(platformRaw) ? platformRaw : "",
+    tier: tierRaw === "signed" || tierRaw === "anonymous" ? tierRaw : "",
+    status: Number.isInteger(statusNum) && statusNum >= 100 && statusNum <= 599 ? statusNum : null,
+    q: (url.searchParams.get("q") || "").replace(/[\0\r\n]/g, "").trim().slice(0, 80),
+    page: clampPage(url.searchParams.get("page")),
+    apage: clampPage(url.searchParams.get("apage")),
+  };
+}
+
+export function safeAdminBack(raw: string | null): string {
+  if (!raw || raw.length > 800 || raw.startsWith("//")) return "/admin";
+  if (!raw.startsWith("/admin") || raw.startsWith("/admin/conversion")) return "/admin";
+  if (raw.includes("\\") || /[\r\n]/.test(raw)) return "/admin";
+  const path = raw.split("?")[0];
+  if (path !== "/admin" && path !== "/admin/") return "/admin";
+  return raw;
+}
+
+export async function loadAdminReport(env: Env, query: AdminQuery): Promise<AdminReport> {
+  if (!env.AUTH_DB) return emptyReport("统计库没有连接。", query);
+  const since = new Date(Date.now() - query.days * 24 * 60 * 60 * 1000).toISOString();
+  const today = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const day = since.slice(0, 10);
+  const conversion = conversionWhere(query, since, true);
+  const conversionAll = conversionWhere(query, since, false);
+  const showConversions = query.view !== "access" && query.view !== "pages" && query.view !== "api";
+  const showAccess = query.view !== "conversions";
+  try {
+    const [
+      access, stats, ledgerWindow, ledgerAll, aggregateTotals, accounts, keys,
+      topIps, conversions, failurePreview, signedFailurePreview, signupSources,
+    ] = await Promise.all([
+      loadAccess(env, query, since, today, showAccess),
+      loadConversionStats(env, query, since, today),
+      first<LedgerTotals>(env, `
+        SELECT COALESCE(SUM(requests), 0) AS requests, COALESCE(SUM(credits), 0) AS credits
+        FROM usage_daily WHERE date >= ?
+      `, [day]),
+      first<LedgerTotals>(env, `
+        SELECT COALESCE(SUM(requests), 0) AS requests, COALESCE(SUM(credits), 0) AS credits
+        FROM usage_daily
+      `),
+      first<AggregateTotals>(env, `
+        SELECT COALESCE(SUM(request_count), 0) AS n
+        FROM conversion_events_daily WHERE date >= ?
+      `, [day]),
+      count(env, "SELECT COUNT(*) AS n FROM accounts"),
+      count(env, "SELECT COUNT(*) AS n FROM api_keys WHERE revoked_at IS NULL"),
+      all<PairRow>(env, `
+        SELECT client_ip || CASE WHEN MAX(as_org) != '' THEN ' · ' || MAX(as_org) ELSE '' END AS label, COUNT(*) AS n
+        FROM conversion_log
+        WHERE ${conversion.clause} AND client_ip != ''
+        GROUP BY client_ip ORDER BY n DESC LIMIT 12
+      `, conversion.binds),
+      showConversions
+        ? all<ConversionRow>(env, `
+            ${conversionColumns(LIST_EXCERPT)}
+            WHERE ${conversion.clause}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+          `, [...conversion.binds, PAGE_SIZE, (query.page - 1) * PAGE_SIZE])
+        : Promise.resolve([]),
+      query.view === "failures"
+        ? Promise.resolve([])
+        : all<ConversionRow>(env, `
+            ${conversionColumns(LIST_EXCERPT)}
+            WHERE ${conversionAll.clause} AND ${PROBLEM_SQL}
+            ORDER BY created_at DESC, id DESC
+            LIMIT 8
+          `, conversionAll.binds),
+      query.view === "failures"
+        ? Promise.resolve([])
+        : all<ConversionRow>(env, `
+            ${conversionColumns(LIST_EXCERPT)}
+            WHERE created_at >= ? AND ${SIGNED_SQL} AND ${FAIL_SQL}
+            ORDER BY created_at DESC, id DESC
+            LIMIT 8
+          `, [since]),
+      all<PairRow>(env, `
+        SELECT CASE WHEN signup_source = '' THEN 'direct' ELSE signup_source END AS label, COUNT(*) AS n
+        FROM accounts WHERE created_at >= ? GROUP BY label ORDER BY n DESC
+      `, [since]).catch(() => []),
+    ]);
+    const { totals: conversionTotals, days: conversionDays, outcomes, platforms, errorCodes, authTiers } = stats;
+    const conversionTotal = showConversions ? stats.total : 0;
+    const conversionsWindow = num(conversionTotals?.window_n);
+    const success = num(conversionTotals?.success_n);
+    const accessTotals = access.totals;
+    return {
+      error: access.error,
+      query,
+      pagesToday: num(accessTotals?.pages_today),
+      pagesWindow: num(accessTotals?.pages_window),
+      pageErrors: num(accessTotals?.page_errors),
+      apiToday: num(accessTotals?.api_today),
+      apiWindow: num(accessTotals?.api_window),
+      apiErrors: num(accessTotals?.api_errors),
+      accountWindow: num(accessTotals?.account_window),
+      probeWindow: num(accessTotals?.probe_window),
+      assetWindow: num(accessTotals?.asset_window),
+      conversionsToday: num(conversionTotals?.today_n),
+      conversionsWindow,
+      usefulToday: num(conversionTotals?.useful_today),
+      usefulWindow: num(conversionTotals?.useful_window),
+      successRate: conversionsWindow === 0 ? 0 : Math.round((success / conversionsWindow) * 1000) / 10,
+      failures: num(conversionTotals?.fail_n),
+      signedFailures: num(conversionTotals?.signed_fail_n),
+      anomalies: num(conversionTotals?.anomaly_n),
+      anonUsage: num(conversionTotals?.anon_n),
+      signedUsage: num(conversionTotals?.signed_n),
+      creditSum: num(conversionTotals?.credits_n),
+      ledgerRequests: num(ledgerWindow?.requests),
+      ledgerCredits: num(ledgerWindow?.credits),
+      ledgerRequestsAll: num(ledgerAll?.requests),
+      ledgerCreditsAll: num(ledgerAll?.credits),
+      aggregateRequests: num(aggregateTotals?.n),
+      accounts,
+      keys,
+      conversionDays: conversionDays.map((row) => ({
+        day: row.day,
+        ok: num(row.ok),
+        warn: num(row.warn),
+        bad: num(row.bad),
+      })),
+      pageDays: access.pageDays.map((row) => ({ day: row.day, n: num(row.n) })),
+      apiDays: access.apiDays.map((row) => ({ day: row.day, n: num(row.n) })),
+      pagePaths: normalizePairs(access.pagePaths),
+      apiPaths: normalizePairs(access.apiPaths),
+      authTiers: normalizePairs(authTiers),
+      signupSources: normalizePairs(signupSources),
+      topIps: normalizePairs(topIps),
+      countries: normalizePairs(access.countries),
+      outcomes: normalizePairs(outcomes),
+      platforms: normalizePairs(platforms),
+      errorCodes: normalizePairs(errorCodes),
+      conversions: conversions.map(mapConversion),
+      conversionTotal,
+      accesses: access.rows.map(mapAccess),
+      accessTotal: access.total,
+      failurePreview: failurePreview.map(mapConversion),
+      signedFailurePreview: signedFailurePreview.map(mapConversion),
+      providerHealth: await loadProviderHealth(env, day),
+      leads: await all<LeadRow>(env, `
+        SELECT id, created_at, email, name, company, plan, volume, message, lang, country, emailed
+        FROM leads ORDER BY created_at DESC LIMIT ${LEAD_LIMIT}
+      `).catch((error) => {
+        console.error("leads load failed:", error instanceof Error ? error.message : "unknown");
+        return [];
+      }),
+      suspiciousIps: await loadSuspiciousIps(env, new Date(Date.now() - DAY_MS).toISOString()).catch((error) => {
+        console.error("suspicious ip scoring failed:", error instanceof Error ? error.message : "unknown");
+        return [];
+      }),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "query failed";
+    return emptyReport(message.includes("no such table") || message.includes("no such column")
+      ? "统计表还没有迁移。在仓库执行 wrangler d1 migrations apply AUTH_DB --remote。"
+      : "读取统计失败。", query);
+  }
+}
+
+export async function loadConversionDetail(env: Env, id: string): Promise<ConversionDetail> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return { error: "记录不存在。", row: null };
+  }
+  if (!env.AUTH_DB) return { error: "统计库没有连接。", row: null };
+  try {
+    const row = await first<ConversionRow>(env, `
+      ${conversionColumns(0)}
+      WHERE id = ?
+    `, [id]);
+    if (!row) return { error: "记录不存在。", row: null };
+    return { error: "", row: mapConversion(row) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "query failed";
+    return {
+      error: message.includes("no such column") || message.includes("no such table")
+        ? "统计表还没有迁移。在仓库执行 wrangler d1 migrations apply AUTH_DB --remote。"
+        : "读取记录失败。",
+      row: null,
+    };
+  }
+}
+
+function conversionColumns(excerptChars: number): string {
+  const excerpt = excerptChars > 0 ? `substr(output_excerpt, 1, ${excerptChars})` : "output_excerpt";
+  return `
+    SELECT id, created_at, route, target_url, target_host, platform, outcome, status_code,
+           method_used, cache_status, duration_ms, format, country, auth_tier, error_code,
+           ${excerpt} AS output_excerpt, output_chars, error_message, fallbacks,
+           paywall, browser_rendered, request_id, engine_requested, credit_cost,
+           selector_present, force_browser, no_cache, quota_bucket, account_hash, key_hash,
+           ua_family, colo, content_type, duration_bucket, output_size_bucket, selector_bucket,
+           has_account, has_key, client_ip, user_agent, asn, as_org, city, account_id, key_id
+    FROM conversion_log
+  `;
+}
+
+
+function emptyReport(error: string, query: AdminQuery): AdminReport {
+  return {
+    error,
+    query,
+    pagesToday: 0,
+    pagesWindow: 0,
+    pageErrors: 0,
+    apiToday: 0,
+    apiWindow: 0,
+    apiErrors: 0,
+    accountWindow: 0,
+    probeWindow: 0,
+    assetWindow: 0,
+    conversionsToday: 0,
+    conversionsWindow: 0,
+    usefulToday: 0,
+    usefulWindow: 0,
+    successRate: 0,
+    failures: 0,
+    signedFailures: 0,
+    anomalies: 0,
+    anonUsage: 0,
+    signedUsage: 0,
+    creditSum: 0,
+    ledgerRequests: 0,
+    ledgerCredits: 0,
+    ledgerRequestsAll: 0,
+    ledgerCreditsAll: 0,
+    aggregateRequests: 0,
+    accounts: 0,
+    keys: 0,
+    conversionDays: [],
+    pageDays: [],
+    apiDays: [],
+    pagePaths: [],
+    apiPaths: [],
+    authTiers: [],
+    signupSources: [],
+    topIps: [],
+    countries: [],
+    outcomes: [],
+    platforms: [],
+    errorCodes: [],
+    conversions: [],
+    conversionTotal: 0,
+    accesses: [],
+    accessTotal: 0,
+    failurePreview: [],
+    signedFailurePreview: [],
+    providerHealth: [],
+    suspiciousIps: [],
+    leads: [],
+  };
+}
+
+interface ConversionSource {
+  table: string;
+  /** Rows each record stands for. */
+  n: string;
+  day: string;
+  /** Window start column and its bound value. */
+  from: string;
+  since: string;
+  today: string;
+  ok: string;
+  warn: string;
+  bad: string;
+  problem: string;
+  success: string;
+  useful: string;
+  credits: string;
+}
+
+/** Raw rows; needed when searching text the daily table does not keep. */
+function logSource(since: string, today: string): ConversionSource {
+  return {
+    table: "conversion_log", n: "1", day: "substr(created_at, 1, 10)", from: "created_at", since, today,
+    ok: CLEAN_SQL, warn: ANOMALY_SQL, bad: FAIL_SQL, problem: PROBLEM_SQL,
+    success: "(outcome = 'success' AND status_code < 400)",
+    useful: "(outcome = 'success' AND status_code < 400 AND output_chars >= 800 AND paywall = 0)",
+    credits: "COALESCE(credit_cost, 0)",
+  };
+}
+
+/** conversion_daily, one row per day and dimension combination (whole UTC days). */
+function dailySource(since: string, today: string): ConversionSource {
+  return {
+    table: "conversion_daily", n: "n", day: "date", from: "date", since: since.slice(0, 10), today: today.slice(0, 10),
+    ok: "kind = 'ok'", warn: "kind = 'warn'", bad: "kind = 'bad'", problem: "kind != 'ok'",
+    success: "kind != 'bad'", useful: "useful = 1", credits: "credits",
+  };
+}
+
+interface ConversionStats {
+  totals: ConversionTotals | null;
+  days: DaySplit[];
+  outcomes: PairRow[];
+  platforms: PairRow[];
+  errorCodes: PairRow[];
+  authTiers: PairRow[];
+  total: number;
+}
+
+async function loadConversionStats(env: Env, query: AdminQuery, since: string, today: string): Promise<ConversionStats> {
+  const src = query.q ? logSource(since, today) : dailySource(since, today);
+  const where = conversionWhere(query, since, true, src);
+  const sum = (cond: string) => `SUM(CASE WHEN ${cond} THEN ${src.n} ELSE 0 END)`;
+  const pairs = (column: string, extra = "", limit = "") => all<PairRow>(env, `
+    SELECT ${column} AS label, SUM(${src.n}) AS n FROM ${src.table}
+    WHERE ${where.clause}${extra} GROUP BY ${column} ORDER BY n DESC${limit}
+  `, where.binds);
+  const [totals, days, outcomes, platforms, errorCodes, authTiers, total] = await Promise.all([
+    first<ConversionTotals>(env, `
+      SELECT
+        ${sum(`${src.from} >= ?`)} AS today_n,
+        ${sum(`${src.from} >= ? AND ${src.useful}`)} AS useful_today,
+        SUM(${src.n}) AS window_n,
+        ${sum(src.useful)} AS useful_window,
+        ${sum(src.success)} AS success_n,
+        ${sum(src.bad)} AS fail_n,
+        ${sum(`${src.bad} AND ${SIGNED_SQL}`)} AS signed_fail_n,
+        ${sum(src.warn)} AS anomaly_n,
+        ${sum(ANON_SQL)} AS anon_n,
+        ${sum(SIGNED_SQL)} AS signed_n,
+        SUM(${src.credits}) AS credits_n
+      FROM ${src.table} WHERE ${src.from} >= ?
+    `, [src.today, src.today, src.since]),
+    all<DaySplit>(env, `
+      SELECT ${src.day} AS day, ${sum(src.ok)} AS ok, ${sum(src.warn)} AS warn, ${sum(src.bad)} AS bad
+      FROM ${src.table} WHERE ${where.clause}
+      GROUP BY day ORDER BY day
+    `, where.binds),
+    pairs("outcome"),
+    pairs("platform", " AND platform != ''", " LIMIT 12"),
+    pairs("error_code", ` AND ${src.bad} AND error_code != ''`, " LIMIT 12"),
+    pairs("auth_tier"),
+    count(env, `SELECT SUM(${src.n}) AS n FROM ${src.table} WHERE ${where.clause}`, where.binds),
+  ]);
+  return { totals, days, outcomes, platforms, errorCodes, authTiers, total };
+}
+
+function conversionWhere(
+  query: AdminQuery,
+  since: string,
+  includeView: boolean,
+  src: ConversionSource = logSource(since, ""),
+): { clause: string; binds: SqlBind[] } {
+  const parts = [`${src.from} >= ?`];
+  const binds: SqlBind[] = [src.since];
+  if (includeView && query.view === "failures") parts.push(src.problem);
+  if (query.outcome) {
+    parts.push("outcome = ?");
+    binds.push(query.outcome);
+  }
+  if (query.route) {
+    parts.push("route = ?");
+    binds.push(query.route);
+  }
+  if (query.platform) {
+    parts.push("platform = ?");
+    binds.push(query.platform);
+  }
+  if (query.tier) parts.push(query.tier === "signed" ? SIGNED_SQL : ANON_SQL);
+  if (query.status != null) {
+    parts.push("status_code = ?");
+    binds.push(query.status);
+  }
+  if (query.q) {
+    const like = likeContains(query.q);
+    parts.push("(target_url LIKE ? ESCAPE '\\' OR target_host LIKE ? ESCAPE '\\' OR error_code LIKE ? ESCAPE '\\' OR error_message LIKE ? ESCAPE '\\' OR platform LIKE ? ESCAPE '\\' OR client_ip LIKE ? ESCAPE '\\' OR user_agent LIKE ? ESCAPE '\\' OR as_org LIKE ? ESCAPE '\\')");
+    binds.push(like, like, like, like, like, like, like, like);
+  }
+  return { clause: parts.join(" AND "), binds };
+}
+
+interface AccessStats {
+  error: string;
+  totals: AccessTotals | null;
+  pageDays: DayRow[];
+  apiDays: DayRow[];
+  pagePaths: PairRow[];
+  apiPaths: PairRow[];
+  countries: PairRow[];
+  total: number;
+  rows: AccessRow[];
+}
+
+/** Access stats from Analytics Engine. A failure here leaves the D1 conversion stats intact. */
+async function loadAccess(env: Env, query: AdminQuery, since: string, today: string, showList: boolean): Promise<AccessStats> {
+  const where = accessWhere(query, since);
+  const pageWhere = accessWhere(query, since, "page");
+  const apiWhere = accessWhere(query, since, "api");
+  const days = (clause: string) => queryAccessEvents<DayRow>(env, `
+    SELECT formatDateTime(timestamp, '%Y-%m-%d') AS day, ${AE_COUNT} AS n
+    FROM access_events WHERE ${clause} GROUP BY day ORDER BY day`);
+  const top = (column: string, clause: string) => queryAccessEvents<PairRow>(env, `
+    SELECT ${column} AS label, ${AE_COUNT} AS n
+    FROM access_events WHERE ${clause} AND ${column} != '' GROUP BY label ORDER BY n DESC LIMIT 12`);
+  try {
+    const [totals, pageDays, apiDays, pagePaths, apiPaths, countries, total, rows] = await Promise.all([
+      queryAccessEvents<AccessTotals>(env, `
+        SELECT
+          ${aeCountIf(`blob1 = 'page' AND timestamp >= ${aeTime(today)}`)} AS pages_today,
+          ${aeCountIf("blob1 = 'page'")} AS pages_window,
+          ${aeCountIf(`blob1 = 'api' AND timestamp >= ${aeTime(today)}`)} AS api_today,
+          ${aeCountIf("blob1 = 'api'")} AS api_window,
+          ${aeCountIf("blob1 = 'account'")} AS account_window,
+          ${aeCountIf("blob1 = 'probe'")} AS probe_window,
+          ${aeCountIf("blob1 = 'asset'")} AS asset_window,
+          ${aeCountIf("blob1 = 'page' AND double1 >= 400")} AS page_errors,
+          ${aeCountIf("blob1 = 'api' AND double1 >= 400")} AS api_errors
+        FROM access_events WHERE timestamp >= ${aeTime(since)}`),
+      days(pageWhere),
+      days(apiWhere),
+      top("blob3", pageWhere),
+      top("blob3", apiWhere),
+      top("blob4", pageWhere),
+      showList
+        ? queryAccessEvents<CountRow>(env, `SELECT ${AE_COUNT} AS n FROM access_events WHERE ${where}`)
+        : Promise.resolve([]),
+      showList
+        ? queryAccessEvents<AccessRow>(env, `
+            SELECT timestamp AS created_at, blob1 AS kind, blob2 AS method, blob3 AS path, double1 AS status,
+                   blob4 AS country, blob6 AS ua_family, blob7 AS referrer_host, blob8 AS route_name,
+                   double2 AS duration_ms, blob9 AS auth_present, blob12 AS query_redacted, blob11 AS format,
+                   blob14 AS client_ip, blob15 AS user_agent, double3 AS asn, blob16 AS as_org, blob17 AS city
+            FROM access_events WHERE ${where}
+            ORDER BY created_at DESC
+            LIMIT ${PAGE_SIZE} OFFSET ${(query.apage - 1) * PAGE_SIZE}`)
+        : Promise.resolve([]),
+    ]);
+    return {
+      error: "",
+      totals: totals[0] ?? null,
+      pageDays,
+      apiDays,
+      pagePaths,
+      apiPaths,
+      countries,
+      total: num(total[0]?.n),
+      rows: rows.map((row) => ({
+        ...row,
+        created_at: aeIso(row.created_at),
+        surface: row.kind,
+        asn: num(row.asn) === 0 ? null : num(row.asn),
+      })),
+    };
+  } catch (error) {
+    console.error("access stats failed:", error instanceof Error ? error.message : "unknown");
+    return {
+      error: "访问统计（Analytics Engine）读取失败，转化统计不受影响。",
+      totals: null, pageDays: [], apiDays: [], pagePaths: [], apiPaths: [], countries: [], total: 0, rows: [],
+    };
+  }
+}
+
+function accessWhere(query: AdminQuery, since: string, surfaceLock = ""): string {
+  const parts = [`timestamp >= ${aeTime(since)}`];
+  if (query.view === "failures") parts.push("double1 >= 400");
+  if (query.view === "pages") parts.push("blob1 = 'page'");
+  if (query.view === "api") parts.push("blob1 = 'api'");
+  const surface = surfaceLock || query.surface;
+  if (surface) parts.push(`blob1 = ${aeText(surface)}`);
+  if (query.status != null) parts.push(`double1 = ${query.status}`);
+  if (query.q) {
+    const like = aeText(`%${query.q}%`);
+    parts.push(`(blob3 ILIKE ${like} OR blob7 ILIKE ${like} OR blob14 ILIKE ${like} OR blob15 ILIKE ${like} OR blob16 ILIKE ${like})`);
+  }
+  return parts.join(" AND ");
+}
+
+function likeContains(value: string): string {
+  const escaped = value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+  return `%${escaped}%`;
+}
+
+function mapConversion(row: ConversionRow): ConversionRow {
+  return {
+    ...row,
+    target_url: row.target_url || "",
+    target_host: row.target_host || "",
+    platform: row.platform || "",
+    outcome: row.outcome || "",
+    method_used: row.method_used || "",
+    cache_status: row.cache_status || "",
+    format: row.format || "",
+    country: row.country || "",
+    auth_tier: row.auth_tier || "",
+    error_code: row.error_code || "",
+    output_excerpt: row.output_excerpt || "",
+    error_message: row.error_message || "",
+    fallbacks: row.fallbacks || "",
+    status_code: num(row.status_code),
+    duration_ms: num(row.duration_ms),
+    output_chars: row.output_chars == null || row.output_chars === undefined ? null : num(row.output_chars),
+    paywall: num(row.paywall),
+    browser_rendered: num(row.browser_rendered),
+    request_id: row.request_id || "",
+    engine_requested: row.engine_requested || "",
+    credit_cost: nullableNum(row.credit_cost),
+    selector_present: nullableNum(row.selector_present),
+    force_browser: nullableNum(row.force_browser),
+    no_cache: nullableNum(row.no_cache),
+    quota_bucket: row.quota_bucket || "",
+    account_hash: row.account_hash || "",
+    key_hash: row.key_hash || "",
+    ua_family: row.ua_family || "",
+    colo: row.colo || "",
+    content_type: row.content_type || "",
+    duration_bucket: row.duration_bucket || "",
+    output_size_bucket: row.output_size_bucket || "",
+    selector_bucket: row.selector_bucket || "",
+    has_account: nullableNum(row.has_account),
+    has_key: nullableNum(row.has_key),
+    client_ip: row.client_ip || "",
+    user_agent: row.user_agent || "",
+    asn: nullableNum(row.asn),
+    as_org: row.as_org || "",
+    city: row.city || "",
+    account_id: row.account_id || "",
+    key_id: row.key_id || "",
+  };
+}
+
+function nullableNum(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  return num(value);
+}
+
+
+function mapAccess(row: AccessRow): AccessRow {
+  const classified = classifyAccessPath(row.path || "/");
+  const duration = row.duration_ms == null || row.duration_ms === undefined ? null : num(row.duration_ms);
+  return {
+    ...row,
+    status: num(row.status),
+    path: row.path || "",
+    country: row.country || "",
+    ua_family: row.ua_family || "",
+    referrer_host: row.referrer_host || "",
+    surface: row.surface || classified.surface,
+    route_name: row.route_name || classified.route,
+    duration_ms: duration,
+    auth_present: row.auth_present || "",
+    query_redacted: row.query_redacted || "",
+    format: row.format || "",
+    client_ip: row.client_ip || "",
+    user_agent: row.user_agent || "",
+    asn: nullableNum(row.asn),
+    as_org: row.as_org || "",
+    city: row.city || "",
+  };
+}
+
+function normalizePairs(rows: PairRow[]): PairRow[] {
+  return rows.map((row) => ({ label: row.label || "", n: num(row.n) }));
+}
+
+function num(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function clampPage(raw: string | null): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) return 1;
+  return Math.min(n, 500);
+}
+
+async function count(env: Env, sql: string, binds: SqlBind[] = []): Promise<number> {
+  const row = await first<CountRow>(env, sql, binds);
+  return num(row?.n);
+}
+
+async function first<T>(env: Env, sql: string, binds: SqlBind[] = []): Promise<T | null> {
+  const stmt = env.AUTH_DB!.prepare(sql);
+  const row = binds.length ? await stmt.bind(...binds).first<T>() : await stmt.first<T>();
+  return row ?? null;
+}
+
+async function all<T>(env: Env, sql: string, binds: SqlBind[] = []): Promise<T[]> {
+  const stmt = env.AUTH_DB!.prepare(sql);
+  const result = binds.length ? await stmt.bind(...binds).all<T>() : await stmt.all<T>();
+  return result.results || [];
+}

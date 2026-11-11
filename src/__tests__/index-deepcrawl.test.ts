@@ -1,0 +1,488 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:sockets", () => ({
+  connect: vi.fn(),
+}));
+
+import worker from "../index";
+import { setCache } from "../cache";
+import { createApiKeyAuthD1, createMockEnv, mockCtx } from "./test-helpers";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function deepcrawlRequest(body: unknown, token?: string): Request {
+  return new Request("https://md.example.com/api/deepcrawl", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function setupInMemoryKv(overrides: Parameters<typeof createMockEnv>[0] = { API_TOKEN: "token" }) {
+  const store = new Map<string, string>();
+  const { env, mocks } = createMockEnv(overrides);
+  mocks.kvGet.mockImplementation(async (key: string) => store.get(key) ?? null);
+  mocks.kvPut.mockImplementation(async (key: string, value: string) => {
+    store.set(key, value);
+  });
+  return { env, store };
+}
+
+function stubGraphFetch(pages: Record<string, string>): void {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const rawUrl =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const lookup = rawUrl.split("#")[0];
+    const html = pages[lookup];
+
+    if (!html) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    return new Response(html, {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }));
+}
+
+function stubGraphFetchWithContentType(
+  pages: Record<string, { body: string; contentType: string }>,
+): void {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const rawUrl =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const lookup = rawUrl.split("#")[0];
+    const page = pages[lookup];
+
+    if (!page) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    return new Response(page.body, {
+      status: 200,
+      headers: { "Content-Type": page.contentType },
+    });
+  }));
+}
+
+describe("POST /api/deepcrawl", () => {
+  const seed = "https://crawl.example.com/start";
+  const graph: Record<string, string> = {
+    "https://crawl.example.com/start": `
+      <html><body><article>
+        <a href="/a">keyword target</a>
+        <a href="/b">normal target</a>
+      </article></body></html>
+    `,
+    "https://crawl.example.com/a": "<html><body><article><a href='/c'>to-c</a></article></body></html>",
+    "https://crawl.example.com/b": "<html><body><article><a href='/d'>to-d</a></article></body></html>",
+    "https://crawl.example.com/c": "<html><body><article>C page</article></body></html>",
+    "https://crawl.example.com/d": "<html><body><article>D page</article></body></html>",
+  };
+
+  it("runs non-stream deep crawl and persists checkpoint", async () => {
+    stubGraphFetch(graph);
+    const { env, store } = setupInMemoryKv();
+
+    const req = deepcrawlRequest({
+      seed,
+      max_depth: 2,
+      max_pages: 5,
+      strategy: "best_first",
+      filters: {
+        allow_domains: ["crawl.example.com"],
+      },
+      scorer: {
+        keywords: ["keyword"],
+        weight: 2,
+        score_threshold: 0,
+      },
+      output: {
+        include_markdown: true,
+      },
+      checkpoint: {
+        crawl_id: "crawl-1",
+        snapshot_interval: 1,
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      crawlId?: string;
+      results?: Array<{ url: string; depth: number }>;
+      stats?: { crawledPages: number; succeededPages: number };
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.crawlId).toBe("crawl-1");
+    expect(payload.results?.length).toBeGreaterThan(0);
+    expect(payload.results?.[0]?.url).toBe(seed);
+    expect(typeof payload.results?.[0]?.depth).toBe("number");
+    expect(payload.stats?.crawledPages).toBeGreaterThan(0);
+    expect(payload.stats?.succeededPages).toBeGreaterThan(0);
+    expect(store.has("deepcrawl:v1:crawl-1")).toBe(true);
+  });
+
+  it("accepts D1 mk API keys without requiring legacy API_TOKEN", async () => {
+    stubGraphFetch(graph);
+    const { env } = setupInMemoryKv({ AUTH_DB: createApiKeyAuthD1() });
+
+    const req = deepcrawlRequest({
+      seed,
+      max_depth: 0,
+      max_pages: 1,
+    }, "mk_valid_deepcrawl_key");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      results?: Array<{ url?: string }>;
+      stats?: { succeededPages?: number };
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.results?.[0]?.url).toBe(seed);
+    expect(payload.stats?.succeededPages).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not persist checkpoint state unless checkpoint options are provided", async () => {
+    stubGraphFetch(graph);
+    const { env, store } = setupInMemoryKv();
+
+    const req = deepcrawlRequest({
+      seed,
+      max_depth: 1,
+      max_pages: 2,
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { crawlId?: string };
+
+    expect(res.status).toBe(200);
+    expect(payload.crawlId).toBeTruthy();
+    expect(Array.from(store.keys()).some((key) => key.startsWith("deepcrawl:v1:"))).toBe(false);
+  });
+
+  it("streams start/node/done events in stream mode", async () => {
+    stubGraphFetch(graph);
+    const { env } = setupInMemoryKv();
+
+    const req = deepcrawlRequest({
+      seed,
+      max_depth: 1,
+      max_pages: 3,
+      stream: true,
+      checkpoint: {
+        crawl_id: "crawl-stream",
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/event-stream");
+    expect(body).toContain("event: start");
+    expect(body).toContain("event: node");
+    expect(body).toContain("event: done");
+  });
+
+  it("resumes from checkpoint when checkpoint.resume is true", async () => {
+    stubGraphFetch(graph);
+    const { env } = setupInMemoryKv();
+
+    const firstReq = deepcrawlRequest({
+      seed,
+      max_depth: 2,
+      max_pages: 2,
+      checkpoint: {
+        crawl_id: "crawl-resume",
+        snapshot_interval: 1,
+      },
+    }, "token");
+    const firstRes = await worker.fetch(firstReq, env, mockCtx());
+    const firstPayload = await firstRes.json() as {
+      results?: Array<{ url: string }>;
+      resumed?: boolean;
+    };
+
+    const resumeReq = deepcrawlRequest({
+      seed,
+      max_depth: 2,
+      max_pages: 5,
+      checkpoint: {
+        crawl_id: "crawl-resume",
+        resume: true,
+        snapshot_interval: 1,
+      },
+    }, "token");
+    const resumeRes = await worker.fetch(resumeReq, env, mockCtx());
+    const resumePayload = await resumeRes.json() as {
+      results?: Array<{ url: string }>;
+      resumed?: boolean;
+    };
+
+    expect(firstRes.status).toBe(200);
+    expect(firstPayload.results?.length).toBe(2);
+    expect(resumeRes.status).toBe(200);
+    expect(resumePayload.resumed).toBe(true);
+    expect(resumePayload.results?.length).toBeGreaterThan(2);
+  });
+
+  it("does not name the fetching service for nodes resumed from an older checkpoint", async () => {
+    stubGraphFetch(graph);
+    const { env, store } = setupInMemoryKv();
+    const checkpoint = { crawl_id: "crawl-legacy", snapshot_interval: 1 };
+    await worker.fetch(deepcrawlRequest({ seed, max_depth: 2, max_pages: 2, checkpoint }, "token"), env, mockCtx());
+
+    // A checkpoint written before methods were mapped holds the internal value.
+    const key = [...store.keys()].find((k) => k.startsWith("deepcrawl:") && k.includes("crawl-legacy"))!;
+    const saved = JSON.parse(store.get(key)!);
+    for (const node of saved.state.results) node.method = "jina";
+    store.set(key, JSON.stringify(saved));
+
+    const res = await worker.fetch(deepcrawlRequest({
+      seed, max_depth: 2, max_pages: 5, checkpoint: { ...checkpoint, resume: true },
+    }, "token"), env, mockCtx());
+    const payload = await res.json() as { results?: Array<{ method?: string }> };
+    expect(res.status).toBe(200);
+    expect(payload.results!.length).toBeGreaterThan(2);
+    for (const node of payload.results!) {
+      expect(["native", "readability+turndown", "browser+readability+turndown", undefined]).toContain(node.method);
+    }
+  });
+
+  it("returns 409 when resume request changes checkpointed crawl configuration", async () => {
+    stubGraphFetch(graph);
+    const { env } = setupInMemoryKv();
+
+    const firstReq = deepcrawlRequest({
+      seed,
+      max_depth: 2,
+      max_pages: 2,
+      filters: {
+        allow_domains: ["crawl.example.com"],
+      },
+      checkpoint: {
+        crawl_id: "crawl-config-mismatch",
+        snapshot_interval: 1,
+      },
+    }, "token");
+    const firstRes = await worker.fetch(firstReq, env, mockCtx());
+    expect(firstRes.status).toBe(200);
+
+    const resumeReq = deepcrawlRequest({
+      seed,
+      max_depth: 2,
+      max_pages: 2,
+      filters: {
+        allow_domains: ["other.example.com"],
+      },
+      checkpoint: {
+        crawl_id: "crawl-config-mismatch",
+        resume: true,
+        snapshot_interval: 1,
+      },
+    }, "token");
+    const resumeRes = await worker.fetch(resumeReq, env, mockCtx());
+    const payload = await resumeRes.json() as { error?: string; message?: string };
+
+    expect(resumeRes.status).toBe(409);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("checkpoint configuration");
+  });
+
+  it("returns 400 when resume is true without checkpoint.crawl_id", async () => {
+    const { env } = setupInMemoryKv();
+    const req = deepcrawlRequest({
+      seed,
+      checkpoint: {
+        resume: true,
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("checkpoint.crawl_id is required");
+  });
+
+  it("returns 400 for out-of-range max_depth and max_pages", async () => {
+    const { env } = setupInMemoryKv();
+
+    const badDepthReq = deepcrawlRequest({
+      seed,
+      max_depth: 7,
+    }, "token");
+    const badDepthRes = await worker.fetch(badDepthReq, env, mockCtx());
+    const badDepthPayload = await badDepthRes.json() as { error?: string; message?: string };
+    expect(badDepthRes.status).toBe(400);
+    expect(badDepthPayload.error).toBe("Invalid request");
+    expect(badDepthPayload.message).toContain("max_depth must be between 0 and 6");
+
+    const badPagesReq = deepcrawlRequest({
+      seed,
+      max_pages: 0,
+    }, "token");
+    const badPagesRes = await worker.fetch(badPagesReq, env, mockCtx());
+    const badPagesPayload = await badPagesRes.json() as { error?: string; message?: string };
+    expect(badPagesRes.status).toBe(400);
+    expect(badPagesPayload.error).toBe("Invalid request");
+    expect(badPagesPayload.message).toContain("max_pages must be between 1 and 200");
+  });
+
+  it("returns 400 for non-integer deepcrawl numeric fields", async () => {
+    const { env } = setupInMemoryKv();
+    const req = deepcrawlRequest({
+      seed,
+      max_depth: 1.5,
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("max_depth must be an integer");
+  });
+
+  it("returns 400 for oversized filter list entries", async () => {
+    const { env } = setupInMemoryKv();
+    const req = deepcrawlRequest({
+      seed,
+      filters: {
+        allow_domains: [`${"a".repeat(513)}.example.com`],
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("allow_domains");
+    expect(payload.message).toContain("at most 512 characters");
+  });
+
+  it("returns 400 for invalid checkpoint.crawl_id characters", async () => {
+    const { env } = setupInMemoryKv();
+    const req = deepcrawlRequest({
+      seed,
+      checkpoint: {
+        crawl_id: "invalid/id",
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("checkpoint.crawl_id");
+    expect(payload.message).toContain("unsupported characters");
+  });
+
+  it("returns 400 for invalid allow_domains entries", async () => {
+    const { env } = setupInMemoryKv();
+    const req = deepcrawlRequest({
+      seed,
+      filters: {
+        allow_domains: ["bad domain value"],
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("filters.allow_domains");
+    expect(payload.message).toContain("invalid domain");
+  });
+
+  it("uses upstream content type when applying content_types filters", async () => {
+    stubGraphFetchWithContentType({
+      [seed]: {
+        body: "# Start\n\n[child](/a)",
+        contentType: "text/markdown; charset=utf-8",
+      },
+      "https://crawl.example.com/a": {
+        body: "# A page",
+        contentType: "text/markdown; charset=utf-8",
+      },
+    });
+    const { env } = setupInMemoryKv();
+
+    const req = deepcrawlRequest({
+      seed,
+      max_depth: 1,
+      max_pages: 2,
+      filters: {
+        content_types: ["text/markdown"],
+      },
+      fetch: {
+        no_cache: true,
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      results?: Array<{ success?: boolean; error?: string; method?: string }>;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.results?.[0]?.success).toBe(true);
+    expect(payload.results?.[0]?.error).toBeUndefined();
+    expect(payload.results?.[0]?.method).toBe("native");
+  });
+
+  it("infers markdown content type for legacy native cache entries", async () => {
+    const { env } = setupInMemoryKv();
+    await setCache(env, seed, "html", {
+      content: "<pre># Cached Start</pre>",
+      method: "native",
+      title: "",
+    });
+
+    const req = deepcrawlRequest({
+      seed,
+      max_depth: 1,
+      max_pages: 1,
+      filters: {
+        content_types: ["text/markdown"],
+      },
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      results?: Array<{ success?: boolean; error?: string; method?: string }>;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.results?.[0]?.success).toBe(true);
+    expect(payload.results?.[0]?.error).toBeUndefined();
+    expect(payload.results?.[0]?.method).toBe("native");
+  });
+});

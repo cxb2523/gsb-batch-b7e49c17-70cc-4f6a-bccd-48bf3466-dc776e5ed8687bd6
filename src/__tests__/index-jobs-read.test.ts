@@ -1,0 +1,172 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:sockets", () => ({
+  connect: vi.fn(),
+}));
+
+import worker from "../index";
+import { jobStorageKey } from "../dispatcher/model";
+import { createMockEnv, mockCtx } from "./test-helpers";
+import { createMockJobCoordinatorNamespace } from "./job-coordinator-test-helpers";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function createJobEnv(overrides?: Parameters<typeof createMockEnv>[0]) {
+  const ctx = createMockEnv(overrides);
+  ctx.env.JOB_COORDINATOR = createMockJobCoordinatorNamespace(ctx.env);
+  return ctx;
+}
+
+describe("GET /api/jobs/:id and /api/jobs/:id/stream", () => {
+  it("returns 503 for status endpoint when API_TOKEN is missing", async () => {
+    const req = new Request("https://md.example.com/api/jobs/job-1", {
+      headers: { Authorization: "Bearer token" },
+    });
+
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(503);
+    expect(payload.error).toBe("Service misconfigured");
+  });
+
+  it("returns 503 for stream endpoint when API_TOKEN is missing", async () => {
+    const req = new Request("https://md.example.com/api/jobs/job-1/stream", {
+      headers: { Authorization: "Bearer token" },
+    });
+
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(503);
+    expect(payload.error).toBe("Service misconfigured");
+  });
+
+  it("returns 401 without valid bearer token", async () => {
+    const { env } = createJobEnv({ API_TOKEN: "token" });
+    const req = new Request("https://md.example.com/api/jobs/job-1");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for missing job", async () => {
+    const { env } = createJobEnv({ API_TOKEN: "token" });
+    const req = new Request("https://md.example.com/api/jobs/job-1", {
+      headers: { Authorization: "Bearer token" },
+    });
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(404);
+    expect(payload.error).toBe("Not Found");
+  });
+
+  it("returns job summary for existing job", async () => {
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-1")) {
+        return JSON.stringify({
+          id: "job-1",
+          type: "crawl",
+          status: "running",
+          totalTasks: 2,
+          succeededTasks: 1,
+          failedTasks: 0,
+          queuedTasks: 0,
+          runningTasks: 1,
+          canceledTasks: 0,
+          priority: 5,
+          maxRetries: 2,
+          retryCount: 0,
+          tasks: [
+            { id: "t1", status: "succeeded", retryCount: 0, input: "https://example.com/a", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
+            { id: "t2", status: "running", retryCount: 0, input: "https://example.com/b", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
+          ],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+        });
+      }
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-1", {
+      headers: { Authorization: "Bearer token" },
+    });
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { jobId?: string; status?: string; totalTasks?: number; runnableTasks?: number };
+
+    expect(res.status).toBe(200);
+    expect(payload.jobId).toBe("job-1");
+    expect(payload.status).toBe("running");
+    expect(payload.totalTasks).toBe(2);
+    // If that run was interrupted, the next /run recovers and retries the running task.
+    expect(payload.runnableTasks).toBe(1);
+  });
+
+  it("streams job status and done for terminal job", async () => {
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-done")) {
+        return JSON.stringify({
+          id: "job-done",
+          type: "crawl",
+          status: "succeeded",
+          totalTasks: 1,
+          succeededTasks: 1,
+          failedTasks: 0,
+          queuedTasks: 0,
+          runningTasks: 0,
+          canceledTasks: 0,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:10.000Z",
+        });
+      }
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-done/stream", {
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("event: status");
+    expect(body).toContain("event: done");
+    expect(body).toContain("\"jobId\":\"job-done\"");
+  });
+
+  it("returns 400 for invalid job id characters in path", async () => {
+    const { env } = createJobEnv({ API_TOKEN: "token" });
+    const req = new Request("https://md.example.com/api/jobs/job%0A1", {
+      headers: { Authorization: "Bearer token" },
+    });
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("Invalid job path");
+  });
+
+  it("returns 400 for malformed /api/jobs/:id action path", async () => {
+    const { env } = createJobEnv({ API_TOKEN: "token" });
+    const req = new Request("https://md.example.com/api/jobs/job-1/unknown", {
+      headers: { Authorization: "Bearer token" },
+    });
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("Invalid job path");
+  });
+});

@@ -1,0 +1,294 @@
+/**
+ * Portal authentication — Magic Link (passwordless email) flow.
+ *
+ *   POST /api/auth/magic-link
+ *        body: { email }
+ *        → Creates magic_link_tokens row, sends email via Cloudflare Email Sending.
+ *        Always returns 200 (does NOT reveal if email is registered).
+ *
+ *   GET /api/auth/verify?token=<token>
+ *        → Validates token, finds/creates account, creates session,
+ *          sets cookie, redirects to /portal/.
+ *
+ *   POST /api/auth/logout
+ *        → Destroys session, clears cookie.
+ *
+ * Security:
+ *  - Magic link tokens stored as SHA-256 hash (never plaintext in D1)
+ *  - 15-minute token TTL
+ *  - Single-use (marked with used_at after verification)
+ *  - Per-email rate limit (3 requests per hour via Cache API)
+ */
+
+import type { Env } from "../types";
+import { sha256Hex } from "../helpers/crypto";
+import { CORS_HEADERS } from "../config";
+import {
+  buildClearCookie,
+  buildSessionCookie,
+  createSession,
+  destroySession,
+  resolveSession,
+  SESSION_COOKIE_NAME,
+} from "../middleware/session";
+import { bumpLimit } from "../middleware/rate-limit-d1";
+import { sanitizeErrorMessage } from "../observability/conversion-events";
+import { sendEmail } from "../helpers/email";
+
+const TOKEN_TTL_MINUTES = 15;
+const EMAIL_RATE_LIMIT_PER_HOUR = 3;
+const IP_RATE_LIMIT_PER_HOUR = 10;  // Per-IP cap to prevent cross-email abuse
+const MAX_BODY_BYTES = 1024;         // Reject oversized magic-link request bodies
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_EMAIL_LENGTH = 254;
+const ONE_HOUR_SECONDS = 60 * 60;
+
+function getClientIp(request: Request): string {
+  return request.headers.get("cf-connecting-ip")
+    || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    || "unknown";
+}
+
+// ─── POST /api/auth/magic-link ──────────────────────────────
+
+export async function handleSendMagicLink(
+  request: Request,
+  env: Env,
+  host: string,
+): Promise<Response> {
+  if (!env.AUTH_DB) {
+    return Response.json({ error: "Service Unavailable" }, { status: 503, headers: CORS_HEADERS });
+  }
+
+  // Body size cap — prevent memory pressure from giant JSON payloads
+  const bodyText = await request.text();
+  if (bodyText.length > MAX_BODY_BYTES) {
+    return Response.json({ error: "Request too large" }, { status: 413, headers: CORS_HEADERS });
+  }
+
+  let email: string;
+  let source: string;
+  try {
+    const body = JSON.parse(bodyText) as { email?: string; source?: string };
+    email = String(body?.email || "").trim().toLowerCase();
+    // Signup attribution from the portal's ?ref=. Anything unexpected is dropped.
+    const rawSource = String(body?.source || "").trim().toLowerCase();
+    source = /^[a-z0-9_-]{1,32}$/.test(rawSource) ? rawSource : "";
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400, headers: CORS_HEADERS });
+  }
+
+  if (!email || email.length > MAX_EMAIL_LENGTH || !EMAIL_REGEX.test(email)) {
+    return Response.json({ error: "Invalid email address" }, { status: 400, headers: CORS_HEADERS });
+  }
+
+  // ── Rate limiting (two-dimensional, D1-backed for atomicity) ────
+  // 1) Per-email cap: prevents mailbox flooding for a specific victim
+  // 2) Per-IP cap: prevents a single attacker from burning email quota
+  //    by rotating across many victim emails
+  //
+  // Uses D1 INSERT ... ON CONFLICT UPDATE RETURNING for atomic counter
+  // semantics. The previous Cache API implementation was per-colo and
+  // non-atomic — an attacker could trivially burst past the limit.
+  const ip = getClientIp(request);
+  const emailKey = `magic-link:email:${email}`;
+  const ipKey = `magic-link:ip:${ip}`;
+
+  const [emailLimit, ipLimit] = await Promise.all([
+    bumpLimit(env, emailKey, EMAIL_RATE_LIMIT_PER_HOUR, ONE_HOUR_SECONDS),
+    bumpLimit(env, ipKey, IP_RATE_LIMIT_PER_HOUR, ONE_HOUR_SECONDS),
+  ]);
+
+  // Silently 200 on rate limit (don't reveal which dimension tripped)
+  if (emailLimit.blocked || ipLimit.blocked) {
+    return Response.json(
+      { ok: true, note: "If an account exists, an email was sent." },
+      { status: 200, headers: CORS_HEADERS },
+    );
+  }
+
+  // Generate random token (plaintext goes in email, hash goes in D1)
+  const tokenBytes = new Uint8Array(32);
+  crypto.getRandomValues(tokenBytes);
+  const token = Array.from(tokenBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const tokenHash = await sha256Hex(token);
+  const tokenId = crypto.randomUUID();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + TOKEN_TTL_MINUTES * 60 * 1000);
+
+  try {
+    await env.AUTH_DB.prepare(`
+      INSERT INTO magic_link_tokens (id, email, token_hash, expires_at, created_at, source)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      tokenId,
+      email,
+      tokenHash,
+      expiresAt.toISOString(),
+      now.toISOString(),
+      source,
+    ).run();
+  } catch (err) {
+    console.error("Magic link insert failed:", sanitizeErrorMessage(err));
+    return Response.json({ error: "Internal Error" }, { status: 500, headers: CORS_HEADERS });
+  }
+
+  // Rate counters were already incremented atomically by bumpLimit() above,
+  // so they're "spent" even if sending fails. This is intentional: it prevents
+  // attackers from retrying by burning the send failure path.
+  const verifyUrl = `https://${host}/api/auth/verify?token=${token}`;
+  try {
+    await sendMagicLinkEmail(env, email, verifyUrl);
+  } catch (err) {
+    // Don't leak the error to the client, but log it
+    console.error("Magic link email failed:", sanitizeErrorMessage(err));
+  }
+
+  return Response.json({
+    ok: true,
+    note: "If an account exists, an email was sent. Check your inbox.",
+  }, { status: 200, headers: CORS_HEADERS });
+}
+
+// ─── Magic link email ───────────────────────────────────────
+
+async function sendMagicLinkEmail(env: Env, email: string, verifyUrl: string): Promise<void> {
+  const subject = "Sign in to mdget.dev";
+  const html = `
+<!DOCTYPE html>
+<html>
+<body style="font-family: system-ui, sans-serif; background: #f3f4f6; color: #1c2128; padding: 40px 20px; margin: 0;">
+  <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 4px; padding: 32px; border: 1px solid #d0d5dc;">
+    <h1 style="font-size: 22px; margin: 0 0 12px; font-weight: 600;">Sign in to mdget.dev</h1>
+    <p style="font-size: 15px; line-height: 1.6; color: #3d4654; margin: 0 0 24px;">
+      Use the button to open the developer portal. This link expires in 15 minutes.
+    </p>
+    <a href="${verifyUrl}" style="display: inline-block; background: #1b4f8a; color: #f4f6f8; padding: 10px 16px; border-radius: 4px; text-decoration: none; font-weight: 600; font-size: 15px;">
+      Sign in
+    </a>
+    <p style="font-size: 13px; color: #5c6573; margin: 28px 0 0;">
+      If you didn't request this, you can ignore this email. Someone may have typed your address by mistake.
+    </p>
+    <p style="font-size: 13px; color: #5c6573; margin: 12px 0 0; word-break: break-all;">
+      Or copy this link: ${verifyUrl}
+    </p>
+  </div>
+</body>
+</html>`.trim();
+  const text = `Sign in to mdget.dev\n\nClick this link to sign in to your Developer Portal:\n${verifyUrl}\n\nThis link expires in 15 minutes.\n\nIf you didn't request this, you can ignore this email.`;
+
+  await sendEmail(env, { to: email, subject, html, text });
+}
+
+// ─── GET /api/auth/verify?token=xxx ─────────────────────────
+
+export async function handleVerifyMagicLink(
+  request: Request,
+  env: Env,
+  host: string,
+): Promise<Response> {
+  if (!env.AUTH_DB) {
+    return Response.redirect(`https://${host}/portal/?error=service_unavailable`, 302);
+  }
+
+  const url = new URL(request.url);
+  const token = url.searchParams.get("token") || "";
+  if (!token || !/^[0-9a-f]{64}$/.test(token)) {
+    return Response.redirect(`https://${host}/portal/?error=invalid_token`, 302);
+  }
+
+  const tokenHash = await sha256Hex(token);
+  const now = new Date();
+
+  try {
+    const row = await env.AUTH_DB.prepare(`
+      SELECT id, email, expires_at, used_at, source
+      FROM magic_link_tokens
+      WHERE token_hash = ?
+      LIMIT 1
+    `).bind(tokenHash).first<{
+      id: string;
+      email: string;
+      expires_at: string;
+      used_at: string | null;
+      source: string | null;
+    }>();
+
+    if (!row) {
+      return Response.redirect(`https://${host}/portal/?error=invalid_token`, 302);
+    }
+    if (row.used_at) {
+      return Response.redirect(`https://${host}/portal/?error=link_already_used`, 302);
+    }
+    if (new Date(row.expires_at) < now) {
+      return Response.redirect(`https://${host}/portal/?error=link_expired`, 302);
+    }
+
+    // Mark token as used atomically (single-use), closing the concurrent replay window.
+    const markUsed = await env.AUTH_DB.prepare(
+      `UPDATE magic_link_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL`
+    ).bind(now.toISOString(), row.id).run();
+    const markUsedChanges = (markUsed.meta as { changes?: number } | undefined)?.changes;
+    if (typeof markUsedChanges === "number" && markUsedChanges < 1) {
+      return Response.redirect(`https://${host}/portal/?error=link_already_used`, 302);
+    }
+
+    // Find or create account
+    const email = row.email;
+    let account = await env.AUTH_DB.prepare(
+      `SELECT id FROM accounts WHERE email = ? LIMIT 1`
+    ).bind(email).first<{ id: string }>();
+
+    let accountId: string;
+    if (account) {
+      accountId = account.id;
+    } else {
+      accountId = crypto.randomUUID();
+      const nowIso = now.toISOString();
+      const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+      await env.AUTH_DB.prepare(`
+        INSERT INTO accounts (id, email, tier, monthly_credits_used, monthly_credits_reset_at, created_at, updated_at, signup_source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(accountId, email, "free", 0, nextMonth, nowIso, nowIso, row.source || "").run();
+    }
+
+    // Create session
+    const { token: sessionToken, expiresAt: sessionExpires } = await createSession(env, accountId);
+
+    // Redirect to portal with session cookie set
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `https://${host}/portal/`,
+        "Set-Cookie": buildSessionCookie(sessionToken, sessionExpires),
+        "Cache-Control": "no-store, private",
+      },
+    });
+  } catch (err) {
+    console.error("Magic link verify failed:", sanitizeErrorMessage(err));
+    return Response.redirect(`https://${host}/portal/?error=internal_error`, 302);
+  }
+}
+
+// ─── POST /api/auth/logout ──────────────────────────────────
+
+export async function handleLogout(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const session = await resolveSession(request, env);
+  if (session) {
+    await destroySession(env, session.sessionId);
+  }
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Set-Cookie": buildClearCookie(),
+      "Cache-Control": "no-store, private",
+      ...CORS_HEADERS,
+    },
+  });
+}

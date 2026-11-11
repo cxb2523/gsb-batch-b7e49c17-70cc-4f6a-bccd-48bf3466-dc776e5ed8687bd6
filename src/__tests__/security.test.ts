@@ -1,0 +1,461 @@
+import { describe, it, expect, vi } from "vitest";
+import {
+  isSafeUrl,
+  isValidUrl,
+  normalizeStrayQueryMarks,
+  needsBrowserRendering,
+  extractTargetUrl,
+  buildRawRequestPath,
+  escapeHtml,
+  fetchWithSafeRedirects,
+} from "../security";
+
+describe("isSafeUrl", () => {
+  it("blocks localhost", () => {
+    expect(isSafeUrl("http://localhost/foo")).toBe(false);
+    expect(isSafeUrl("http://localhost:3000")).toBe(false);
+  });
+
+  it("blocks 127.0.0.1", () => {
+    expect(isSafeUrl("http://127.0.0.1")).toBe(false);
+    expect(isSafeUrl("http://127.0.0.1:8080/path")).toBe(false);
+    expect(isSafeUrl("http://127.0.0.2")).toBe(false);
+  });
+
+  it("blocks 0.0.0.0", () => {
+    expect(isSafeUrl("http://0.0.0.0")).toBe(false);
+  });
+
+  it("blocks CGNAT range 100.64.0.0/10", () => {
+    expect(isSafeUrl("http://100.64.0.1")).toBe(false);
+    expect(isSafeUrl("http://100.127.255.255")).toBe(false);
+  });
+
+  it("blocks octal-notation localhost after URL normalization", () => {
+    // URL() normalizes 0177.0.0.1 to 127.0.0.1
+    expect(isSafeUrl("http://0177.0.0.1")).toBe(false);
+  });
+
+  it("blocks IPv6 loopback", () => {
+    expect(isSafeUrl("http://[::1]")).toBe(false);
+    expect(isSafeUrl("http://[::1]:8080")).toBe(false);
+  });
+
+  it("blocks IPv6 loopback full form", () => {
+    expect(isSafeUrl("http://[0:0:0:0:0:0:0:1]")).toBe(false);
+    expect(isSafeUrl("http://[0000:0000:0000:0000:0000:0000:0000:0001]")).toBe(false);
+  });
+
+  it("blocks IPv4-mapped IPv6 addresses", () => {
+    expect(isSafeUrl("http://[::ffff:127.0.0.1]")).toBe(false);
+    expect(isSafeUrl("http://[::ffff:10.0.0.1]")).toBe(false);
+    expect(isSafeUrl("http://[::ffff:169.254.169.254]")).toBe(false);
+    expect(isSafeUrl("http://[::ffff:192.168.1.1]")).toBe(false);
+    expect(isSafeUrl("http://[::ffff:172.16.0.1]")).toBe(false);
+  });
+
+  it("blocks IPv4-mapped IPv6 in hex form", () => {
+    // ::ffff:7f00:0001 = 127.0.0.1
+    expect(isSafeUrl("http://[::ffff:7f00:1]")).toBe(false);
+    // ::ffff:0a00:0001 = 10.0.0.1
+    expect(isSafeUrl("http://[::ffff:a00:1]")).toBe(false);
+    // ::ffff:c0a8:0101 = 192.168.1.1
+    expect(isSafeUrl("http://[::ffff:c0a8:101]")).toBe(false);
+  });
+
+  it("allows valid IPv4-mapped IPv6 public addresses", () => {
+    // ::ffff:8.8.8.8 (Google DNS, public)
+    expect(isSafeUrl("http://[::ffff:8.8.8.8]")).toBe(true);
+  });
+
+  it("blocks private IPv4 ranges", () => {
+    expect(isSafeUrl("http://10.0.0.1")).toBe(false);
+    expect(isSafeUrl("http://10.255.255.255")).toBe(false);
+    expect(isSafeUrl("http://172.16.0.1")).toBe(false);
+    expect(isSafeUrl("http://172.31.255.255")).toBe(false);
+    expect(isSafeUrl("http://192.168.0.1")).toBe(false);
+    expect(isSafeUrl("http://192.168.255.255")).toBe(false);
+  });
+
+  it("blocks AWS metadata endpoint", () => {
+    expect(isSafeUrl("http://169.254.169.254")).toBe(false);
+    expect(isSafeUrl("http://169.254.169.254/latest/meta-data/")).toBe(false);
+  });
+
+  it("blocks link-local IPv4", () => {
+    expect(isSafeUrl("http://169.254.1.1")).toBe(false);
+  });
+
+  it("blocks FQDN trailing dot bypass (localhost.)", () => {
+    expect(isSafeUrl("http://localhost.")).toBe(false);
+    expect(isSafeUrl("http://localhost.:8080")).toBe(false);
+  });
+
+  it("blocks IPv4-compatible IPv6 without ffff (::7f00:1 = 127.0.0.1)", () => {
+    expect(isSafeUrl("http://[::7f00:1]")).toBe(false);
+    // ::a00:1 = 10.0.0.1
+    expect(isSafeUrl("http://[::a00:1]")).toBe(false);
+    // ::c0a8:101 = 192.168.1.1
+    expect(isSafeUrl("http://[::c0a8:101]")).toBe(false);
+  });
+
+  it("blocks .local and .internal domains", () => {
+    expect(isSafeUrl("http://myservice.local")).toBe(false);
+    expect(isSafeUrl("http://api.internal")).toBe(false);
+    expect(isSafeUrl("http://test.localhost")).toBe(false);
+    expect(isSafeUrl("http://router.home.arpa")).toBe(false);
+    expect(isSafeUrl("http://home.arpa")).toBe(false);
+    expect(isSafeUrl("http://svc.localdomain")).toBe(false);
+  });
+
+  it("allows valid public URLs", () => {
+    expect(isSafeUrl("https://example.com")).toBe(true);
+    expect(isSafeUrl("https://mp.weixin.qq.com/s/abc123")).toBe(true);
+    expect(isSafeUrl("http://100.63.255.255")).toBe(true); // below CGNAT range
+    expect(isSafeUrl("https://172.32.0.1")).toBe(true); // not in 172.16-31 range
+    expect(isSafeUrl("http://192.169.0.1")).toBe(true); // not 192.168.x.x
+  });
+
+  it("blocks decimal integer IP addresses", () => {
+    expect(isSafeUrl("http://2130706433")).toBe(false); // 127.0.0.1
+    expect(isSafeUrl("http://3232235521")).toBe(false); // 192.168.0.1
+  });
+
+  it("blocks hex IP addresses", () => {
+    expect(isSafeUrl("http://0x7f000001")).toBe(false);
+    expect(isSafeUrl("http://0xC0A80001")).toBe(false);
+  });
+
+  it("blocks DNS rebinding services", () => {
+    expect(isSafeUrl("http://127.0.0.1.nip.io")).toBe(false);
+    expect(isSafeUrl("http://192.168.1.1.sslip.io")).toBe(false);
+    expect(isSafeUrl("http://10.0.0.1.xip.io")).toBe(false);
+    expect(isSafeUrl("http://test.localtest.me")).toBe(false);
+  });
+
+  it("blocks non-http protocols", () => {
+    expect(isSafeUrl("ftp://example.com")).toBe(false);
+    expect(isSafeUrl("file:///etc/passwd")).toBe(false);
+  });
+
+  it("returns false for invalid URLs", () => {
+    expect(isSafeUrl("not a url")).toBe(false);
+    expect(isSafeUrl("")).toBe(false);
+  });
+});
+
+describe("fetchWithSafeRedirects", () => {
+  it("blocks unsafe first-hop URLs before fetch is called", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await expect(
+        fetchWithSafeRedirects("http://169.254.169.254/latest/meta-data/", {}),
+      ).rejects.toThrow("SSRF protection");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("isValidUrl", () => {
+  it("accepts http and https", () => {
+    expect(isValidUrl("http://example.com")).toBe(true);
+    expect(isValidUrl("https://example.com")).toBe(true);
+  });
+
+  it("rejects other protocols", () => {
+    expect(isValidUrl("ftp://example.com")).toBe(false);
+    expect(isValidUrl("https://wp-content/uploads/logo.png")).toBe(false);
+    expect(isValidUrl("https://https/example.com")).toBe(false);
+    expect(isValidUrl("http://93.184.216.34/")).toBe(true);
+    expect(isValidUrl("http://[2606:4700::1111]/")).toBe(true);
+    expect(isValidUrl("javascript:alert(1)")).toBe(false);
+  });
+
+  it("rejects file names joined as hosts but keeps real TLDs that look like extensions", () => {
+    expect(isValidUrl("https://ads.txt")).toBe(false);
+    expect(isValidUrl("https://sellers.json/")).toBe(false);
+    expect(isValidUrl("https://phpinfo.php.bak/")).toBe(false);
+    expect(isValidUrl("https://info.php.old")).toBe(false);
+    expect(isValidUrl("https://phpinfo.php.save/")).toBe(false);
+    expect(isValidUrl("https://shop.save/")).toBe(true);
+    expect(isValidUrl("https://cdn.example.com.js/x")).toBe(false);
+    expect(isValidUrl("https://example.com/ads.txt")).toBe(true);
+    expect(isValidUrl("https://github.zip")).toBe(true);
+    expect(isValidUrl("https://example.md")).toBe(true);
+    expect(isValidUrl("https://jsonplaceholder.typicode.com")).toBe(true);
+  });
+
+  it("rejects hosts that do not end in a real top-level domain", () => {
+    expect(isValidUrl("https://docker-compose.yml/")).toBe(false);
+    expect(isValidUrl("https://config.env")).toBe(false);
+    expect(isValidUrl("https://wrangler.toml")).toBe(false);
+    expect(isValidUrl("https://static../app.js")).toBe(false);
+    expect(isValidUrl("https://example.com&format=json")).toBe(false);
+    expect(isValidUrl("https://money.usnews.com./x")).toBe(true);
+    expect(isValidUrl("https://bun.sh")).toBe(true);
+    expect(isValidUrl("https://例子.中国/")).toBe(true);
+    expect(isValidUrl("https://пример.рф/")).toBe(true);
+    expect(isValidUrl("https://primer.срб/")).toBe(true);
+    expect(isValidUrl("https://example.xn--/")).toBe(false);
+    expect(isValidUrl("https://EXAMPLE.COM/")).toBe(true);
+  });
+
+  it("rejects invalid URLs", () => {
+    expect(isValidUrl("not-a-url")).toBe(false);
+    expect(isValidUrl("")).toBe(false);
+  });
+
+  it("rejects URLs exceeding max length", () => {
+    const longUrl = "https://example.com/" + "a".repeat(5000);
+    expect(isValidUrl(longUrl)).toBe(false);
+  });
+});
+
+describe("needsBrowserRendering", () => {
+  it("detects Cloudflare challenges", () => {
+    expect(needsBrowserRendering('<div id="cf-challenge">...</div>', "https://example.com")).toBe(true);
+    expect(needsBrowserRendering('<script>cf_chl_opt={}</script>', "https://example.com")).toBe(true);
+  });
+
+  it("detects CAPTCHA on short pages", () => {
+    expect(needsBrowserRendering('<div class="captcha">solve me</div>', "https://example.com")).toBe(true);
+  });
+
+  it("does not flag CAPTCHA on long pages", () => {
+    const longPage = '<html><body>captcha' + 'x'.repeat(20000) + '</body></html>';
+    expect(needsBrowserRendering(longPage, "https://example.com")).toBe(false);
+  });
+
+  it("detects JS redirects in script tags on short pages", () => {
+    expect(needsBrowserRendering('<script>document.location="/"</script>', "https://example.com")).toBe(true);
+    expect(needsBrowserRendering('<script>window.location.href="/"</script>', "https://example.com")).toBe(true);
+  });
+
+  it("does not flag normal pages with analytics containing document.location", () => {
+    // Longer page with document.location in analytics — should NOT trigger
+    const normalPage = '<html><body>' + '<p>content</p>'.repeat(50) +
+      '<script>ga("send", document.location.href)</script></body></html>';
+    expect(needsBrowserRendering(normalPage, "https://example.com")).toBe(false);
+  });
+
+  it("does not flag normal pages", () => {
+    const normalPage = '<html><body>' + '<p>content</p>'.repeat(100) + '</body></html>';
+    expect(needsBrowserRendering(normalPage, "https://example.com")).toBe(false);
+  });
+});
+
+describe("extractTargetUrl", () => {
+  it("extracts https URL from path", () => {
+    expect(extractTargetUrl("/https://example.com/page", "")).toBe("https://example.com/page");
+  });
+
+  it("extracts http URL from path", () => {
+    expect(extractTargetUrl("/http://example.com", "")).toBe("http://example.com");
+  });
+
+  it("auto-prepends https for bare domains", () => {
+    expect(extractTargetUrl("/example.com", "")).toBe("https://example.com");
+    expect(extractTargetUrl("/example.com/path", "")).toBe("https://example.com/path");
+  });
+
+  it("returns null for empty path", () => {
+    expect(extractTargetUrl("/", "")).toBeNull();
+  });
+
+  it("treats dotted path as domain (favicon.ico has a dot)", () => {
+    // favicon.ico has a dot, so it gets treated as a bare domain
+    // The main handler checks /favicon.ico separately before calling extractTargetUrl
+    expect(extractTargetUrl("/favicon.ico", "")).toBe("https://favicon.ico");
+  });
+
+  it("does not promote scanner paths whose first segment is not a hostname", () => {
+    expect(extractTargetUrl("/laravel/.env", "")).toBeNull();
+    expect(extractTargetUrl("/static/.env", "")).toBeNull();
+    expect(extractTargetUrl("/backend/config", "")).toBeNull();
+  });
+
+  it("keeps a hostname path when a later segment looks like a probe", () => {
+    expect(extractTargetUrl("/example.com/.env", "")).toBe("https://example.com/.env");
+  });
+
+  it("returns null for paths without dots", () => {
+    expect(extractTargetUrl("/about", "")).toBeNull();
+    expect(extractTargetUrl("/api", "")).toBeNull();
+  });
+
+  it("strips our query params but keeps target params", () => {
+    const result = extractTargetUrl("/https://example.com", "?raw=true&force_browser=true&foo=bar");
+    expect(result).toBe("https://example.com?foo=bar");
+  });
+
+  it("handles percent-encoded URLs", () => {
+    expect(extractTargetUrl("/https%3A%2F%2Fexample.com%2Fpage", "")).toBe("https://example.com/page");
+  });
+
+  it("also strips no_cache, format, selector params", () => {
+    const result = extractTargetUrl("/https://example.com", "?no_cache=true&format=json&selector=.main&key=val");
+    expect(result).toBe("https://example.com?key=val");
+  });
+
+  it("appends remaining params with & when target URL already has query string", () => {
+    const result = extractTargetUrl("/https://example.com/page?id=123", "?raw=true&foo=bar");
+    expect(result).toBe("https://example.com/page?id=123&foo=bar");
+  });
+
+  it("does not add ? when no remaining params exist", () => {
+    const result = extractTargetUrl("/https://example.com/page?id=123", "?raw=true&format=json");
+    expect(result).toBe("https://example.com/page?id=123");
+  });
+
+  it("fixes missing colon in protocol (https// → https://)", () => {
+    expect(extractTargetUrl("/https//x.com/user/status/123", "")).toBe("https://x.com/user/status/123");
+    expect(extractTargetUrl("/http//example.com/page", "")).toBe("http://example.com/page");
+  });
+
+  it("preserves query params when fixing missing colon", () => {
+    const result = extractTargetUrl("/https//x.com/user/status/123", "?s=46&t=abc");
+    expect(result).toBe("https://x.com/user/status/123?s=46&t=abc");
+  });
+});
+
+describe("extractTargetUrl — self-reference unwrapping", () => {
+  // Regression: a doubled prefix (user pastes an md.genedai.me URL back in)
+  // must NOT make the Worker fetch itself and time out (CF 522). It unwraps
+  // to the real inner URL. Without a selfHost the old behavior is preserved.
+  const SELF = "md.genedai.me";
+
+  it("unwraps a self-referential target to the real inner URL", () => {
+    expect(
+      extractTargetUrl(
+        "/https://md.genedai.me/https://mp.weixin.qq.com/s/slaS6E2AB8YZkK5_-kuFqg",
+        "",
+        SELF,
+      ),
+    ).toBe("https://mp.weixin.qq.com/s/slaS6E2AB8YZkK5_-kuFqg");
+  });
+
+  it("unwraps multiple nested self-references", () => {
+    expect(
+      extractTargetUrl(
+        "/https://md.genedai.me/https://md.genedai.me/https://x.com/a/b",
+        "",
+        SELF,
+      ),
+    ).toBe("https://x.com/a/b");
+  });
+
+  it("unwraps when self is the live request host (not just the known domain)", () => {
+    expect(
+      extractTargetUrl("/https://foo.example/https://x.com/a", "", "foo.example"),
+    ).toBe("https://x.com/a");
+  });
+
+  it("unwraps the workers.dev deployment host", () => {
+    expect(
+      extractTargetUrl(
+        "/https://website2markdown.genedai.workers.dev/https://x.com/a",
+        "",
+        SELF,
+      ),
+    ).toBe("https://x.com/a");
+  });
+
+  it("preserves the inner URL's own query string when unwrapping", () => {
+    expect(
+      extractTargetUrl("/https://md.genedai.me/https://x.com/a?id=1&z=2", "", SELF),
+    ).toBe("https://x.com/a?id=1&z=2");
+  });
+
+  it("unwraps a URL on the other hosted domain", () => {
+    expect(extractTargetUrl("/https://mdget.dev/https://x.com/a", "", SELF)).toBe("https://x.com/a");
+    expect(extractTargetUrl("/https://md.genedai.me/https://x.com/a", "", "mdget.dev")).toBe("https://x.com/a");
+  });
+
+  it("resolves a bare self-reference (no inner URL) to null", () => {
+    expect(extractTargetUrl("/https://md.genedai.me", "", SELF)).toBeNull();
+  });
+
+  it("leaves non-self targets untouched", () => {
+    expect(extractTargetUrl("/https://x.com/a", "", SELF)).toBe("https://x.com/a");
+  });
+
+  it("is a no-op without selfHost (backward compatible)", () => {
+    expect(
+      extractTargetUrl("/https://md.genedai.me/https://x.com/a", ""),
+    ).toBe("https://md.genedai.me/https://x.com/a");
+  });
+
+  it("refuses pathologically deep self-nesting rather than self-fetching", () => {
+    const path = "/" + "https://md.genedai.me/".repeat(7) + "https://x.com/a";
+    expect(extractTargetUrl(path, "", SELF)).toBeNull();
+  });
+
+  it("does not let unwrapping bypass SSRF protection on the inner target", () => {
+    // Unwrapping still yields the inner URL, but the downstream isSafeUrl gate
+    // (applied in the handler) must still reject an internal address.
+    const inner = extractTargetUrl(
+      "/https://md.genedai.me/http://169.254.169.254/latest/meta-data",
+      "",
+      SELF,
+    );
+    expect(inner).toBe("http://169.254.169.254/latest/meta-data");
+    expect(isSafeUrl(inner as string)).toBe(false);
+  });
+});
+
+describe("buildRawRequestPath", () => {
+  it("builds a stable raw path without optional params", () => {
+    expect(buildRawRequestPath("https://example.com/page")).toBe(
+      "/https%3A%2F%2Fexample.com%2Fpage?raw=true",
+    );
+  });
+
+  it("preserves selector, browser, cache, engine and token params", () => {
+    expect(buildRawRequestPath("https://example.com/page", {
+      selector: ".main",
+      forceBrowser: true,
+      noCache: true,
+      engine: "jina",
+      token: "public-token",
+    })).toBe(
+      "/https%3A%2F%2Fexample.com%2Fpage?raw=true&selector=.main&force_browser=true&no_cache=true&engine=jina&token=public-token",
+    );
+  });
+});
+
+describe("escapeHtml", () => {
+  it("escapes all special characters", () => {
+    expect(escapeHtml('<script>alert("xss")&</script>')).toBe(
+      "&lt;script&gt;alert(&quot;xss&quot;)&amp;&lt;/script&gt;",
+    );
+  });
+
+  it("escapes single quotes", () => {
+    expect(escapeHtml("it's")).toBe("it&#039;s");
+  });
+
+  it("leaves normal text unchanged", () => {
+    expect(escapeHtml("Hello World 123")).toBe("Hello World 123");
+  });
+});
+
+describe("normalizeStrayQueryMarks", () => {
+  it("splits our parameters off a target query that already had one", () => {
+    const search = normalizeStrayQueryMarks("?class_id=01_01&id=4002156?raw=true");
+    expect(new URLSearchParams(search).get("raw")).toBe("true");
+    expect(extractTargetUrl("/http://kzp.mof.gov.cn/content.jsp", search))
+      .toBe("http://kzp.mof.gov.cn/content.jsp?class_id=01_01&id=4002156");
+    expect(normalizeStrayQueryMarks("?id=9?format=json?selector=main")).toBe("?id=9&format=json&selector=main");
+  });
+
+  it("leaves other question marks in the target query alone", () => {
+    expect(normalizeStrayQueryMarks("?next=/a?b=1")).toBe("?next=/a?b=1");
+    expect(normalizeStrayQueryMarks("?raw=true")).toBe("?raw=true");
+    expect(normalizeStrayQueryMarks("?q=draw=1?rawdata=2")).toBe("?q=draw=1?rawdata=2");
+    expect(normalizeStrayQueryMarks("")).toBe("");
+  });
+});

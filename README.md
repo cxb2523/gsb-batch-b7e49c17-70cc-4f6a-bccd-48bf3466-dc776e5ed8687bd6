@@ -1,0 +1,749 @@
+# URL to Markdown Converter
+
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
+[![Live API](https://img.shields.io/badge/API-mdget.dev-22d3ee)](https://mdget.dev)
+[![npm](https://img.shields.io/npm/v/@digidai/mcp-website2markdown?label=MCP%20Server)](https://www.npmjs.com/package/@digidai/mcp-website2markdown)
+[![Agent Skills](https://img.shields.io/badge/Skills-website2markdown--skills-blue?logo=github)](https://github.com/Digidai/website2markdown-skills)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
+[![CI](https://github.com/Digidai/website2markdown/actions/workflows/ci.yml/badge.svg)](https://github.com/Digidai/website2markdown/actions/workflows/ci.yml)
+
+Convert **any** web page to clean Markdown — JS-heavy SPAs, paywalled content, Chinese platforms (WeChat, Zhihu, Feishu), and more. Powered by Cloudflare Workers with a 5-layer fallback pipeline and 14 site adapters.
+
+The hosted service lives at **[mdget.dev](https://mdget.dev)**. The old address `md.genedai.me` still works the same way, so existing integrations need no change.
+
+### Quick Start
+
+```bash
+# Convert any URL to Markdown (try it now!)
+curl -H "Accept: text/markdown" https://mdget.dev/https://example.com
+
+# WeChat article
+curl -H "Accept: text/markdown" "https://mdget.dev/https://mp.weixin.qq.com/s/YOUR_ARTICLE_ID"
+
+# JSON output with metadata
+curl "https://mdget.dev/https://example.com?format=json&raw=true"
+```
+
+Or just open in your browser: **[mdget.dev/https://example.com](https://mdget.dev/https://example.com)**
+
+Need browser-rendered pages (WeChat, Feishu, JS-heavy SPAs) or higher limits?
+Get a free API key at **[mdget.dev/portal/](https://mdget.dev/portal/)**.
+
+## How It Works
+
+```
+https://mdget.dev/<target-url>
+```
+
+### Conversion Flow
+
+```
+Request
+  │
+  ▼
+Fetch target with Accept: text/markdown
+  │
+  ├─ Response is text/markdown? ──▶ Path 1: Native Markdown
+  │
+  └─ Response is text/html?
+       │
+       ├─ Anti-bot / JS-required detected? ──▶ Path 3: Browser Rendering → Readability + Turndown
+       │
+       └─ Normal HTML ──▶ Path 2: Readability + Turndown
+```
+
+| Path | When | How | `X-Markdown-Method` |
+|---|---|---|---|
+| **Native** | Target site supports Markdown for Agents | Cloudflare edge converts via `Accept: text/markdown` content negotiation | `native` |
+| **Fallback** | Normal HTML pages | Readability extracts main content → Turndown converts to Markdown | `readability+turndown` |
+| **Browser** | Anti-bot pages, JS-rendered content | Headless Chrome renders the page → Readability + Turndown | `browser+readability+turndown` |
+| **Extended fallbacks** | API key, when the paths above return too little or the page blocks direct access | Further fetch paths, then the same extraction. Anonymous callers never reach this path | `readability+turndown` |
+
+## API Usage
+
+### Browser (URL bar)
+
+```
+# Full URL
+https://mdget.dev/https://example.com/page
+
+# Bare domain (auto-prepends https://)
+https://mdget.dev/example.com/page
+```
+
+### Raw Markdown API
+
+```bash
+# Get raw Markdown via query param
+curl "https://mdget.dev/https://example.com/page?raw=true"
+
+# Get raw Markdown via Accept header
+curl https://mdget.dev/https://example.com/page \
+  -H "Accept: text/markdown"
+```
+
+### API Keys and Tiers
+
+Sign up at **[mdget.dev/portal/](https://mdget.dev/portal/)** with
+your email to get an API key. No password; a sign-in link is emailed to you.
+
+| Tier | Credits/month | Browser rendering | Pipeline |
+|------|---------------|-------------------|---------|
+| **Anonymous** (no key) | — | No | Cache, direct fetch, and Readability only. Limited to 10 requests a minute and 100 a day per IP |
+| **Free** | 1,000 | Yes. A live render costs 3 credits | Full pipeline, including extended fallbacks. `no_cache` requires Pro |
+| **Pro** | 50,000 | Yes. A live render costs 3 credits | Full pipeline with more fallback paths, plus `no_cache` and `force_browser` |
+
+Convert, stream, and each batch URL cost 1 credit. A successful live browser
+render on those routes costs 3. Cache hits stay at the route cost, including
+when the cached page was originally rendered in a browser. Failures are not
+charged, and neither is a result whose body has fewer than 100
+non-whitespace characters (not counting the title or link and image URLs),
+such as a title with no body.
+
+| Endpoint | Credits |
+|---|---|
+| `GET /<url>` | 1, or 3 when a live browser render succeeds |
+| `GET /api/stream` | 1, or 3 when a live browser render succeeds |
+| `POST /api/batch` (per URL) | 1, or 3 when that URL's live browser render succeeds |
+| `POST /api/extract` | Quota check uses 3. This route does not write the monthly ledger |
+| `POST /api/deepcrawl` (per URL) | Quota check uses 2. This route does not write the monthly ledger |
+
+Cache hits on a paying tier still consume the route cost. When the quota is
+exhausted the API keeps serving cached URLs (with `X-Quota-Exceeded: true`)
+but rejects cache-miss requests with `429`.
+
+#### Using your key
+
+```bash
+# Bearer header (recommended)
+curl "https://mdget.dev/https://example.com/page?raw=true" \
+  -H "Authorization: Bearer mk_..."
+
+# The old ?token= query-parameter form is supported for legacy
+# PUBLIC_API_TOKEN deployments, but NOT for mk_ keys. Never put a real
+# API key in a query string — logs, referrers, and monitoring capture it.
+```
+
+Every authenticated response includes per-key rate limit headers:
+
+```
+X-RateLimit-Limit:     50000
+X-RateLimit-Remaining: 49993
+X-Request-Cost:        1
+```
+
+#### Portal API (session cookie)
+
+Once signed in at `/portal/`, these endpoints are available under the same
+session cookie:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/me` | GET | Current account (email, tier, account_id) |
+| `/api/keys` | GET | List your keys (prefix only, never plaintext) |
+| `/api/keys` | POST | Create a new key; plaintext returned **once** |
+| `/api/keys/:id` | DELETE | Revoke a key (takes effect within 60s — LRU cache) |
+| `/api/usage` | GET | Usage breakdown (tier, quota, used, daily history) |
+| `/api/auth/logout` | POST | Destroy session, clear cookie |
+
+`/api/usage` also accepts an `Authorization: Bearer mk_...` header so SDK
+and CLI tools can poll usage without a session.
+
+### Output Formats
+
+```bash
+# Markdown (default)
+curl "https://mdget.dev/https://example.com?format=markdown&raw=true"
+
+# Clean HTML
+curl "https://mdget.dev/https://example.com?format=html&raw=true"
+
+# Plain text (no formatting)
+curl "https://mdget.dev/https://example.com?format=text&raw=true"
+
+# JSON (structured: url, title, markdown, method, timestamp)
+curl "https://mdget.dev/https://example.com?format=json&raw=true"
+```
+
+### CSS Selector Extraction
+
+Extract specific page elements instead of the full article:
+
+```bash
+# Extract only the article body
+curl "https://mdget.dev/https://example.com?selector=.article-body&raw=true"
+
+# Extract a specific section
+curl "https://mdget.dev/https://example.com?selector=%23main-content&raw=true"
+```
+
+> `selector` maximum length is `256` characters.
+
+### Force Browser Rendering
+
+```bash
+curl "https://mdget.dev/https://example.com/js-heavy-page?raw=true&force_browser=true"
+```
+
+### Cache Control
+
+Results are cached in KV for fast repeat access. To bypass cache:
+
+```bash
+curl "https://mdget.dev/https://example.com?raw=true&no_cache=true"
+```
+
+### Batch Conversion
+
+Convert multiple URLs in a single request:
+
+```bash
+curl -X POST https://mdget.dev/api/batch \
+  -H "Authorization: Bearer <api-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": [
+      "https://example.com/page1",
+      {
+        "url": "https://example.com/page2",
+        "format": "text",
+        "selector": "article",
+        "force_browser": false,
+        "no_cache": true
+      }
+    ]
+  }'
+```
+
+`urls` supports:
+- String item: `"https://example.com/a"` (defaults to markdown)
+- Object item: `{ "url": "...", "format?": "markdown|html|text|json", "selector?": "...", "force_browser?": boolean, "no_cache?": boolean }`
+
+Response:
+```json
+{
+  "results": [
+    {
+      "url": "...",
+      "format": "markdown",
+      "content": "...",
+      "markdown": "...",
+      "title": "...",
+      "method": "...",
+      "cached": false
+    },
+    {
+      "url": "...",
+      "format": "text",
+      "content": "...",
+      "title": "...",
+      "method": "...",
+      "cached": true
+    }
+  ]
+}
+```
+
+### Structured Extraction API
+
+Extract structured fields from URL or raw HTML.
+
+```bash
+curl -X POST https://mdget.dev/api/extract \
+  -H "Authorization: Bearer <api-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "strategy": "css",
+    "url": "https://example.com/article",
+    "schema": {
+      "fields": [
+        { "name": "title", "selector": "h1", "type": "text", "required": true },
+        { "name": "author", "selector": ".author", "type": "text" }
+      ]
+    },
+    "include_markdown": true
+  }'
+```
+
+Batch extraction (`items`) is also supported (max 10 items).
+
+Additional extraction capabilities:
+
+- Use either top-level `url` / `html` or nested `input.url` / `input.html`.
+- `schema.fields[*].required` fails extraction when a required field is missing.
+- `options` supports `dedupe`, `includeEmpty`, and `regexFlags`.
+- `include_markdown: true` attaches converted markdown alongside extracted data.
+
+### Job API (create / query / stream / run)
+
+Submit crawl/extract tasks as queued jobs, then run and monitor. Jobs are persisted as queued records in KV; execution begins when you call `/run`:
+
+```bash
+# 1) Create job
+curl -X POST https://mdget.dev/api/jobs \
+  -H "Authorization: Bearer <api-token>" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-job-1" \
+  -d '{
+    "type": "crawl",
+    "tasks": [
+      "https://example.com/a",
+      "https://example.com/b"
+    ],
+    "priority": 10,
+    "maxRetries": 2
+  }'
+
+# 2) Query status
+curl -H "Authorization: Bearer <api-token>" \
+  https://mdget.dev/api/jobs/<job-id>
+
+# 3) Watch status stream (SSE)
+curl -N -H "Authorization: Bearer <api-token>" \
+  https://mdget.dev/api/jobs/<job-id>/stream
+
+# 4) Execute queued tasks
+curl -X POST -H "Authorization: Bearer <api-token>" \
+  https://mdget.dev/api/jobs/<job-id>/run
+```
+
+Job API notes:
+
+- Supports both `type: "crawl"` and `type: "extract"`.
+- `type: "crawl"` accepts string URLs or object tasks with `format`, `selector`, `force_browser`, and `no_cache`.
+- `type: "extract"` reuses the same task shape as `/api/extract`.
+- `Idempotency-Key` is keyed by both the header value and request payload: same key + same payload returns the existing job; same key + different payload returns `409 Conflict`.
+- `priority` is normalized to `1..100` (default `10`), `maxRetries` to `0..10` (default `2`).
+- Up to `100` tasks are allowed per job.
+
+### Deep Crawl API
+
+Run BFS/BestFirst deep crawl with filters/scoring and opt-in checkpoint resume.
+
+```bash
+# non-stream
+curl -X POST https://mdget.dev/api/deepcrawl \
+  -H "Authorization: Bearer <api-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "seed": "https://example.com/docs",
+    "max_depth": 2,
+    "max_pages": 20,
+    "strategy": "best_first",
+    "filters": {
+      "allow_domains": ["example.com"],
+      "url_patterns": ["https://example.com/docs/*"]
+    },
+    "scorer": {
+      "keywords": ["api", "reference"],
+      "weight": 2
+    },
+    "checkpoint": {
+      "crawl_id": "docs-crawl-001",
+      "snapshot_interval": 5
+    }
+  }'
+
+# stream mode (SSE: start/node/done/fail)
+curl -N -X POST https://mdget.dev/api/deepcrawl \
+  -H "Authorization: Bearer <api-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "seed": "https://example.com/docs",
+    "stream": true
+  }'
+```
+
+Deep crawl request supports:
+
+- `include_external` to traverse off-domain links.
+- `filters.url_patterns`, `filters.allow_domains`, `filters.block_domains`, `filters.content_types`.
+- `scorer.keywords`, `scorer.weight`, `scorer.score_threshold`.
+- `output.include_markdown` to attach per-page markdown.
+- `fetch.selector`, `fetch.force_browser`, `fetch.no_cache` to control page conversion.
+- `checkpoint.crawl_id`, `checkpoint.resume`, `checkpoint.snapshot_interval`, `checkpoint.ttl_seconds`.
+
+### Supported Sites
+
+Special adapters for optimal extraction on these platforms:
+
+| Site | Features |
+|---|---|
+| **WeChat** (`mp.weixin.qq.com`) | MicroMessenger UA, image proxy for hotlink bypass |
+| **Feishu/Lark Docs** (document surfaces such as `/wiki`, `/docx`, `/docs` on `.feishu.cn` / `.larksuite.com`) | Virtual scroll handling, R2 image storage, UI noise removal |
+| **Zhihu** (`zhihu.com/p/`) | Login wall removal, lazy image swap, hybrid proxy bypass |
+| **Yuque** (`yuque.com`) | SPA rendering, sidebar/toc removal |
+| **Notion** (`notion.site`, `notion.so`) | SPA rendering, lazy scroll loading |
+| **Juejin** (`juejin.cn/post/`) | Login popup removal, code block expansion |
+| **Twitter/X** (`twitter.com`, `x.com`) | Stealth rendering, login wall bypass |
+| **Reddit** (`reddit.com`) | URL transform to old.reddit.com, content extraction |
+| **CSDN** (`csdn.net`) | Login popup removal, code block expansion |
+| **36Kr** (`36kr.com`) | Stealth rendering, content extraction |
+| **Toutiao** (`toutiao.com`) | Stealth rendering, content extraction |
+| **NetEase** (`163.com`) | Content extraction |
+| **Weibo** (`weibo.com`) | Stealth rendering, hybrid proxy bypass |
+| **All other sites** | Generic mobile UA, lazy image handling |
+
+### JavaScript / TypeScript
+
+```ts
+const res = await fetch(
+  "https://mdget.dev/https://example.com/page?raw=true"
+);
+const markdown = await res.text();
+console.log(res.headers.get("X-Markdown-Method"));
+console.log(res.headers.get("X-Cache-Status")); // "HIT" or "MISS"
+```
+
+### Python
+
+```python
+import requests
+
+url = "https://mdget.dev/https://example.com/page"
+resp = requests.get(url, params={"raw": "true", "format": "json"})
+data = resp.json()
+print(data["title"], data["method"])
+```
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/` | GET | Landing page with URL input form |
+| `/<url>` | GET | Convert URL and render Markdown as HTML page |
+| `/<url>?raw=true` | GET | Return raw Markdown as plain text |
+| `/<url>?format=json` | GET | Return structured JSON (url, title, markdown, method) |
+| `/<url>?format=html` | GET | Return HTML output for preview/basic rendering |
+| `/<url>?format=text` | GET | Return plain text (no formatting) |
+| `/<url>?selector=.class` | GET | Extract specific CSS selector |
+| `/<url>?force_browser=true` | GET | Force browser rendering. Requires an API key. A successful live render costs 3 credits |
+| `/<url>?no_cache=true` | GET | Bypass KV cache |
+| `/api/stream?url=<encoded-url>` | GET | SSE conversion stream with `selector` / `force_browser` / `no_cache` / `token` support. Events: `step` (`id`: `fetch`, `analyze`, `browser`, `convert`; may repeat on retry), then `done` (`rawUrl`, `title`, `method`, `tokenCount`, `cached`, `creditCost`) or `fail` (`title`, `message`, `status`, `code`, `retryable`, `hint`). Each connection starts a new conversion, so do not auto-reconnect |
+| `/api/batch` | POST | Batch convert multiple URLs (max 10) |
+| `/api/extract` | POST | Structured extraction API (`css` / `xpath` / `regex`) |
+| `/api/jobs` | POST | Create queued crawl/extract job record |
+| `/api/jobs/:id` | GET | Query job status |
+| `/api/jobs/:id/stream` | GET | SSE job status stream |
+| `/api/jobs/:id/run` | POST | Run queued tasks and retry failed ones. Each rerun of a failed task counts toward `maxRetries`, so a task runs at most `maxRetries + 1` times in total. The job summary's `runnableTasks` says how many tasks the next run would execute; once the job is no longer `running`, `0` means rerunning will not change anything |
+| `/api/deepcrawl` | POST | Deep crawl API (BFS/BestFirst, stream/non-stream, checkpoint) |
+| `/api/og` | GET | Dynamic Open Graph image for landing/rendered pages |
+| `/img/<encoded-url>` | GET | Image proxy (bypasses hotlink protection) |
+| `/r2img/<key>` | GET | Serve image from R2 storage |
+| `/api/health` | GET | Health + runtime + operational metrics |
+
+## Authentication Matrix
+
+The hosted instance at `mdget.dev` uses D1-backed API keys with tiers
+(see [API Keys and Tiers](#api-keys-and-tiers)). Self-hosted deployments
+can skip the `AUTH_DB` binding and fall back to the legacy
+`API_TOKEN` / `PUBLIC_API_TOKEN` secrets.
+
+| Route Group | Anonymous | Free tier (`mk_…`) | Pro tier (`mk_…`) |
+|---|---|---|---|
+| `GET /<url>` | ✅ cache, direct fetch, Readability | ✅ full pipeline; live browser success costs 3 | ✅ + more fallback paths, `no_cache`, `force_browser` |
+| `GET /api/stream` | ✅ cache, direct fetch, Readability | ✅ same as convert | ✅ full + params |
+| `POST /api/batch` | ❌ 401 | ✅ | ✅ |
+| `POST /api/extract` | ❌ 401 | ✅ | ✅ |
+| `POST /api/deepcrawl` | ❌ 401 | ✅ | ✅ |
+| `POST /api/jobs*` | ❌ 401 | ✅ | ✅ |
+| `GET /api/me`, `/api/keys`, `/api/usage` | — | session cookie | session cookie or Bearer key |
+| `POST /api/auth/magic-link`, `/auth/logout` | public | public | public |
+| `GET /api/auth/verify` | public (single-use token) | — | — |
+| `GET /portal/` (SPA) | public HTML | — | — |
+| `GET /api/health`, `/llms.txt`, `/robots.txt`, `/sitemap.xml` | public | public | public |
+
+The batch / extract / deepcrawl / jobs endpoints are always gated because
+they either fan out into many conversions or touch Browser Rendering
+directly.
+
+## Response Headers (Raw API)
+
+| Header | Description |
+|---|---|
+| `Content-Type` | `text/markdown`, `application/json`, `text/html`, or `text/plain` |
+| `X-Source-URL` | The original target URL |
+| `X-Markdown-Tokens` | Token count (native Markdown for Agents only) |
+| `X-Markdown-Native` | `"true"` when native, `"false"` otherwise |
+| `X-Markdown-Method` | `"native"`, `"readability+turndown"`, or `"browser+readability+turndown"`. Which service fetched the page is not reported. |
+| `X-Cache-Status` | `"HIT"` or `"MISS"` |
+| `X-Browser-Rendered` | `"true"` when browser rendering path was used |
+| `X-Paywall-Detected` | `"true"` when paywall heuristics were triggered |
+| `X-RateLimit-Limit` | Monthly credit quota (authenticated requests only) |
+| `X-RateLimit-Remaining` | Credits remaining this month |
+| `X-Request-Cost` | Credits consumed. 3 when a live browser render succeeds on a 1-credit route |
+| `X-Quota-Exceeded` | `"true"` when quota is exhausted but a cached response was served |
+| `Retry-After` | Present on `429` responses (IP rate limit or quota exceeded) |
+| `Access-Control-Allow-Origin` | `*` — CORS enabled |
+
+## Features
+
+| Feature | Description |
+|---|---|
+| **Any Website** | Works on every site with four conversion paths |
+| **Site Adapters** | Specialized extractors for WeChat, Feishu, Zhihu, Yuque, Notion, Juejin |
+| **Anti-Bot Bypass** | Browser Rendering handles JS challenges, CAPTCHAs, and verification |
+| **3-Tier Cache** | In-memory hot cache → Cloudflare Cache API (per-colo, free) → KV (global, persistent) |
+| **Developer Portal** | Self-service signup, API key management, real-time usage dashboard |
+| **Tier System** | Anonymous (cache, direct fetch, Readability), Free (1k/mo), Pro (50k/mo) |
+| **R2 Image Storage** | Images stored reliably, served via proxy URLs |
+| **Multiple Formats** | Markdown, HTML, text, or structured JSON output |
+| **CSS Selectors** | Target specific page elements for extraction |
+| **Batch API v2** | Convert up to 10 URLs with per-item format/selector/browser/cache options |
+| **Structured Extraction** | CSS/XPath/Regex extraction via `/api/extract` with optional markdown attachment |
+| **Job Dispatcher** | Queue + run + monitor crawl/extract workloads via `/api/jobs/*` |
+| **Deep Crawl** | BFS + BestFirst traversal, filters/scorers, stream mode, checkpoint/resume |
+| **Table Support** | Improved handling of simple and complex tables |
+| **Smart Extraction** | Readability strips nav, ads, sidebars — extracts main article content |
+| **Rendered View** | Dark-themed Markdown preview with GitHub CSS and tab switching |
+| **Session Profiles** | Persist/replay cookies and localStorage for repeat authenticated crawling |
+| **Proxy Pool Fallback** | Multi-proxy + UA/header variant rotation for challenge-prone targets |
+| **SSRF Protection** | Blocks private IPs, IPv6 link-local, cloud metadata endpoints |
+| **Timeout Protection** | Time-budgeted scrolling for Feishu virtual scroll documents |
+| **Built-in Rate Limiting** | Per-IP limits for conversion, stream, and batch routes |
+| **Runtime Paywall Rules** | Support dynamic paywall rule updates via env/KV JSON |
+| **Operational Health** | `/api/health` exposes throughput/success/retry/backlog and P50/P95 latency |
+
+## Tech Stack
+
+| Component | Role |
+|---|---|
+| [Cloudflare Workers](https://workers.cloudflare.com/) | Edge runtime — global deployment |
+| [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) | Headless Chrome for JS-heavy/anti-bot pages |
+| [Cloudflare KV](https://developers.cloudflare.com/kv/) | Edge key-value cache for converted content |
+| [Cloudflare R2](https://developers.cloudflare.com/r2/) | Object storage for images |
+| [Markdown for Agents](https://developers.cloudflare.com/fundamentals/reference/markdown-for-agents/) | Native HTML→Markdown at edge |
+| [@mozilla/readability](https://github.com/mozilla/readability) | Article content extraction (Firefox Reader View) |
+| [Turndown](https://github.com/mixmark-io/turndown) | HTML→Markdown conversion |
+| [@cloudflare/puppeteer](https://github.com/nichochar/puppeteer) | Puppeteer API for Browser Rendering |
+| [LinkeDOM](https://github.com/WebReflection/linkedom) | Lightweight DOM for Workers |
+| [Vitest](https://vitest.dev/) | Unit testing framework |
+
+## AI Agent Integration
+
+Three ways to use Website2Markdown from AI agents:
+
+### Agent Skills (Claude Code, OpenClaw, Claw)
+
+One command install, auto-discovered by your agent. Includes usage patterns, error handling, and guides for all 21 adapters.
+
+```bash
+# Claude Code
+git clone https://github.com/Digidai/website2markdown-skills ~/.claude/skills/website2markdown
+
+# Codex CLI
+git clone https://github.com/Digidai/website2markdown-skills ~/.codex/skills/website2markdown
+
+# Gemini CLI
+git clone https://github.com/Digidai/website2markdown-skills ~/.gemini/skills/website2markdown
+
+# OpenClaw
+npx clawhub@latest install website2markdown
+```
+
+One command, auto-discovered in new sessions. See the [website2markdown-skills](https://github.com/Digidai/website2markdown-skills) repo for full documentation.
+
+### MCP Server (Claude Desktop, Cursor IDE, Windsurf)
+
+Standard MCP protocol with `convert_url` tool.
+
+```bash
+npm install -g @digidai/mcp-website2markdown
+```
+
+Claude Desktop config (`~/.claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "website2markdown": {
+      "command": "mcp-website2markdown",
+      "env": {
+        "WEBSITE2MARKDOWN_API_URL": "https://mdget.dev"
+      }
+    }
+  }
+}
+```
+
+### llms.txt
+
+Machine-readable API description for AI system auto-discovery:
+
+```
+https://mdget.dev/llms.txt
+```
+
+### Which to choose?
+
+| | Skills | MCP Server | llms.txt |
+|---|---|---|---|
+| **Best for** | CLI-based agents (Claude Code, OpenClaw) | IDE-based agents (Claude Desktop, Cursor) | Any AI with web access |
+| **Latency** | Direct HTTP (fastest) | MCP protocol overhead | Direct HTTP |
+| **Context** | Rich (patterns, error handling, adapters) | Tool schema only | API description |
+| **Install** | `git clone` (one command) | `npm install -g` | None |
+
+## Project Structure
+
+```
+md-genedai/
+├── src/
+│   ├── index.ts              # Router + conversion + extraction + job/deepcrawl endpoints
+│   ├── types.ts              # Shared TS types (Env, extraction/job payloads, adapters)
+│   ├── config.ts             # Limits, timeouts, UA and parser constants
+│   ├── utils.ts              # Shared helpers (headers, parsing, formatting)
+│   ├── converter.ts          # Readability + Turndown pipeline and content shaping
+│   ├── security.ts           # SSRF guardrails, retry wrappers, safe fetch helpers
+│   ├── paywall.ts            # Paywall heuristics + runtime rule updates
+│   ├── proxy.ts              # Forward proxy + pool parsing/selection
+│   ├── browser/
+│   │   ├── index.ts          # Browser rendering orchestrator and capacity control
+│   │   ├── stealth.ts        # Anti-detection hardening
+│   │   └── adapters/         # 14 site-specific browser adapters
+│   ├── cache/
+│   │   └── index.ts          # KV conversion cache + R2 image storage
+│   ├── extraction/
+│   │   └── strategies.ts     # CSS/XPath/Regex structured extraction
+│   ├── dispatcher/
+│   │   ├── model.ts          # Job schema + KV persistence/idempotency
+│   │   └── runner.ts         # Job execution and retry orchestration
+│   ├── deepcrawl/
+│   │   ├── bfs.ts            # BFS/BestFirst traversal core
+│   │   ├── filters.ts        # Crawl filters (domains, patterns, content hints)
+│   │   └── scorers.ts        # Keyword/domain scoring for BestFirst strategy
+│   ├── session/
+│   │   └── profile.ts        # Session profile capture/replay (cookie/localStorage)
+│   ├── observability/
+│   │   └── metrics.ts        # Throughput/success/retry/backlog/latency snapshots
+│   ├── templates/
+│   │   ├── landing.ts        # Landing page HTML
+│   │   ├── rendered.ts       # Markdown preview page HTML
+│   │   ├── loading.ts        # SSE loading/progress page HTML
+│   │   └── error.ts          # Error page HTML
+│   └── __tests__/            # 37 test files
+├── docs/
+│   └── slo-reference.md      # SLO targets used by /api/health operational metrics
+├── scripts/
+│   └── smoke-api.sh          # End-to-end API smoke checks for deployed/local worker
+├── package.json
+├── wrangler.toml             # Worker config: browser, KV, R2 bindings
+├── tsconfig.json
+├── vitest.config.ts
+└── .gitignore
+```
+
+## Deployment
+
+This project uses **Cloudflare Git Integration** — push to `main` and Cloudflare automatically builds and deploys. GitHub Actions only validates (typecheck, tests, build) and does not deploy. Cloudflare does not apply D1 migrations: run `npm run db:migrate:remote` before pushing a change that needs one.
+
+### Setup (one-time)
+
+1. Fork or push this repo to GitHub
+2. Create required resources:
+   ```bash
+   # Create KV namespace
+   wrangler kv namespace create CACHE_KV
+   # Update the namespace ID in wrangler.toml
+
+   # Create R2 bucket
+   wrangler r2 bucket create md-images
+   ```
+3. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) > **Workers & Pages** > **Create** > **Import a Git repository**
+4. Select the GitHub repo — Cloudflare will deploy automatically on every push to `main`
+
+### Secrets / Runtime Variables
+
+```bash
+# Required: Bearer auth for protected write APIs
+# Used by: /api/batch, /api/extract, /api/jobs, /api/deepcrawl
+wrangler secret put API_TOKEN
+
+# Optional: protect raw convert API + /api/stream
+wrangler secret put PUBLIC_API_TOKEN
+
+# Optional: dynamic paywall rules (JSON array)
+wrangler secret put PAYWALL_RULES_JSON
+
+# Optional: single upstream proxy (format: username:password@host:port)
+wrangler secret put PROXY_URL
+
+# Optional: proxy pool for rotation/fallback (comma or newline separated)
+wrangler secret put PROXY_POOL
+```
+
+Optional KV-driven paywall rule source:
+
+- Set `PAYWALL_RULES_KV_KEY` (plain env var) to a KV key that stores JSON paywall rules.
+- If both `PAYWALL_RULES_JSON` and KV key are configured, KV value takes precedence.
+
+Example plain env var in `wrangler.toml`:
+
+```toml
+[vars]
+PAYWALL_RULES_KV_KEY = "paywall:rules:v1"
+```
+
+### Browser Rendering Binding
+
+```toml
+[browser]
+binding = "MYBROWSER"
+```
+
+> **Note**: Browser Rendering requires a Workers Paid plan. It only works in deployed Workers or with `wrangler dev --remote`.
+
+### Custom Domain
+
+1. In Cloudflare Dashboard > Workers & Pages > your Worker > **Settings** > **Domains & Routes**
+2. Add your custom domain (e.g. `md.example.com`)
+
+### Local Development
+
+```bash
+npm install
+npm run dev           # Local dev at http://localhost:8787
+npm run build         # Dry-run bundle to dist/
+npm run typecheck     # Type check
+npm test              # Run unit tests
+npm run test:watch    # Watch mode
+npm run test:coverage # Coverage
+npm run smoke:api     # API smoke checks (requires BASE_URL + API_TOKEN env vars)
+```
+
+Checkpoint behavior:
+
+- Deep crawl checkpoint persistence is only enabled when you provide `checkpoint` options such as `crawl_id`, `resume`, `snapshot_interval`, or `ttl_seconds`.
+- If you omit `checkpoint`, the API still returns a `crawlId` for tracing, but no checkpoint record is written.
+- Resume requests must match the original crawl configuration; changing filters, scoring, or fetch options returns `409 Conflict`.
+
+Smoke example:
+
+```bash
+BASE_URL="https://mdget.dev" \
+API_TOKEN="<api-token>" \
+TARGET_URL="https://example.com" \
+npm run smoke:api
+```
+
+### Validation Workflow (2026-03-06)
+
+Use Node 22 locally (see [`.nvmrc`](./.nvmrc)) or rely on GitHub Actions in [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
+
+| Check | Command |
+|---|---|
+| Type safety | `npm run typecheck` |
+| Unit/integration tests | `npm test` |
+| Coverage | `npm run test:coverage` |
+| Worker bundle dry-run | `npm run build` |
+| Live health check | `curl https://website2markdown.genedai.workers.dev/api/health` |
+| Live public conversion | `GET /https://website2markdown.genedai.workers.dev/https://example.com?raw=true` |
+
+Production note:
+
+- Protected write APIs (`/api/extract`, `/api/jobs*`, `/api/deepcrawl`, `/api/batch`) require `API_TOKEN`.
+- If `API_TOKEN` is not configured in deployed Worker, these endpoints return `503` (`API_TOKEN not set`).
+
+## License
+
+MIT

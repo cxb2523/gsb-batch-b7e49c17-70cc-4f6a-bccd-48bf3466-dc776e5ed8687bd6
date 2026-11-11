@@ -1,0 +1,572 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:sockets", () => ({
+  connect: vi.fn(),
+}));
+
+import worker from "../index";
+import { createMockEnv, mockCtx } from "./test-helpers";
+
+function createAuthDbMock(): D1Database {
+  const prepare = vi.fn((sql: string) => {
+    const stmt = {
+      bind: vi.fn(() => stmt),
+      first: vi.fn(async () => {
+        if (sql.includes("FROM api_keys")) {
+          return {
+            key_id: "key_force_browser",
+            account_id: "acct_force_browser",
+            revoked_at: null,
+            tier: "pro",
+            monthly_credits_used: 0,
+            monthly_credits_reset_at: "2099-01-01T00:00:00.000Z",
+          };
+        }
+        return null;
+      }),
+      run: vi.fn(async () => ({ success: true })),
+    };
+    return stmt;
+  });
+  const batch = vi.fn(async (items: Array<{ run: () => Promise<unknown> }>) =>
+    Promise.all(items.map((item) => item.run()))
+  );
+  return { prepare, batch } as unknown as D1Database;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("index conversion/stream/og routes", () => {
+  it("returns JSON error for invalid format", async () => {
+    const req = new Request(
+      "https://md.example.com/https://example.com/article?format=xml",
+      { headers: { Accept: "application/json" } },
+    );
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid Format");
+    expect(payload.message).toContain("Unknown format");
+  });
+
+  it("returns Invalid URL when target URL is malformed", async () => {
+    const req = new Request(
+      "https://md.example.com/https://exa mple.com",
+      { headers: { Accept: "application/json" } },
+    );
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string; status?: number };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid URL");
+  });
+
+  it("returns Blocked for private target URLs", async () => {
+    const req = new Request(
+      "https://md.example.com/http://127.0.0.1/private",
+      { headers: { Accept: "application/json" } },
+    );
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(403);
+    expect(payload.error).toBe("Blocked");
+  });
+
+  it("rejects non-text content types", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("PDF", {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/file", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(415);
+    expect(payload.error).toBe("Unsupported Content");
+  });
+
+  it("rejects unsupported text/css content", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("body{color:red}", {
+        status: 200,
+        headers: { "Content-Type": "text/css; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/style.css", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(415);
+    expect(payload.error).toBe("Unsupported Content");
+  });
+
+  it("returns loading page for browser document navigation", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = new Request("https://md.example.com/https://example.com/nav", {
+      headers: {
+        Accept: "text/html",
+        "Sec-Fetch-Dest": "document",
+      },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Security-Policy")).toContain("connect-src 'self'");
+    expect(html).toContain("Converting");
+    expect(html).toContain("/api/stream?url=");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not render legacy query tokens into document loading pages", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = new Request("https://md.example.com/https://example.com/nav?token=public-token", {
+      headers: {
+        Accept: "text/html",
+        "Sec-Fetch-Dest": "document",
+      },
+    });
+    const res = await worker.fetch(
+      req,
+      createMockEnv({ PUBLIC_API_TOKEN: "public-token" }).env,
+      mockCtx(),
+    );
+    const body = await res.text();
+
+    expect(res.status).toBe(401);
+    expect(body).not.toContain("public-token");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns rendered cached page for document navigation cache hit", async () => {
+    const { env, mocks } = createMockEnv();
+    mocks.kvGet.mockResolvedValueOnce(JSON.stringify({
+      content: "# cached markdown",
+      method: "native",
+      title: "Cached Title",
+    }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = new Request("https://md.example.com/https://example.com/cached", {
+      headers: {
+        Accept: "text/html",
+        "Sec-Fetch-Dest": "document",
+      },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(html).toContain("cached markdown");
+    expect(html).toContain("CACHED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns markdown response for native markdown source", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("# native markdown", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/md", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/markdown");
+    expect(res.headers.get("X-Markdown-Native")).toBe("true");
+    expect(body).toContain("# native markdown");
+  });
+
+  it("returns html format for native markdown source", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("# md with <tag>", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/md?raw=true&format=html");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    expect(body).toContain("<pre>");
+    expect(body).toContain("&lt;tag&gt;");
+  });
+
+  it("returns json format for native markdown source", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("# md json", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/md?raw=true&format=json");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { method?: string; markdown?: string };
+
+    expect(res.status).toBe(200);
+    expect(payload.method).toBe("native");
+    expect(payload.markdown).toContain("# md json");
+  });
+
+  it("returns text format for native markdown source", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("# Heading\n\n- item", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/md?raw=true&format=text");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/plain");
+    expect(body).toContain("Heading");
+    expect(body).toContain("item");
+    expect(body).not.toContain("# ");
+  });
+
+  it("returns text format converted from html", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><head><title>T</title></head><body><h1>Hello</h1><p>World</p></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/t?raw=true&format=text");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/plain");
+    expect(body).toContain("Hello");
+    expect(body).toContain("World");
+  });
+
+  it("returns html format rendered from engine=jina markdown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        code: 200,
+        data: {
+          url: "https://example.com/jina",
+          title: "Jina Title",
+          content: "# Jina Heading\n\nBody text",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request(
+      "https://md.example.com/https://example.com/jina?raw=true&format=html&engine=jina",
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    expect(body).toContain("<pre>");
+    expect(body).toContain("# Jina Heading");
+  });
+
+  it("returns text format stripped from engine=jina markdown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        code: 200,
+        data: {
+          url: "https://example.com/jina",
+          title: "Jina Title",
+          content: "# Jina Heading\n\n- Body item",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request(
+      "https://md.example.com/https://example.com/jina?raw=true&format=text&engine=jina",
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/plain");
+    expect(body).toContain("Jina Heading");
+    expect(body).toContain("Body item");
+    expect(body).not.toContain("# ");
+  });
+
+  it("returns 400 for oversized selector on sync convert route", async () => {
+    const selector = "x".repeat(257);
+    const req = new Request(
+      `https://md.example.com/https://example.com/t?raw=true&selector=${selector}`,
+      { headers: { Accept: "application/json" } },
+    );
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid Selector");
+  });
+
+  it("returns selector-scoped text format", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(
+        "<html><body><div class='sidebar'>Noise</div><article class='main'><h1>Hello</h1><p>World</p></article></body></html>",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        },
+      ),
+    ));
+
+    const req = new Request(
+      "https://md.example.com/https://example.com/t?raw=true&format=text&selector=.main",
+    );
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("Hello");
+    expect(body).toContain("World");
+    expect(body).not.toContain("Noise");
+  });
+
+  it("uses redirect final URL in json output", async () => {
+    const fetchMock = vi.fn(async (req: RequestInfo | URL) => {
+      const reqUrl = String(req);
+      if (reqUrl === "https://example.com/original") {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://final.example/article" },
+        });
+      }
+      if (reqUrl === "https://final.example/article") {
+        return new Response(
+          "<html><head><title>T</title></head><body><article><p>redirected</p></article></body></html>",
+          {
+            status: 200,
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          },
+        );
+      }
+      throw new Error(`Unexpected fetch URL: ${reqUrl}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = new Request(
+      "https://md.example.com/https://example.com/original?raw=true&format=json",
+    );
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { url?: string; markdown?: string };
+
+    expect(res.status).toBe(200);
+    expect(payload.url).toBe("https://final.example/article");
+    expect(payload.markdown).toContain("redirected");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("streams fail event for invalid /api/stream URL", async () => {
+    const req = new Request("https://md.example.com/api/stream?url=not-a-url");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/event-stream");
+    expect(body).toContain("event: fail");
+    expect(body).toContain("Invalid URL");
+  });
+
+  it("streams fail event for oversized selector", async () => {
+    const selector = "a".repeat(257);
+    const req = new Request(
+      `https://md.example.com/api/stream?url=https%3A%2F%2Fexample.com%2Fstream&selector=${selector}`,
+    );
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("event: fail");
+    expect(body).toContain("\"title\":\"Invalid Selector\"");
+  });
+
+  it("streams done event for successful /api/stream conversion", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("# stream markdown", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/api/stream?url=https%3A%2F%2Fexample.com%2Fstream");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("event: done");
+    expect(body).toContain("\"rawUrl\":\"/https%3A%2F%2Fexample.com%2Fstream?raw=true\"");
+    expect(body).toContain("\"method\":\"native\"");
+  });
+
+  it("preserves conversion params in /api/stream rawUrl payload", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        code: 200,
+        data: {
+          url: "https://example.com/stream",
+          title: "Stream Title",
+          content: "# stream markdown",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request(
+      "https://md.example.com/api/stream?url=https%3A%2F%2Fexample.com%2Fstream&selector=.main&force_browser=true&no_cache=true&engine=jina&token=public-token",
+    );
+    const res = await worker.fetch(req, createMockEnv({ PUBLIC_API_TOKEN: "public-token" }).env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain(
+      "\"rawUrl\":\"/https%3A%2F%2Fexample.com%2Fstream?raw=true&selector=.main&force_browser=true&no_cache=true&engine=jina\"",
+    );
+    expect(body).not.toContain("public-token");
+  });
+
+  it("rejects anonymous Jina stream selection", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const url = "https://md.example.com/api/stream?url=https%3A%2F%2Fexample.com%2Fstream&engine=jina";
+
+    const hosted = await worker.fetch(
+      new Request(url),
+      createMockEnv({ AUTH_DB: createAuthDbMock() }).env,
+      mockCtx(),
+    );
+    const hostedPayload = await hosted.json() as { error?: string; message?: string };
+    expect(hosted.status).toBe(401);
+    expect(hostedPayload.error).toBe("Unauthorized");
+    expect(hostedPayload.message).toBe("engine selection requires an API key.");
+
+    const legacy = await worker.fetch(new Request(url), createMockEnv().env, mockCtx());
+    const legacyPayload = await legacy.json() as { error?: string; message?: string };
+    expect(legacy.status).toBe(401);
+    expect(legacyPayload.message).toBe(
+      "Parameters no_cache, engine, and force_browser require a valid token.",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("streams fail event when conversion throws ConvertError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("upstream failed", {
+        status: 500,
+        statusText: "Internal Server Error",
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/api/stream?url=https%3A%2F%2Fexample.com%2Ffail");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/event-stream");
+    expect(body).toContain("event: fail");
+    expect(body).toContain("\"title\":\"Fetch Failed\"");
+    expect(body).toContain("\"status\":502");
+  });
+
+  it("renders /api/og svg image", async () => {
+    const req = new Request("https://md.example.com/api/og?title=This%20is%20a%20long%20title");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/svg+xml");
+    expect(body).toContain("<svg");
+    expect(body).toContain("This is a long title");
+  });
+
+  it("does not serve a normal cache entry for force_browser requests", async () => {
+    const store = new Map<string, string>();
+    const { env, mocks } = createMockEnv({ AUTH_DB: createAuthDbMock() });
+    mocks.kvGet.mockImplementation(async (key: string) => store.get(key) ?? null);
+    mocks.kvPut.mockImplementation(async (key: string, value: string) => {
+      store.set(key, value);
+    });
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("# Cached Source", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }))
+      .mockResolvedValueOnce(new Response("# Fresh Forced Source", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await worker.fetch(
+      new Request("https://md.example.com/https://example.com/force-cache?raw=true", {
+        headers: { Accept: "text/markdown" },
+      }),
+      env,
+      mockCtx(),
+    );
+    expect(await first.text()).toContain("Cached Source");
+
+    const forced = await worker.fetch(
+      new Request("https://md.example.com/https://example.com/force-cache?raw=true&force_browser=true", {
+        headers: {
+          Accept: "text/markdown",
+          Authorization: "Bearer mk_force_browser_test",
+        },
+      }),
+      env,
+      mockCtx(),
+    );
+    const forcedBody = await forced.text();
+
+    expect(forced.status).toBe(200);
+    expect(forcedBody).toContain("Fresh Forced Source");
+    expect(forcedBody).not.toContain("Cached Source");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

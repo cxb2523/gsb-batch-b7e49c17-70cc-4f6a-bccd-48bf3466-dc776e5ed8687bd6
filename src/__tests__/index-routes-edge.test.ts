@@ -1,0 +1,248 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:sockets", () => ({
+  connect: vi.fn(),
+}));
+
+vi.mock("@cloudflare/puppeteer", () => ({
+  default: {
+    launch: vi.fn(),
+  },
+}));
+
+import puppeteer from "@cloudflare/puppeteer";
+import worker from "../index";
+import { createMockEnv, mockCtx } from "./test-helpers";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("index route edge coverage", () => {
+  it("returns 405 for non-GET/HEAD methods outside batch endpoint", async () => {
+    const req = new Request("https://md.example.com/api/health", {
+      method: "PUT",
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(405);
+    expect(await res.text()).toBe("Method Not Allowed");
+  });
+
+  it("handles HEAD favicon without side effects", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = new Request("https://md.example.com/favicon.ico", {
+      method: "HEAD",
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a short 404 for scanner paths and leaves real pages alone", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const probes = [
+      ["GET", "https://md.example.com/.env", "Not Found"],
+      ["GET", "https://md.example.com/portal/.env", "Not Found"],
+      ["GET", "https://md.example.com/laravel/.env", "Not Found"],
+      ["POST", "https://md.example.com/.env", "Not Found"],
+      ["HEAD", "https://md.example.com/.env", ""],
+    ] as const;
+
+    for (const [method, url, body] of probes) {
+      const res = await worker.fetch(new Request(url, { method }), createMockEnv().env, mockCtx());
+      expect(res.status, `${method} ${url}`).toBe(404);
+      expect(res.headers.get("Content-Type")).toContain("text/plain");
+      const text = await res.text();
+      expect(text, `${method} ${url}`).toBe(body);
+      expect(text).not.toContain("<");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const docs = await worker.fetch(new Request("https://md.example.com/docs"), createMockEnv().env, mockCtx());
+    expect(docs.status).toBe(200);
+    expect(await docs.text()).toContain("<");
+
+    const favicon = await worker.fetch(new Request("https://md.example.com/favicon.ico"), createMockEnv().env, mockCtx());
+    expect(favicon.status).toBe(204);
+
+    const unknown = await worker.fetch(new Request("https://md.example.com/graphql"), createMockEnv().env, mockCtx());
+    expect(unknown.status).toBe(200);
+    expect((await unknown.text())).toContain("<");
+  });
+
+  it("serves landing page when target URL is missing", async () => {
+    const req = new Request("https://md.example.com/");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    expect(res.headers.get("Content-Security-Policy")).toContain("default-src 'none'");
+    // Cloudflare Web Analytics injects its beacon from this host.
+    expect(res.headers.get("Content-Security-Policy")).toContain(
+      "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
+    );
+    expect(body).toContain("Markdown");
+  });
+
+  it("serves Chinese landing page when lang=zh", async () => {
+    const req = new Request("https://md.example.com/?lang=zh");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain('href="/?lang=zh"');
+    expect(body).toContain("任意 URL 转");
+    expect(body).toContain("转换");
+  });
+
+  it("returns HTML error response when invalid url is requested by browser", async () => {
+    const req = new Request("https://md.example.com/https://exa mple.com", {
+      headers: { Accept: "text/html" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const html = await res.text();
+
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    expect(res.headers.get("Content-Security-Policy")).toContain("default-src 'none'");
+    expect(html).toContain("Invalid URL");
+  });
+
+  it("streams blocked event for private /api/stream target", async () => {
+    const req = new Request("https://md.example.com/api/stream?url=http%3A%2F%2F127.0.0.1%2Fa");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("event: fail");
+    expect(body).toContain("\"title\":\"Blocked\"");
+  });
+
+  it("returns 502 when /img upstream response is not ok", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("missing", {
+        status: 404,
+        headers: { "Content-Type": "image/png" },
+      }),
+    ));
+
+    const target = encodeURIComponent("https://mmbiz.qpic.cn/not-found.png");
+    const req = new Request(`https://md.example.com/img/${target}`);
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(502);
+    expect(await res.text()).toBe("Image fetch failed");
+  });
+
+  it("returns 403 when /img upstream content is svg", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<svg></svg>", {
+        status: 200,
+        headers: { "Content-Type": "image/svg+xml" },
+      }),
+    ));
+
+    const target = encodeURIComponent("https://mmbiz.qpic.cn/icon.svg");
+    const req = new Request(`https://md.example.com/img/${target}`);
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(403);
+    expect(await res.text()).toBe("SVG images are not allowed");
+  });
+
+  it("returns 403 when /img redirect target is blocked by SSRF protection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("", {
+        status: 302,
+        headers: { Location: "http://127.0.0.1/private" },
+      }),
+    ));
+
+    const target = encodeURIComponent("https://mmbiz.qpic.cn/redirect.png");
+    const req = new Request(`https://md.example.com/img/${target}`);
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(403);
+    expect(await res.text()).toBe("Redirect target blocked");
+  });
+
+  it("returns 502 when /img fetch throws non-SSRF errors", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("dial tcp failed")));
+
+    const target = encodeURIComponent("https://mmbiz.qpic.cn/error.png");
+    const req = new Request(`https://md.example.com/img/${target}`);
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(502);
+    expect(await res.text()).toBe("Image fetch failed");
+  });
+
+  it("returns proxied image bytes with strict headers", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      }),
+    ));
+
+    const target = encodeURIComponent("https://mmbiz.qpic.cn/ok.png");
+    const req = new Request(`https://md.example.com/img/${target}`);
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+    expect(res.headers.get("Content-Security-Policy")).toBe("default-src 'none'");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("returns 404 when r2 image read throws", async () => {
+    const { env, mocks } = createMockEnv();
+    mocks.r2Get.mockRejectedValueOnce(new Error("r2 unavailable"));
+
+    const req = new Request("https://md.example.com/r2img/images/miss.png");
+    const res = await worker.fetch(req, env, mockCtx());
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 502 when static fetch fails and force_browser browser fallback also fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("unavailable", {
+        status: 500,
+        statusText: "Server Error",
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+    vi.mocked(puppeteer.launch).mockRejectedValueOnce(new Error("browser down"));
+
+    const req = new Request("https://md.example.com/https://example.com/fail?force_browser=true", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.error).toBe("Fetch Failed");
+    expect(JSON.stringify(payload)).not.toMatch(/proxy|fallback|render|static fetch/i);
+    expect(payload).toMatchObject({ code: "target_error", target_status: 500, cause: "target" });
+  });
+
+  it("renders og image default title block when title is missing", async () => {
+    const req = new Request("https://md.example.com/api/og");
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("Any web page, read as");
+    expect(body).toContain("Markdown");
+  });
+});

@@ -1,0 +1,217 @@
+export interface Env {
+  MYBROWSER: Fetcher;
+  CACHE_KV: KVNamespace;
+  IMAGE_BUCKET: R2Bucket;
+  JOB_COORDINATOR?: DurableObjectNamespace;
+  /** D1 database for auth, API keys, and usage metering */
+  AUTH_DB?: D1Database;
+  /** Analytics Engine dataset `access_events`; column layout in admin/access-ae.ts. */
+  ACCESS_AE?: AnalyticsEngineDataset;
+  /** Passphrase for /admin. Login is refused when this is unset. */
+  ADMIN_PASSWORD?: string;
+  API_TOKEN?: string;
+  PUBLIC_API_TOKEN?: string;
+  PAYWALL_RULES_JSON?: string;
+  PAYWALL_RULES_KV_KEY?: string;
+  /** Proxy URL (Swiftproxy): "username:password@host:port" */
+  PROXY_URL?: string;
+  /** Optional proxy pool. Accepts comma/newline separated proxy URLs. */
+  PROXY_POOL?: string;
+  /** Browser Use Cloud API key for remote browser fetching */
+  BROWSER_USE_API_KEY?: string;
+  /** Cloudflare Account ID for REST API calls */
+  CF_ACCOUNT_ID?: string;
+  /** Cloudflare API Token with Browser Rendering - Edit permission */
+  CF_API_TOKEN?: string;
+  /** Account-owned API token with Account Analytics Read, for the admin's WAE queries. */
+  CF_ANALYTICS_TOKEN?: string;
+  /** Optional Firecrawl API key. Omit to use Firecrawl keyless when available. */
+  FIRECRAWL_API_KEY?: string;
+  /** Context.dev API key; signed-in last-resort fallback for blocked pages. */
+  CONTEXT_DEV_API_KEY?: string;
+  /** Optional Firecrawl API base URL. Defaults to https://api.firecrawl.dev. */
+  FIRECRAWL_API_URL?: string;
+  /** Optional Firecrawl timeout in milliseconds. */
+  FIRECRAWL_TIMEOUT_MS?: string;
+  /** Optional secret salt for analytics HMAC hashes. If omitted, hashes are not persisted. */
+  ANALYTICS_SALT?: string;
+  /** Optional debug trace retention in days. Defaults to 7, capped to 14. */
+  DEBUG_TRACE_RETENTION_DAYS?: string;
+  /** Optional max redacted output excerpt characters for debug traces. Defaults to 2000. */
+  DEBUG_TRACE_MAX_CONTENT_CHARS?: string;
+  /** Cloudflare Email Sending binding for sign-in and alert emails. */
+  EMAIL?: SendEmail;
+  /** Optional sender override. Its domain must be onboarded to Cloudflare Email Sending. */
+  AUTH_EMAIL_FROM?: string;
+  /** Recipient for the daily fallback-path health alert. No alert email without it. */
+  ADMIN_EMAIL?: string;
+}
+
+// ─── Auth & Tier Types ──────────────────────────────────────
+
+export type Tier = "anonymous" | "free" | "pro";
+
+export interface AuthContext {
+  tier: Tier;
+  accountId: string | null;
+  keyId: string | null;
+  quotaLimit: number;
+  quotaUsed: number;
+}
+
+/**
+ * PolicyDecision — computed from AuthContext, controls what resources
+ * are available for this request. Downstream code only reads this.
+ *
+ *   resolveAuth() → AuthContext → buildPolicy() → PolicyDecision
+ */
+export interface PolicyDecision {
+  tier: Tier;
+  browserAllowed: boolean;
+  proxyAllowed: boolean;
+  engineSelectionAllowed: boolean;
+  noCacheAllowed: boolean;
+  quotaRemaining: number;
+  /** Fixed credit cost for this request type (not actual path cost) */
+  creditCost: number;
+}
+
+/** The plan stored on an account row (accounts.tier). */
+export type AccountPlan = "free" | "pro" | "enterprise";
+
+export function accountPlan(raw: unknown): AccountPlan {
+  return raw === "pro" || raw === "enterprise" ? raw : "free";
+}
+
+/** The limits an account gets. Enterprise has pro limits until it gets its own. */
+export function tierForPlan(raw: unknown): Exclude<Tier, "anonymous"> {
+  return accountPlan(raw) === "free" ? "free" : "pro";
+}
+
+/** Quota limits per tier (credits per month) */
+export const TIER_QUOTAS: Record<Tier, number> = {
+  anonymous: 0,
+  free: 1000,
+  pro: 50000,
+};
+
+export type ConvertMethod =
+  | "native"
+  | "readability+turndown"
+  | "browser+readability+turndown"
+  | "proxy+readability+turndown"
+  | "jina"
+  | "firecrawl"
+  | "cf";
+
+export type OutputFormat = "markdown" | "html" | "text" | "json";
+
+export interface ExtractResult {
+  html: string;
+  images?: string[];
+}
+
+export type ExtractionStrategyType = "css" | "xpath" | "regex";
+export type ExtractionFieldType = "text" | "html" | "attribute";
+
+export type ExtractionErrorCode =
+  | "INVALID_REQUEST"
+  | "INVALID_SCHEMA"
+  | "INVALID_URL"
+  | "UNSUPPORTED_STRATEGY"
+  | "UNSUPPORTED_XPATH"
+  | "EXTRACTION_TIMEOUT"
+  | "EXTRACTION_FAILED"
+  | "UPSTREAM_FETCH_FAILED";
+
+export interface ExtractionError {
+  code: ExtractionErrorCode;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface ExtractionFieldSchema {
+  name: string;
+  selector?: string;
+  xpath?: string;
+  type?: ExtractionFieldType;
+  attribute?: string;
+  multiple?: boolean;
+  required?: boolean;
+}
+
+export interface StructuredExtractionSchema {
+  name?: string;
+  baseSelector?: string;
+  baseXPath?: string;
+  fields: ExtractionFieldSchema[];
+}
+
+export interface RegexExtractionSchema {
+  patterns: Record<string, string>;
+  flags?: string;
+}
+
+export type ExtractionSchema =
+  | StructuredExtractionSchema
+  | RegexExtractionSchema
+  | Record<string, string>;
+
+export interface ExtractionOptions {
+  dedupe?: boolean;
+  includeEmpty?: boolean;
+  regexFlags?: string;
+}
+
+export interface ExtractionRequestInput {
+  url?: string;
+  html?: string;
+}
+
+export interface ExtractionRequestItem {
+  strategy: ExtractionStrategyType;
+  input?: ExtractionRequestInput;
+  url?: string;
+  html?: string;
+  schema: ExtractionSchema;
+  selector?: string;
+  force_browser?: boolean;
+  no_cache?: boolean;
+  include_markdown?: boolean;
+  options?: ExtractionOptions;
+}
+
+export interface ExtractionBatchRequest {
+  items: ExtractionRequestItem[];
+}
+
+export interface ExtractionResultMeta {
+  itemCount: number;
+  matches: number;
+  durationMs: number;
+}
+
+export interface ExtractionResult {
+  success: boolean;
+  strategy: ExtractionStrategyType;
+  data: unknown;
+  meta: ExtractionResultMeta;
+  error?: ExtractionError;
+}
+
+export interface SiteAdapter {
+  /** Return true if this adapter handles the given URL. */
+  match(url: string): boolean;
+  /** Whether this site always needs browser rendering (skip static fetch). */
+  alwaysBrowser: boolean;
+  /** Configure browser page before navigation (UA, viewport, headers, response listeners). */
+  configurePage(page: any, capturedImages?: Map<string, string>): Promise<void>;
+  /** Extract content after navigation. Return null to fall back to default. */
+  extract(page: any, capturedImages: Map<string, string>): Promise<ExtractResult | null>;
+  /** Post-process HTML before Readability (optional). */
+  postProcess?(html: string): string;
+  /** Transform URL before browser navigation (optional). */
+  transformUrl?(url: string): string;
+  /** Fetch content directly via API, bypassing static fetch and browser. Return HTML or null. */
+  fetchDirect?(url: string, env?: Env): Promise<string | null>;
+}

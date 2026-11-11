@@ -1,0 +1,78 @@
+name = "website2markdown"
+account_id = "48d9ccaf5ee7914c803b5d0656462848"
+main = "src/index.ts"
+compatibility_date = "2025-02-14"
+compatibility_flags = ["nodejs_compat"]
+
+# HeroUI front end (web/): Vite prebuilds the server renderer that the Worker
+# imports and the browser bundle served from web-dist/ at /_app/*.
+[alias]
+"@web/server" = "./web-server-dist/server.js"
+
+[assets]
+directory = "./web-dist"
+
+[build]
+command = "npm run build:web"
+watch_dir = ["src", "web"]
+
+[browser]
+binding = "MYBROWSER"
+
+# KV namespace for caching converted markdown
+[[kv_namespaces]]
+binding = "CACHE_KV"
+id = "ce411570e9734bae989e03c705804c94"
+
+# R2 bucket for storing images
+[[r2_buckets]]
+binding = "IMAGE_BUCKET"
+bucket_name = "md-images"
+
+# D1 database for auth, API keys, and usage metering
+[[d1_databases]]
+binding = "AUTH_DB"
+database_name = "md-auth"
+database_id = "15623873-2c54-493a-8639-2428819665ad"
+
+# Analytics Engine dataset for per-request access events (replacing D1 access_events)
+[[analytics_engine_datasets]]
+binding = "ACCESS_AE"
+dataset = "access_events"
+
+[durable_objects]
+bindings = [
+  { name = "JOB_COORDINATOR", class_name = "JobCoordinator" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["JobCoordinator"]
+
+[observability]
+enabled = true
+
+# Cloudflare Email Sending, for sign-in and alert emails. The sender domain
+# (mdget.dev) is onboarded under Email Service > Email Sending.
+[[send_email]]
+name = "EMAIL"
+
+[triggers]
+crons = ["17 3 * * *"]
+
+# Built-in Worker code applies per-IP limits when cf-connecting-ip is present.
+# Keep Cloudflare WAF rate limiting enabled as an outer layer.
+
+# Secrets (set via wrangler secret):
+# API_TOKEN — Bearer token for POST /api/batch authentication
+# PUBLIC_API_TOKEN — optional token for raw API + /api/stream
+# CF_ACCOUNT_ID — Cloudflare account ID for Browser Rendering REST API
+# CF_API_TOKEN — API token with Browser Rendering - Edit permission
+# PAYWALL_RULES_JSON — optional JSON array of runtime paywall rules
+# Optional var:
+# PAYWALL_RULES_KV_KEY — KV key name containing JSON paywall rules (overrides PAYWALL_RULES_JSON)
+
+# Custom domain configuration — update with your actual domain
+# routes = [
+#   { pattern = "your-domain.example.com/*", zone_name = "example.com" }
+# ]

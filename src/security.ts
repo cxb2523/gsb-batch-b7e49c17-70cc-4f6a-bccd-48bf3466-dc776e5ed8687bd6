@@ -1,0 +1,653 @@
+import { MAX_URL_LENGTH } from "./config";
+import { TLDS } from "./tlds";
+import { errorMessage } from "./utils";
+
+const SAFE_URL_MEMO_MAX_SIZE = 2048;
+const safeUrlMemo = new Map<string, boolean>();
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const IDEMPOTENT_METHODS = new Set([
+  "GET",
+  "HEAD",
+  "OPTIONS",
+  "PUT",
+  "DELETE",
+  "TRACE",
+]);
+const DEFAULT_FETCH_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_MS = 80;
+const DEFAULT_MAX_RETRY_DELAY_MS = 400;
+const REBIND_SUFFIXES = [".nip.io", ".sslip.io", ".xip.io", ".localtest.me"];
+
+type FetchRetryOptions = {
+  maxRetries?: number;
+  retryDelayMs?: number;
+  maxRetryDelayMs?: number;
+};
+
+function normalizeHostname(parsed: URL): string {
+  // Strip trailing dot (FQDN notation: "localhost." bypasses exact match)
+  return parsed.hostname.toLowerCase().replace(/\.$/, "");
+}
+
+function getSafeUrlMemoKey(protocol: string, hostname: string): string {
+  return `${protocol}//${hostname}`;
+}
+
+function memoizeSafeUrlResult(key: string, value: boolean): void {
+  if (safeUrlMemo.size >= SAFE_URL_MEMO_MAX_SIZE) {
+    const oldestKey = safeUrlMemo.keys().next().value;
+    if (oldestKey !== undefined) {
+      safeUrlMemo.delete(oldestKey);
+    }
+  }
+  safeUrlMemo.set(key, value);
+}
+
+function isSafeUrlForParsed(protocol: string, hostname: string): boolean {
+  // Loopback
+  if (
+    hostname === "localhost" ||
+    /^127\./.test(hostname) ||
+    hostname === "[::1]" ||
+    hostname === "::1"
+  )
+    return false;
+
+  // Unspecified / wildcard
+  if (hostname === "0.0.0.0") return false;
+
+  // Carrier-grade NAT (100.64.0.0/10)
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(hostname))
+    return false;
+
+  // IPv4 private ranges
+  if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(hostname))
+    return false;
+
+  // AWS / cloud metadata
+  if (hostname === "169.254.169.254") return false;
+
+  // Link-local IPv4
+  if (/^169\.254\./.test(hostname)) return false;
+
+  // IPv6 private / link-local (bracket-stripped)
+  const bare = hostname.replace(/^\[|\]$/g, "");
+
+  // Standard IPv6 private/link-local
+  if (/^(fc|fd|fe80)/i.test(bare)) return false;
+
+  // IPv6 loopback — all representations
+  if (
+    bare === "::1" ||
+    bare === "0:0:0:0:0:0:0:1" ||
+    bare === "0000:0000:0000:0000:0000:0000:0000:0001" ||
+    /^0*:0*:0*:0*:0*:0*:0*:0*1$/.test(bare)
+  )
+    return false;
+
+  // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
+  // These are equivalent to the IPv4 address and bypass simple hostname checks
+  const v4MappedMatch = bare.match(
+    /^(?:0*:)*:?(?:ffff:?)?((?:\d{1,3}\.){3}\d{1,3})$/i,
+  );
+  if (v4MappedMatch) {
+    const mappedIp = v4MappedMatch[1];
+    // Check the embedded IPv4 against private ranges
+    if (mappedIp === "127.0.0.1" || mappedIp.startsWith("127."))
+      return false;
+    if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(mappedIp))
+      return false;
+    if (/^169\.254\./.test(mappedIp)) return false;
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(mappedIp))
+      return false;
+    if (mappedIp === "0.0.0.0") return false;
+  }
+
+  // IPv4-compatible IPv6 in hex form (e.g., ::ffff:7f00:0001 = 127.0.0.1)
+  const hexMappedMatch = bare.match(
+    /^(?:0*:)*:?ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i,
+  );
+  if (hexMappedMatch) {
+    const hi = parseInt(hexMappedMatch[1], 16);
+    const lo = parseInt(hexMappedMatch[2], 16);
+    const ip1 = (hi >> 8) & 0xff;
+    const ip2 = hi & 0xff;
+    const ip3 = (lo >> 8) & 0xff;
+    const ip4 = lo & 0xff;
+    const mappedIp = `${ip1}.${ip2}.${ip3}.${ip4}`;
+    if (mappedIp.startsWith("127.") || mappedIp.startsWith("10."))
+      return false;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(mappedIp)) return false;
+    if (mappedIp.startsWith("192.168.") || mappedIp.startsWith("169.254."))
+      return false;
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(mappedIp))
+      return false;
+    if (mappedIp === "0.0.0.0") return false;
+  }
+
+  // IPv4-compatible IPv6 WITHOUT ffff (e.g., ::7f00:1 from ::127.0.0.1)
+  // Deprecated but still parsed by URL implementations
+  const hexCompatMatch = bare.match(
+    /^(?:0*:)*:?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i,
+  );
+  if (hexCompatMatch && !hexMappedMatch) {
+    const hi = parseInt(hexCompatMatch[1], 16);
+    const lo = parseInt(hexCompatMatch[2], 16);
+    const ip1 = (hi >> 8) & 0xff;
+    const ip2 = hi & 0xff;
+    const ip3 = (lo >> 8) & 0xff;
+    const ip4 = lo & 0xff;
+    const mappedIp = `${ip1}.${ip2}.${ip3}.${ip4}`;
+    if (mappedIp.startsWith("127.") || mappedIp.startsWith("10."))
+      return false;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(mappedIp)) return false;
+    if (mappedIp.startsWith("192.168.") || mappedIp.startsWith("169.254."))
+      return false;
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(mappedIp))
+      return false;
+    if (mappedIp === "0.0.0.0") return false;
+  }
+
+  // Internal / local TLDs
+  if (
+    hostname === "home.arpa" ||
+    hostname === "localdomain" ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".home.arpa") ||
+    hostname.endsWith(".localdomain") ||
+    hostname.endsWith(".test") ||
+    hostname.endsWith(".invalid")
+  )
+    return false;
+
+  // Must be HTTP(S)
+  if (protocol !== "http:" && protocol !== "https:")
+    return false;
+
+  // Decimal integer IP (e.g., 2130706433 = 127.0.0.1)
+  if (/^\d+$/.test(hostname)) return false;
+
+  // Hex IP (e.g., 0x7f000001)
+  if (/^0x[0-9a-f]+$/i.test(hostname)) return false;
+
+  // DNS rebinding services that resolve to arbitrary IPs
+  for (const d of REBIND_SUFFIXES) {
+    if (hostname.endsWith(d)) return false;
+  }
+
+  return true;
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+function isIdempotentRequest(init: RequestInit): boolean {
+  const method = (init.method ?? "GET").toUpperCase();
+  return IDEMPOTENT_METHODS.has(method);
+}
+
+function normalizeRetryOptions(
+  retryOptions?: FetchRetryOptions,
+): Required<FetchRetryOptions> {
+  return {
+    maxRetries: Math.max(0, retryOptions?.maxRetries ?? DEFAULT_FETCH_RETRIES),
+    retryDelayMs: Math.max(
+      0,
+      retryOptions?.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
+    ),
+    maxRetryDelayMs: Math.max(
+      0,
+      retryOptions?.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS,
+    ),
+  };
+}
+
+function waitMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new Error("Retry backoff aborted."));
+  }
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let onAbort: (() => void) | undefined;
+    const cleanup = () => {
+      if (signal && onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }, ms);
+    if (!signal) return;
+    onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error("Retry backoff aborted."));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function getRetryDelayMs(
+  attempt: number,
+  retryDelayMs: number,
+  maxRetryDelayMs: number,
+): number {
+  return Math.min(retryDelayMs * 2 ** attempt, maxRetryDelayMs);
+}
+
+function errorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "";
+  const direct = (error as { code?: unknown }).code;
+  if (typeof direct === "string") return direct.toUpperCase();
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") {
+    const causeCode = (cause as { code?: unknown }).code;
+    if (typeof causeCode === "string") return causeCode.toUpperCase();
+  }
+  return "";
+}
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "target host";
+  }
+}
+
+function normalizeFetchFailure(error: unknown, requestUrl: string): Error {
+  if (
+    error instanceof Error &&
+    error.message.includes("Redirect target blocked by SSRF protection")
+  ) {
+    return error;
+  }
+
+  const code = errorCode(error);
+  const message = errorMessage(error);
+  const lower = message.toLowerCase();
+  const host = hostnameOf(requestUrl);
+
+  if (
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN" ||
+    lower.includes("enotfound") ||
+    lower.includes("eai_again") ||
+    lower.includes("dns") ||
+    lower.includes("could not resolve host") ||
+    lower.includes("name or service not known")
+  ) {
+    return new Error(`DNS resolution failed for ${host}.`);
+  }
+
+  if (
+    code === "ECONNRESET" ||
+    lower.includes("econnreset") ||
+    lower.includes("socket hang up") ||
+    lower.includes("connection reset") ||
+    lower.includes("network reset")
+  ) {
+    return new Error("Connection reset while fetching the target URL.");
+  }
+
+  if (
+    code === "ETIMEDOUT" ||
+    lower.includes("etimedout") ||
+    lower.includes("timed out") ||
+    lower.includes("timeout")
+  ) {
+    return new Error("Request timed out while fetching the target URL.");
+  }
+
+  return error instanceof Error ? error : new Error(message);
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  retryable: boolean,
+  retryOptions: Required<FetchRetryOptions>,
+): Promise<Response> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...init,
+        redirect: "manual",
+      });
+
+      if (
+        !retryable ||
+        !isRetryableStatus(response.status) ||
+        attempt === retryOptions.maxRetries
+      ) {
+        return response;
+      }
+    } catch (error) {
+      const normalizedError = normalizeFetchFailure(error, url);
+      lastError = normalizedError;
+
+      // Abort errors should not be retried
+      const aborted =
+        init.signal?.aborted ||
+        (error instanceof DOMException && error.name === "AbortError");
+
+      if (aborted || !retryable || attempt === retryOptions.maxRetries) {
+        throw normalizedError;
+      }
+    }
+
+    const delay = getRetryDelayMs(
+      attempt,
+      retryOptions.retryDelayMs,
+      retryOptions.maxRetryDelayMs,
+    );
+    await waitMs(delay, init.signal ?? undefined);
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error("No response received");
+}
+
+/**
+ * Validate that a URL is safe to fetch (no SSRF).
+ * Blocks localhost, private/internal IPs (v4 + v6 + mapped), link-local, AWS metadata.
+ */
+export function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const hostname = normalizeHostname(parsed);
+    const cacheKey = getSafeUrlMemoKey(parsed.protocol, hostname);
+    const cached = safeUrlMemo.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const result = isSafeUrlForParsed(parsed.protocol, hostname);
+    memoizeSafeUrlResult(cacheKey, result);
+    return result;
+  } catch {
+    return false;
+  }
+}
+
+// .save is a real TLD and also an editor backup suffix (phpinfo.php.save). It only counts
+// after a file extension, so a real .save domain still works.
+const FILE_EXTENSION_HOST =
+  /\.(txt|json|xml|html?|php|aspx?|js|css|jpe?g|png|gif|svg|ico|webp)\.save$/i;
+
+/** Check that the URL is valid HTTP(S). */
+export function isValidUrl(url: string): boolean {
+  if (url.length > MAX_URL_LENGTH) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    // A dotless host such as https://wp-content/... is a mis-joined relative path or a probe.
+    // IPv6 literals keep their colons in the hostname.
+    if (!/[.:]/.test(parsed.hostname)) return false;
+    // IP literals have no top-level domain; isSafeUrl decides which addresses are allowed.
+    if (parsed.hostname.startsWith("[") || /^\d{1,3}(\.\d{1,3}){3}$/.test(parsed.hostname)) return true;
+    // A host such as config.env or docker-compose.yml is a file name a scanner joined as a host,
+    // and static.. is a mis-joined path. Neither ends in a real top-level domain.
+    const tld = parsed.hostname.replace(/\.$/, "").split(".").pop()!;
+    if (!TLDS.has(tld)) return false;
+    return !FILE_EXTENSION_HOST.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect if a static-fetch HTML response is an anti-bot / JS-challenge page
+ * that needs browser rendering to get real content.
+ */
+export function needsBrowserRendering(html: string, _url: string): boolean {
+  const lower = html.toLowerCase();
+
+  // Cloudflare JS challenge
+  if (lower.includes("cf-challenge") || lower.includes("cf_chl_opt"))
+    return true;
+
+  // Generic CAPTCHA on short pages
+  if (lower.includes("captcha") && html.length < 10_000) return true;
+
+  // Very short page with JS redirect (likely anti-bot).
+  // Only flag truly minimal pages — real content pages are longer than this.
+  if (
+    html.length < 2000 &&
+    (lower.includes("document.location") ||
+      lower.includes("window.location"))
+  ) {
+    // If the page has substantial visible text content, it's probably real
+    const textOnly = html.replace(/<[^>]+>/g, "").trim();
+    if (textOnly.length < 200) return true;
+  }
+
+  return false;
+}
+
+const ESCAPE_MAP: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#039;",
+};
+
+/** Escape HTML special characters to prevent XSS. */
+export function escapeHtml(str: string): string {
+  return str.replace(/[&<>"']/g, (ch) => ESCAPE_MAP[ch]);
+}
+
+/**
+ * Fetch a URL following redirects manually, validating each hop for SSRF.
+ * Returns the final response or throws on failure.
+ */
+export async function fetchWithSafeRedirects(
+  url: string,
+  init: RequestInit,
+  maxHops: number = 5,
+  retryOptions?: FetchRetryOptions,
+): Promise<{ response: Response; finalUrl: string }> {
+  let currentUrl = url;
+  let response: Response | null = null;
+  const retryable = isIdempotentRequest(init);
+  const normalizedRetryOptions = normalizeRetryOptions(retryOptions);
+  const redirectHopLimit = Math.max(0, Math.floor(maxHops));
+
+  for (let hops = 0; hops <= redirectHopLimit; hops++) {
+    if (!isSafeUrl(currentUrl)) {
+      throw new Error("Redirect target blocked by SSRF protection");
+    }
+
+    try {
+      response = await fetchWithRetry(
+        currentUrl,
+        init,
+        retryable,
+        normalizedRetryOptions,
+      );
+    } catch (error) {
+      throw normalizeFetchFailure(error, currentUrl);
+    }
+
+    if (!REDIRECT_STATUS_CODES.has(response.status)) {
+      break;
+    }
+
+    const location = response.headers.get("Location");
+    if (!location) break;
+    if (hops >= redirectHopLimit) {
+      throw new Error(`Too many redirects (max ${redirectHopLimit}).`);
+    }
+
+    const nextUrl = new URL(location, currentUrl).href;
+    if (!isSafeUrl(nextUrl)) {
+      throw new Error("Redirect target blocked by SSRF protection");
+    }
+    currentUrl = nextUrl;
+  }
+
+  if (!response) {
+    throw new Error("No response received");
+  }
+
+  return { response, finalUrl: currentUrl };
+}
+
+/** Max times to unwrap a self-referential target URL before giving up. */
+const MAX_SELF_UNWRAP_DEPTH = 5;
+
+/** Our own hostnames — a target on any of these would make the Worker fetch itself. */
+const KNOWN_SELF_HOSTS = ["mdget.dev", "md.genedai.me"];
+
+/** Is `host` one of our own hostnames (case-insensitive)? */
+function isSelfHost(host: string, selfHost: string): boolean {
+  const h = host.toLowerCase();
+  return (
+    h === selfHost.toLowerCase() ||
+    KNOWN_SELF_HOSTS.includes(h) ||
+    h.endsWith(".genedai.workers.dev")
+  );
+}
+
+/**
+ * Extract target URL from request path.
+ * Handles bare domains, http/https prefixed, and strips our own query params.
+ *
+ * When `selfHost` is provided, self-referential targets (e.g. a user pasting an
+ * md.genedai.me article URL back into the service, producing a doubled prefix)
+ * are unwrapped to the real inner URL. This prevents the Worker from fetching
+ * itself and nesting a full conversion, which otherwise times out (CF 522).
+ */
+/**
+ * Callers often append "?raw=true" to a target URL that already has a query,
+ * as in /https://site/a.jsp?id=7?raw=true. The second "?" would make "raw"
+ * part of the id value and send a broken URL to the site. Turn a "?" that
+ * starts one of our own parameters into "&". Other "?" characters stay.
+ */
+export function normalizeStrayQueryMarks(search: string): string {
+  if (search.length < 2) return search;
+  return "?" + search.slice(1).replace(/\?(?=(raw|format|selector|force_browser|no_cache|engine|debug_trace|token)=)/g, "&");
+}
+
+export function extractTargetUrl(
+  path: string,
+  search: string,
+  selfHost?: string,
+  depth: number = 0,
+): string | null {
+  let raw = path.slice(1); // Remove leading slash
+  if (!raw) return null;
+
+  // Decode percent-encoded URLs (e.g., /https%3A%2F%2Fexample.com)
+  try {
+    const decoded = decodeURIComponent(raw);
+    if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+      raw = decoded;
+    }
+  } catch {
+    // Keep raw as-is if decoding fails
+  }
+
+  // Fix missing colon in protocol (e.g., "https//example.com" → "https://example.com")
+  raw = raw.replace(/^(https?)\/\//, "$1://");
+
+  // Auto-prepend https:// only when the first segment looks like a hostname.
+  // /laravel/.env and /static/.env are scanner paths, not hosts. A dotted
+  // file in the first segment (favicon.ico) still matches; the handler
+  // serves known assets before extraction.
+  if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+    const firstSegment = raw.split(/[/?#]/)[0] || "";
+    if (firstSegment.includes(".") && !firstSegment.startsWith(".")) {
+      raw = "https://" + raw;
+    } else {
+      return null;
+    }
+  }
+
+  // Re-attach query string (excluding our params)
+  const targetSearchParams = new URLSearchParams(search);
+  if (targetSearchParams.get("raw") === "true") targetSearchParams.delete("raw");
+  if (targetSearchParams.get("force_browser") === "true") targetSearchParams.delete("force_browser");
+  if (targetSearchParams.get("no_cache") === "true") targetSearchParams.delete("no_cache");
+  if (targetSearchParams.get("debug_trace") === "true") targetSearchParams.delete("debug_trace");
+
+  const formatVal = targetSearchParams.get("format");
+  if (formatVal && ["markdown", "html", "text", "json"].includes(formatVal)) {
+    targetSearchParams.delete("format");
+  }
+
+  const engineVal = targetSearchParams.get("engine");
+  if (engineVal && ["cf", "jina", "firecrawl", "auto", "local"].includes(engineVal)) {
+    targetSearchParams.delete("engine");
+  }
+
+  targetSearchParams.delete("selector");
+  targetSearchParams.delete("token");
+  const remainingSearch = targetSearchParams.toString();
+
+  if (remainingSearch) {
+    raw += (raw.includes("?") ? "&" : "?") + remainingSearch;
+  }
+
+  // Length check
+  if (raw.length > MAX_URL_LENGTH) return null;
+
+  // Unwrap self-references: a target on our own host (e.g. a doubled prefix,
+  // /https://<selfHost>/https://real...) makes the Worker call itself and nest
+  // a full conversion, which times out (Cloudflare 522). Strip our host and
+  // re-extract the real inner target. A bare self-reference, or nesting deeper
+  // than the cap, resolves to null so we NEVER return a self-host target.
+  if (selfHost) {
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      parsed = null; // not parseable — leave raw untouched below
+    }
+    if (parsed && isSelfHost(parsed.host, selfHost)) {
+      return depth < MAX_SELF_UNWRAP_DEPTH
+        ? extractTargetUrl(parsed.pathname, parsed.search, selfHost, depth + 1)
+        : null;
+    }
+  }
+
+  return raw;
+}
+
+/** Build a stable raw markdown request path for a target URL. */
+export interface RawRequestPathOptions {
+  selector?: string;
+  forceBrowser?: boolean;
+  noCache?: boolean;
+  engine?: string;
+  token?: string;
+}
+
+/** Build a stable raw markdown request path for a target URL. */
+export function buildRawRequestPath(
+  targetUrl: string,
+  options: RawRequestPathOptions = {},
+): string {
+  const params = new URLSearchParams();
+  params.set("raw", "true");
+  if (options.selector) params.set("selector", options.selector);
+  if (options.forceBrowser) params.set("force_browser", "true");
+  if (options.noCache) params.set("no_cache", "true");
+  if (options.engine) params.set("engine", options.engine);
+  if (options.token) params.set("token", options.token);
+  return `/${encodeURIComponent(targetUrl)}?${params.toString()}`;
+}

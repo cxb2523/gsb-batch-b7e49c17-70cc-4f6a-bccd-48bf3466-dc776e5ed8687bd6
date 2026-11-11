@@ -1,0 +1,195 @@
+# Changelog
+
+## [Unreleased]
+
+### Changed
+- Sign-in and fallback-alert emails are sent with Cloudflare Email Sending (`[[send_email]]` binding `EMAIL`) from `noreply@mdget.dev`, instead of Resend. `RESEND_API_KEY` is no longer read; `AUTH_EMAIL_FROM` still overrides the sender if its domain is onboarded to Email Sending.
+- The hosted service moves to `mdget.dev`. `md.genedai.me` still serves the same API, so existing integrations keep working, but its home, docs, robots.txt, sitemap and llms.txt now name `mdget.dev` as canonical. Docs, the MCP server's default API URL, sign-in emails and rate-limit messages use `mdget.dev`.
+- The home, examples, docs, integrations, reader, loading, error, and portal pages are rebuilt with React and HeroUI v3 default components and theme. The Worker renders them on the server, and per-page Vite bundles under `/_app/` (landing, portal, reader) hydrate them.
+- The theme choice is stored under `localStorage["heroui-theme"]`.
+- Page CSPs no longer allow Google Fonts or the jsDelivr CDN. Marked and DOMPurify ship in the app bundle.
+- Production deploys come only from Cloudflare Workers Builds. The GitHub Actions deploy job is removed; CI still runs typecheck, tests, and build.
+- Conversion cache keys move to `md-cache/v2`, so results cached before the table fixes are no longer served.
+
+### Fixed
+- Tables whose cells use `colspan`, such as Wikipedia infoboxes, keep every column. The converter pads each row to the widest row, so Markdown renderers no longer drop the extra cells. Rows whose cells are all empty are left out.
+- Page CSPs allow `https://static.cloudflareinsights.com`, so the Cloudflare Web Analytics beacon now loads. It was blocked before. The portal still allows no third-party scripts.
+- Cloudflare Browser Rendering `/markdown` and `/content` calls no longer send a `render` key, which Cloudflare rejected with HTTP 400 on every request. `engine=cf` now works for callers allowed to use browser rendering. Conversions without `engine=cf`, including batch and deep crawl, no longer try Cloudflare first, since every call launches a billed browser.
+- Line breaks inside table cells (`<br>` or block elements) are kept as `<br>` instead of running the text together, for example `1.0.1<br>December 17, 2004`.
+
+## [1.2.0] - 2026-10-01
+
+### Added
+- Operator dashboard at `/admin` (noindex) with page views, API calls, conversion rows, and useful results: success, status below 400, at least 800 characters, and no paywall.
+- D1 access and conversion logs, including probe classification. Migrations `0002` through `0005`.
+- Anonymous negative cache for origin HTTP 429, 403, 404, and 410. Entries last 30 minutes and are read only for anonymous callers.
+- Anonymous HTTP 401 for the exact search pages `www.bing.com/search`, `searx.be/search`, and `html.duckduckgo.com/html`.
+
+### Changed
+- Anonymous Firecrawl and Jina selection asks for an API key. Anonymous convert, stream, and batch stay limited to 10, 10, and 5 requests per 60 seconds.
+- A successful live browser render on convert, stream, and batch costs 3 credits. Cache hits stay at the base route cost. Failures are not charged.
+- Free and pro monthly quotas roll to the current UTC month on the next authenticated read.
+- Probe paths return a short 404 before conversion. Unknown non-probe paths still render the homepage.
+- WeChat verification pages and title-only shells return 502 and are not cached.
+- After browser rendering, a `gov.cn` page that is a known not-found URL or an empty not-found shell returns 502 and is not charged. Short notices stay successful.
+- Public marketing pages use the current site design.
+
+### Security
+- The `/admin` passphrase is the `ADMIN_PASSWORD` Worker secret. Login is refused when that secret is unset.
+
+## [1.1.3] - 2026-06-28
+
+### Fixed
+- **Self-referential URLs no longer hang.** Converting an md.genedai.me link that
+  itself wraps another md.genedai.me link (a doubled prefix — e.g. pasting a
+  converted-article URL back into the service) made the Worker fetch itself and
+  nest a full conversion, timing out with a Cloudflare 522. Such targets are now
+  unwrapped to the real inner URL before fetching; a bare self-reference falls
+  back to the landing page.
+- **Paywall selectors match whole tokens.** Class and attribute paywall selectors
+  used a `\b` boundary that treats hyphens as delimiters, so `.paywall` could strip
+  a legitimate `class="paywall-explainer"` article container and `[data-qa="paywall"]`
+  matched `my-data-qa="paywall"`. Matching now requires a full class token /
+  attribute name, preventing silent removal of real article content.
+
+## [1.1.2] - 2026-06-28
+
+Paywall element stripping gets more precise: per-site rules can now actually
+remove their own overlay elements.
+
+### Fixed
+- Paywall rules' per-site `removeSelectors` are now applied. The field was
+  declared and parsed but never used, so any site-specific overlay selector
+  silently did nothing. `removePaywallElements` now strips both the global
+  paywall selectors and the matching rule's `removeSelectors`.
+
+### Added
+- Two more global paywall-overlay selectors (`[data-qa="paywall"]`,
+  `[data-cy="paywall"]`) alongside the existing `[data-testid="paywall"]`.
+
+## [1.1.1] - 2026-06-27
+
+Twitter/X gets a browser-free fallback so a fxtwitter outage no longer
+degrades tweets to expensive browser rendering.
+
+### Added
+- **Twitter/X syndication-CDN fallback** — when fxtwitter is down or rate
+  limiting us, single tweets are now fetched directly from Twitter's own
+  `cdn.syndication.twimg.com/tweet-result` endpoint (no auth, no guest token,
+  client-computed token). Keeps Twitter conversion off the expensive
+  browser-rendering path and removes the hard third-party dependency for the
+  common single-tweet case. fxtwitter stays primary (full fidelity for
+  X Articles and retweet counts); oEmbed remains the final text-only fallback.
+
+### Fixed
+- Twitter footer no longer reports a false "0 retweets" for tweets fetched via
+  the syndication path, which has no retweet count — the clause is omitted when
+  the count is unknown rather than asserting zero.
+
+## [1.1.0] - 2026-04-11
+
+Three-phase auth, metering, and portal launch. Everything anonymous users
+could break for free is now metered or gated behind an API key.
+
+### Added
+- **Developer Portal** at `/portal/` — single-page dashboard for signup, API
+  key management, usage tracking, tier display. Static HTML served by the
+  Worker, no build step, matches landing-page design system.
+- **Magic Link auth** via Resend — passwordless email sign-in flow.
+  Endpoints: `POST /api/auth/magic-link`, `GET /api/auth/verify`,
+  `POST /api/auth/logout`. Tokens expire in 15 min, single-use, SHA-256
+  hashed in D1, rate limited 3/hour/email via Cache API.
+- **D1-backed API keys** with tier system. Keys are `mk_` + 32 random bytes,
+  SHA-256 hashed in D1. Format: `Authorization: Bearer mk_...`. Three tiers:
+  `anonymous` (cache + readability only), `free` (1,000 credits/month, full
+  pipeline), `pro` (50,000 credits/month).
+- **Portal API endpoints** (session-authenticated via `md_session` cookie):
+  - `GET /api/me` — current account info
+  - `GET /api/keys` — list keys (prefix only, never plaintext)
+  - `POST /api/keys` — create new key (plaintext returned ONCE)
+  - `DELETE /api/keys/:id` — revoke key
+  - `GET /api/usage` — usage data (also accepts Bearer API key)
+- **Cache API middle layer** between in-memory hot cache and KV. Cache API
+  is free and per-colo; reduces KV operations by ~80% for repeat traffic.
+  Unified URL-based cache key: `https://md-cache/v1/{format}/{engine}/{hash}`.
+- **Usage metering** — in-memory counters flush to D1 via `ctx.waitUntil()`
+  after every authenticated request. `usage_daily` table tracks requests,
+  credits, browser calls, cache hits per key per day. `monthly_credits_used`
+  denormalized on `accounts` for fast quota checks.
+- **Per-request rate limit headers** on every authenticated response:
+  `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-Request-Cost`. Cost is a
+  fixed per-request-type value (convert=1, extract=3, deepcrawl=2) — not the
+  actual pipeline cost, which would vary by site and confuse billing.
+- **Graceful quota degradation** — when a paying user's monthly quota is
+  exhausted, cached URLs still serve with `X-Quota-Exceeded: true`; only
+  cache-miss requests return `429`.
+- **D1 `AUTH_DB` binding** with 6 tables: `accounts`, `api_keys`,
+  `usage_daily`, `sessions`, `magic_link_tokens`, `paddle_events`.
+- **DESIGN.md** — design system tokens (fonts, colors, spacing, components)
+  shared between landing page and portal.
+
+### Changed
+- Anonymous users can no longer trigger browser rendering. Previously a
+  single crawler bot could burn through Cloudflare Browser Rendering minutes
+  and KV quota. Now anonymous users get readability + cache only. Expensive
+  parameters (`force_browser`, `engine`, `no_cache`) return `401` for
+  anonymous and Free tier users.
+- `/api/usage` now accepts either a Bearer API key (for SDK/CLI) or a portal
+  session cookie (for the dashboard).
+- Authentication logic consolidated into one place — `resolveAuth()` returns
+  an `AuthContext`, `buildPolicy()` turns that into a `PolicyDecision` that
+  every downstream handler consults. No more scattered token checks.
+- `ctx: ExecutionContext` added to the `fetch` handler signature so usage
+  flushes can run post-response via `ctx.waitUntil()`.
+
+### Fixed
+- KV incident from 2026-04-09 properly closed (anonymous abuse surface).
+- `/api/usage` returned `401` for session users because it required a key
+  id. Now derives tier and quota from the D1 `accounts` row.
+- `FLUSH_THRESHOLD` was 100 — low-traffic deployments never flushed usage
+  to D1, so `monthly_credits_used` stayed at 0 forever. Lowered to 1.
+- `GET /api/auth/magic-link` and `GET /api/auth/logout` fell through to the
+  URL-conversion path and returned the landing page. Now return `405`.
+- Cache edge tests unblocked — previous fake-timer race with `setCache`.
+
+### Security
+- Session tokens stored as SHA-256 hash. Plaintext exists only in the
+  `md_session` cookie. Cookie is `HttpOnly; Secure; SameSite=Lax`.
+- API key values stored as SHA-256 hash. Plaintext shown once at creation
+  and never again — lost keys must be revoked and regenerated.
+- Magic link tokens: 15 min TTL, single-use (`used_at` set on verify), never
+  stored plaintext, rate limited per email per hour.
+- Portal endpoints reject CSRF via `SameSite=Lax` cookies and absence of
+  `Access-Control-Allow-Credentials` in CORS.
+
+## [1.0.0] - 2026-03-26
+
+### Added
+- **Modular architecture**: refactored monolithic index.ts (4995 lines) into 14 focused modules
+- **MCP Server**: `@digidai/mcp-website2markdown` npm package with `convert_url` tool
+- **Agent Skills**: [website2markdown-skills](https://github.com/Digidai/website2markdown-skills) repo for Claude Code, OpenClaw, and other agents
+- **llms.txt**: AI discoverability at `/llms.txt` and `/.well-known/llms.txt` with KV cache
+- **Adapter scaffold CLI**: `scripts/create-adapter.ts` generates adapter + test boilerplate
+- **robots.txt + sitemap.xml**: SEO endpoints
+- **Landing page redesign**: 3-tab architecture (Home/Docs/Integration), Cursor-style design, dark mode, bilingual EN/ZH, Schema.org FAQPage/HowTo/SoftwareApplication
+- **npm publish workflow**: GitHub Actions on `mcp-v*` tag
+
+### Fixed
+- 3 pre-existing test failures (deepcrawl checkpoint, jobs idempotency, stale task)
+- SSRF protection in `fetchTargetLlmsTxt` (redirect: error)
+- Adapter scaffold URL pattern injection (JSON.stringify escaping)
+- MCP SDK version compatibility (zod 4 alignment)
+- Dark mode CSS variable leak via `data-theme` attribute on theme toggle buttons
+
+### Changed
+- `formatOutput()` consolidated from 4 scattered switch blocks into single helper
+- Deep crawl checkpoint config no longer includes `maxDepth`/`maxPages` (operational limits)
+
+### Security
+- wrangler.toml KV namespace ID replaced with placeholder for open source
+- MCP response body size limit (10MB)
+- Negative llms.txt cache uses 1h TTL (vs 24h for positive) to recover from transient errors
+
+## [0.x] - Pre-release
+
+All development prior to open source launch. See [git history](https://github.com/Digidai/website2markdown/commits/main) for details.

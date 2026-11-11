@@ -1,0 +1,665 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:sockets", () => ({
+  connect: vi.fn(),
+}));
+
+import worker from "../index";
+import { jobStorageKey } from "../dispatcher/model";
+import { executeJobRun } from "../handlers/jobs";
+import { createApiKeyAuthD1, createMockEnv, mockCtx } from "./test-helpers";
+import { createMockJobCoordinatorNamespace } from "./job-coordinator-test-helpers";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function jobsRequest(
+  body: unknown,
+  token?: string,
+  headers?: Record<string, string>,
+): Request {
+  return new Request("https://md.example.com/api/jobs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(headers || {}),
+    },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+function createJobEnv(overrides?: Parameters<typeof createMockEnv>[0]) {
+  const ctx = createMockEnv(overrides);
+  ctx.env.JOB_COORDINATOR = createMockJobCoordinatorNamespace(ctx.env);
+  return ctx;
+}
+
+describe("POST /api/jobs", () => {
+  it("returns 503 when API_TOKEN is missing", async () => {
+    const req = jobsRequest({
+      type: "crawl",
+      tasks: ["https://example.com"],
+    }, "token");
+
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(503);
+    expect(payload.error).toBe("Service misconfigured");
+  });
+
+  it("returns 401 for invalid token", async () => {
+    const { env } = createMockEnv({ API_TOKEN: "correct" });
+    const req = jobsRequest({
+      type: "crawl",
+      tasks: ["https://example.com"],
+    }, "wrong");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(401);
+    expect(payload.error).toBe("Unauthorized");
+  });
+
+  it("accepts D1 mk API keys for job creation without legacy API_TOKEN", async () => {
+    const { env } = createJobEnv({ AUTH_DB: createApiKeyAuthD1() });
+    const req = jobsRequest({
+      type: "crawl",
+      tasks: ["https://example.com/a"],
+    }, "mk_valid_jobs_key");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { jobId?: string; status?: string };
+
+    expect(res.status).toBe(202);
+    expect(payload.jobId).toBeTruthy();
+    expect(payload.status).toBe("queued");
+  });
+
+  it("returns 400 for invalid payload", async () => {
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const req = jobsRequest({
+      type: "extract",
+      tasks: [{ html: "<h1>x</h1>" }],
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("INVALID_REQUEST");
+  });
+
+  it("returns 503 when JOB_COORDINATOR is missing for create", async () => {
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const req = jobsRequest({
+      type: "crawl",
+      tasks: ["https://example.com"],
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(503);
+    expect(payload.error).toBe("Service misconfigured");
+    expect(payload.message).toContain("JOB_COORDINATOR");
+  });
+
+  it("returns 503 for /api/jobs/:id/run when API_TOKEN is missing", async () => {
+    const req = new Request("https://md.example.com/api/jobs/job-run-1/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(503);
+    expect(payload.error).toBe("Service misconfigured");
+  });
+
+  it("creates a queued job and persists it", async () => {
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    const req = jobsRequest({
+      type: "crawl",
+      tasks: ["https://example.com/a", "https://example.com/b"],
+      priority: 5,
+      maxRetries: 3,
+    }, "token");
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      jobId?: string;
+      status?: string;
+      totalTasks?: number;
+      idempotent?: boolean;
+    };
+
+    expect(res.status).toBe(202);
+    expect(payload.jobId).toBeTruthy();
+    expect(payload.status).toBe("queued");
+    expect(payload.totalTasks).toBe(2);
+    expect(payload.idempotent).toBe(false);
+    expect(mocks.kvPut).toHaveBeenCalled();
+  });
+
+  it("returns existing job for idempotency key", async () => {
+    const { env } = createJobEnv({ API_TOKEN: "token" });
+    const idempotency = "idem-1";
+
+    const req = jobsRequest(
+      { type: "crawl", tasks: ["https://example.com"] },
+      "token",
+      { "Idempotency-Key": idempotency },
+    );
+    const firstRes = await worker.fetch(req.clone(), env, mockCtx());
+    const firstPayload = await firstRes.json() as { jobId?: string };
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      jobId?: string;
+      idempotent?: boolean;
+    };
+
+    expect(firstRes.status).toBe(202);
+    expect(res.status).toBe(200);
+    expect(payload.jobId).toBe(firstPayload.jobId);
+    expect(payload.idempotent).toBe(true);
+  });
+
+  it("rejects reusing an Idempotency-Key with a different payload", async () => {
+    const { env } = createJobEnv({ API_TOKEN: "token" });
+    const idempotency = "idem-conflict";
+    const req = jobsRequest(
+      { type: "crawl", tasks: ["https://example.com"] },
+      "token",
+      { "Idempotency-Key": idempotency },
+    );
+    const conflictReq = jobsRequest(
+      { type: "crawl", tasks: ["https://example.com/other"] },
+      "token",
+      { "Idempotency-Key": idempotency },
+    );
+
+    const firstRes = await worker.fetch(req, env, mockCtx());
+    const res = await worker.fetch(conflictReq, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(firstRes.status).toBe(202);
+    expect(res.status).toBe(409);
+    expect(payload.error).toBe("Conflict");
+    expect(payload.message).toContain("different payload");
+  });
+
+  it("rejects overly long Idempotency-Key values", async () => {
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const req = jobsRequest(
+      { type: "crawl", tasks: ["https://example.com"] },
+      "token",
+      { "Idempotency-Key": "a".repeat(129) },
+    );
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("too long");
+  });
+
+  it("rejects Idempotency-Key values with unsupported characters", async () => {
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const req = jobsRequest(
+      { type: "crawl", tasks: ["https://example.com"] },
+      "token",
+      { "Idempotency-Key": "key/with/slash" },
+    );
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("unsupported characters");
+  });
+
+  it("rejects empty Idempotency-Key values", async () => {
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const req = jobsRequest(
+      { type: "crawl", tasks: ["https://example.com"] },
+      "token",
+      { "Idempotency-Key": "   " },
+    );
+
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(400);
+    expect(payload.error).toBe("Invalid request");
+    expect(payload.message).toContain("cannot be empty");
+  });
+
+  it("runs queued crawl tasks via /api/jobs/:id/run", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("# job run success", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }),
+    ));
+
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    const now = "2026-01-01T00:00:00.000Z";
+    const queuedJob = {
+      id: "job-run-1",
+      type: "crawl",
+      status: "queued",
+      priority: 10,
+      maxRetries: 1,
+      retryCount: 0,
+      totalTasks: 1,
+      succeededTasks: 0,
+      failedTasks: 0,
+      queuedTasks: 1,
+      runningTasks: 0,
+      canceledTasks: 0,
+      tasks: [
+        {
+          id: "task-1",
+          status: "queued",
+          retryCount: 0,
+          input: "https://example.com/job-a",
+          url: "https://example.com/job-a",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-run-1")) return JSON.stringify(queuedJob);
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-run-1/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      jobId?: string;
+      status?: string;
+      executedTasks?: number;
+      failedTasksInRun?: number;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.jobId).toBe("job-run-1");
+    expect(payload.status).toBe("succeeded");
+    expect(payload.executedTasks).toBe(1);
+    expect(payload.failedTasksInRun).toBe(0);
+    expect(mocks.kvPut).toHaveBeenCalled();
+  });
+
+  it("recovers stale running job state when no coordinator lock is held", async () => {
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    const runningJob = {
+      id: "job-running",
+      type: "crawl",
+      status: "running",
+      priority: 10,
+      maxRetries: 0,
+      retryCount: 0,
+      totalTasks: 1,
+      succeededTasks: 0,
+      failedTasks: 0,
+      queuedTasks: 0,
+      runningTasks: 1,
+      canceledTasks: 0,
+      tasks: [
+        {
+          id: "task-1",
+          status: "running",
+          retryCount: 0,
+          input: "https://example.com/running",
+          url: "https://example.com/running",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-running")) return JSON.stringify(runningJob);
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-running/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      executedTasks?: number;
+      status?: string;
+      failedTasks?: number;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.executedTasks).toBe(0);
+    expect(payload.status).toBe("failed");
+    expect(payload.failedTasks).toBe(1);
+  });
+
+  it("returns executedTasks=0 when no runnable tasks remain", async () => {
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    const finishedJob = {
+      id: "job-finished",
+      type: "crawl",
+      status: "succeeded",
+      totalTasks: 1,
+      succeededTasks: 1,
+      failedTasks: 0,
+      queuedTasks: 0,
+      runningTasks: 0,
+      canceledTasks: 0,
+      tasks: [
+        {
+          id: "task-1",
+          status: "succeeded",
+          retryCount: 0,
+          input: "https://example.com/done",
+          url: "https://example.com/done",
+          result: { method: "native" },
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:10.000Z",
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:10.000Z",
+    };
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-finished")) return JSON.stringify(finishedJob);
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-finished/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      jobId?: string;
+      status?: string;
+      executedTasks?: number;
+      succeededTasks?: number;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.jobId).toBe("job-finished");
+    expect(payload.status).toBe("succeeded");
+    expect(payload.executedTasks).toBe(0);
+    expect(payload.succeededTasks).toBe(1);
+    expect(mocks.kvPut).not.toHaveBeenCalled();
+  });
+
+  it("tracks task-level failures in /api/jobs/:id/run summary", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("# ok", {
+        status: 200,
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      }),
+    ));
+
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    const now = "2026-01-01T00:00:00.000Z";
+    const queuedJob = {
+      id: "job-run-failures",
+      type: "crawl",
+      status: "queued",
+      priority: 10,
+      maxRetries: 1,
+      retryCount: 0,
+      totalTasks: 2,
+      succeededTasks: 0,
+      failedTasks: 0,
+      queuedTasks: 2,
+      runningTasks: 0,
+      canceledTasks: 0,
+      tasks: [
+        {
+          id: "task-1",
+          status: "queued",
+          retryCount: 0,
+          input: "not-a-url",
+          url: "not-a-url",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "task-2",
+          status: "queued",
+          retryCount: 0,
+          input: "https://example.com/job-b",
+          url: "https://example.com/job-b",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-run-failures")) return JSON.stringify(queuedJob);
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-run-failures/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      jobId?: string;
+      status?: string;
+      executedTasks?: number;
+      failedTasksInRun?: number;
+      failedTasks?: number;
+      succeededTasks?: number;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.jobId).toBe("job-run-failures");
+    expect(payload.executedTasks).toBe(2);
+    expect(payload.failedTasksInRun).toBe(1);
+    expect(payload.failedTasks).toBe(1);
+    expect(payload.succeededTasks).toBe(1);
+    expect(payload.status).toBe("failed");
+  });
+
+  it("clears stale task result when a rerun still fails", async () => {
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    const now = "2026-01-01T00:00:00.000Z";
+    const failedJob = {
+      id: "job-rerun-fail",
+      type: "crawl",
+      status: "failed",
+      priority: 10,
+      maxRetries: 1,
+      retryCount: 0,
+      totalTasks: 1,
+      succeededTasks: 0,
+      failedTasks: 1,
+      queuedTasks: 0,
+      runningTasks: 0,
+      canceledTasks: 0,
+      tasks: [
+        {
+          id: "task-1",
+          status: "failed",
+          retryCount: 0,
+          input: "not-a-url",
+          url: "not-a-url",
+          result: { fromPreviousRun: true },
+          error: "old error",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-rerun-fail")) return JSON.stringify(failedJob);
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-rerun-fail/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    expect(res.status).toBe(200);
+
+    const finalPersistCall = mocks.kvPut.mock.calls[mocks.kvPut.mock.calls.length - 1];
+    const persisted = JSON.parse(finalPersistCall[1] as string) as {
+      tasks: Array<{ status: string; result?: unknown; error?: string }>;
+    };
+
+    expect(persisted.tasks[0].status).toBe("failed");
+    expect(persisted.tasks[0].result).toBeUndefined();
+    expect(typeof persisted.tasks[0].error).toBe("string");
+    // The rerun was the task's one allowed retry, even though a 400 is not retried within a run.
+    expect((persisted.tasks[0] as { retryCount?: number }).retryCount).toBe(1);
+    const payload = await res.json() as { runnableTasks?: number; retriesUsedInRun?: number };
+    expect(payload.retriesUsedInRun).toBe(1);
+    expect(payload.runnableTasks).toBe(0);
+  });
+
+  it("does not rerun failed tasks that exhausted maxRetries", async () => {
+    const { env, mocks } = createJobEnv({ API_TOKEN: "token" });
+    const now = "2026-01-01T00:00:00.000Z";
+    const exhaustedJob = {
+      id: "job-exhausted",
+      type: "crawl",
+      status: "failed",
+      priority: 10,
+      maxRetries: 1,
+      retryCount: 1,
+      totalTasks: 1,
+      succeededTasks: 0,
+      failedTasks: 1,
+      queuedTasks: 0,
+      runningTasks: 0,
+      canceledTasks: 0,
+      tasks: [
+        {
+          id: "task-1",
+          status: "failed",
+          retryCount: 1,
+          input: "https://example.com/exhausted",
+          url: "https://example.com/exhausted",
+          error: "still failing",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    mocks.kvGet.mockImplementation(async (key: string) => {
+      if (key === jobStorageKey("job-exhausted")) return JSON.stringify(exhaustedJob);
+      return null;
+    });
+
+    const req = new Request("https://md.example.com/api/jobs/job-exhausted/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { executedTasks?: number; status?: string };
+
+    expect(res.status).toBe(200);
+    expect(payload.executedTasks).toBe(0);
+    expect(payload.status).toBe("failed");
+  });
+
+  it("leaves tasks that never ran as they were when the run is canceled first", async () => {
+    const { env, mocks } = createMockEnv({ API_TOKEN: "token" });
+    const now = "2026-01-01T00:00:00.000Z";
+    const job = {
+      id: "job-canceled-early",
+      type: "crawl",
+      status: "failed",
+      priority: 10,
+      maxRetries: 1,
+      retryCount: 0,
+      totalTasks: 2,
+      succeededTasks: 0,
+      failedTasks: 1,
+      queuedTasks: 1,
+      runningTasks: 0,
+      canceledTasks: 0,
+      tasks: [
+        { id: "task-1", status: "queued", retryCount: 0, input: "https://example.com/a", url: "https://example.com/a", createdAt: now, updatedAt: now },
+        { id: "task-2", status: "failed", retryCount: 0, input: "https://example.com/b", url: "https://example.com/b", error: "old error", createdAt: now, updatedAt: now },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+    mocks.kvGet.mockImplementation(async (key: string) =>
+      key === jobStorageKey("job-canceled-early") ? JSON.stringify(job) : null);
+
+    const res = await executeJobRun(env, "md.example.com", "job-canceled-early", AbortSignal.abort());
+    const payload = await res.json() as { runnableTasks?: number; retriesUsedInRun?: number };
+
+    const finalPersistCall = mocks.kvPut.mock.calls[mocks.kvPut.mock.calls.length - 1];
+    const persisted = JSON.parse(finalPersistCall[1] as string) as {
+      tasks: Array<{ status: string; retryCount: number; error?: string }>;
+    };
+    expect(persisted.tasks.map((t) => [t.status, t.retryCount])).toEqual([["queued", 0], ["failed", 0]]);
+    expect(persisted.tasks[1].error).toBe("old error");
+    expect(payload.retriesUsedInRun).toBe(0);
+    expect(payload.runnableTasks).toBe(2);
+  });
+
+  it("returns 503 when JOB_COORDINATOR is missing for /api/jobs/:id/run", async () => {
+    const { env, mocks } = createMockEnv({ API_TOKEN: "token" });
+    mocks.kvGet.mockResolvedValue(JSON.stringify({
+      id: "job-run-missing-coordinator",
+      type: "crawl",
+      status: "queued",
+      priority: 10,
+      maxRetries: 1,
+      retryCount: 0,
+      totalTasks: 0,
+      succeededTasks: 0,
+      failedTasks: 0,
+      queuedTasks: 0,
+      runningTasks: 0,
+      canceledTasks: 0,
+      tasks: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }));
+
+    const req = new Request("https://md.example.com/api/jobs/job-run-missing-coordinator/run", {
+      method: "POST",
+      headers: { Authorization: "Bearer token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(503);
+    expect(payload.error).toBe("Service misconfigured");
+    expect(payload.message).toContain("JOB_COORDINATOR");
+  });
+});

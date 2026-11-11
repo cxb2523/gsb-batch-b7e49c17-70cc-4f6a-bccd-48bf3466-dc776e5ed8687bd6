@@ -1,0 +1,1677 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockEnv, mockCtx } from "./test-helpers";
+
+const mocked = vi.hoisted(() => ({
+  browser: {
+    fetchWithBrowser: vi.fn(),
+    alwaysNeedsBrowser: vi.fn(),
+    getAdapter: vi.fn(),
+  },
+  paywall: {
+    applyPaywallHeaders: vi.fn(),
+    extractJsonLdArticle: vi.fn(),
+    removePaywallElements: vi.fn(),
+    looksPaywalled: vi.fn(),
+    getPaywallRule: vi.fn(),
+    fetchWaybackSnapshot: vi.fn(),
+    fetchArchiveToday: vi.fn(),
+    extractAmpLink: vi.fn(),
+    stripAmpAccessControls: vi.fn(),
+  },
+  converter: {
+    htmlToMarkdown: vi.fn(),
+    htmlToText: vi.fn(),
+    proxyImageUrls: vi.fn(),
+  },
+  cache: {
+    getCached: vi.fn(),
+    setCache: vi.fn(),
+    getNegativeCache: vi.fn(),
+    setNegativeCache: vi.fn(),
+    getImage: vi.fn(),
+  },
+  proxy: {
+    parseProxyUrl: vi.fn(),
+    parseProxyPool: vi.fn(),
+    fetchViaProxy: vi.fn(),
+    fetchViaProxyPool: vi.fn(),
+  },
+  browserUse: {
+    fetchViaBrowserUse: vi.fn(),
+  },
+}));
+
+vi.mock("cloudflare:sockets", () => ({
+  connect: vi.fn(),
+}));
+
+vi.mock("../browser", () => ({
+  fetchWithBrowser: mocked.browser.fetchWithBrowser,
+  alwaysNeedsBrowser: mocked.browser.alwaysNeedsBrowser,
+  getAdapter: mocked.browser.getAdapter,
+}));
+
+vi.mock("../paywall", () => ({
+  applyPaywallHeaders: mocked.paywall.applyPaywallHeaders,
+  extractJsonLdArticle: mocked.paywall.extractJsonLdArticle,
+  removePaywallElements: mocked.paywall.removePaywallElements,
+  looksPaywalled: mocked.paywall.looksPaywalled,
+  getPaywallRule: mocked.paywall.getPaywallRule,
+  fetchWaybackSnapshot: mocked.paywall.fetchWaybackSnapshot,
+  fetchArchiveToday: mocked.paywall.fetchArchiveToday,
+  extractAmpLink: mocked.paywall.extractAmpLink,
+  stripAmpAccessControls: mocked.paywall.stripAmpAccessControls,
+}));
+
+vi.mock("../converter", () => ({
+  htmlToMarkdown: mocked.converter.htmlToMarkdown,
+  htmlToText: mocked.converter.htmlToText,
+  proxyImageUrls: mocked.converter.proxyImageUrls,
+}));
+
+vi.mock("../cache", () => ({
+  getCached: mocked.cache.getCached,
+  setCache: mocked.cache.setCache,
+  getNegativeCache: mocked.cache.getNegativeCache,
+  setNegativeCache: mocked.cache.setNegativeCache,
+  getImage: mocked.cache.getImage,
+}));
+
+vi.mock("../proxy", () => ({
+  parseProxyUrl: mocked.proxy.parseProxyUrl,
+  parseProxyPool: mocked.proxy.parseProxyPool,
+  fetchViaProxy: mocked.proxy.fetchViaProxy,
+  fetchViaProxyPool: mocked.proxy.fetchViaProxyPool,
+}));
+
+vi.mock("../browser-use", () => ({
+  fetchViaBrowserUse: mocked.browserUse.fetchViaBrowserUse,
+}));
+
+import worker from "../index";
+import { createProxyRetrySignal } from "../browser/proxy-retry";
+
+function makeAdapter(overrides?: Record<string, unknown>): any {
+  return {
+    match: vi.fn(() => true),
+    alwaysBrowser: false,
+    configurePage: vi.fn(async () => {}),
+    extract: vi.fn(async () => null),
+    ...overrides,
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocked.browser.fetchWithBrowser.mockResolvedValue("<html><body>browser-content</body></html>");
+  mocked.browser.alwaysNeedsBrowser.mockReturnValue(false);
+  mocked.browser.getAdapter.mockReturnValue(makeAdapter());
+
+  mocked.cache.getCached.mockResolvedValue(null);
+  mocked.cache.setCache.mockResolvedValue(undefined);
+  mocked.cache.getNegativeCache.mockResolvedValue(null);
+  mocked.cache.setNegativeCache.mockResolvedValue(undefined);
+  mocked.cache.getImage.mockResolvedValue(null);
+
+  mocked.paywall.applyPaywallHeaders.mockImplementation(() => {});
+  mocked.paywall.extractJsonLdArticle.mockReturnValue(null);
+  mocked.paywall.removePaywallElements.mockImplementation((html: string) => html);
+  mocked.paywall.looksPaywalled.mockReturnValue(false);
+  mocked.paywall.getPaywallRule.mockReturnValue(null);
+  mocked.paywall.fetchWaybackSnapshot.mockResolvedValue(null);
+  mocked.paywall.fetchArchiveToday.mockResolvedValue(null);
+  mocked.paywall.extractAmpLink.mockReturnValue(null);
+  mocked.paywall.stripAmpAccessControls.mockImplementation((html: string) => html);
+
+  mocked.converter.htmlToMarkdown.mockReturnValue({
+    markdown: "# md body",
+    title: "Title",
+    contentHtml: "<article>md body</article>",
+  });
+  mocked.converter.htmlToText.mockReturnValue("plain text");
+  mocked.converter.proxyImageUrls.mockImplementation((markdown: string) => `proxied:${markdown}`);
+
+  mocked.proxy.parseProxyUrl.mockReturnValue(null);
+  mocked.proxy.parseProxyPool.mockReturnValue([]);
+  mocked.proxy.fetchViaProxy.mockResolvedValue({
+    status: 200,
+    headers: {},
+    body: "<html>proxy body</html>",
+  });
+  mocked.proxy.fetchViaProxyPool.mockResolvedValue({
+    status: 200,
+    headers: {},
+    body: "<html>proxy pool body</html>",
+    proxyIndex: 0,
+    proxy: {
+      host: "proxy.example.com",
+      port: 8080,
+      username: "u",
+      password: "p",
+    },
+    variant: "desktop",
+    attempts: 1,
+    errors: [],
+  });
+  mocked.browserUse.fetchViaBrowserUse.mockResolvedValue(null);
+});
+
+describe("index mocked branch coverage", () => {
+  it("uses adapter transformUrl + fetchDirect path", async () => {
+    const adapter = makeAdapter({
+      transformUrl: vi.fn((url: string) => `${url}?t=1`),
+      fetchDirect: vi.fn(async () => "<html><body>direct body</body></html>"),
+    });
+    mocked.browser.getAdapter.mockReturnValue(adapter);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = new Request("https://md.example.com/https://example.com/a?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("# md body");
+    expect((adapter.transformUrl as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("https://example.com/a");
+    expect((adapter.fetchDirect as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("https://example.com/a?t=1", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to static fetch when fetchDirect throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const adapter = makeAdapter({
+      fetchDirect: vi.fn(async () => {
+        throw new Error("direct failed");
+      }),
+    });
+    mocked.browser.getAdapter.mockReturnValue(adapter);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body>static body</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/static?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("# md body");
+  });
+
+  it("returns fetch failed when browser asks proxy retry but PROXY_URL is missing", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.browser.fetchWithBrowser.mockRejectedValueOnce(new Error("PROXY_RETRY:SID=abc"));
+
+    const req = new Request("https://md.example.com/https://example.com/proxy-missing", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.error).toBe("Fetch Failed");
+    // Our proxy setup is ours to know; the caller hears that the site blocks automated access.
+    expect(JSON.stringify(payload)).not.toMatch(/proxy/i);
+    expect(payload).toMatchObject({ code: "target_blocked" });
+  });
+
+  it("does not cache empty output when anonymous always-browser fallbacks return no content", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.trim() ? "# md body" : "",
+      title: "",
+      contentHtml: html,
+    }));
+
+    const req = new Request("https://md.example.com/https://example.com/needs-browser?raw=true", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.error).toBe("Fetch Failed");
+    expect(JSON.stringify(payload)).not.toMatch(/proxy|fallback|render/i);
+    expect(payload).toMatchObject({ code: "target_unreadable", retryable: true });
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("uses static WeChat fetch for anonymous users when remote browser and proxy produce no content", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("<html><body><div id=\"js_content\">wechat article</div></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.includes("wechat article") ? "# wechat article" : "",
+      title: "wechat",
+      contentHtml: "<article>wechat article</article>",
+    }));
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/abc?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("proxied:# wechat article");
+    expect(fetchMock).toHaveBeenCalled();
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect((init.headers as Record<string, string>)["User-Agent"]).toContain("MicroMessenger");
+    expect((init.headers as Record<string, string>).Referer).toBe("https://mp.weixin.qq.com/");
+    expect(res.headers.get("X-Markdown-Fallbacks")).toBeNull();
+  });
+
+  it("tries static WeChat fetch before Browser Use for anonymous users", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("<html><body><div id=\"js_content\">wechat static first</div></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.includes("wechat static first") ? "# wechat static first" : "",
+      title: "wechat",
+      contentHtml: "<article>wechat static first</article>",
+    }));
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/static-first?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ BROWSER_USE_API_KEY: "browser-use-key" }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("proxied:# wechat static first");
+    expect(mocked.browserUse.fetchViaBrowserUse).not.toHaveBeenCalled();
+  });
+
+  it("rejects a WeChat captcha redirect even when its HTML lacks the old markers", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    const captchaUrl = "https://mp.weixin.qq.com/mp/wappoc_appmsgcaptcha?action=verify";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: captchaUrl } }))
+      .mockResolvedValueOnce(new Response("<html><body>视频 小程序 赞 在看</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/captcha-redirect?raw=true", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.message).toBe("WeChat returned an environment verification page instead of the article content.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("rejects WeChat captcha HTML without the old detector strings", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    for (const html of [
+      "<html><head><title>微信安全验证</title></head><body><div class='captcha-panel'>请完成验证</div></body></html>",
+      "<html><body><p>验证码</p></body></html>",
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+        new Response(html, { status: 200, headers: { "Content-Type": "text/html" } }),
+      ));
+      const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/captcha-html?raw=true", {
+        headers: { Accept: "application/json" },
+      });
+      const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+      const payload = await res.json() as { message?: string };
+
+      expect(res.status).toBe(502);
+      expect(payload.message).toBe("WeChat returned an environment verification page instead of the article content.");
+    }
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("rejects chrome-only WeChat HTML without caching it", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body><div class='rich_media_tool'>视频 小程序 赞 在看</div></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/chrome-only?raw=true", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ BROWSER_USE_API_KEY: "browser-use-key" }).env, mockCtx());
+    const payload = await res.json() as { message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.message).toContain("without article content");
+    expect(mocked.browserUse.fetchViaBrowserUse).toHaveBeenCalledOnce();
+    expect(mocked.converter.htmlToMarkdown).not.toHaveBeenCalled();
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("rejects a WeChat source that contains only its title", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><head><title>Article Title</title></head><body><h1 id='activity-name'>Article Title</h1><div id='js_content'></div></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/empty-article?raw=true", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.message).toContain("without article content");
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("rejects a repeated-title WeChat conversion even when the source has a body", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><head><title>Article Title</title></head><body><div id='js_content'><p>Brief real prose.</p></div></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "# Article Title\n\n## Article Title",
+      title: "Article Title",
+      contentHtml: "<h1>Article Title</h1>",
+    });
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/title-only?raw=true", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.message).toContain("without article content");
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("tries Browser Use after a WeChat static shell and returns recovered prose", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body>视频 小程序 赞 在看</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+    mocked.browserUse.fetchViaBrowserUse.mockResolvedValueOnce(
+      "<html><body><div id='js_content'><p>Recovered article prose.</p></div></body></html>",
+    );
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.includes("Recovered article prose.") ? "# Recovered article prose." : "",
+      title: "",
+      contentHtml: "<p>Recovered article prose.</p>",
+    }));
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/shell-recovery?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ BROWSER_USE_API_KEY: "browser-use-key" }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Recovered article prose.");
+    expect(res.headers.get("X-Markdown-Fallbacks")).toBeNull();
+  });
+
+  it("lets anonymous browser-only reads fall back to Context.dev within a daily budget", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    const article = `<html><body><article><p>Context article prose.</p>${"<p>body text</p>".repeat(200)}</article></body></html>`;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("https://api.context.dev/")) {
+        return Response.json({ html: { success: true, data: article }, metadata: {}, key_metadata: { credits_remaining: 10 } });
+      }
+      return new Response("<html><body>loading</body></html>", { status: 200, headers: { "Content-Type": "text/html" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.includes("Context article prose.") ? "# Context article prose." : "",
+      title: "",
+      contentHtml: "<p>Context article prose.</p>",
+    }));
+    const contextDevCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith("https://api.context.dev/")).length;
+    // The budget counter row is the only D1 read that matters here.
+    const budgetDb = (count: number) => ({
+      prepare: vi.fn(() => {
+        const stmt = {
+          bind: vi.fn(() => stmt),
+          first: vi.fn(async () => ({ count, expires_at: "2099-01-01T00:00:00.000Z" })),
+          all: vi.fn(async () => ({ results: [] })),
+          run: vi.fn(async () => ({ success: true })),
+        };
+        return stmt;
+      }),
+    }) as unknown as D1Database;
+
+    const ok = await worker.fetch(new Request("https://md.example.com/https://example.com/ctx-anon?raw=true", {
+      headers: { Accept: "text/markdown" },
+    }), createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", AUTH_DB: budgetDb(1) }).env, mockCtx());
+    expect(ok.status).toBe(200);
+    expect(await ok.text()).toContain("Context article prose.");
+    expect(ok.headers.get("X-Markdown-Fallbacks")).toBeNull();
+    expect(contextDevCalls()).toBe(1);
+
+    // Call 41 of the day is over the anonymous budget: no Context.dev request.
+    const capped = await worker.fetch(new Request("https://md.example.com/https://example.com/ctx-anon-2?raw=true", {
+      headers: { Accept: "text/markdown" },
+    }), createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", AUTH_DB: budgetDb(41) }).env, mockCtx());
+    expect(capped.status).toBe(502);
+    expect(contextDevCalls()).toBe(1);
+  });
+
+  it("tries the existing direct proxy after a WeChat static shell and empty Browser Use result", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body>视频 小程序 赞 在看</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+    mocked.proxy.parseProxyUrl.mockReturnValue({
+      host: "proxy.example.com", port: 8080, username: "u", password: "p",
+    });
+    mocked.proxy.fetchViaProxyPool.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      body: "<html><body><div id='js_content'><p>Prose recovered through proxy.</p></div></body></html>",
+      proxyIndex: 0,
+      proxy: { host: "proxy.example.com", port: 8080, username: "u", password: "p" },
+      variant: "mobile",
+      attempts: 1,
+      errors: [],
+    });
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.includes("Prose recovered through proxy.") ? "# Prose recovered through proxy." : "",
+      title: "",
+      contentHtml: "<p>Prose recovered through proxy.</p>",
+    }));
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/proxy-recovery?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv({
+      BROWSER_USE_API_KEY: "browser-use-key",
+      PROXY_URL: "u:p@proxy.example.com:8080",
+    }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Prose recovered through proxy.");
+    expect(mocked.browserUse.fetchViaBrowserUse).toHaveBeenCalledOnce();
+    expect(mocked.proxy.fetchViaProxyPool).toHaveBeenCalledOnce();
+    expect(res.headers.get("X-Markdown-Fallbacks")).toBeNull();
+  });
+
+  it("reports a file the site sends after the direct fetch was refused as unsupported, not as a page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("forbidden", { status: 403, statusText: "Forbidden", headers: { "Content-Type": "text/html" } }),
+    ));
+    mocked.proxy.parseProxyUrl.mockReturnValue({
+      host: "proxy.example.com", port: 8080, username: "u", password: "p",
+    });
+    mocked.proxy.fetchViaProxyPool.mockResolvedValueOnce({
+      status: 200,
+      headers: { "content-type": "application/pdf; qs=0.001" },
+      body: `%PDF-1.4 ${"\u0000".repeat(1200)}`,
+      proxyIndex: 0,
+      proxy: { host: "proxy.example.com", port: 8080, username: "u", password: "p" },
+      variant: "mobile",
+      attempts: 1,
+      errors: [],
+    });
+
+    const res = await worker.fetch(new Request("https://md.example.com/https://example.com/files/report.pdf?raw=true", {
+      headers: { Accept: "application/json" },
+    }), createMockEnv({ PROXY_URL: "u:p@proxy.example.com:8080" }).env, mockCtx());
+
+    expect(mocked.proxy.fetchViaProxyPool).toHaveBeenCalledOnce();
+    expect(res.status).toBe(415);
+    const payload = await res.json() as Record<string, unknown>;
+    expect(payload).toMatchObject({ code: "unsupported_content", cause: "target", retryable: false });
+    expect(String(payload.message)).toContain("application/pdf");
+    expect(JSON.stringify(payload)).not.toMatch(/proxy/i);
+  });
+
+  it("retries through proxy and succeeds after PROXY_RETRY signal", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.browser.fetchWithBrowser.mockRejectedValueOnce(
+      new Error("Browser rendering failed: PROXY_RETRY:SID=abc"),
+    );
+    mocked.proxy.parseProxyUrl.mockReturnValue({
+      host: "proxy.example.com",
+      port: 8080,
+      username: "u",
+      password: "p",
+    });
+    mocked.proxy.fetchViaProxy.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      body: `<html><body>${"x".repeat(1500)}</body></html>`,
+    });
+
+    const { env } = createMockEnv({
+      PROXY_URL: "u:p@proxy.example.com:8080",
+      API_TOKEN: "test-token",
+    });
+    const req = new Request("https://md.example.com/https://example.com/proxy-ok?raw=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Markdown-Method")).toBe("browser+readability+turndown");
+    expect(mocked.proxy.fetchViaProxy).toHaveBeenCalled();
+    const headersArg = mocked.proxy.fetchViaProxy.mock.calls[0]?.[2] as Record<string, string>;
+    expect(headersArg.Cookie).toBe("SID=abc");
+  });
+
+  it("retries through proxy when browser returns PROXY_RETRY_TOKEN signal", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    const retrySignal = createProxyRetrySignal([{ name: "SID", value: "token-cookie" }]);
+    if (!retrySignal) {
+      throw new Error("retry signal was not generated");
+    }
+    mocked.browser.fetchWithBrowser.mockRejectedValueOnce(
+      new Error(`Browser rendering failed: ${retrySignal}`),
+    );
+    mocked.proxy.parseProxyUrl.mockReturnValue({
+      host: "proxy.example.com",
+      port: 8080,
+      username: "u",
+      password: "p",
+    });
+    mocked.proxy.fetchViaProxy.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      body: `<html><body>${"x".repeat(1500)}</body></html>`,
+    });
+
+    const { env } = createMockEnv({
+      PROXY_URL: "u:p@proxy.example.com:8080",
+      API_TOKEN: "test-token",
+    });
+    const req = new Request("https://md.example.com/https://example.com/proxy-token?raw=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Markdown-Method")).toBe("browser+readability+turndown");
+    const headersArg = mocked.proxy.fetchViaProxy.mock.calls[0]?.[2] as Record<string, string>;
+    expect(headersArg.Cookie).toBe("SID=token-cookie");
+  });
+
+  it("returns proxy access failure when proxy returns login/challenge html", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.browser.fetchWithBrowser.mockRejectedValueOnce(new Error("PROXY_RETRY:sid=abc"));
+    mocked.proxy.parseProxyUrl.mockReturnValue({
+      host: "proxy.example.com",
+      port: 8080,
+      username: "u",
+      password: "p",
+    });
+    mocked.proxy.fetchViaProxy.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      body: `<html><body>${"z".repeat(1200)}passport.weibo qrcode_login</body></html>`,
+    });
+
+    const { env } = createMockEnv({
+      PROXY_URL: "u:p@proxy.example.com:8080",
+      API_TOKEN: "test-token",
+    });
+    const req = new Request("https://md.example.com/https://example.com/proxy-garbage", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.error).toBe("Fetch Failed");
+    expect(JSON.stringify(payload)).not.toMatch(/proxy/i);
+    expect(payload).toMatchObject({ code: "target_unreadable" });
+  });
+
+  it("uses proxy pool rotation path when PROXY_POOL is configured", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.browser.fetchWithBrowser.mockRejectedValueOnce(
+      new Error("Browser rendering failed: PROXY_RETRY:SID=pool"),
+    );
+    mocked.proxy.parseProxyPool.mockReturnValue([
+      {
+        host: "proxy-1.example.com",
+        port: 8080,
+        username: "u1",
+        password: "p1",
+      },
+      {
+        host: "proxy-2.example.com",
+        port: 8080,
+        username: "u2",
+        password: "p2",
+      },
+    ]);
+    mocked.proxy.fetchViaProxyPool.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      body: `<html><body>${"y".repeat(1600)}</body></html>`,
+      proxyIndex: 1,
+      proxy: {
+        host: "proxy-2.example.com",
+        port: 8080,
+        username: "u2",
+        password: "p2",
+      },
+      variant: "mobile",
+      attempts: 2,
+      errors: [],
+    });
+
+    const { env } = createMockEnv({
+      PROXY_POOL: "u1:p1@proxy-1.example.com:8080,u2:p2@proxy-2.example.com:8080",
+      API_TOKEN: "test-token",
+    });
+    const req = new Request("https://md.example.com/https://example.com/proxy-pool?raw=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Markdown-Fallbacks")).toBeNull();
+    expect(mocked.proxy.fetchViaProxyPool).toHaveBeenCalled();
+    expect(mocked.proxy.fetchViaProxy).not.toHaveBeenCalled();
+  });
+
+  it("uses paywall wayback fallback when static fetch is blocked", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue({ domains: ["example.com"] });
+    mocked.paywall.fetchWaybackSnapshot.mockResolvedValueOnce(
+      `<html><body>${"w".repeat(1600)}</body></html>`,
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("forbidden", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/paywall-wayback?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(mocked.paywall.fetchWaybackSnapshot).toHaveBeenCalled();
+    expect(mocked.paywall.fetchArchiveToday).not.toHaveBeenCalled();
+  });
+
+  it("returns the archive snapshot, not the blocked origin body", async () => {
+    // Regression: the 403 block page used to overwrite the recovered snapshot
+    // and be returned (and cached) as a 200 success.
+    mocked.paywall.getPaywallRule.mockReturnValue({ domains: ["example.com"] });
+    mocked.paywall.fetchWaybackSnapshot.mockResolvedValueOnce(
+      `<html><body><article>WAYBACK-ARCHIVED-BODY ${"w".repeat(1600)}</article></body></html>`,
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body>FORBIDDEN-BLOCK-PAGE</body></html>", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/pw-body?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    // Assert on the HTML actually handed to the converter (the markdown output
+    // itself is mocked in this suite).
+    const converted = mocked.converter.htmlToMarkdown.mock.calls.map((c: any[]) => String(c[0]));
+    expect(converted.join("\n")).toContain("WAYBACK-ARCHIVED-BODY");
+    expect(converted.join("\n")).not.toContain("FORBIDDEN-BLOCK-PAGE");
+  });
+
+  it("uses archive.today fallback when wayback is unavailable", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue({ domains: ["example.com"] });
+    mocked.paywall.fetchWaybackSnapshot.mockResolvedValueOnce(null);
+    mocked.paywall.fetchArchiveToday.mockResolvedValueOnce(
+      `<html><body>${"a".repeat(1600)}</body></html>`,
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("forbidden", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/paywall-archive?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(mocked.paywall.fetchArchiveToday).toHaveBeenCalled();
+  });
+
+  it("retries Context.dev once after a 429 from its concurrency limit", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue(null);
+    let contextDevCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("https://api.context.dev/")) {
+        contextDevCalls++;
+        if (contextDevCalls === 1) return Response.json({ message: "Too many concurrent requests" }, { status: 429 });
+        return Response.json({ html: { success: true, data: `<html><body><article>CONTEXT-DEV-BODY ${"c".repeat(1600)}</article></body></html>` }, metadata: {} });
+      }
+      return new Response("<html><body>FORBIDDEN-BLOCK-PAGE</body></html>", { status: 403, headers: { "Content-Type": "text/html" } });
+    }));
+
+    const res = await worker.fetch(new Request("https://md.example.com/https://example.com/walled?raw=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    }), createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(contextDevCalls).toBe(2);
+    expect(mocked.converter.htmlToMarkdown.mock.calls.map((c: any[]) => String(c[0])).join("\n")).toContain("CONTEXT-DEV-BODY");
+  });
+
+  it("skips Context.dev for a host that keeps timing out there, and counts each timeout", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.converter.htmlToMarkdown.mockReturnValue({ markdown: "", title: "", contentHtml: "" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("https://api.context.dev/")
+      ? Response.json({ html: { success: false, error_code: "REQUEST_TIMEOUT" } })
+      : new Response("<html><body>loading</body></html>", { status: 200, headers: { "Content-Type": "text/html" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const contextDevCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith("https://api.context.dev/")).length;
+    // The timeout counter for the host, as rate_limits holds it.
+    const counterDb = (count: number) => {
+      const binds: unknown[][] = [];
+      const db = {
+        binds,
+        prepare: vi.fn((sql: string) => {
+          const stmt = {
+            bind: vi.fn((...args: unknown[]) => { binds.push(args); return stmt; }),
+            first: vi.fn(async () => (/rate_limits/.test(sql) ? { count, expires_at: "2099-01-01T00:00:00.000Z" } : null)),
+            all: vi.fn(async () => ({ results: [] })),
+            run: vi.fn(async () => ({ success: true })),
+          };
+          return stmt;
+        }),
+      };
+      return db;
+    };
+    const request = (path: string) => new Request(`https://md.example.com/https://slow.example.com/${path}?raw=true`, {
+      headers: { Accept: "text/markdown" },
+    });
+
+    const below = counterDb(2);
+    const first = await worker.fetch(request("a"), createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", AUTH_DB: below as unknown as D1Database }).env, mockCtx());
+    expect(first.status).toBe(502);
+    expect(contextDevCalls()).toBe(1);
+    expect(below.binds.some((args) => args[0] === "context-dev-timeout:slow.example.com" && args.length === 3)).toBe(true);
+
+    const over = await worker.fetch(request("b"), createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", AUTH_DB: counterDb(3) as unknown as D1Database }).env, mockCtx());
+    expect(over.status).toBe(502);
+    expect(contextDevCalls()).toBe(1);
+  });
+
+  it("rescues a bot-walled page through Context.dev for signed-in requests only", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue(null);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("https://api.context.dev/")) {
+        return Response.json({
+          html: { success: true, data: `<html><body><article>CONTEXT-DEV-BODY ${"c".repeat(1600)}</article></body></html>` },
+          metadata: { finalUrl: "https://example.com/walled" },
+          key_metadata: { credits_remaining: 998 },
+        });
+      }
+      return new Response("<html><body>FORBIDDEN-BLOCK-PAGE</body></html>", {
+        status: 403,
+        headers: { "Content-Type": "text/html" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", API_TOKEN: "test-token" }).env;
+    const contextDevCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith("https://api.context.dev/")).length;
+
+    const anon = await worker.fetch(new Request("https://md.example.com/https://example.com/walled?raw=true", {
+      headers: { Accept: "text/markdown" },
+    }), env, mockCtx());
+    expect(anon.status).toBe(502);
+    // Anonymous traffic must not spend the small Context.dev quota.
+    expect(contextDevCalls()).toBe(0);
+
+    const signed = await worker.fetch(new Request("https://md.example.com/https://example.com/walled?raw=true&no_cache=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    }), env, mockCtx());
+    expect(signed.status).toBe(200);
+    expect(contextDevCalls()).toBe(1);
+    expect(signed.headers.get("X-Markdown-Fallbacks")).toBeNull();
+    const converted = mocked.converter.htmlToMarkdown.mock.calls.map((c: any[]) => String(c[0])).join("\n");
+    expect(converted).toContain("CONTEXT-DEV-BODY");
+    expect(converted).not.toContain("FORBIDDEN-BLOCK-PAGE");
+  });
+
+  it("tries Firecrawl after Context.dev fails on a signed-in 403, and logs the steps when both fail", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue(null);
+    let firecrawl: () => Response = () => Response.json({
+      success: true,
+      data: { markdown: `# Sponges\n\nFIRECRAWL-BODY ${"f".repeat(400)}`, metadata: { title: "Sponges" } },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://api.context.dev/")) return Response.json({ html: { success: false, error_code: "REQUEST_TIMEOUT" } });
+      if (url.endsWith("/v2/scrape")) return firecrawl();
+      if (url === "https://example.com/walled-a") return new Response(null, { status: 301, headers: { Location: "https://www.example.com/walled-a" } });
+      return new Response("<html><body>FORBIDDEN-BLOCK-PAGE</body></html>", { status: 403, statusText: "Forbidden", headers: { "Content-Type": "text/html" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", API_TOKEN: "test-token" }).env;
+    const request = (path: string) => new Request(`https://md.example.com/https://example.com/${path}?raw=true`, {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+
+    const rescued = await worker.fetch(new Request("https://md.example.com/https://example.com/walled-a?format=json", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    }), env, mockCtx());
+    expect(rescued.status).toBe(200);
+    const body = await rescued.json() as { url: string; markdown: string };
+    expect(body.markdown).toContain("FIRECRAWL-BODY");
+    expect(body.url).toBe("https://www.example.com/walled-a");
+    // Fetched at the redirect target, cached under the URL the caller asked for.
+    const scrapes = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith("/v2/scrape"));
+    expect(JSON.parse(String((scrapes[0] as unknown[] as [unknown, RequestInit])[1].body)).url).toBe("https://www.example.com/walled-a");
+    expect(mocked.cache.setCache.mock.calls.map((c: any[]) => c[1])).toContain("https://example.com/walled-a");
+
+    // Firecrawl returns the whole page, which is not what a selector asked for.
+    const scoped = await worker.fetch(new Request("https://md.example.com/https://example.com/walled-c?raw=true&selector=.price", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    }), env, mockCtx());
+    expect(scoped.status).toBe(502);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).endsWith("/v2/scrape"))).toHaveLength(1);
+
+    // Firecrawl handing back the site's denial page is no rescue.
+    firecrawl = () => Response.json({
+      success: true,
+      data: { markdown: "# Access Denied\n\nYou don't have permission to access this server.\n\nReference #18.4f2a3b17.1793876400.5e1c2a", metadata: { title: "Access Denied" } },
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const ctx = mockCtx();
+    const failed = await worker.fetch(request("walled-b"), env, ctx);
+    expect(failed.status).toBe(502);
+    await Promise.all((ctx.waitUntil as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]));
+    const event = log.mock.calls.map((c) => String(c[0])).filter((line) => line.includes('"conversion.event"')).map((line) => JSON.parse(line))[0];
+    expect(event).toMatchObject({ outcome: "convert_error", fallbacks: ["context_dev_failed"] });
+  });
+
+  it("retries an anonymous 403 once through the proxy, and points to sign-in when it fails", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue(null);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>blocked</html>", {
+      status: 403,
+      statusText: "Forbidden",
+      headers: { "Content-Type": "text/html" },
+    })));
+    mocked.proxy.parseProxyUrl.mockReturnValue({
+      host: "proxy.example.com", port: 8080, username: "u", password: "p",
+    });
+    const env = createMockEnv({ PROXY_URL: "u:p@proxy.example.com:8080" }).env;
+    mocked.proxy.fetchViaProxyPool.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      body: `<html><body><article>PROXY-BODY ${"p".repeat(1600)}</article></body></html>`,
+      proxyIndex: 0,
+      proxy: { host: "proxy.example.com", port: 8080, username: "u", password: "p" },
+      variant: "mobile",
+      attempts: 1,
+      errors: [],
+    });
+    const rescued = await worker.fetch(new Request("https://md.example.com/https://example.com/walled-a?raw=true", {
+      headers: { Accept: "text/markdown" },
+    }), env, mockCtx());
+    expect(rescued.status).toBe(200);
+    expect(rescued.headers.get("X-Markdown-Fallbacks")).toBeNull();
+    const converted = mocked.converter.htmlToMarkdown.mock.calls.map((c: any[]) => String(c[0])).join("\n");
+    expect(converted).toContain("PROXY-BODY");
+
+    mocked.proxy.fetchViaProxyPool.mockRejectedValueOnce(new Error("All proxy attempts failed"));
+    const failed = await worker.fetch(new Request("https://md.example.com/https://example.com/walled-b", {
+      headers: { Accept: "application/json" },
+    }), env, mockCtx());
+    const payload = await failed.json() as { message?: string };
+    expect(failed.status).toBe(502);
+    expect(payload).toMatchObject({ code: "target_forbidden", target_status: 403 });
+    expect((payload as { hint?: string }).hint).toContain("https://mdget.dev/portal/");
+  });
+
+  it("does not retry an anonymous 404 through the proxy or suggest signing in", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue(null);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not found", {
+      status: 404,
+      statusText: "Not Found",
+      headers: { "Content-Type": "text/html" },
+    })));
+    const res = await worker.fetch(new Request("https://md.example.com/https://example.com/gone", {
+      headers: { Accept: "application/json" },
+    }), createMockEnv({ PROXY_URL: "u:p@proxy.example.com:8080" }).env, mockCtx());
+    const payload = await res.json() as { message?: string };
+    expect(res.status).toBe(502);
+    expect(payload.message).not.toContain("Sign in");
+    expect(mocked.proxy.fetchViaProxyPool).not.toHaveBeenCalled();
+  });
+
+  it("gives up on an unanswering mainland China host after 10 seconds and says why", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue(null);
+    vi.useFakeTimers();
+    try {
+      const hang = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }));
+      vi.stubGlobal("fetch", hang);
+      const pending = worker.fetch(new Request("https://md.example.com/https://www.example.gov.cn/a.html", {
+        headers: { Accept: "application/json" },
+      }), createMockEnv().env, mockCtx());
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_500);
+      const res = await pending;
+      const payload = await res.json() as { message?: string };
+      expect(res.status).toBe(504);
+      expect(payload.message).toContain("refuse connections from outside China");
+
+      const other = worker.fetch(new Request("https://md.example.com/https://www.example.com/a.html", {
+        headers: { Accept: "application/json" },
+      }), createMockEnv().env, mockCtx());
+      await vi.advanceTimersByTimeAsync(31_000);
+      const otherPayload = await (await other).json() as { message?: string };
+      expect(otherPayload).toMatchObject({ code: "target_timeout", retryable: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not spend Context.dev credits on WeChat articles", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("https://api.context.dev/")) {
+        return Response.json({ html: { success: true, data: "<html><body>verify</body></html>" } });
+      }
+      return new Response("<html><body>环境异常 去验证</body></html>", { status: 200, headers: { "Content-Type": "text/html" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await worker.fetch(new Request("https://md.example.com/https://mp.weixin.qq.com/s/abc", {
+      headers: { Accept: "application/json" },
+    }), createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test" }).env, mockCtx());
+    expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).startsWith("https://api.context.dev/"))).toBe(false);
+  });
+
+  it("keeps a real 404 as an error instead of spending Context.dev credits", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue(null);
+    const fetchMock = vi.fn(async () => new Response("not found", { status: 404, headers: { "Content-Type": "text/html" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createMockEnv({ CONTEXT_DEV_API_KEY: "ctxt_secret_test", API_TOKEN: "test-token" }).env;
+    const res = await worker.fetch(new Request("https://md.example.com/https://example.com/missing?raw=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    }), env, mockCtx());
+    expect(res.status).not.toBe(200);
+    expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).startsWith("https://api.context.dev/"))).toBe(false);
+  });
+
+  it("returns fetch failed when paywall archives are unavailable", async () => {
+    mocked.paywall.getPaywallRule.mockReturnValue({ domains: ["example.com"] });
+    mocked.paywall.fetchWaybackSnapshot.mockResolvedValueOnce(null);
+    mocked.paywall.fetchArchiveToday.mockResolvedValueOnce(null);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("forbidden", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "Content-Type": "text/html" },
+      }),
+    ));
+
+    const req = new Request("https://md.example.com/https://example.com/paywall-fail", {
+      headers: { Accept: "application/json" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const payload = await res.json() as { error?: string; message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.error).toBe("Fetch Failed");
+    expect(payload).toMatchObject({ code: "target_forbidden", target_status: 403 });
+  });
+
+  it("prefers JSON-LD content when markdown is short and paywalled", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body>short static</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+    mocked.paywall.looksPaywalled.mockReturnValue(true);
+    mocked.paywall.extractJsonLdArticle.mockReturnValue("<html><body>jsonld article</body></html>");
+    mocked.converter.htmlToMarkdown
+      .mockReturnValueOnce({
+        markdown: "short",
+        title: "Old",
+        contentHtml: "<p>old</p>",
+      })
+      .mockReturnValueOnce({
+        markdown: "jsonld content ".repeat(60),
+        title: "Json Title",
+        contentHtml: "<p>json</p>",
+      });
+
+    const req = new Request("https://md.example.com/https://example.com/jsonld?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("jsonld content");
+    expect(mocked.converter.htmlToMarkdown.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(
+      mocked.converter.htmlToMarkdown.mock.calls.some(
+        (call) => typeof call[0] === "string" && call[0].includes("jsonld article"),
+      ),
+    ).toBe(true);
+  });
+
+  it("tries wayback then archive when paywalled markdown remains short", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body>short static</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+    mocked.paywall.looksPaywalled.mockReturnValue(true);
+    mocked.paywall.getPaywallRule.mockReturnValue({ domains: ["example.com"] });
+    mocked.paywall.fetchWaybackSnapshot.mockResolvedValueOnce("<html><body>wayback</body></html>");
+    mocked.paywall.fetchArchiveToday.mockResolvedValueOnce("<html><body>archive</body></html>");
+    mocked.converter.htmlToMarkdown
+      .mockReturnValueOnce({
+        markdown: "tiny",
+        title: "T1",
+        contentHtml: "<p>1</p>",
+      })
+      .mockReturnValueOnce({
+        markdown: "still short",
+        title: "T2",
+        contentHtml: "<p>2</p>",
+      })
+      .mockReturnValueOnce({
+        markdown: "archive-long ".repeat(60),
+        title: "T3",
+        contentHtml: "<p>3</p>",
+      });
+
+    const req = new Request("https://md.example.com/https://example.com/archive-fallback?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain("archive-long");
+    expect(mocked.paywall.fetchWaybackSnapshot).toHaveBeenCalled();
+    expect(mocked.paywall.fetchArchiveToday).toHaveBeenCalled();
+  });
+
+  it("replaces final html with AMP content when amp page is available", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("<html><body>orig</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }))
+      .mockResolvedValueOnce(new Response("<html><body>amp raw</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    mocked.paywall.looksPaywalled
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    mocked.paywall.getPaywallRule.mockReturnValue({ domains: ["example.com"] });
+    mocked.paywall.extractAmpLink.mockReturnValue("https://amp.example.com/article");
+    mocked.paywall.stripAmpAccessControls.mockReturnValue(
+      `<html><body>${"AMP_REPLACED ".repeat(80)}</body></html>`,
+    );
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.includes("AMP_REPLACED") ? "amp-markdown" : "orig-markdown",
+      title: "Amp",
+      contentHtml: "<p>amp</p>",
+    }));
+
+    const req = new Request("https://md.example.com/https://example.com/amp?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("amp-markdown");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mocked.paywall.stripAmpAccessControls).toHaveBeenCalled();
+  });
+
+  it("uses browser fallback when static html looks like challenge and keeps static on browser failure", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html>cf-challenge<script>document.location='/'</script></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+    mocked.browser.fetchWithBrowser.mockRejectedValueOnce(new Error("render failed"));
+
+    const req = new Request("https://md.example.com/https://example.com/challenge?raw=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("# md body");
+    expect(mocked.browser.fetchWithBrowser).toHaveBeenCalled();
+  });
+
+  const AKAMAI_DENIAL = `<html><head><title>Access Denied - Macy's</title></head><body><h1>Access Denied - Macy's</h1>
+    <p>You don't have access to this page</p><p>Reference: 0.64a7cb17.1793873586.77c3d7df</p></body></html>`;
+
+  it("fails as blocked when a forced browser render gets a block page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(`<html><head><title>Glass columns</title></head><body><article>${"Glass chromatography columns. ".repeat(40)}</article></body></html>`, {
+        status: 200, headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce(AKAMAI_DENIAL);
+
+    const req = new Request("https://md.example.com/https://example.com/product?force_browser=true", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(502);
+    expect((await res.json() as { code?: string }).code).toBe("target_blocked");
+  });
+
+  it("fails as blocked when the browser gets a block page after a blocked static fetch", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/html" } }),
+    ));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce(AKAMAI_DENIAL);
+
+    const req = new Request("https://md.example.com/https://example.com/shop?force_browser=true", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+    const payload = await res.json() as { code?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.code).toBe("target_blocked");
+  });
+
+  it("fails as blocked when a browser block page is recognised only in its Markdown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/html" } }),
+    ));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce("<html><body><div class=\"error\">rendered by script</div></body></html>");
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "# Farnell | 403 Error\n\n## Access Denied (Error 403)\n\nPlease quote the following incident number:\n\n**0.5bc90b17.1793873578.64ebbb98**",
+      title: "Farnell | 403 Error",
+      contentHtml: "",
+    });
+
+    const req = new Request("https://md.example.com/https://example.com/search?force_browser=true", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(502);
+    expect((await res.json() as { code?: string }).code).toBe("target_blocked");
+  });
+
+  it("keeps a rendered page whose section, not its title, is about access denial", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/html" } }),
+    ));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce("<html><body><article>guide</article></body></html>");
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "# API authentication guide\n\n## Access denied\n\nThe API answers 403 with a body such as Request ID: abc123456.",
+      title: "API authentication guide",
+      contentHtml: "",
+    });
+
+    const req = new Request("https://md.example.com/https://example.com/docs?raw=true&force_browser=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+  });
+
+  it("keeps a rendered page whose code identifiers only look like block wording", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/html" } }),
+    ));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce("<html><body><article>doc</article></body></html>");
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "# Security check\n\nEach response carries `request_id`: abc123456.\n\n![Please enable JS and disable any ad blocker](https://example.com/shot.png)",
+      title: "Security check",
+      contentHtml: "",
+    });
+
+    const req = new Request("https://md.example.com/https://example.com/docs?raw=true&force_browser=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+  });
+
+  it("keeps a rendered help article that quotes Akamai's denial", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/html" } }),
+    ));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce("<html><body><article>help</article></body></html>");
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "# Troubleshooting Akamai errors\n\nThe page says You don't have permission to access this server. Reference #18.4f2a3b17.1793840000.1a2b3c4d",
+      title: "Troubleshooting Akamai errors",
+      contentHtml: "",
+    });
+
+    const req = new Request("https://md.example.com/https://example.com/help?raw=true&force_browser=true", {
+      headers: { Accept: "text/markdown", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(200);
+  });
+
+  it("fails as blocked when a browser render is only a denial title", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/html" } }),
+    ));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce("<html><body><div id=\"app\"></div></body></html>");
+    mocked.converter.htmlToMarkdown.mockReturnValue({ markdown: "# Access Denied - Macy's\n\nAccess Denied - Macy's", title: "Access Denied - Macy's", contentHtml: "" });
+
+    const req = new Request("https://md.example.com/https://example.com/shop?force_browser=true", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(502);
+    expect((await res.json() as { code?: string }).code).toBe("target_blocked");
+  });
+
+  it("does not take a provider's cut-down copy of the block page as a rescue", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("https://r.jina.ai/")
+      ? Response.json({ code: 200, data: { title: "Access Denied - Macy's", content: "# Access Denied - Macy's\n\nAccess Denied - Macy's" } })
+      : new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/html" } })));
+    mocked.browser.fetchWithBrowser.mockResolvedValueOnce(AKAMAI_DENIAL);
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "# Access Denied - Macy's\n\nYou don't have access to this page\n\nReference: 0.64a7cb17.1793873586.77c3d7df",
+      title: "Access Denied - Macy's",
+      contentHtml: "",
+    });
+
+    const req = new Request("https://md.example.com/https://example.com/shop?force_browser=true", {
+      headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+    });
+    const res = await worker.fetch(req, createMockEnv({ API_TOKEN: "test-token" }).env, mockCtx());
+
+    expect(res.status).toBe(502);
+    expect((await res.json() as { code?: string }).code).toBe("target_blocked");
+  });
+
+  it("proxies wechat markdown image urls when output format is markdown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body><div id='js_content'><img data-src='https://mmbiz.qpic.cn/mmbiz_png/a1/640'></div></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "![a](https://mmbiz.qpic.cn/mmbiz_png/a1/640)",
+      title: "wechat",
+      contentHtml: "<p>wechat</p>",
+    });
+
+    const req = new Request("https://md.example.com/https://mp.weixin.qq.com/s/abc?raw=true", {
+      headers: { Accept: "text/markdown" },
+    });
+    const res = await worker.fetch(req, createMockEnv().env, mockCtx());
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("proxied:");
+    expect(mocked.converter.proxyImageUrls).toHaveBeenCalled();
+  });
+
+  it("returns timeout and generic fetch errors from static fetch path", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("request timed out")));
+
+    const timeoutReq = new Request("https://md.example.com/https://example.com/timeout", {
+      headers: { Accept: "application/json" },
+    });
+    const timeoutRes = await worker.fetch(timeoutReq, createMockEnv().env, mockCtx());
+    const timeoutPayload = await timeoutRes.json() as { error?: string };
+
+    expect(timeoutRes.status).toBe(504);
+    expect(timeoutPayload.error).toBe("Fetch Timeout");
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
+    const failedReq = new Request("https://md.example.com/https://example.com/fail", {
+      headers: { Accept: "application/json" },
+    });
+    const failedRes = await worker.fetch(failedReq, createMockEnv().env, mockCtx());
+    const failedPayload = await failedRes.json() as { error?: string; message?: string };
+
+    expect(failedRes.status).toBe(502);
+    expect(failedPayload.error).toBe("Fetch Failed");
+    // A thrown error's own text is internal.
+    expect(JSON.stringify(failedPayload)).not.toContain("boom");
+    expect(failedPayload).toMatchObject({ code: "target_unreadable" });
+  });
+
+  it("applies runtime body-size check in batch even when Content-Length is small", async () => {
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const hugeBody = JSON.stringify({
+      urls: ["https://example.com"],
+      pad: "x".repeat(120_000),
+    });
+    const req = new Request("https://md.example.com/api/batch", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer token",
+        "Content-Type": "application/json",
+        "Content-Length": "0",
+      },
+      body: hugeBody,
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as { error?: string };
+
+    expect(res.status).toBe(413);
+    expect(payload.error).toBe("Request too large");
+  });
+
+  it("returns ConvertError message for batch item unsupported content", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("binary", {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      }),
+    ));
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const req = new Request("https://md.example.com/api/batch", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ urls: ["https://example.com/a"] }),
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      results?: Array<{ error?: string }>;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.results?.[0]).toMatchObject({ code: "unsupported_content", cause: "target", retryable: false });
+    expect(payload.results?.[0].error).toContain("Only HTML and plain-text pages");
+  });
+
+  it("returns generic error when unexpected exception happens inside batch item", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body>ok</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+    mocked.converter.htmlToMarkdown.mockImplementationOnce(() => {
+      throw new Error("converter exploded");
+    });
+
+    const { env } = createMockEnv({ API_TOKEN: "token" });
+    const req = new Request("https://md.example.com/api/batch", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ urls: ["https://example.com/b"] }),
+    });
+    const res = await worker.fetch(req, env, mockCtx());
+    const payload = await res.json() as {
+      results?: Array<{ error?: string }>;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.results?.[0].error).toBe("Failed to process this URL.");
+  });
+
+  it("rejects a browser-rendered gov.cn not-found shell without caching it", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "页面不存在\n返回首页",
+      title: "页面不存在",
+      contentHtml: "<p>页面不存在</p>",
+    });
+    const { env } = createMockEnv({ API_TOKEN: "gov-token" });
+    const res = await worker.fetch(
+      new Request("https://md.example.com/https://czt.gansu.gov.cn/art/2024/1/1/art_1.html?raw=true", {
+        headers: { Accept: "application/json", Authorization: "Bearer gov-token" },
+      }),
+      env,
+      mockCtx(),
+    );
+    const payload = await res.json() as { message?: string };
+
+    expect(res.status).toBe(502);
+    expect(payload.message).toBe(
+      "This government page returned a not-found or empty shell instead of the article content.",
+    );
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("keeps a short government notice and a long article that mentions a missing page", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    const { env } = createMockEnv({ API_TOKEN: "gov-token" });
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "会议定于明日召开。",
+      title: "会议通知",
+      contentHtml: "<p>会议定于明日召开。</p>",
+    });
+    const notice = await worker.fetch(
+      new Request("https://md.example.com/https://czj.beijing.gov.cn/notice?raw=true", {
+        headers: { Accept: "application/json", Authorization: "Bearer gov-token" },
+      }),
+      env,
+      mockCtx(),
+    );
+    expect(notice.status).toBe(200);
+    expect(await notice.text()).toContain("会议定于明日召开。");
+    expect(mocked.cache.setCache).toHaveBeenCalled();
+
+    mocked.cache.setCache.mockClear();
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: `${"本页讨论页面不存在的处理办法。".repeat(40)}${"正文".repeat(800)}`,
+      title: "处理办法",
+      contentHtml: "<p>long</p>",
+    });
+    const article = await worker.fetch(
+      new Request("https://md.example.com/https://cz.wuxi.gov.cn/art/2024/notice.html?raw=true", {
+        headers: { Accept: "application/json", Authorization: "Bearer gov-token" },
+      }),
+      env,
+      mockCtx(),
+    );
+    expect(article.status).toBe(200);
+    expect(mocked.cache.setCache).toHaveBeenCalled();
+  });
+
+  it("rejects a gov.cn soft-404 URL even when the rendered body is long", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "站点导航".repeat(200),
+      title: "财政部",
+      contentHtml: "<p>nav</p>",
+    });
+    const { env } = createMockEnv({ API_TOKEN: "gov-token" });
+    const res = await worker.fetch(
+      new Request("https://md.example.com/https://www.mof.gov.cn/404.htm?raw=true", {
+        headers: { Accept: "application/json", Authorization: "Bearer gov-token" },
+      }),
+      env,
+      mockCtx(),
+    );
+    expect(res.status).toBe(502);
+    expect(mocked.cache.setCache).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a short gov.cn navigation page as a failure just because it is short", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "甘肃财政 通知公告 政务公开",
+      title: "甘肃财政厅",
+      contentHtml: "<p>甘肃财政</p>",
+    });
+    const { env } = createMockEnv({ API_TOKEN: "gov-token" });
+    const res = await worker.fetch(
+      new Request("https://md.example.com/https://czt.gansu.gov.cn/?raw=true", {
+        headers: { Accept: "application/json", Authorization: "Bearer gov-token" },
+      }),
+      env,
+      mockCtx(),
+    );
+    expect(res.status).toBe(200);
+    expect(mocked.cache.setCache).toHaveBeenCalled();
+  });
+
+  it("leaves a static gov.cn not-found phrase alone when the browser did not render it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<html><body><p>页面不存在</p></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    ));
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "页面不存在",
+      title: "页面不存在",
+      contentHtml: "<p>页面不存在</p>",
+    });
+    const res = await worker.fetch(
+      new Request("https://md.example.com/https://hrss.henan.gov.cn/art/1.html?raw=true", {
+        headers: { Accept: "text/markdown" },
+      }),
+      createMockEnv().env,
+      mockCtx(),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("页面不存在");
+    expect(res.headers.get("X-Markdown-Fallbacks") || "").not.toContain("wechat");
+  });
+
+  it("does not apply the government shell rule to a lookalike host", async () => {
+    mocked.browser.alwaysNeedsBrowser.mockReturnValue(true);
+    mocked.converter.htmlToMarkdown.mockReturnValue({
+      markdown: "页面不存在",
+      title: "页面不存在",
+      contentHtml: "<p>页面不存在</p>",
+    });
+    const { env } = createMockEnv({ API_TOKEN: "gov-token" });
+    const res = await worker.fetch(
+      new Request("https://md.example.com/https://evilgov.cn/404.htm?raw=true", {
+        headers: { Accept: "application/json", Authorization: "Bearer gov-token" },
+      }),
+      env,
+      mockCtx(),
+    );
+    expect(res.status).toBe(200);
+    expect(mocked.cache.setCache).toHaveBeenCalled();
+  });
+
+  it("does not serve a cached search page to an anonymous document navigation", async () => {
+    mocked.cache.getCached.mockResolvedValue({
+      content: "# bing results that must stay hidden",
+      method: "readability+turndown",
+      title: "Bing",
+    });
+    const res = await worker.fetch(
+      new Request("https://md.example.com/https://www.bing.com/search?q=hidden", {
+        headers: { Accept: "text/html", "Sec-Fetch-Dest": "document" },
+      }),
+      createMockEnv().env,
+      mockCtx(),
+    );
+    const body = await res.text();
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(body).not.toContain("bing results that must stay hidden");
+    expect(mocked.cache.getCached).not.toHaveBeenCalled();
+  });
+
+  it("reads a blocked Substack custom-domain post from the post API, and only when Substack served the block", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/v1/posts/my-post")) {
+        return Response.json({ title: "Custom Domain Post", body_html: "<p>Body from the API.</p>" });
+      }
+      const fromSubstack = url.startsWith("https://www.example-newsletter.com/");
+      return new Response("Too Many Requests", {
+        status: 429,
+        headers: fromSubstack ? { "x-served-by": "Substack" } : {},
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mocked.converter.htmlToMarkdown.mockImplementation((html: string) => ({
+      markdown: html.includes("Body from the API.") ? "# Custom Domain Post\n\nBody from the API." : "",
+      title: "Custom Domain Post",
+      contentHtml: "<p>Body from the API.</p>",
+    }));
+    const apiCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/v1/posts/")).length;
+
+    const ok = await worker.fetch(new Request("https://md.example.com/https://www.example-newsletter.com/p/my-post?raw=true", {
+      headers: { Accept: "text/markdown" },
+    }), createMockEnv().env, mockCtx());
+    const okBody = await ok.text();
+    expect(okBody, okBody).toContain("Body from the API.");
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("X-Markdown-Fallbacks")).toBeNull();
+    expect(String(fetchMock.mock.calls.find((c) => String(c[0]).includes("/api/v1/posts/"))?.[0]))
+      .toBe("https://www.example-newsletter.com/api/v1/posts/my-post");
+
+    // The same 429 from a site that is not Substack does not probe a post API.
+    const other = await worker.fetch(new Request("https://md.example.com/https://www.example-other.com/p/my-post?raw=true", {
+      headers: { Accept: "text/markdown" },
+    }), createMockEnv().env, mockCtx());
+    expect(other.status).toBe(502);
+    expect(apiCalls()).toBe(1);
+  });
+});

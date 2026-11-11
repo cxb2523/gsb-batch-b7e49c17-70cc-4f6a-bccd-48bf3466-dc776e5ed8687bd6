@@ -1,0 +1,98 @@
+/** Maximum response body size (5 MB). */
+export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+/** Maximum URL length to prevent abuse. */
+export const MAX_URL_LENGTH = 4096;
+export const MAX_SELECTOR_LENGTH = 256;
+
+/** Cache TTL defaults (seconds). */
+export const CACHE_TTL_DEFAULT = 3600; // 1 hour
+export const CACHE_TTL_SHORT = 600; // 10 min (dynamic content)
+
+/** Browser rendering budget (ms). */
+export const BROWSER_TIMEOUT = 30_000;
+export const FEISHU_BROWSER_TIMEOUT = 55_000;
+export const FEISHU_SCROLL_BUDGET = 25_000;
+export const FEISHU_SETTLE_WAIT = 3000;
+export const FEISHU_SCROLL_STEP = 300;
+export const FEISHU_SCROLL_DELAY = 400;
+export const FEISHU_STALE_LIMIT = 15;
+export const FEISHU_MAX_CAPTURED_IMAGES = 50;
+
+/** Image limits for capture. */
+export const IMAGE_MIN_BYTES = 5000;
+export const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Max concurrent browser sessions in batch mode. */
+export const BROWSER_CONCURRENCY = 2;
+
+/** Per-IP request limits (per 60 second window, when client IP is available). */
+export const RATE_LIMIT_WINDOW_SECONDS = 60;
+export const RATE_LIMIT_CONVERT_PER_WINDOW = 20;
+export const RATE_LIMIT_STREAM_PER_WINDOW = 30;
+export const RATE_LIMIT_BATCH_PER_WINDOW = 10;
+/**
+ * Anonymous callers share one durable counter across isolates.
+ * 20/minute still allows about 864,000 requests a month from one address,
+ * which is large enough to replay a whole month of traffic.
+ */
+export const RATE_LIMIT_ANON_CONVERT_PER_WINDOW = 10;
+export const RATE_LIMIT_ANON_STREAM_PER_WINDOW = 10;
+export const RATE_LIMIT_ANON_BATCH_PER_WINDOW = 5;
+/**
+ * Anonymous requests per IP per UTC day, shared by convert, stream, and batch.
+ * The per-minute limit alone let a slow scraper run thousands of requests a day.
+ */
+export const RATE_LIMIT_ANON_PER_DAY = 100;
+
+/** Valid output formats. */
+export const VALID_FORMATS = new Set(["markdown", "html", "text", "json"]);
+
+// WeChat in-app browser UA — mp.weixin.qq.com checks for "MicroMessenger"
+export const WECHAT_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 " +
+  "(KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.47(0x18002f2f) " +
+  "NetType/WIFI Language/zh_CN";
+
+// Generic mobile UA for other sites that block headless Chrome
+export const MOBILE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 " +
+  "(KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+
+// Desktop UA for sites that require desktop viewport
+export const DESKTOP_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
+
+/** CF Browser Rendering REST API settings. */
+export const CF_REST_TIMEOUT_MS = 30_000;
+export const CF_CRAWL_POLL_INTERVAL_MS = 3_000;
+export const CF_CRAWL_MAX_POLL_ATTEMPTS = 360;
+
+/** The hosted service's public domain. */
+export const PRIMARY_HOST = "mdget.dev";
+/** Earlier domain, still served. Its public pages name PRIMARY_HOST as canonical. */
+export const LEGACY_HOST = "md.genedai.me";
+
+/** Host to print in canonical links, sitemaps and llms.txt. Self-hosted domains are kept as-is. */
+export function publicHost(host: string): string {
+  return host.toLowerCase() === LEGACY_HOST ? PRIMARY_HOST : host;
+}
+
+export const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Accept, Content-Type, Authorization, Idempotency-Key, X-Debug-Trace",
+  "Access-Control-Expose-Headers": [
+    "X-Debug-Trace",
+    "X-Request-ID",
+    "X-RateLimit-Limit",
+    "X-RateLimit-Remaining",
+    "X-Request-Cost",
+    "X-Cache",
+    "X-Method",
+    "X-Browser-Rendered",
+    "X-Paywall-Detected",
+  ].join(", "),
+  "Access-Control-Max-Age": "86400",
+};
