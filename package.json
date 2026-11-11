@@ -1,0 +1,60 @@
+{
+  "license": "SEE LICENSE IN LICENSE",
+  "name": "flappin-ufo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "A Flappy Bird-style web game where you pilot a UFO through fields of asteroids, with a global leaderboard and ghost replay.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nirholas/flappin-ufo.git"
+  },
+  "homepage": ".",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.38.0",
+    "classnames": "^2.5.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.0",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^25.6.2",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vercel/node": "^5.7.15",
+    "@vitejs/plugin-react-swc": "^3.10.0",
+    "eslint": "^9.18.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.14.0",
+    "jsdom": "^26.0.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.20.0",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.11"
+  },
+  "resolutions": {
+    "vite": "^7.3.7",
+    "**/undici/@fastify/busboy": "^3.2.2",
+    "**/tsx/esbuild": "^0.28.1",
+    "**/@vercel/python-analysis/js-yaml": "^4.3.2",
+    "**/@vercel/python-analysis/minimatch": "^11.0.1",
+    "**/@vercel/python-analysis/smol-toml": "^1.9.0",
+    "**/@vercel/node/undici": "^6.29.1",
+    "**/@typescript-eslint/typescript-estree/minimatch": "^11.0.1",
+    "**/glob/minimatch": "^11.0.1"
+  }
+}
