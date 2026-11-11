@@ -1,0 +1,94 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Linux
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+  pull_request:
+    branches:
+      - dev
+      - main
+
+env:
+  TEST_PYTHON_VERSION: 3.9
+
+jobs:
+  build:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04]
+        python-version: [3.7, 3.8, 3.9, 3.10.5, 3.11.0, 3.12.0, 3.13.0, 3.14.0]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Installation
+      run: |
+        sudo python -m pip install --upgrade pip
+        sudo pip install .
+    - name: Smoke test
+      run: |
+        sudo python -c "from nava import *"
+        sudo python -m nava
+        sudo python -m nava --version
+        sudo nava
+        sudo nava --version
+    - name: Install ALSA
+      run: |
+        sudo apt-get update
+        sudo apt-get install alsa-utils
+        sudo apt-get install alsa-tools
+        sudo apt-get install alsa-firmware-loaders
+        sudo apt-get install alsa-oss
+        sudo apt-get install -y software-properties-common
+        sudo apt-get install linux-modules-extra-$(uname -r)
+    - name: Dev requirements Installation
+      run: |
+        sudo pip install --upgrade --upgrade-strategy=only-if-needed -r requirements-dev.txt
+    - name: Test with pytest
+      run: |
+        sudo python -m pytest --cov=nava --cov-report=term
+    - name: Other tests
+      run: |
+          sudo python -m vulture nava/ others/ setup.py --min-confidence 65 --exclude=__init__.py --sort-by-size
+          sudo python -m bandit -r nava -s B404,B603,B605,B607
+          sudo python -m pydocstyle -v --match-dir=nava
+      if: matrix.python-version == env.TEST_PYTHON_VERSION
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+      if: matrix.python-version == env.TEST_PYTHON_VERSION
+    - name: Version check
+      run: |
+        python others/version_check.py
+      if: matrix.python-version == env.TEST_PYTHON_VERSION
+    - name: Build package
+      run: |
+        sudo python -m build
+    - name: Check package metadata
+      run: |
+        sudo twine check dist/*
+    - name: Wheel smoke test
+      shell: bash
+      run: |
+        sudo pip uninstall -y nava
+        sudo pip install dist/*.whl
+        sudo mkdir wheel_test
+        cd wheel_test
+        sudo python -c "from nava import *"
+        sudo python -m nava
+        sudo python -m nava --version
+        sudo nava
+        sudo nava --version
