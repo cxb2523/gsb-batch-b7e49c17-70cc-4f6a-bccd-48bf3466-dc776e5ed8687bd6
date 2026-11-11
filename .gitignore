@@ -1,0 +1,38 @@
+# ── Local dev / notes / assets not needed to run v2 ──
+handoff.md
+feedback.md
+design/
+*.png
+# but DO track the README screenshot
+!docs/screenshot.png
+# and the app icon source
+!assets/icon.png
+profiles.json
+settings.json
+perf.log
+# legacy UI; v2 lives in dashboard_v2/
+dashboard/
+.claude/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# ── PyInstaller build output ──
+dist/
+build/
+
+# ── Editor / OS ──
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Personal / private - synced via private repo, keep out of public ──
+post.md
+# launch/marketing copy (reddit posts, itch page, devlogs)
+docs/marketing/

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint and syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint for real errors (syntax, undefined names)
+        run: ruff check --select E9,F63,F7,F82 .
+
+      - name: Compile all Python files
+        run: >-
+          python -m compileall -q
+          main.py audio_capture.py overlay.py
+          process_loopback.py mono_output.py direction.py perf_stats.py
+          look.py hotkeys.py global_hotkey.py capture_state.py popup_snap.py
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # direction.py is deliberately dependency-light (numpy only, no Qt or
+      # audio devices) so the math tests can run on Linux CI.
+      - name: Install test dependencies
+        run: pip install numpy pytest
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -q
+
+      # The dashboard tests load the real dashboard_v2/script.js against a small
+      # DOM stub and guard the bridge contract (slot names, value types, no
+      # echo loops). Plain Node, no npm packages.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Dashboard tests (dropdowns)
+        run: node tests/test_dropdowns.js
+
+      - name: Dashboard tests (look settings)
+        run: node tests/test_look_settings.js
+
+      - name: Dashboard tests (hotkey)
+        run: node tests/test_hotkey_ui.js
+
+      - name: Dashboard tests (capture device)
+        run: node tests/test_capture_device_ui.js
+
+      - name: Dashboard tests (quiet dropdowns)
+        run: node tests/test_popup_quiet.js

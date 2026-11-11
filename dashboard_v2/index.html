@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Audio Overlay</title>
+    <!-- qwebchannel.js is served by Qt at this special URL. -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <!-- Font (Google Sans Flex) is self-hosted in fonts/ via @font-face in style.css,
+         so it works offline in the packaged .exe - no network/CDN dependency. -->
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="app">
+
+        <!-- ── Brand ─────────────────────────────────────────────── -->
+        <h1 class="brand">
+            <span class="cap">V</span>isual <span class="cap">A</span>udio <span class="cap">O</span>verlay
+        </h1>
+
+        <!-- ── Top row: HARDWARE · SETTINGS · RADAR ──────────────── -->
+        <div class="row">
+
+            <!-- HARDWARE -->
+            <section class="card card--hardware">
+                <h2 class="card-title">HARDWARE</h2>
+
+                <div class="field">
+                    <div class="field-label">
+                        <img src="icons/monitor.svg" class="icon" alt="">
+                        <span>Monitor</span>
+                    </div>
+                    <div class="select-wrap">
+                        <select id="monitor-select" class="select" onchange="AR.setMonitor(this.value)"></select>
+                    </div>
+                </div>
+
+                <!-- Which output VAO listens to ("" = follow Windows), built like the
+                     Monitor select. The card has room for one status line under it,
+                     built from parts that say what may be cut (see captureStatus);
+                     the full text is in its title. -->
+                <div class="field">
+                    <div class="field-label">
+                        <img src="icons/headphone.svg" class="icon" alt="">
+                        <span>Audio Device</span>
+                    </div>
+                    <div class="select-wrap">
+                        <select id="capture-device-select" class="select" aria-label="Audio device"
+                            aria-describedby="capture-status"
+                            onchange="AR.setCaptureDevice(this.value)">
+                            <option value="">Windows default</option>
+                        </select>
+                    </div>
+                    <div id="capture-status" class="device-sub capture-status" aria-live="polite"><span class="capture-part capture-part--keep">Starts when the radar runs.</span></div>
+                </div>
+
+                <!-- Mono Output (single-sided listeners). The overlay shows the
+                     direction; this also plays a mono down-mix so you HEAR
+                     everything through one ear without losing direction. The
+                     toggle lives here (compact); the multi-step setup opens in a
+                     modal so the fixed-height card never clips. -->
+                <div class="field">
+                    <div class="field-label">
+                        <img src="icons/headphone.svg" class="icon" alt="">
+                        <span>Mono Output</span>
+                        <label class="switch" title="Play a mono mix to your headphones">
+                            <input type="checkbox" id="mono-enabled"
+                                onchange="AR.setMonoEnabled(this.checked)">
+                            <span class="switch-track"></span>
+                        </label>
+                    </div>
+                    <div id="mono-hint" class="device-sub">
+                        <span class="mono-hint-state" title="Off">Off</span>
+                        <a href="#" class="mono-setup-link" onclick="AR.openMonoSetup(); return false;">Setup</a>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SETTINGS -->
+            <section class="card card--settings">
+                <h2 class="card-title">SETTINGS</h2>
+
+                <div class="settings-grid">
+                    <!-- Left column -->
+                    <div class="settings-col">
+                        <h3 class="group-title">Sensitivity</h3>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Text_Align_Center.svg" class="icon icon--rot" alt="">
+                                <span>Sensitivity</span>
+                                <span class="value" id="sensitivity-val">0.0050</span>
+                            </div>
+                            <input type="range" class="slider" id="sensitivity" min="1" max="500" value="50"
+                                oninput="AR.setSensitivity(this.value)">
+                        </div>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Volume_Max.svg" class="icon" alt="">
+                                <span>Gain / Boost</span>
+                                <span class="value" id="gain-val">1.0x</span>
+                            </div>
+                            <input type="range" class="slider" id="gain" min="10" max="500" value="10"
+                                oninput="AR.setGain(this.value)">
+                        </div>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Slider_03.svg" class="icon" alt="">
+                                <span>Preset</span>
+                            </div>
+                            <div class="preset-row">
+                                <div class="select-wrap select-wrap--grow">
+                                    <select id="preset-select" class="select"
+                                        onchange="AR.applyPreset(this.value)"></select>
+                                </div>
+                                <button class="icon-btn" title="Add preset" onclick="AR.addPreset()">
+                                    <img src="icons/Add_Plus.svg" class="icon" alt="Add">
+                                </button>
+                                <button class="icon-btn" title="Delete preset" onclick="AR.deletePreset()">
+                                    <img src="icons/Trash_Full.svg" class="icon" alt="Delete">
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right column -->
+                    <div class="settings-col">
+                        <h3 class="group-title">Frequency</h3>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Text_Align_Center.svg" class="icon icon--rot" alt="">
+                                <span>Frequency</span>
+                                <span class="value" id="freq-val">150-4000 Hz</span>
+                            </div>
+                            <!-- Dual-handle range (low + high), built in JS -->
+                            <div class="dualrange" id="freq-range"
+                                data-min="20" data-max="20000" data-low="150" data-high="4000">
+                                <div class="dualrange-track"></div>
+                                <div class="dualrange-fill"></div>
+                                <input type="range" class="dualrange-input" id="freq-low"
+                                    min="20" max="20000" value="150">
+                                <input type="range" class="dualrange-input" id="freq-high"
+                                    min="20" max="20000" value="4000">
+                            </div>
+                        </div>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Volume_Max.svg" class="icon" alt="">
+                                <span>Max Amplitude</span>
+                                <span class="value" id="max-amp-val">1.00</span>
+                            </div>
+                            <input type="range" class="slider" id="max-amp" min="1" max="100" value="100"
+                                oninput="AR.setMaxAmp(this.value)">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RADAR -->
+            <section class="card card--radar">
+                <h2 class="card-title">
+                    RADAR
+                    <span id="status-dot" class="status-dot status-dot--off"></span>
+                </h2>
+
+                <div class="field">
+                    <div class="field-label"><span>Start / Stop</span></div>
+                    <button id="btn-toggle" class="btn-toggle" onclick="AR.toggleRadar()">Start</button>
+                    <div id="status-text" class="device-sub">Radar stopped</div>
+                </div>
+
+                <div class="field">
+                    <div class="field-label"><span>Program</span></div>
+                    <div class="select-wrap">
+                        <select id="program-select" class="select" onchange="AR.setProgram(this.value)"></select>
+                    </div>
+                </div>
+
+                <!-- Toggle hotkey. One line only: the status line above wraps to
+                     two lines while the radar runs, so waiting for keys, hints,
+                     errors and Clear live in #hotkey-modal (like Mono Output). -->
+                <div id="hotkey-field" class="field">
+                    <div class="field-label">
+                        <span>Hotkey</span>
+                        <button id="hotkey-btn" class="btn-toggle btn-toggle--small hotkey-btn"
+                            title="Starts or stops the radar while you play. Click to change."
+                            aria-label="Hotkey: Ctrl+Shift+H. Click to change."
+                            onclick="AR.startHotkeyCapture()">Ctrl+Shift+H</button>
+                        <span id="hotkey-readout" class="device-sub hotkey-readout is-hidden"></span>
+                    </div>
+                </div>
+
+            </section>
+        </div>
+
+        <!-- ── CUSTOMIZATION ─────────────────────────────────────── -->
+        <section class="card card--custom">
+            <h2 class="card-title">CUSTOMIZATION</h2>
+
+            <div class="custom-grid">
+                <!-- Color + Thickness stacked -->
+                <div class="custom-col">
+                    <h3 class="group-title">Color</h3>
+                    <div class="color-block">
+                        <!-- Native color input drives the accent; styled as a swatch -->
+                        <input type="color" id="accent-color" class="color-input" value="#9751F2"
+                            oninput="AR.setAccentColor(this.value)">
+                        <div class="color-readout">
+                            <span class="color-hex" id="color-hex">#9751F2</span>
+                            <span class="color-rgb" id="color-rgb">151, 81, 242</span>
+                        </div>
+                    </div>
+
+                    <h3 class="group-title group-title--spaced">Thickness</h3>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Stroke</span>
+                            <span class="value" id="thickness-val">6 px</span>
+                        </div>
+                        <input type="range" class="slider" id="thickness" min="1" max="20" value="6"
+                            oninput="AR.setThickness(this.value)">
+                    </div>
+                </div>
+
+                <!-- Overlay size, alert opacity and outline. One group (like
+                     Sensitivity in SETTINGS) so the three rows fit beside Color
+                     without making this fixed-height card any taller. -->
+                <div class="custom-col">
+                    <h3 class="group-title">Overlay</h3>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Size</span>
+                            <span class="value" id="overlay-size-val">100 % &middot; 300 px</span>
+                        </div>
+                        <input type="range" class="slider" id="overlay-size" min="50" max="200" step="10"
+                            value="100" aria-label="Overlay size"
+                            oninput="AR.setOverlaySize(this.value)">
+                    </div>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Alert opacity</span>
+                            <span class="value" id="alert-opacity-val">100 %</span>
+                        </div>
+                        <input type="range" class="slider" id="alert-opacity" min="20" max="100" step="5"
+                            value="100" aria-label="Alert opacity"
+                            oninput="AR.setAlertOpacity(this.value)">
+                    </div>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Show outline</span>
+                            <label class="switch" title="Show the faint ring around the radar">
+                                <input type="checkbox" id="outline-enabled" checked aria-label="Show outline"
+                                    onchange="AR.setOutlineEnabled(this.checked)">
+                                <span class="switch-track"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Preview -->
+                <div class="custom-col custom-col--preview">
+                    <h3 class="group-title">Preview</h3>
+                    <canvas id="preview-canvas" width="150" height="150"></canvas>
+                </div>
+
+                <!-- Position -->
+                <div class="custom-col custom-col--position">
+                    <h3 class="group-title">Position</h3>
+
+                    <!-- Circular D-pad. IDs btn-move / position-val are kept so the
+                         existing JS bridge (toggleMoveMode, position readout) works as-is. -->
+                    <div class="dpad" role="group" aria-label="Overlay position">
+                        <button class="dpad-arrow dpad-arrow--up" title="Move up"
+                            onclick="AR.nudgeOverlay(0, -8)" aria-label="Move up">&uarr;</button>
+                        <button class="dpad-arrow dpad-arrow--right" title="Move right"
+                            onclick="AR.nudgeOverlay(8, 0)" aria-label="Move right">&rarr;</button>
+                        <button class="dpad-arrow dpad-arrow--down" title="Move down"
+                            onclick="AR.nudgeOverlay(0, 8)" aria-label="Move down">&darr;</button>
+                        <button class="dpad-arrow dpad-arrow--left" title="Move left"
+                            onclick="AR.nudgeOverlay(-8, 0)" aria-label="Move left">&larr;</button>
+                        <button class="dpad-center" title="Center on screen"
+                            onclick="AR.resetOverlay()" aria-label="Center on screen">
+                            <span class="dpad-center-label">CENTER</span>
+                            <span class="dpad-coords" id="position-val">0, 0</span>
+                        </button>
+                    </div>
+
+                    <button id="btn-move" class="btn-toggle btn-toggle--small dpad-move"
+                        onclick="AR.toggleMoveMode()">Move</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Footer: passive, non-intrusive support links ─────────────────
+             No popups or nags - just always-there ghost links. Each opens in
+             the real browser via bridge.open_url (not inside this webview). -->
+        <footer class="footer">
+            <a href="#" class="footer-link" title="Star the project on GitHub"
+                onclick="AR.openRepo(); return false;">
+                <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M12 17.27l-5.18 3.04 1.4-5.96-4.62-4 6.08-.52L12 4l2.32 5.83 6.08.52-4.62 4 1.4 5.96z"/>
+                </svg>
+                <span>Star on GitHub</span>
+            </a>
+            <a href="#" class="footer-link" title="Report a bug or request a feature"
+                onclick="AR.openFeedback(); return false;">
+                <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/>
+                </svg>
+                <span>Send feedback</span>
+            </a>
+            <a href="#" class="footer-link" title="Contribute / help build it"
+                onclick="AR.openContribute(); return false;">
+                <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M12 21s-7.5-4.6-10-9A5 5 0 0 1 12 6a5 5 0 0 1 10 6c-2.5 4.4-10 9-10 9z"/>
+                </svg>
+                <span>Contribute</span>
+            </a>
+            <a href="#" class="footer-link footer-link--coffee" title="Buy me a coffee (optional)"
+                onclick="AR.openCoffee(); return false;">
+                <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M4 8h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8zm13 1h2.5a2.5 2.5 0 0 1 0 5H17V9zM6 2.5c.5.6.5 1.2 0 1.8M9.5 2.5c.5.6.5 1.2 0 1.8M13 2.5c.5.6.5 1.2 0 1.8M3 20.5h15"
+                        stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>Buy me a coffee</span>
+            </a>
+            <!-- New version notice, left of the version number. Hidden until
+                 onUpdateAvailable(); it sits in the footer row, so showing it
+                 never makes the page or any card taller. -->
+            <span id="update-notice" class="footer-update is-hidden" role="status">
+                <span id="update-notice-text">A new version is available</span>
+                <a href="#" class="footer-update-link" title="Open the download page"
+                    aria-label="Download the new version"
+                    onclick="AR.openUpdate(); return false;">Download</a>
+            </span>
+            <span class="footer-version" id="footer-version"></span>
+        </footer>
+
+    </div>
+
+    <!-- ── Mono Output setup modal ───────────────────────────────────────
+         Kept out of the cards so its multi-step content can scroll freely
+         without clipping the fixed-height dashboard layout. -->
+    <div id="mono-modal" class="modal is-hidden" role="dialog" aria-modal="true"
+        aria-labelledby="mono-modal-title">
+        <div class="modal-backdrop" onclick="AR.closeMonoSetup()"></div>
+        <div class="modal-card">
+            <h2 id="mono-modal-title" class="modal-title">Mono Output Setup</h2>
+            <p class="modal-intro">
+                Hear the whole game through your working ear while the radar still
+                shows direction. AudioRadar does the mono mix for you, so you turn
+                <b>off</b> the Windows "mono audio" setting (leaving it on hides the
+                direction the overlay needs). Follow the 5 steps below once.
+            </p>
+
+            <div class="field">
+                <div class="field-label"><span>Mono plays to</span></div>
+                <div class="select-wrap">
+                    <select id="mono-output-select" class="select"
+                        onchange="AR.setMonoOutput(this.value)"></select>
+                </div>
+                <div class="device-sub" style="margin-top:6px">
+                    Pick your real headphones here, not the virtual cable.
+                </div>
+            </div>
+
+            <div id="mono-status" class="device-sub mono-status"></div>
+            <button id="mono-install-btn"
+                class="btn-toggle btn-toggle--small is-hidden"
+                onclick="AR.installCable()">Install VB-CABLE</button>
+
+            <ol class="mono-steps">
+                <li>Install VB-CABLE (button above if shown), then <b>reboot</b>
+                    if Windows asks.</li>
+                <li>Turn <b>off</b> Windows mono audio:
+                    <b>Settings &rsaquo; Accessibility &rsaquo; Audio</b>.
+                    AudioRadar handles mono now.</li>
+                <li>Send your game's sound into the cable:
+                    <b>Settings &rsaquo; System &rsaquo; Sound &rsaquo; Volume mixer</b>,
+                    find your game, set its output to <b>CABLE Input</b>.</li>
+                <li>Above, set <b>"Mono plays to"</b> to your real headphones.</li>
+                <li>Pick your game under <b>Program</b>, then press <b>Start</b>.</li>
+            </ol>
+
+            <button class="btn-toggle btn-toggle--small mono-done"
+                onclick="AR.closeMonoSetup()">Done</button>
+        </div>
+    </div>
+
+    <!-- ── Hotkey modal ──────────────────────────────────────────────────
+         Opened by the Hotkey button in the RADAR card, which has no room for
+         a hint or error line. Same pieces as the Mono Output setup modal. -->
+    <div id="hotkey-modal" class="modal is-hidden" role="dialog" aria-modal="true"
+        aria-labelledby="hotkey-modal-title" aria-describedby="hotkey-modal-intro">
+        <div class="modal-backdrop" onclick="AR.closeHotkey()"></div>
+        <div class="modal-card">
+            <h2 id="hotkey-modal-title" class="modal-title">Radar Hotkey</h2>
+            <p id="hotkey-modal-intro" class="modal-intro">
+                Click the button, then press the keys you want. Use Ctrl or Alt
+                with a key, or an F key on its own.
+            </p>
+
+            <div class="field">
+                <div class="field-label"><span>Hotkey</span></div>
+                <div class="preset-row">
+                    <button id="hotkey-capture-btn" class="btn-toggle btn-toggle--small hotkey-btn"
+                        aria-label="Hotkey: Ctrl+Shift+H. Click to change." aria-pressed="false"
+                        onclick="AR.startHotkeyCapture()">Ctrl+Shift+H</button>
+                    <button id="hotkey-clear" class="icon-btn" title="Clear hotkey"
+                        aria-label="Clear hotkey" onclick="AR.clearHotkey()">
+                        <img src="icons/Trash_Full.svg" class="icon" alt="">
+                    </button>
+                </div>
+                <div id="hotkey-hint" class="device-sub hotkey-hint" role="status" aria-live="polite">
+                    Starts or stops the radar while you play.
+                </div>
+            </div>
+
+            <button class="btn-toggle btn-toggle--small mono-done"
+                onclick="AR.closeHotkey()">Done</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
