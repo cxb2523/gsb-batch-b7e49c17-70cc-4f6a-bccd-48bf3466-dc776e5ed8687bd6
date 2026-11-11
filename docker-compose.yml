@@ -1,0 +1,22 @@
+# 3D-PrintDash without Home Assistant:
+#   docker compose up -d
+# then open http://<computer-ip>:8090
+services:
+  printdash:
+    image: ghcr.io/freaky-jay-22/printdash:latest
+    # to build it yourself instead:  build: ./printdash
+    container_name: printdash
+    restart: unless-stopped
+    ports:
+      # only via the Home Assistant sidebar (hass_ingress, see README): use "127.0.0.1:8090:8090"
+      - "8090:8090"
+    volumes:
+      - ./data:/data
+    environment:
+      # your time zone, e.g. Europe/Berlin, America/New_York
+      - TZ=UTC
+      # optional, for smart plugs, sensors and notifications from Home Assistant:
+      # - HA_URL=http://192.168.1.10:8123
+      # - HA_TOKEN=<long-lived access token>
+      # optional, hide the "no password" warning when the port is bound to 127.0.0.1 (hass_ingress):
+      # - PRINTDASH_NO_PASSWORD_WARNING=1
