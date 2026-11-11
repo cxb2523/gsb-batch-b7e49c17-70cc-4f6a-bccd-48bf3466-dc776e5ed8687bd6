@@ -1,8 +1,8 @@
 import "dotenv/config";
-import { extname, join } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { formatComparisonReport, saveComparisonReport, saveResultsJSON, type ProviderRun } from "./format.js";
 import { PROVIDERS } from "./providers/index.js";
-import { makeRecordingExecutor } from "./failures.js";
+import { makeRecordingExecutor, startFailureRun, type FailureRun } from "./failures.js";
 import { makeExecutor, runWebAccessBenchmarkSuite } from "./runner.js";
 import { WEB_ACCESS_ALL_TESTS, WEB_ACCESS_BENCHMARK_CONFIG } from "./tests.const.js";
 import type { Provider, WebAccessBenchmarkConfig, WebAccessTestConfig } from "./types.js";
@@ -75,8 +75,10 @@ Options:
   --provider-concurrency <n>  Providers to benchmark at once (default: ${WEB_ACCESS_BENCHMARK_CONFIG.providerConcurrency})
   --out <file>         Results JSON path (default: results/benchmark-<timestamp>.json)
   --report-out <file>  Rendered report path (default: the results path with a .txt extension)
-  --failures-dir <dir> Keep evidence for every failed attempt: <dir>/<provider>/<test>-<attempt>.{html,txt}
-                       (body as scored, capped at 2 MB) plus a .json sidecar (status, latency, error, trace id)
+  --failures-dir <dir> Keep evidence for every failed attempt under a fresh per-run directory
+                       <dir>/run-<timestamp>/<provider>/<test>-<attempt>.{html,txt}
+                       (body as scored, capped at 2 MB) plus a .json sidecar (run id, status,
+                       latency, error, trace id); the run directory is printed at run start
   -h, --help           Show this help
 
 Set provider API keys in a .env file (see .env.example). A provider runs only when all of
@@ -144,12 +146,14 @@ async function main(): Promise<void> {
   }
 
   const runs: ProviderRun[] = new Array(active.length);
+  const failureRun: FailureRun | undefined = opts.failuresDir ? startFailureRun(opts.failuresDir) : undefined;
+  if (failureRun) console.log(`Failure evidence for this run: ${resolve(failureRun.dir)}\n`);
   let nextProvider = 0;
   async function providerWorker(): Promise<void> {
     while (nextProvider < active.length) {
       const providerIndex = nextProvider++;
       const provider = active[providerIndex];
-      const executor = opts.failuresDir ? makeRecordingExecutor(provider, opts.failuresDir) : makeExecutor(provider);
+      const executor = failureRun ? makeRecordingExecutor(provider, failureRun) : makeExecutor(provider);
       const result = await runWebAccessBenchmarkSuite(tests, executor, config, provider.name);
       runs[providerIndex] = { provider: provider.name, result };
     }
@@ -168,7 +172,7 @@ async function main(): Promise<void> {
   saveComparisonReport(report, reportPath);
   console.log(`\nSaved results to ${outPath}`);
   console.log(`Saved report to ${reportPath}`);
-  if (opts.failuresDir) console.log(`Failed-attempt evidence (if any) in ${opts.failuresDir}`);
+  if (failureRun) console.log(`Failed-attempt evidence (if any) in ${failureRun.dir}`);
 }
 
 main().catch((e) => {

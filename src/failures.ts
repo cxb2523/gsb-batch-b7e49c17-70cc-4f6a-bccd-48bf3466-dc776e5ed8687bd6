@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeBody } from "./check.js";
 import { makeExecutor } from "./runner.js";
@@ -16,6 +16,8 @@ export interface FailureEvidence {
 
 /** Sidecar written next to each failed attempt's body. */
 export interface FailureRecord {
+  /** Identifier of the benchmark run this evidence belongs to (the run directory's name). */
+  runId: string;
   provider: string;
   test: string;
   url: string;
@@ -40,12 +42,34 @@ export function failureFileStem(testName: string, attempt: number): string {
   return `${safeName(testName)}-${attempt}`;
 }
 
+/** One benchmark run's isolated evidence directory under `--failures-dir`. */
+export interface FailureRun {
+  /** Run identifier, also the run directory's name; recorded in every sidecar. */
+  runId: string;
+  /** Absolute or relative path of the run directory all of this run's evidence is written to. */
+  dir: string;
+}
+
 /**
- * Writes `<dir>/<provider>/<test>-<attempt>.json` for a failed attempt, plus the body it was scored on
- * (`.html` when it looks like markup, `.txt` otherwise), capped at MAX_FAILURE_BODY_BYTES.
+ * Creates a fresh, timestamped run directory under `baseDir` (e.g. `run-2026-11-12T08-30-00-000Z`)
+ * so evidence from different runs never overwrites each other. If the name is already taken
+ * (two runs started in the same millisecond), a `-2`, `-3`, … suffix keeps them apart.
+ */
+export function startFailureRun(baseDir: string, now: Date = new Date()): FailureRun {
+  const stamp = now.toISOString().replace(/[:.]/g, "-");
+  let runId = `run-${stamp}`;
+  for (let n = 2; existsSync(join(baseDir, runId)); n++) runId = `run-${stamp}-${n}`;
+  const dir = join(baseDir, runId);
+  mkdirSync(dir, { recursive: true });
+  return { runId, dir };
+}
+
+/**
+ * Writes `<run.dir>/<provider>/<test>-<attempt>.json` for a failed attempt, plus the body it was
+ * scored on (`.html` when it looks like markup, `.txt` otherwise), capped at MAX_FAILURE_BODY_BYTES.
  */
 export function writeFailure(
-  dir: string,
+  run: FailureRun,
   provider: string,
   test: WebAccessTestConfig,
   attempt: number,
@@ -53,7 +77,7 @@ export function writeFailure(
   evidence: FailureEvidence,
   now: Date = new Date()
 ): FailureRecord {
-  const providerDir = join(dir, safeName(provider));
+  const providerDir = join(run.dir, safeName(provider));
   mkdirSync(providerDir, { recursive: true });
   const stem = failureFileStem(test.name, attempt);
 
@@ -69,6 +93,7 @@ export function writeFailure(
   }
 
   const record: FailureRecord = {
+    runId: run.runId,
     provider,
     test: test.name,
     url: test.url,
@@ -92,10 +117,10 @@ function traceIdOf(error: unknown): string | undefined {
 }
 
 /**
- * Same executor as `makeExecutor`, but every failed attempt also leaves its evidence under `dir`.
+ * Same executor as `makeExecutor`, but every failed attempt also leaves its evidence under `run.dir`.
  * It observes the adapter's single fetch; it never adds a request, a retry or a request parameter.
  */
-export function makeRecordingExecutor(provider: Provider, dir: string): RequestExecutorFn {
+export function makeRecordingExecutor(provider: Provider, run: FailureRun): RequestExecutorFn {
   return async (test, timeoutMs, attemptIndex = 0) => {
     let fetched: ProviderFetchResult | undefined;
     let thrown: unknown;
@@ -117,7 +142,7 @@ export function makeRecordingExecutor(provider: Provider, dir: string): RequestE
 
     const traceId = fetched?.traceId ?? traceIdOf(thrown);
     try {
-      writeFailure(dir, provider.name, test, attemptIndex + 1, result, {
+      writeFailure(run, provider.name, test, attemptIndex + 1, result, {
         body: fetched?.body,
         statusCode: fetched?.statusCode,
         traceId
