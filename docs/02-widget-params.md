@@ -30,8 +30,13 @@ Output:
 |---|---|
 | `cf-turnstile-response` | the token; submitted with the form, validated server-side via siteverify. |
 
-`tools/capture.py` extracts `sitekey`, `cData`, and `action` from the page HTML. `chlPageData` is
-injected at runtime by the bundle, so it only shows up in a browser capture, not a static fetch.
+`tools/capture.py` extracts `sitekey`, `cData`, `action`, and `chlPageData` from the page HTML.
+It recognises both the `data-*` form and the `turnstile.render(..., { ... })` form. When both
+provide a field, the explicit render options win; fields absent from the options fall back to
+attributes. The output's `source` object records `"attribute"` or `"script"` per field, missing
+fields stay `null`, and values rejected by the `action`/`cData` limits above are nulled with the
+reason recorded in `invalid`. `chlPageData` is normally injected at runtime by the bundle, so in
+practice it only shows up in a browser capture, not a static fetch.
 
 ## Full render parameter reference (documented API)
 

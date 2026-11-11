@@ -31,7 +31,9 @@ A sourced teardown of how Cloudflare Turnstile fingerprints and scores browsers,
 
 ## Tool
 
-`tools/capture.py` — pull the `sitekey` / `cData` / `action` off a page; `--solve` returns a token.
+`tools/capture.py` — pull the `sitekey` / `cData` / `action` / `chlPageData` off a page from either
+`data-*` attributes or a `turnstile.render(...)` options object (with per-field provenance in
+`source`); `--solve` returns a token. Tests are offline: `python -m unittest discover -s tests`.
 
 ```bash
 python tools/capture.py https://example.com/
