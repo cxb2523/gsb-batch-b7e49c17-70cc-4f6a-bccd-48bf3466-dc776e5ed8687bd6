@@ -1,0 +1,336 @@
+# coding: utf-8
+"""Project serialization: save/load .uidp files (JSON format)."""
+import json
+import copy
+import math
+import os
+import tempfile
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+
+from app.designer.canvas import DesignScene
+from app.designer.canvas_item import CanvasItem, LINK_CARD_TYPES  # noqa: F401  (re-exported)
+from app.common.signal_bus import signalBus
+from app.core.widget_registry import registry
+from app.core.i18n import tr
+from app.core.link_polling import PROJECT_PARSER
+from app.core.bit_profiles import normalize_bit_profiles
+from PyQt5.QtCore import QSignalBlocker
+
+PROJECT_VERSION = "1.0"
+# The application name of a file that has none; a new project starts with it in the interface language.
+DEFAULT_APP_NAME = "上位机"  # i18n: value
+# LINK_CARD_TYPES: the link cards, which can carry their own frame format (properties.parserConfig).
+
+
+def resolved_asset_path(path: str, base_dir=None) -> str:
+    """An image path as the project uses it: a relative one is taken from ``base_dir`` (the .uidp's folder),
+    else from the working directory."""
+    source = Path(path).expanduser()
+    if not source.is_absolute():
+        source = Path(base_dir or Path.cwd()) / source
+    return str(source.resolve())
+
+
+def rebased_asset_path(path: str, old_base, new_base) -> str:
+    """A relative image path that names the same file once the .uidp moves from ``old_base`` to ``new_base``."""
+    if not path or Path(path).expanduser().is_absolute():
+        return path
+    source = (old_base / Path(path).expanduser()).resolve()
+    try:
+        return Path(os.path.relpath(source, new_base)).as_posix()
+    except ValueError:
+        # Windows paths on another drive cannot be made relative.
+        return str(source)
+
+
+class ProjectData:
+    """In-memory representation of a .uidp project."""
+
+    def __init__(self):
+        self.version: str = PROJECT_VERSION
+        self.app_name: str = tr(DEFAULT_APP_NAME)
+        self.canvas_width: int = 1200
+        self.canvas_height: int = 800
+        self.grid_size: int = 10
+        self.icon: str = ""  # the exported application's icon; empty for the default one
+        self.widgets: List[Dict[str, Any]] = []
+        self.bit_profiles = {}
+        self.serial: Dict[str, Any] = {
+            "baudRate": 115200,
+            "dataBits": 8,
+            "parity": "None",
+            "stopBits": 1,
+            "parser": "line",
+            "parserConfig": {"separator": ","},
+        }
+        self.file_path: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        document = {
+            "version": self.version,
+            "appName": self.app_name,
+            "canvas": {
+                "width": self.canvas_width,
+                "height": self.canvas_height,
+                "gridSize": self.grid_size,
+            },
+            "widgets": self.widgets,
+            "serial": self.serial,
+        }
+        if self.bit_profiles:
+            document["bitProfiles"] = normalize_bit_profiles(self.bit_profiles)
+        if self.icon:
+            document["icon"] = self.icon
+        return document
+
+    def base_dir(self) -> Path:
+        """The folder relative image paths start from: the .uidp's, or the working directory before a save."""
+        return (Path(self.file_path).expanduser().resolve().parent
+                if self.file_path else Path.cwd())
+
+    def icon_file(self) -> str:
+        """The icon's absolute path, or "" when the project uses the default icon."""
+        return resolved_asset_path(self.icon, self.base_dir()) if self.icon else ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ProjectData":
+        cls.validate(data)
+        proj = cls()
+        proj.version = data.get("version", PROJECT_VERSION)
+        proj.app_name = data.get("appName", DEFAULT_APP_NAME)
+        canvas = data.get("canvas", {})
+        proj.canvas_width = canvas.get("width", 1200)
+        proj.canvas_height = canvas.get("height", 800)
+        proj.grid_size = canvas.get("gridSize", 10)
+        proj.icon = data.get("icon", "")
+        proj.widgets = data.get("widgets", [])
+        proj.bit_profiles = normalize_bit_profiles(data.get("bitProfiles", {}))
+        proj.serial.update(data.get("serial", {}))
+        return proj
+
+    @staticmethod
+    def validate(data):
+        """Reject invalid documents before touching the current scene."""
+        if not isinstance(data, dict):
+            raise ValueError(tr("项目根节点必须是对象"))
+        normalize_bit_profiles(data.get("bitProfiles", {}))
+        if data.get("version", PROJECT_VERSION) != PROJECT_VERSION:
+            raise ValueError(tr("不支持的项目版本"))
+        if not isinstance(data.get("appName", ""), str):
+            raise ValueError(tr("应用名称必须是文本"))
+        if not isinstance(data.get("icon", ""), str):
+            raise ValueError(tr("应用图标必须是文本"))
+        canvas = data.get("canvas", {})
+        if not isinstance(canvas, dict):
+            raise ValueError(tr("画布配置必须是对象"))
+        for name, default, limit in (("width", 1200, 9999), ("height", 800, 9999),
+                                     ("gridSize", 10, 1000)):
+            value = canvas.get(name, default)
+            if type(value) is not int or not 1 <= value <= limit:
+                raise ValueError(tr("无效画布参数: %1", name))
+        serial = data.get("serial", {})
+        if not isinstance(serial, dict):
+            raise ValueError(tr("串口配置必须是对象"))
+        from app.core.protocol_parser import create_parser
+        project_parser = serial.get("parser", "line")
+        create_parser(project_parser, serial.get("parserConfig"))
+        ids = set()
+
+        def check_card_parser(item, props):
+            card = item.get("id") or ""
+            config = props["parserConfig"]
+            if not isinstance(config, dict):
+                raise ValueError(tr("卡片 %1 的 parserConfig 必须是对象", card))
+            mode = props.get("defaultParser", PROJECT_PARSER)
+            try:
+                create_parser(project_parser if mode == PROJECT_PARSER else mode, config)
+            except ValueError as error:
+                raise ValueError(tr("卡片 %1: %2", card, error)) from None
+
+        def walk(items, depth=0):
+            if not isinstance(items, list) or depth > 64:
+                raise ValueError(tr("无效控件树"))
+            for item in items:
+                if not isinstance(item, dict) or not isinstance(item.get("type"), str):
+                    raise ValueError(tr("控件缺少有效类型"))
+                if not registry.get(item["type"]):
+                    raise ValueError(tr("未知控件类型: %1", item["type"]))
+                wid = item.get("id")
+                if wid is not None:
+                    if not isinstance(wid, str) or not wid or wid in ids:
+                        raise ValueError(tr("控件 ID 无效或重复"))
+                    ids.add(wid)
+                props = item.get("properties", {})
+                if not isinstance(props, dict):
+                    raise ValueError(tr("控件属性必须是对象"))
+                if item["type"] == "RotaryEncoder":
+                    ppr = props.get("pulsesPerTurn", 1024)
+                    if type(ppr) not in (int, float) or not math.isfinite(ppr) or ppr <= 0 or int(ppr) != ppr:
+                        raise ValueError(tr("每圈脉冲数必须为正整数"))
+                if item["type"] in LINK_CARD_TYPES and "parserConfig" in props:
+                    check_card_parser(item, props)
+                if item.get("binding") is not None and not isinstance(item["binding"], dict):
+                    raise ValueError(tr("控件绑定必须是对象"))
+                geo = item.get("geometry", {})
+                if not isinstance(geo, dict):
+                    raise ValueError(tr("控件位置必须是对象"))
+                for key, value in geo.items():
+                    if key in ("x", "y", "w", "h"):
+                        if type(value) not in (int, float) or not math.isfinite(value):
+                            raise ValueError(tr("控件位置必须是有限数值"))
+                        if key in ("w", "h") and value <= 0:
+                            raise ValueError(tr("控件尺寸必须大于零"))
+                tab = item.get("tabIndex", 0)
+                if type(tab) is not int or tab < 0:
+                    raise ValueError(tr("无效选项卡索引"))
+                walk(item.get("children", []), depth + 1)
+
+        walk(data.get("widgets", []))
+
+
+class ProjectManager:
+    """Handles project new/save/load operations."""
+
+    def __init__(self):
+        self._current: ProjectData = ProjectData()
+        self._dirty: bool = False
+
+    @property
+    def current(self) -> ProjectData:
+        return self._current
+
+    @property
+    def is_dirty(self) -> bool:
+        return self._dirty
+
+    def mark_dirty(self):
+        self._dirty = True
+
+    def set_dirty(self, dirty: bool):
+        self._dirty = dirty
+
+    def new_project(self):
+        self._current = ProjectData()
+        self._dirty = False
+        signalBus.projectNew.emit()
+
+    def save_from_scene(self, scene: DesignScene, path: str, app_name: str = None):
+        """Serialize current scene to .uidp file."""
+        scene.aboutToSerialize.emit()
+        candidate = copy.deepcopy(self._current)
+        if app_name is not None:
+            candidate.app_name = app_name
+        candidate.canvas_width = int(scene.sceneRect().width())
+        candidate.canvas_height = int(scene.sceneRect().height())
+        candidate.grid_size = scene.grid_size
+        candidate.widgets = [
+            item.to_dict() for item in scene.top_level_canvas_items()
+        ]
+        candidate.bit_profiles = copy.deepcopy(scene.bit_profiles)
+        old_base = self._current.base_dir()
+        new_base = Path(path).expanduser().resolve().parent
+        if old_base != new_base:
+            self._rebase_image_paths(candidate.widgets, old_base, new_base)
+            candidate.icon = rebased_asset_path(candidate.icon, old_base, new_base)
+        candidate.file_path = path
+        document = candidate.to_dict()
+        ProjectData.validate(document)
+        payload = json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False)
+        target = Path(path)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=target.parent, prefix=f".{target.name}.",
+                                             suffix=".tmp", delete=False) as output:
+                temporary = Path(output.name)
+                output.write(payload)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        self._current = candidate
+        scene._asset_base_dir = new_base
+        images = {}
+        def collect_images(items):
+            for item in items:
+                if item["type"] == "ImageDisplay":
+                    images[item["id"]] = item.get("properties", {}).get("imagePath", "")
+                collect_images(item.get("children", []))
+        collect_images(candidate.widgets)
+        def update_images(items):
+            for item in items:
+                if item.widget_id in images:
+                    item.properties["imagePath"] = images[item.widget_id]
+                item.set_asset_base_dir(new_base)
+                update_images(item._container_children)
+        update_images(scene.top_level_canvas_items())
+        self._dirty = False
+        signalBus.projectSaved.emit(path)
+
+    @staticmethod
+    def _rebase_image_paths(items, old_base, new_base):
+        for item in items:
+            props = item.get("properties", {})
+            path = props.get("imagePath", "")
+            if item["type"] == "ImageDisplay" and path:
+                props["imagePath"] = rebased_asset_path(path, old_base, new_base)
+            ProjectManager._rebase_image_paths(item.get("children", []), old_base, new_base)
+
+    def load_to_scene(self, scene: DesignScene, path: str):
+        """Load a .uidp file and populate the scene."""
+        text = Path(path).read_text(encoding="utf-8")
+        data = json.loads(text)
+        candidate = ProjectData.from_dict(data)
+        candidate.file_path = path
+        base_dir = Path(path).expanduser().resolve().parent
+        # Construct every widget before removing any existing item. Block global
+        # edit notifications while building/applying the replacement.
+        with QSignalBlocker(signalBus), QSignalBlocker(scene):
+            staged = [CanvasItem.from_dict(wd, asset_base_dir=base_dir)
+                      for wd in candidate.widgets]
+            old_items = scene.top_level_canvas_items()
+            old_rect, old_grid = scene.sceneRect(), scene.grid_size
+            old_profiles = copy.deepcopy(scene.bit_profiles)
+            old_base = getattr(scene, "_asset_base_dir", None)
+            try:
+                scene.clear_all()
+                scene.set_bit_profiles(candidate.bit_profiles)
+                scene._asset_base_dir = base_dir
+                scene.set_canvas_size(candidate.canvas_width, candidate.canvas_height)
+                scene.set_grid_size(candidate.grid_size)
+                for item in staged:
+                    scene.add_canvas_item(item)
+            except Exception:
+                scene.clear_all()
+                scene.set_bit_profiles(old_profiles)
+                scene._asset_base_dir = old_base
+                scene.set_canvas_size(old_rect.width(), old_rect.height())
+                scene.set_grid_size(old_grid)
+                for item in old_items:
+                    scene.add_canvas_item(item)
+                raise
+        # The blocker also hid the new canvas size from the views, which would keep the old scroll range
+        # and show a smaller project shifted off to one side.
+        scene.sceneRectChanged.emit(scene.sceneRect())
+        self._current = candidate
+        self._dirty = False
+        scene.clearSelection()
+        signalBus.widgetDeselected.emit()
+        signalBus.projectLoaded.emit(path)
+
+    def export_scene_data(self, scene: DesignScene, app_name: str = None) -> ProjectData:
+        """Capture current scene state into ProjectData (without saving to file)."""
+        scene.aboutToSerialize.emit()
+        if app_name is not None:
+            self._current.app_name = app_name
+        self._current.canvas_width = int(scene.sceneRect().width())
+        self._current.canvas_height = int(scene.sceneRect().height())
+        self._current.grid_size = scene.grid_size
+        self._current.widgets = [
+            item.to_dict() for item in scene.top_level_canvas_items()
+        ]
+        self._current.bit_profiles = copy.deepcopy(scene.bit_profiles)
+        return self._current

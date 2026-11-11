@@ -1,0 +1,3096 @@
+# coding: utf-8
+"""Auto-generated UI module."""
+import struct, math, json
+from html import escape as _html_escape
+
+def _log_html(text):
+    return _html_escape(str(text)).replace("\n", "<br>")
+from pathlib import Path
+
+from PyQt5.QtCore import Qt, QTimer, QRectF
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QFrame, QGroupBox, QTabWidget, QTextEdit, QCheckBox,
+    QSizePolicy, QHeaderView, QAbstractItemView, QTableWidget, QTableWidgetItem,
+    QSpinBox, QPushButton, QFileDialog, QLineEdit,
+)
+from PyQt5.QtGui import QColor, QPainter, QFont, QPen, QConicalGradient
+
+from qfluentwidgets import (
+    PushButton, PrimaryPushButton, BodyLabel, StrongBodyLabel,
+    CaptionLabel, LineEdit, ComboBox, TextEdit, CheckBox,
+    SwitchButton, Slider, SpinBox, ProgressBar, ProgressRing,
+    CardWidget, TableWidget, ToolButton, ScrollArea,
+    FluentWindow, NavigationItemPosition,
+    FluentIcon as FIF, InfoBar, InfoBarPosition, isDarkTheme,
+    qconfig, setCustomStyleSheet, themeColor,
+)
+
+from i18n import tr, N_
+from serial_handler import _list_all_ports
+
+try:
+    import serial
+    import serial.tools.list_ports
+    HAS_SERIAL = True
+except ImportError:
+    HAS_SERIAL = False
+
+try:
+    import pyqtgraph as pg
+    HAS_PYQTGRAPH = True
+except ImportError:
+    HAS_PYQTGRAPH = False
+
+
+"""Explicit Qt signal lifetimes, including compiled Python callables."""
+
+
+class SignalConnections:
+    """Disconnect external signals when their owning QObject is destroyed.
+
+    PyQt cannot always infer the QObject receiver of a compiled bound method.
+    Relays therefore have an explicit lifetime and release their callback before
+    disconnecting, so already queued deliveries also become harmless.
+    """
+
+    def __init__(self, owner):
+        self._connections = []
+        owner.destroyed.connect(self.clear)
+
+    def connect(self, signal, slot, *args, **kwargs):
+        callback = [slot]
+
+        def relay(*values):
+            current = callback[0]
+            if current is not None:
+                current(*values)
+
+        connection = signal.connect(relay, *args, **kwargs)
+        self._connections.append((signal, connection, callback))
+        return connection
+
+    def clear(self, *_):
+        connections, self._connections = self._connections, []
+        for _signal, _connection, callback in connections:
+            callback[0] = None
+        for signal, connection, _callback in connections:
+            try:
+                signal.disconnect(connection)
+            except (TypeError, RuntimeError):
+                # The sender or its connection may already have been destroyed.
+                pass
+
+"""Explicit lifetimes for Fluent's external window and configuration signals."""
+from functools import update_wrapper
+
+
+def _bridge_fluent_slot(cls, name, argument_count):
+    original = getattr(cls, name)
+    if getattr(original, "_designer_signal_lifetimes", False):
+        return
+
+    # PyQt recognizes genuine Python bound methods as QObject receivers, but
+    # not Nuitka's compiled_method objects. Runtime-created functions keep this
+    # distinction in a compiled app. Exact arity also preserves Qt's argument
+    # truncation (themeChanged supplies a Theme to a zero-argument handler).
+    parameters = ", value" if argument_count else ""
+    values = "value" if argument_count else ""
+    namespace = {}
+    exec(
+        f"def {name}(self{parameters}):\n"
+        f"    return _original.__get__(self, type(self))({values})\n",
+        {"_original": original}, namespace,
+    )
+    bridge = namespace[name]
+    update_wrapper(bridge, original)
+    bridge._designer_signal_lifetimes = True
+    setattr(cls, name, bridge)
+
+
+def install_fluent_signal_lifetimes():
+    """Give Fluent's long-lived signals QObject-aware slots before creation."""
+    from qfluentwidgets import (
+        OptionsSettingCard, SwitchSettingCard, RangeSettingCard,
+        ColorSettingCard, ComboBoxSettingCard,
+    )
+    from qfluentwidgets.common.animation import BackgroundAnimationWidget
+    from qfluentwidgets.components.widgets.stacked_widget import PopUpAniStackedWidget
+    from qfluentwidgets.window.fluent_window import FluentWidget, FluentTitleBar
+
+    _bridge_fluent_slot(BackgroundAnimationWidget, "_updateBackgroundColor", 0)
+    # Page animations have no QObject parent and can finish after the window is gone.
+    _bridge_fluent_slot(PopUpAniStackedWidget, "_PopUpAniStackedWidget__onAniFinished", 0)
+    _bridge_fluent_slot(FluentWidget, "_onThemeChangedFinished", 0)
+    _bridge_fluent_slot(FluentTitleBar, "setTitle", 1)
+    _bridge_fluent_slot(FluentTitleBar, "setIcon", 1)
+    for cls in (OptionsSettingCard, SwitchSettingCard, RangeSettingCard,
+                ColorSettingCard, ComboBoxSettingCard):
+        _bridge_fluent_slot(cls, "setValue", 1)
+
+
+class TitleBarLifecycleMixin:
+    """Install QObject-aware slots before Fluent creates its widget tree.
+
+    FluentWindow replaces its initial FluentWidgetTitleBar during construction.
+    Both title bars must connect the Python bridge from the start: retrieving a
+    fresh compiled bound method later cannot reliably disconnect the first one.
+    """
+
+    def __init__(self, *args, **kwargs):
+        install_fluent_signal_lifetimes()
+        super().__init__(*args, **kwargs)
+
+"""Command encoders shared by preview and standalone applications."""
+import json
+import math
+import struct
+
+from serial_handler import (  # noqa: F401  (_transaction: the MBAP counter, for callers of this module)
+    _transaction, modbus_dispatch, modbus_frame as _modbus_frame, next_modbus_transaction,
+)
+from serial_handler import AREA_TABLES
+from i18n import tr
+
+
+def _command_hex(text):
+    """Accept whitespace and a leading half-byte, but never drop invalid fields."""
+    compact = "".join(str(text).split())
+    if len(compact) % 2:
+        compact = "0" + compact
+    try:
+        return bytes.fromhex(compact)
+    except ValueError as exc:
+        raise ValueError(tr("HEX 格式错误，请检查内容、帧头和帧尾")) from exc
+
+
+def command_hex_frame(command, header="", tail=""):
+    return _command_hex(header) + _command_hex(command) + _command_hex(tail)
+
+
+_JSON_NEWLINES = {"无": "", "\\r\\n": "\r\n", "\\n": "\n", "\\r": "\r"}  # i18n: value
+
+
+def _reject_constant(name):
+    raise ValueError(name)
+
+
+_JSON_MAX_DEPTH = 512
+
+
+def _json_depth_ok(text):
+    """No more than _JSON_MAX_DEPTH objects and arrays nested in each other (outside strings), as in
+    FluentHMI Studio; deeper text is not JSON, so json.loads never runs out of stack."""
+    depth, in_str, esc = 0, False, False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > _JSON_MAX_DEPTH:
+                return False
+        elif ch in "]}":
+            depth -= 1
+    return True
+
+
+def _is_json(text):
+    """Exactly one JSON value under RFC 8259 (NaN and Infinity are not JSON), surrounding whitespace allowed."""
+    if not _json_depth_ok(text):
+        return False
+    try:
+        json.loads(text, parse_constant=_reject_constant)
+    except ValueError:
+        return False
+    return True
+
+
+def _json_fill(text, value_json, placeholders=True):
+    """One pass over ``text``: drop JSON whitespace outside strings and, with ``placeholders``, replace each
+    {value} outside strings by ``value_json``; None when a {value} sits inside a string literal."""
+    out, i, in_str, esc = [], 0, False, False
+    while i < len(text):
+        ch = text[i]
+        if in_str:
+            if placeholders and text.startswith("{value}", i):
+                return None
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+        elif placeholders and text.startswith("{value}", i):
+            out.append(value_json)
+            i += len("{value}")
+        else:
+            if ch not in " \t\n\r":
+                out.append(ch)
+                if ch == '"':
+                    in_str = True
+            i += 1
+    return "".join(out)
+
+
+def json_command(props, value):
+    """The bytes a control in JSON mode sends: ``commandTemplate`` (blank = {value}) with each {value}
+    outside strings replaced by the value (used compacted when it is one JSON value, else as a JSON
+    string), whitespace outside strings removed, then the ``commandJsonNewline`` line ending.
+    A template that is not one JSON value with every {value} as null raises ValueError."""
+    template = props.get("commandTemplate", "{value}")
+    effective = template if template.strip() else "{value}"
+    shape = _json_fill(effective, "null")
+    if shape is None or not _is_json(shape):
+        raise ValueError(tr("JSON 模板无效: %1", template))
+    value = str(value)
+    value_json = (_json_fill(value, "", placeholders=False) if _is_json(value)
+                  else json.dumps(value, ensure_ascii=False))
+    document = _json_fill(effective, value_json)
+    newline = _JSON_NEWLINES.get(props.get("commandJsonNewline", "无"), "")  # i18n: value
+    return (document + newline).encode("utf-8")
+
+
+def command_packed_frame(value, fmt, cast=int, template="{value}", header="", tail=""):
+    try:
+        number = cast(value)
+        if isinstance(number, float) and not math.isfinite(number):
+            raise ValueError("non-finite value")
+        payload = struct.pack(fmt, number)
+    except (TypeError, ValueError, OverflowError, struct.error) as exc:
+        raise ValueError(tr("数值无效或超出数据类型范围")) from exc
+    return command_hex_frame(template.replace("{value}", payload.hex()), header, tail)
+
+
+# Function codes by the names the designer shows, for widgets and exports.
+MODBUS_FUNCTIONS = {
+    "01 读线圈": 0x01, "02 读离散输入": 0x02,  # i18n: value
+    "03 读保持寄存器": 0x03, "04 读输入寄存器": 0x04,  # i18n: value
+    "05 写单线圈": 0x05, "06 写单寄存器": 0x06, "16 写多个寄存器": 0x10,  # i18n: value
+}
+MODBUS_DATA_TYPES = ("uint16", "int16", "uint32", "int32", "float32")
+MODBUS_ORDERS = ("大端(AB CD)", "小端(CD AB)")  # i18n: value
+_REGISTER_FORMATS = {"uint16": "H", "int16": "h", "uint32": "I", "int32": "i", "float32": "f"}
+
+
+def modbus_registers(value, data_type="uint16", reg_order=MODBUS_ORDERS[0]):
+    """A value as the 16-bit registers that hold it: one for 16-bit types, two for 32-bit ones."""
+    fmt = _REGISTER_FORMATS.get(data_type)
+    if fmt is None:
+        raise ValueError(tr("未知的 Modbus 数据类型: %1", data_type))
+    try:
+        number = float(value) if fmt == "f" else int(value)
+        if fmt == "f" and not math.isfinite(number):
+            raise ValueError("non-finite value")
+        raw = struct.pack(">" + fmt, number)
+    except (TypeError, ValueError, OverflowError, struct.error) as exc:
+        raise ValueError(tr("Modbus 值无效或超出 %1 的范围", data_type)) from exc
+    registers = [int.from_bytes(raw[i:i + 2], "big") for i in range(0, len(raw), 2)]
+    if reg_order != MODBUS_ORDERS[0]:
+        registers.reverse()
+    return tuple(registers)
+
+
+def modbus_request(slave, func, address, value, data_type="uint16", reg_order=MODBUS_ORDERS[0]):
+    """Validate a Modbus request and return its integer fields.
+
+    The value is the count for reads and the coil or register value for FC 05/06 (FC 06
+    also takes an int16); for FC 16 it becomes the registers holding the typed value.
+    """
+    try:
+        slave, func, address = (int(item) for item in (slave, func, address))
+        if func not in (0x06, 0x10):
+            value = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(tr("Modbus 地址和值必须是整数")) from exc
+    if not 1 <= slave <= 247 or not 0 <= address <= 65535:
+        raise ValueError(tr("Modbus 从站地址或寄存器地址超出范围"))
+    if func in (0x06, 0x10):
+        if func == 0x06 and data_type not in ("uint16", "int16"):
+            raise ValueError(tr("32 位数据占两个寄存器，请用 16 写多个寄存器"))
+        registers = modbus_registers(value, data_type, reg_order)
+        if address + len(registers) > 65536:
+            raise ValueError(tr("Modbus 从站地址或寄存器地址超出范围"))
+        return slave, func, address, registers[0] if func == 0x06 else registers
+    if func in (1, 2):
+        valid = 1 <= value <= 2000
+    elif func in (3, 4):
+        valid = 1 <= value <= 125
+    elif func == 5:
+        valid = value in (0, 0xFF00)
+    else:
+        valid = False
+    if not valid:
+        raise ValueError(tr("Modbus 值或读取数量超出功能码允许范围"))
+    return slave, func, address, value
+
+
+def command_modbus_frame(slave, func, address, value, data_type="uint16", reg_order=MODBUS_ORDERS[0]):
+    """A validated Modbus RTU request frame (CRC16 appended)."""
+    return _modbus_frame(modbus_request(slave, func, address, value, data_type, reg_order))
+
+
+def command_modbus_tcp_frame(slave, func, address, value, transaction=None,
+                             data_type="uint16", reg_order=MODBUS_ORDERS[0]):
+    """A validated Modbus TCP request ADU (MBAP header, no CRC)."""
+    request = modbus_request(slave, func, address, value, data_type, reg_order)
+    if transaction is None:
+        transaction = next_modbus_transaction()
+    return _modbus_frame(request, transaction)
+
+
+def send_modbus_command(hub, slave, func, address, value, data_type="uint16", reg_order=MODBUS_ORDERS[0]):
+    """Validate once, then send the request over every connected link, framed for that link.
+
+    A link parsing Modbus TCP gets an MBAP frame, one parsing Modbus ASCII an ASCII frame,
+    every other link an RTU frame; a link answering as a Modbus slave gets none. A link that parses Modbus
+    queues the request in its
+    ModbusMaster ahead of any polling reads, with a 1000 ms timeout, so it never collides
+    with a read on the wire; the others are written at once. Returns the frames that were
+    accepted (queued, or written); an invalid request raises before anything is sent.
+    """
+    request = modbus_request(slave, func, address, value, data_type, reg_order)
+    return [frame for frame, _master in modbus_dispatch(hub, request, 1000, "write")]
+
+
+# -- the data tables of the link cards in the 从站 role (modbus_slave.py, slave_runtime.py) --------------
+
+_TYPE_RANGES = {"uint16": (0, 0xFFFF), "int16": (-0x8000, 0x7FFF), "uint32": (0, 0xFFFFFFFF),
+                "int32": (-0x80000000, 0x7FFFFFFF), "float32": (-3.4028234663852886e38, 3.4028234663852886e38)}
+
+
+def slave_devices(widgets):
+    """The slaves of the link cards in the slave role among ``widgets``, in their order (the document's)."""
+    return [device for device in (getattr(widget, "slave_device", None) for widget in widgets)
+            if device is not None]
+
+
+def slave_control_write(devices, area, address, value, data_type="uint16", reg_order=MODBUS_ORDERS[0]):
+    """A user's change of a control with a Modbus binding, written into every slave's data table at the
+    binding's area and address: 1 or 0 for a coil or discrete input, the registers of the value packed as its
+    type (and clamped to the type's range) for registers, as a Modbus write command packs them. A table that
+    has not every address in its area is left alone."""
+    table = AREA_TABLES.get(area)
+    if table is None or not devices:
+        return
+    if table in ("co", "di"):
+        values = [1 if value else 0]
+    else:
+        low, high = _TYPE_RANGES.get(data_type, _TYPE_RANGES["uint16"])
+        number = float(value) if data_type == "float32" else int(value)
+        try:
+            values = list(modbus_registers(min(max(number, low), high), data_type, reg_order))
+        except ValueError:
+            return
+    for device in devices:
+        device.write(table, int(address), values)
+
+
+def slave_command_write(devices, request):
+    """A validated Modbus command (modbus_request) carried out on every slave's data table, whatever slave
+    it names: 05 writes 1 for a value that is not 0, 06 and 16 the registers the command packs; a read does
+    nothing. True when a table took it."""
+    _slave, func, address, value = request
+    if func == 0x05:
+        table, values = "co", [1 if value else 0]
+    elif func == 0x06:
+        table, values = "hr", [value]
+    elif func == 0x10:
+        table, values = "hr", list(value)
+    else:
+        return False
+    return any([device.write(table, address, values) for device in devices])
+
+"""Preserve the designer's tab-relative coordinates in real Qt tab pages."""
+from PyQt5.QtCore import QObject, QEvent, QPoint, QRect, QTimer
+from PyQt5 import sip
+
+
+class TabChildGeometry(QObject):
+    def __init__(self, tabs):
+        super().__init__(tabs)
+        self.tabs = tabs
+        self._children = {}
+        self._pending = False
+        self._applying = False
+        tabs.installEventFilter(self)
+        tabs.currentChanged.connect(self.schedule)
+
+    def register(self, child, geometry):
+        self._children[child] = QRect(*geometry)
+        page = child.parentWidget()
+        page.installEventFilter(self)
+        page.parentWidget().installEventFilter(self)
+        self.apply()
+        self.schedule()
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Resize, QEvent.Move, QEvent.Show,
+                            QEvent.LayoutRequest, QEvent.StyleChange, QEvent.FontChange):
+            self.schedule()
+        return False
+
+    def schedule(self, *_):
+        if not self._pending and not self._applying:
+            self._pending = True
+            QTimer.singleShot(0, self.apply)
+
+    def apply(self):
+        self._pending = False
+        if sip.isdeleted(self.tabs) or self._applying:
+            return
+        self._applying = True
+        try:
+            for child, rect in list(self._children.items()):
+                if sip.isdeleted(child):
+                    del self._children[child]
+                    continue
+                page = child.parentWidget()
+                # The page may be laid out lazily on its first activation.
+                # Reapply after its move/show events, without changing saved coordinates.
+                origin = page.mapTo(self.tabs, QPoint())
+                child.setGeometry(rect.translated(-origin))
+        finally:
+            self._applying = False
+
+
+def place_tab_child(tabs, child, x, y, width, height):
+    controller = getattr(tabs, "_designer_child_geometry", None)
+    if controller is None:
+        controller = TabChildGeometry(tabs)
+        tabs._designer_child_geometry = controller
+    controller.register(child, (x, y, width, height))
+
+"""A slider's command, sent once when a drag lets go: shared by preview and standalone applications."""
+from PyQt5.QtCore import QEvent, QObject, Qt
+
+
+class SendOnRelease(QObject):
+    """Calls send(value) whenever a qfluentwidgets Slider's value changes, except while the mouse is down on
+    it: a drag sends once, when it lets go, instead of a command for every value the handle passes. Keys and
+    the wheel move in steps and send each one.
+
+    That Slider never sets QSlider.isSliderDown(), and a drag that starts on the groove emits no
+    pressed/released signals, so the mouse is watched on the slider and its handle."""
+
+    def __init__(self, slider, send):
+        super().__init__(slider)
+        self._slider, self._send = slider, send
+        self._held = False
+        self._press_value = slider.value()
+        slider.installEventFilter(self)
+        slider.handle.installEventFilter(self)
+        slider.valueChanged.connect(self._value_changed)
+
+    def _value_changed(self, value):
+        if not self._held:
+            self._send(value)
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease) and event.button() == Qt.LeftButton:
+            if kind == QEvent.MouseButtonPress:
+                self._held = True
+                self._press_value = self._slider.value()  # before a press on the groove moves it
+            elif self._held:
+                self._held = False
+                if self._slider.value() != self._press_value:
+                    self._send(self._slider.value())
+        return False
+
+"""A slider with its minimum and maximum at its ends (the showRange property), shared by preview and exported
+apps. Code that wires or binds a slider goes through slider_of(), which gives the Slider in both cases."""
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QWidget, QHBoxLayout
+from qfluentwidgets import CaptionLabel, Slider
+
+
+class SliderWithLimits(QWidget):
+    """A Slider in a row with its minimum on the left and its maximum on the right, both as captions."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.slider = Slider(Qt.Horizontal, self)
+        self._min_label = CaptionLabel(self)
+        self._max_label = CaptionLabel(self)
+        # Hidden labels take no room in the row, so with the limits off the slider fills the widget.
+        self._min_label.hide()
+        self._max_label.hide()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        row.addWidget(self._min_label, 0, Qt.AlignVCenter)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self._max_label, 0, Qt.AlignVCenter)
+        # The labels follow the range however it is set: the slider emits rangeChanged on every change.
+        self.slider.rangeChanged.connect(self._show_limits)
+        self._show_limits(self.slider.minimum(), self.slider.maximum())
+
+    def set_show_range(self, shown):
+        self._min_label.setVisible(bool(shown))
+        self._max_label.setVisible(bool(shown))
+
+    def _show_limits(self, low, high):
+        self._min_label.setText(str(low))
+        self._max_label.setText(str(high))
+
+
+def slider_of(widget):
+    """The Slider a designed slider widget is: the widget itself, or the one inside SliderWithLimits."""
+    return widget.slider if isinstance(widget, SliderWithLimits) else widget
+
+
+class LEDIndicator(QWidget):
+    COLOR_MAP = {
+        "green": QColor(76, 175, 80), "red": QColor(244, 67, 54),
+        "yellow": QColor(255, 193, 7), "blue": QColor(33, 150, 243),
+        "gray": QColor(158, 158, 158),
+    }
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._color_name = "green"
+        self._on = True
+        self._label_text = ""
+        self.setMinimumSize(20, 20)
+        self._theme_connections = SignalConnections(self)
+        self._theme_connections.connect(qconfig.themeChangedFinished, self.update)
+    def set_color(self, name): self._color_name = name; self.update()
+    def set_on(self, on): self._on = on; self.update()
+    def set_label(self, text): self._label_text = text; self.update()
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        color = self.COLOR_MAP.get(self._color_name, QColor(76, 175, 80))
+        if not self._on: color = QColor("#777777" if isDarkTheme() else "#c8c8c8")
+        size = min(self.height(), 30)
+        painter.setBrush(color); painter.setPen(Qt.NoPen)
+        painter.drawEllipse(4, (self.height()-size)//2, size, size)
+        painter.setBrush(Qt.NoBrush); painter.setPen(color.darker(120))
+        painter.drawEllipse(4, (self.height()-size)//2, size, size)
+        if self._label_text:
+            painter.setPen(QColor("#f3f3f3" if isDarkTheme() else "#3c3c3c"))
+            painter.setFont(QFont(self.font().family(), 10))
+            painter.drawText(size+12, 0, self.width()-size-12, self.height(), Qt.AlignVCenter, self._label_text)
+        painter.end()
+
+
+class NumericDisplay(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8,4,8,4); layout.setSpacing(0)
+        self._title = CaptionLabel(tr("标题"))
+        self._value = BodyLabel("0.00")
+        self._unit = CaptionLabel("")
+        for label in (self._title, self._unit):
+            label.setTextColor(QColor("#606060"), QColor("#b3b3b3"))
+        self._unit.setMinimumHeight(self._unit.fontMetrics().height())  # an empty unit keeps its line
+        for label in (self._title, self._value, self._unit):
+            label.setAlignment(Qt.AlignCenter); layout.addWidget(label)
+        self._update_value_style()
+        self._theme_connections = SignalConnections(self)
+        self._theme_connections.connect(qconfig.themeChangedFinished, self._update_value_style)
+        self._theme_connections.connect(qconfig.themeColorChanged, self._update_value_style)
+    def set_title(self, t): self._title.setText(t)
+    def set_value(self, v): self._value.setText(str(v))
+    def set_unit(self, u): self._unit.setText(u)
+    def set_value_color(self, color):
+        self._val_color = color
+        self._update_value_style()
+    def set_font_size(self, size):
+        self._val_font_size = size
+        self._update_value_style()
+    def _update_value_style(self):
+        color = QColor(getattr(self, "_val_color", None) or themeColor())
+        font = self._value.font()
+        font.setPixelSize(getattr(self, "_val_font_size", 28)); font.setBold(True)
+        self._value.setFont(font)
+        self._value.setTextColor(color, color)
+
+"""Explicit Qt signal lifetimes, including compiled Python callables."""
+
+
+class SignalConnections:
+    """Disconnect external signals when their owning QObject is destroyed.
+
+    PyQt cannot always infer the QObject receiver of a compiled bound method.
+    Relays therefore have an explicit lifetime and release their callback before
+    disconnecting, so already queued deliveries also become harmless.
+    """
+
+    def __init__(self, owner):
+        self._connections = []
+        owner.destroyed.connect(self.clear)
+
+    def connect(self, signal, slot, *args, **kwargs):
+        callback = [slot]
+
+        def relay(*values):
+            current = callback[0]
+            if current is not None:
+                current(*values)
+
+        connection = signal.connect(relay, *args, **kwargs)
+        self._connections.append((signal, connection, callback))
+        return connection
+
+    def clear(self, *_):
+        connections, self._connections = self._connections, []
+        for _signal, _connection, callback in connections:
+            callback[0] = None
+        for signal, connection, _callback in connections:
+            try:
+                signal.disconnect(connection)
+            except (TypeError, RuntimeError):
+                # The sender or its connection may already have been destroyed.
+                pass
+
+"""Conversions shared by live bindings and standalone exported applications."""
+import ast
+from functools import lru_cache
+import math
+import operator
+import struct
+
+from i18n import tr
+
+
+_EXPRESSION_NODES = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Name,
+    ast.Load, ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
+    ast.Mod, ast.Pow, ast.LShift, ast.RShift, ast.BitOr, ast.BitXor, ast.BitAnd,
+    ast.Invert, ast.Not, ast.UAdd, ast.USub, ast.And, ast.Or, ast.Eq, ast.NotEq,
+    ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+)
+
+
+@lru_cache(maxsize=256)
+def _curve_expression_code(expression):
+    # Cache rejected expressions too: malformed project text is received on every sample.
+    try:
+        if len(expression) > 4096:
+            return None
+        tree = ast.parse(expression.strip(), mode="eval")
+        nodes = list(ast.walk(tree))
+        if len(nodes) > 512:
+            return None
+        for node in nodes:
+            if not isinstance(node, _EXPRESSION_NODES):
+                return None
+            if isinstance(node, ast.Name) and node.id != "value":
+                return None
+            if isinstance(node, ast.Constant) and type(node.value) not in (int, float, bool):
+                return None
+        return tree.body
+    except (SyntaxError, ValueError, TypeError, RecursionError):
+        return None
+
+
+def _expression_number(value):
+    if type(value) not in (int, float, bool):
+        raise ValueError("Expression requires a real number")
+    if isinstance(value, int):
+        if not -(1 << 63) <= value < (1 << 63):
+            raise OverflowError("Expression integer exceeds 64 bits")
+    elif not math.isfinite(value):
+        raise ValueError("Expression requires a finite number")
+    return value
+
+
+_EXPRESSION_BINARY = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+    ast.BitAnd: operator.and_, ast.BitOr: operator.or_, ast.BitXor: operator.xor,
+}
+_EXPRESSION_COMPARE = {
+    ast.Eq: operator.eq, ast.NotEq: operator.ne, ast.Lt: operator.lt,
+    ast.LtE: operator.le, ast.Gt: operator.gt, ast.GtE: operator.ge,
+}
+
+
+def _expression_eval(node, value):
+    if isinstance(node, ast.Constant):
+        return _expression_number(node.value)
+    if isinstance(node, ast.Name):
+        return _expression_number(value)
+    if isinstance(node, ast.BoolOp):
+        for child in node.values:
+            result = _expression_eval(child, value)
+            if isinstance(node.op, ast.And) and not result:
+                return result
+            if isinstance(node.op, ast.Or) and result:
+                return result
+        return result
+    if isinstance(node, ast.Compare):
+        left = _expression_eval(node.left, value)
+        for op, child in zip(node.ops, node.comparators):
+            right = _expression_eval(child, value)
+            if not _EXPRESSION_COMPARE[type(op)](left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.UnaryOp):
+        operand = _expression_eval(node.operand, value)
+        operation = {ast.UAdd: operator.pos, ast.USub: operator.neg,
+                     ast.Not: operator.not_, ast.Invert: operator.invert}[type(node.op)]
+        return _expression_number(operation(operand))
+    left = _expression_eval(node.left, value)
+    right = _expression_eval(node.right, value)
+    if isinstance(node.op, (ast.LShift, ast.RShift)):
+        if not isinstance(left, int) or not isinstance(right, int) or right < 0:
+            raise ValueError("Invalid shift")
+        if isinstance(node.op, ast.RShift):
+            result = left >> min(right, 63)
+        elif left == 0:
+            result = 0
+        elif right >= 64:
+            raise OverflowError("Left shift exceeds 64 bits")
+        else:
+            result = left << right  # At most 127 bits before the range check.
+    elif isinstance(node.op, ast.Pow):
+        if isinstance(left, int) and isinstance(right, int) and right >= 0:
+            if left in (-1, 0, 1):
+                result = 1 if right == 0 else (left if left != -1 or right % 2 else 1)
+            elif right > 63:
+                raise OverflowError("Integer power exceeds 64 bits")
+            else:
+                # Each multiplication has two 64-bit operands; stop before the next step.
+                result = 1
+                for _ in range(right):
+                    result = _expression_number(result * left)
+        else:
+            result = math.pow(left, right)
+    else:
+        result = _EXPRESSION_BINARY[type(node.op)](left, right)
+    return _expression_number(result)
+
+
+def curve_expression(raw_value, expression):
+    """Evaluate bounded numeric curve arithmetic; failures preserve the original numeric input."""
+    if not expression:
+        return raw_value
+    if isinstance(raw_value, str):
+        raw_value = binding_float(raw_value)
+    else:
+        binding_float(raw_value)
+    try:
+        node = _curve_expression_code(expression)
+        return _expression_eval(node, raw_value) if node is not None else raw_value
+    except Exception:
+        return raw_value
+
+
+def binding_integer(value):
+    """Accept integer-compatible values that fit Qt's signed 32-bit API."""
+    number = int(value)
+    if not -(2 ** 31) <= number < 2 ** 31:
+        raise OverflowError(tr("绑定整数超出 Qt 支持的范围"))
+    return number
+
+
+def binding_float(value):
+    """Reject NaN/infinity before passing a sample to a numeric widget."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(tr("绑定数值必须是有限数"))
+    return number
+
+
+def binding_register(value):
+    """Modbus register payloads must be unsigned 16-bit integers."""
+    if not isinstance(value, int) or not 0 <= value <= 65535:
+        raise ValueError(tr("Modbus 寄存器值必须是 0 到 65535 的整数"))
+    return value
+
+
+# Where a Modbus binding or chart curve reads: a register table, whose registers a reply names by
+# address (hr100), from the request it answers. 保持寄存器 when a binding names none.
+MODBUS_AREAS = {"保持寄存器": "hr", "输入寄存器": "ir", "线圈": "co", "离散输入": "di"}  # i18n: value
+DEFAULT_MODBUS_AREA = "保持寄存器"  # i18n: value
+# The registers a value of each type takes; coils and discrete inputs are one bit each.
+MODBUS_REGISTERS = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2}
+
+
+def modbus_need(area, address, data_type="uint16", slave_filter=-1, period=0):
+    """What a Modbus binding or chart curve reads, for the Modbus poller:
+    ``(slave, table, address, count, period)``, or None for an area that is not a register table.
+    A slave of 0 or less stands for the poller's default slave, a period of 0 for its default period."""
+    table = MODBUS_AREAS.get(area)
+    if table is None:
+        return None
+    count = 1 if table in ("co", "di") else MODBUS_REGISTERS.get(data_type, 1)
+    return int(slave_filter), table, int(address), count, max(0, min(60000, int(period)))
+
+
+def modbus_value(data, address, data_type="uint16", reg_order="大端(AB CD)",  # i18n: value
+                 fc_filter=-1, slave_filter=-1, area=DEFAULT_MODBUS_AREA):
+    """One value from a parsed Modbus response, or None when the response does not hold it.
+
+    The value is the register (or coil, or discrete input) at ``address`` of the area's table,
+    named by address in a reply to a read this program sent (hr100, co3). 32-bit types take the
+    register at the address and the next one, which must be in the same response. Coils and
+    discrete inputs are 0 or 1 whatever the data type.
+    """
+    if slave_filter >= 0 and data.get("slave") != slave_filter:
+        return None
+    fc = data.get("fc", 0)
+    if fc_filter >= 0 and fc != fc_filter:
+        return None
+    table = MODBUS_AREAS.get(area)
+    if table is None:
+        return None
+    if table in ("co", "di"):
+        return data.get(f"{table}{address}")
+    r0 = data.get(f"{table}{address}")
+    if r0 is None:
+        return None
+    r0 = binding_register(r0)
+    if data_type == "uint16":
+        return r0
+    if data_type == "int16":
+        return r0 - 65536 if r0 > 32767 else r0
+    r1 = data.get(f"{table}{address + 1}")
+    if r1 is None:
+        return None
+    r1 = binding_register(r1)
+    high, low = (r0, r1) if reg_order == "大端(AB CD)" else (r1, r0)  # i18n: value
+    raw = high.to_bytes(2, "big") + low.to_bytes(2, "big")
+    if data_type == "uint32":
+        return int.from_bytes(raw, "big")
+    if data_type == "int32":
+        return int.from_bytes(raw, "big", signed=True)
+    if data_type == "float32":
+        return struct.unpack(">f", raw)[0]
+    return r0
+
+
+def binding_boolean(value):
+    """Read explicit boolean tokens or finite numbers; reject unknown text."""
+    if isinstance(value, str):
+        token = value.strip().casefold()
+        if token in ("true", "on", "yes"):
+            return True
+        if token in ("false", "off", "no"):
+            return False
+    return bool(binding_float(value))
+
+
+def binding_decimals(value, places="自动"):  # i18n: value
+    """A number shown with a fixed count of decimal places; anything else (text, flags, NaN) as it came."""
+    if places in ("自动", "", None) or isinstance(value, bool):  # i18n: value
+        if isinstance(value, float) and math.isfinite(value):
+            # 15 significant digits: the noise of binary arithmetic (267 * 0.1 = 26.700000000000003)
+            # goes, every digit a double really holds stays.
+            return float(f"{value:.15g}")
+        return value
+    try:
+        number = float(value)
+        places = int(places)
+    except (TypeError, ValueError, OverflowError):
+        return value
+    if not math.isfinite(number):
+        return value
+    return f"{number:.{places}f}"
+
+
+def binding_led(value, on_value="1", off_value="0"):
+    """Preserve custom LED states before falling back to boolean conversion."""
+    text = str(value).strip()
+    if text == on_value:
+        return True
+    if text == off_value:
+        return False
+    try:
+        return binding_float(value) == binding_float(on_value)
+    except (TypeError, ValueError, OverflowError):
+        return binding_boolean(value)
+
+"""Bounded display cache with full history spooled to a temporary file."""
+from collections import deque
+from itertools import islice
+import math
+import struct
+import tempfile
+
+from i18n import tr
+
+
+class ChartHistory:
+    def __init__(self, capacity=10000):
+        self.cache = deque(maxlen=capacity)
+        self.count = 0
+        self._file = None
+
+    def append(self, value):
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError(tr("曲线样本必须是有限数"))
+        if self._file is None:
+            self._file = tempfile.TemporaryFile()
+        self._file.write(struct.pack("<d", value))
+        self.cache.append(value)
+        self.count += 1
+
+    def tail(self, count):
+        return list(islice(self.cache, max(0, len(self.cache) - count), None))
+
+    def values(self):
+        if self._file is None:
+            return
+        self._file.flush()
+        self._file.seek(0)
+        try:
+            while True:
+                chunk = self._file.read(8192)
+                if not chunk:
+                    break
+                yield from (v[0] for v in struct.iter_unpack("<d", chunk))
+        finally:
+            self._file.seek(0, 2)
+
+    def clear(self):
+        self.close()
+        self.cache.clear()
+        self.count = 0
+
+    def close(self):
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+    def __len__(self):
+        return len(self.cache)
+
+    def __getitem__(self, index):
+        return self.cache[index]
+
+    def __del__(self):
+        self.close()
+
+# coding: utf-8
+"""Chart widgets: real-time line chart (pyqtgraph) and gauge meter."""
+import csv
+import json
+import math
+import struct
+from itertools import zip_longest
+from pathlib import Path
+
+from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF, QSize
+from PyQt5.QtGui import QColor, QFontMetricsF, QPainter, QPen
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QSizePolicy
+
+from qfluentwidgets import (
+    LineEdit as FluentLineEdit, ToolButton as FluentToolButton, FluentIcon,
+    BodyLabel, CaptionLabel, ToolTipFilter, ToolTipPosition, isDarkTheme, qconfig, setCustomStyleSheet,
+)
+
+
+
+from serial_handler import RawFrameBuffer
+
+
+from i18n import tr
+
+try:
+    import pyqtgraph as pg
+    HAS_PYQTGRAPH = True
+except ImportError:
+    HAS_PYQTGRAPH = False
+
+_CURVE_COLORS = [
+    (0, 120, 212), (244, 67, 54), (76, 175, 80), (255, 152, 0),
+    (156, 39, 176), (0, 188, 212), (121, 85, 72), (96, 125, 139),
+]
+
+_DARK_CURVE_COLORS = [
+    (74, 163, 223), (255, 112, 105), (129, 199, 132), (255, 183, 77),
+    (206, 147, 216), (77, 208, 225), (188, 170, 164), (176, 190, 197),
+]
+
+_STRUCT_FMT = {
+    "uint8": ("B", 1), "int8": ("b", 1),
+    "uint16": ("H", 2), "int16": ("h", 2),
+    "uint32": ("I", 4), "int32": ("i", 4),
+    "float32": ("f", 4),
+}
+
+
+# ---------------------------------------------------------------------------
+# Real-time line chart — multi-curve with built-in parsing
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CURVE_CFG = {
+    "name": "曲线1", "parseMode": "键值匹配",  # i18n: value
+    "key": "", "jsonPath": "", "expression": "",
+    "byteOffset": 0, "dataType": "float32", "byteOrder": "大端(BE)",  # i18n: value
+    "frameHeader": "", "frameTail": "",
+    "regIndex": 0, "mbDataType": "uint16", "mbRegOrder": "大端(AB CD)",  # i18n: value
+    "mbFcFilter": -1, "mbSlaveFilter": -1, "mbArea": "保持寄存器",  # i18n: value
+}
+
+# Virtual prop name -> per-curve storage suffix
+_CURVE_FIELD_MAP = {
+    "curveName": "name", "curveParseMode": "parseMode",
+    "curveExpression": "expression",
+    "curveKey": "key", "curveJsonPath": "jsonPath",
+    "curveByteOffset": "byteOffset", "curveDataType": "dataType",
+    "curveByteOrder": "byteOrder", "curveFrameHeader": "frameHeader",
+    "curveFrameTail": "frameTail", "curveRegIndex": "regIndex",
+    "curveMbDataType": "mbDataType", "curveMbRegOrder": "mbRegOrder",
+    "curveMbFcFilter": "mbFcFilter", "curveMbSlaveFilter": "mbSlaveFilter",
+    "curveMbArea": "mbArea",
+}
+
+
+class _HistoryObjectPairs(list):
+    """Distinguish legacy JSON objects while preserving duplicate channel keys."""
+
+
+def _history_json_channels(document):
+    if isinstance(document, _HistoryObjectPairs):
+        channels = list(document)
+    elif isinstance(document, list):
+        channels = []
+        for entry in document:
+            if not isinstance(entry, _HistoryObjectPairs):
+                raise ValueError(tr("曲线 JSON 通道必须包含 name 和 values"))
+            entry = dict(entry)
+            if set(entry) != {"name", "values"}:
+                raise ValueError(tr("曲线 JSON 通道必须包含 name 和 values"))
+            channels.append((entry["name"], entry["values"]))
+    else:
+        raise ValueError(tr("曲线 JSON 必须是对象或通道数组"))
+    for name, values in channels:
+        if not isinstance(name, str) or not isinstance(values, list) or isinstance(values, _HistoryObjectPairs):
+            raise ValueError(tr("曲线 JSON 通道名称必须是文本，样本必须是数组"))
+    return channels
+
+
+def default_curve_name(index):
+    """The name of curve ``index`` (from 0) when the file gives none; the same in every language."""
+    return "曲线%1".replace("%1", str(index + 1))  # i18n: value
+
+
+def build_cfgs_from_props(props: dict) -> list:
+    """Build per-curve config list from flat ``_curve_{i}_{field}`` properties."""
+    count = max(1, min(8, int(props.get("curveCount", 1))))
+    cfgs = []
+    for i in range(count):
+        cfg = dict(_DEFAULT_CURVE_CFG)
+        cfg["name"] = props.get(f"_curve_{i}_name", default_curve_name(i))
+        for field in _DEFAULT_CURVE_CFG:
+            stored = props.get(f"_curve_{i}_{field}")
+            if stored is not None:
+                cfg[field] = stored
+        cfgs.append(cfg)
+    return cfgs
+
+
+class ChartHeader(QWidget):
+    """The row above the plot: the chart's title, then an entry per curve reading "name value", the dashed
+    comparison curves' too, flowing left to right and onto further rows only where they do not fit. An entry
+    keeps the widest it has been, so a reading that gets shorter (100 -> 99.82) leaves the entries after it
+    where they are; a new one starts wide enough for a typical reading. Clicking an entry calls toggled(index)."""
+
+    SAMPLE_READING = "-0000.00"
+    _PAD, _GAP, _TITLE_GAP, _SAMPLE, _TEXT = 8, 14, 20, 20, 26
+
+    def __init__(self, toggled, parent=None):
+        super().__init__(parent)
+        self._toggled = toggled
+        self._title = ""
+        self._entries = []  # (name, value, (r, g, b), dashed, shown)
+        self._widths = []  # the widest each entry's text has been
+        self._foreground = QColor("#202020")
+        policy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def set_title(self, title):
+        self._title = title
+        self.updateGeometry()
+        self.update()
+
+    def set_foreground(self, color):
+        self._foreground = QColor(color)
+        self.update()
+
+    def foreground(self):
+        return QColor(self._foreground)
+
+    def set_entries(self, entries):
+        metrics = QFontMetricsF(self._entry_font())
+        height = self.heightForWidth(self.width())
+        for index, (name, value, *_) in enumerate(entries):
+            if index == len(self._widths):
+                self._widths.append(metrics.horizontalAdvance(f"{name} {self.SAMPLE_READING}"))
+            self._widths[index] = max(self._widths[index], metrics.horizontalAdvance(f"{name} {value}"))
+        self._entries = list(entries)
+        if self.heightForWidth(self.width()) != height:
+            self.updateGeometry()
+        self.update()
+
+    def renew(self, first):
+        """The entries from `first` on belong to new curves (rebuilt, or a recording loaded or cleared)."""
+        del self._widths[first:]
+        self.updateGeometry()
+
+    def entry_texts(self):
+        return [f"{name} {value}" for name, value, *_ in self._entries]
+
+    def entry_rect(self, index):
+        return self._places(self.width())[1][index]
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._places(width)[2]
+
+    def sizeHint(self):
+        title, rects, _ = self._places(1 << 20)  # all in one row
+        return QSize(math.ceil(max([title.right()] + [rect.right() for rect in rects])) + self._PAD,
+                     self.heightForWidth(self.width()))
+
+    def minimumSizeHint(self):
+        return QSize(0, self.heightForWidth(self.width()))
+
+    def _entry_font(self):
+        font = self.font()
+        font.setPointSizeF(9)
+        return font
+
+    def _title_font(self):
+        font = self.font()
+        font.setPointSizeF(10)
+        return font
+
+    def _places(self, width):
+        """The title's rect, the entries' rects and the height, for a width."""
+        row = math.ceil(max(QFontMetricsF(self._entry_font()).height(),
+                            QFontMetricsF(self._title_font()).height())) + 6
+        widths = [self._TEXT + held for held in self._widths[:len(self._entries)]]
+        if self._title:
+            widths.insert(0, QFontMetricsF(self._title_font()).horizontalAdvance(self._title))
+        rects, x, y = [], self._PAD, 2
+        for index, item_width in enumerate(widths):
+            if x > self._PAD and x + item_width > width - self._PAD:
+                x, y = self._PAD, y + row
+            rects.append(QRectF(x, y, item_width, row))
+            x += item_width + (self._TITLE_GAP if self._title and index == 0 else self._GAP)
+        title = rects.pop(0) if self._title else QRectF()
+        return title, rects, (y + row + 2 if widths else 0)
+
+    def paintEvent(self, event):
+        title, rects, _ = self._places(self.width())
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        if self._title:
+            painter.setFont(self._title_font())
+            painter.setPen(self._foreground)
+            painter.drawText(title, Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, self._title)
+        painter.setFont(self._entry_font())
+        for rect, (name, value, color, dashed, shown) in zip(rects, self._entries):
+            sample = QColor(*color) if shown else QColor(self._foreground)
+            text = QColor(self._foreground)
+            if not shown:  # a hidden curve's entry is greyed
+                sample.setAlpha(82)
+                text.setAlpha(86)
+            middle = rect.center().y()
+            painter.setPen(QPen(sample, 2, Qt.DashLine if dashed else Qt.SolidLine, Qt.FlatCap))
+            painter.drawLine(QPointF(rect.left(), middle), QPointF(rect.left() + self._SAMPLE, middle))
+            painter.setPen(text)
+            painter.drawText(rect.adjusted(self._TEXT, 0, 0, 0), Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip,
+                             f"{name} {value}")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            for index, rect in enumerate(self._places(self.width())[1]):
+                if rect.contains(QPointF(event.pos())):
+                    self._toggled(index)
+                    break
+        event.accept()
+
+
+class RealtimeLineChart(QWidget):
+    """Multi-curve scrolling real-time chart, with a header above the plot that reads each curve's value, the
+    latest or at a draggable cursor. Each curve has independent parse configuration."""
+
+    HISTORY_LIMIT = 10000
+    REFRESH_MS = 33
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._serial_connections = SignalConnections(self)
+        self._external_connections = SignalConnections(self)
+        self._root = QVBoxLayout(self)
+        self._root.setContentsMargins(0, 0, 0, 0)
+        self._root.setSpacing(2)
+
+        self._display_points = 200
+        self._title = tr("实时曲线")
+        self._cfgs: list = [dict(_DEFAULT_CURVE_CFG)]
+        self._curves = []
+        self._data: list = []
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(self.REFRESH_MS)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self._refresh_all)
+        self.destroyed.connect(lambda _=None, histories=self._data: [h.close() for h in histories])
+        # a loaded recording laid over the live curves: [(name, values)] and their dashed curves
+        self._refs: list = []
+        self._ref_curves: list = []
+        self._listening = False
+        self._cursor_mode = False
+        self._missing_label = None
+
+        # The title and a "name value" entry per curve, the dashed ones too; clicking one hides or shows its
+        # curve. Above the plot, so no curve runs under it.
+        self._header = ChartHeader(self._toggle_curve)
+        self._header.set_title(self._title)
+        self._root.addWidget(self._header)
+
+        if HAS_PYQTGRAPH:
+            self._plot = pg.PlotWidget()
+            self._plot.showGrid(x=True, y=True, alpha=0.3)
+            self._root.addWidget(self._plot, 1)
+
+            self._cursor_line = pg.InfiniteLine(
+                angle=90, movable=True,
+                pen=pg.mkPen(color=(255, 0, 0, 180), width=1, style=Qt.DashLine))
+            self._cursor_line.setVisible(False)
+            self._plot.addItem(self._cursor_line)
+            self._external_connections.connect(
+                self._cursor_line.sigPositionChanged, self._on_cursor_moved)
+            self._external_connections.connect(
+                self._plot.scene().sigMouseClicked, self._on_plot_clicked)
+        else:
+            self._missing_label = BodyLabel(tr("需要安装 pyqtgraph"))
+            self._missing_label.setAlignment(Qt.AlignCenter)
+            self._root.addWidget(self._missing_label, 1)
+            self._plot = None
+            self._cursor_line = None
+
+        # ---- toolbar ----
+        tb = QHBoxLayout()
+        tb.setContentsMargins(4, 2, 4, 0)
+        tb.setSpacing(6)
+        tb.addWidget(BodyLabel(tr("显示点数")))
+        self._disp_edit = FluentLineEdit()
+        self._disp_edit.setText(str(self._display_points))
+        self._disp_edit.setFixedWidth(80)
+        self._disp_edit.editingFinished.connect(self._on_disp_changed)
+        tb.addWidget(self._disp_edit)
+        # 实时, the cursor's sample, or what went wrong saving, loading or recording
+        self._mode_label = CaptionLabel(tr("实时"))
+        self._mode_label.setTextColor(QColor("#0078d4"), QColor("#4aa3df"))
+        self._mode_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._mode_label.setMinimumWidth(1)  # a long message is cut short rather than widening the chart
+        tb.addWidget(self._mode_label)
+        tb.addStretch()
+        self._save_btn = FluentToolButton(FluentIcon.SAVE)
+        self._save_btn.setToolTip(tr("保存完整曲线数据"))
+        self._save_btn.clicked.connect(self._save_data)
+        tb.addWidget(self._save_btn)
+        self._load_btn = FluentToolButton(FluentIcon.FOLDER)
+        self._load_btn.setToolTip(tr("加载对比曲线"))
+        self._load_btn.clicked.connect(self._load_data)
+        tb.addWidget(self._load_btn)
+        self._clear_ref_btn = FluentToolButton(FluentIcon.BROOM)
+        self._clear_ref_btn.setToolTip(tr("清除对比"))
+        self._clear_ref_btn.clicked.connect(self.clear_reference)
+        self._clear_ref_btn.hide()
+        tb.addWidget(self._clear_ref_btn)
+        for button in (self._save_btn, self._load_btn, self._clear_ref_btn):
+            button.installEventFilter(ToolTipFilter(button, 300, ToolTipPosition.TOP))
+        self._root.addLayout(tb)
+
+        self._rebuild_curves()
+        self._external_connections.connect(qconfig.themeChangedFinished, self.apply_theme)
+
+    # -- public configuration -------------------------------------------------
+
+    @staticmethod
+    def _curve_color(index):
+        colors = _DARK_CURVE_COLORS if isDarkTheme() else _CURVE_COLORS
+        return colors[index % len(colors)]
+
+    def apply_theme(self):
+        """Update appearance without rebuilding curves, histories or controls."""
+        dark = isDarkTheme()
+        foreground = "#e5e5e5" if dark else "#202020"
+        muted = "#b0b0b0" if dark else "#606060"
+        self._header.set_foreground(foreground)
+        if self._plot:
+            self._plot.setBackground("#252525" if dark else "#ffffff")
+            for name in ("left", "bottom", "right", "top"):
+                axis = self._plot.getAxis(name)
+                axis.setPen(pg.mkPen(muted))
+                axis.setTextPen(pg.mkPen(foreground))
+            for index, curve in enumerate(self._curves):
+                if curve:
+                    curve.setPen(pg.mkPen(self._curve_color(index), width=2))
+            for index, curve in enumerate(self._ref_curves):
+                if curve:
+                    curve.setPen(self._ref_pen(index))
+        elif self._missing_label is not None:
+            setCustomStyleSheet(
+                self._missing_label,
+                "FluentLabelBase { color: #606060; border: 1px dashed #ccc; background: #fafafa; }",
+                "FluentLabelBase { color: #c0c0c0; border: 1px dashed #555; background: #252525; }",
+            )
+        self._show_values()  # the entries in the new curve colours
+        self.update()
+
+    def set_title(self, title: str):
+        self._title = title
+        self._header.set_title(title)
+
+    def set_display_points(self, n: int):
+        self._display_points = max(10, min(self.HISTORY_LIMIT, n))
+        self._disp_edit.blockSignals(True)
+        self._disp_edit.setText(str(self._display_points))
+        self._disp_edit.blockSignals(False)
+        self._refresh_all()
+
+    def load_from_props(self, props: dict):
+        """Build curve configs from flat properties and rebuild."""
+        self._cfgs = build_cfgs_from_props(props)
+        self._rebuild_curves()
+
+    def set_curve_count(self, n: int):
+        old = len(self._cfgs)
+        n = max(1, min(8, n))
+        while len(self._cfgs) > n:
+            self._cfgs.pop()
+        while len(self._cfgs) < n:
+            idx = len(self._cfgs)
+            cfg = dict(_DEFAULT_CURVE_CFG)
+            cfg["name"] = default_curve_name(idx)
+            self._cfgs.append(cfg)
+        if len(self._cfgs) != old:
+            self._rebuild_curves()
+
+    # -- internal -------------------------------------------------------------
+
+    def _on_disp_changed(self):
+        try:
+            v = int(self._disp_edit.text())
+        except (ValueError, TypeError):
+            v = self._display_points
+        self._display_points = max(10, v)
+        self._disp_edit.setText(str(self._display_points))
+        self._refresh_all()
+
+    def _refresh_all(self):
+        self._refresh_timer.stop()
+        for i in range(len(self._data)):
+            if i < len(self._curves) and self._curves[i]:
+                self._curves[i].setData(self._data[i].tail(self._display_points))
+        start = self._window_start()
+        for curve, (_, values) in zip(self._ref_curves, self._refs):
+            if curve:
+                curve.setData(values[start:start + self._display_points])
+        self._show_values()
+
+    def _rebuild_curves(self):
+        self.clear_reference()  # its entries follow the live curves' in the header rebuilt below
+        self._raw_frames = [
+            RawFrameBuffer(_hex_to_bytes(cfg.get("frameHeader", "")),
+                           _hex_to_bytes(cfg.get("frameTail", ""))) for cfg in self._cfgs
+        ]
+        for c in self._curves:
+            if self._plot and c:
+                self._plot.removeItem(c)
+        self._curves.clear()
+
+        count = len(self._cfgs)
+        while self._data and len(self._data) > count:
+            self._data.pop().close()
+        while len(self._data) < count:
+            self._data.append(ChartHistory(self.HISTORY_LIMIT))
+
+        for i in range(len(self._cfgs)):
+            self._curves.append(self._plot.plot(pen=pg.mkPen(color=self._curve_color(i), width=2))
+                                if self._plot else None)
+        self._header.renew(0)
+        self._cursor_mode = False
+        self._mode_label.setText(tr("实时"))
+        self.apply_theme()
+
+    def _toggle_curve(self, index):
+        """A click on a header entry hides or shows its curve."""
+        curve = (self._curves + self._ref_curves)[index]
+        if curve:
+            curve.setVisible(not curve.isVisible())
+            self._show_values()
+
+    # -- comparison overlay ---------------------------------------------------
+
+    def load_reference(self, path):
+        """Lay a saved recording over the live curves as dashed curves, to compare runs. The live curves and
+        their history stay as they are; the two line up sample for sample from the start of each."""
+        names, histories = self._read_history(path)
+        try:
+            refs = [(tr("%1（%2）", name, Path(path).stem), list(history.values()))
+                    for name, history in zip(names, histories)]
+        finally:
+            for history in histories:
+                history.close()
+        self.clear_reference()
+        self._refs = refs
+        self._ref_curves = [self._plot.plot(pen=self._ref_pen(index)) if self._plot else None
+                            for index in range(len(refs))]
+        self._clear_ref_btn.show()
+        self.apply_theme()
+        self._refresh_all()
+
+    def clear_reference(self):
+        for curve in self._ref_curves:
+            if self._plot and curve:
+                self._plot.removeItem(curve)
+        self._refs, self._ref_curves = [], []
+        self._header.renew(len(self._cfgs))
+        self._clear_ref_btn.hide()
+        self._show_values()
+
+    def _ref_color(self, index):
+        """A recording takes the palette colours after the live curves', so it stands apart even where it
+        crosses the curve it is compared with; the header names which is which."""
+        return self._curve_color(len(self._cfgs) + index)
+
+    def _ref_pen(self, index):
+        return pg.mkPen(self._ref_color(index), width=2, style=Qt.DashLine)
+
+    def _window_start(self):
+        """Sample number of the first point the live window shows."""
+        return max(0, max((h.count for h in self._data), default=0) - self._display_points)
+
+    def _show_entries(self, live, sample):
+        """The header: each live curve's reading, then the recording's at a sample number."""
+        entries = []
+        for i, value in enumerate(live):
+            curve = self._curves[i] if i < len(self._curves) else None
+            entries.append((self._cfgs[i].get("name", default_curve_name(i)), value, self._curve_color(i), False,
+                            curve is None or curve.isVisible()))
+        for index, (curve, (name, values)) in enumerate(zip(self._ref_curves, self._refs)):
+            val = f"{values[sample]:.4g}" if 0 <= sample < len(values) else "--"
+            entries.append((name, val, self._ref_color(index), True, curve is None or curve.isVisible()))
+        self._header.set_entries(entries)
+
+    # -- cursor ---------------------------------------------------------------
+
+    def _on_plot_clicked(self, evt):
+        if evt.double():
+            self._cursor_mode = False
+            self._mode_label.setText(tr("实时"))
+            if self._cursor_line:
+                self._cursor_line.setVisible(False)
+            self._show_live_values()
+            return
+        if not self._plot:
+            return
+        scene_pos = evt.scenePos()
+        vb = self._plot.plotItem.vb
+        mouse_point = vb.mapSceneToView(scene_pos)
+        x = mouse_point.x()
+        self._cursor_mode = True
+        if self._cursor_line:
+            self._cursor_line.setVisible(True)
+            self._cursor_line.blockSignals(True)
+            self._cursor_line.setValue(x)
+            self._cursor_line.blockSignals(False)
+        self._show_cursor_values(x)
+
+    def _on_cursor_moved(self, *_):
+        if not self._cursor_line:
+            return
+        self._cursor_mode = True
+        x = self._cursor_line.value()
+        self._show_cursor_values(x)
+
+    def _show_values(self):
+        if self._cursor_mode and self._cursor_line:
+            self._show_cursor_values(self._cursor_line.value())
+        else:
+            self._show_live_values()
+
+    def _show_cursor_values(self, x: float):
+        idx = int(round(x))
+        self._mode_label.setText(tr("游标: x=%1", idx))
+        values = []
+        for i in range(len(self._cfgs)):
+            visible = self._data[i].tail(self._display_points) if i < len(self._data) else []
+            values.append(f"{visible[idx]:.4g}" if 0 <= idx < len(visible) else "--")
+        self._show_entries(values, self._window_start() + idx)
+
+    def _show_live_values(self):
+        values = []
+        for i in range(len(self._cfgs)):
+            if i < len(self._data) and self._data[i]:
+                values.append(f"{self._data[i][-1]:.4g}")
+            else:
+                values.append("--")
+        # the recording at the point the live run has reached
+        self._show_entries(values, max((h.count for h in self._data), default=0) - 1)
+
+    # -- data input -----------------------------------------------------------
+
+    def append_value(self, channel: int, value: float):
+        if 0 <= channel < len(self._data):
+            try:
+                self._data[channel].append(value)
+            except OSError as error:
+                self._mode_label.setText(tr("记录失败: %1", error))
+                return
+            if not self._refresh_timer.isActive():
+                self._refresh_timer.start()
+
+    def clear_data(self):
+        self._refresh_timer.stop()
+        for i in range(len(self._data)):
+            self._data[i].clear()
+            if i < len(self._curves) and self._curves[i]:
+                self._curves[i].setData([])
+        self._show_live_values()
+
+    # -- save / load ----------------------------------------------------------
+
+    def save_data(self, path):
+        """Stream the complete history, including samples evicted from display."""
+        names = [c.get("name", default_curve_name(i)) for i, c in enumerate(self._cfgs)]
+        with open(path, "w", newline="", encoding="utf-8") as output:
+            if str(path).lower().endswith(".json"):
+                # Objects retain the original format for unique names. Ordered
+                # channel records keep duplicate names lossless in other JSON readers.
+                duplicate_names = len(set(names)) != len(names)
+                output.write("[" if duplicate_names else "{")
+                for i, name in enumerate(names):
+                    if i:
+                        output.write(",")
+                    encoded_name = json.dumps(name, ensure_ascii=False)
+                    output.write(('{"name":' + encoded_name + ',"values":[')
+                                 if duplicate_names else encoded_name + ":[")
+                    for index, value in enumerate(self._data[i].values()):
+                        if index:
+                            output.write(",")
+                        output.write(json.dumps(value, allow_nan=False))
+                    output.write("]}" if duplicate_names else "]")
+                output.write("]" if duplicate_names else "}")
+            else:
+                writer = csv.writer(output)
+                writer.writerow(names)
+                writer.writerows(zip_longest(*(h.values() for h in self._data), fillvalue=""))
+
+    def _save_data(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, tr("保存完整曲线数据"), "", tr("CSV文件 (*.csv);;JSON文件 (*.json)"))
+        if path:
+            try:
+                self.save_data(path)
+            except OSError as error:
+                self._mode_label.setText(tr("保存失败: %1", error))
+
+    def load_data(self, path):
+        """Replace samples for existing channels without changing live parsing.
+
+        Identical channel lists retain their order (including duplicate names).
+        Unique names may be reordered in a file. Other channel changes are
+        rejected instead of silently associating samples with another parser.
+        An empty, unconfigured default chart can adopt the file's channels.
+        """
+        adopt_channels = (self._cfgs == [_DEFAULT_CURVE_CFG]
+                          and not any(history.count for history in self._data))
+        names, histories = self._read_history(path)
+        try:
+            channel_order = self._history_channel_order(names, adopt_channels)
+        except Exception:
+            for history in histories:
+                history.close()
+            raise
+        self._refresh_timer.stop()
+        for history in self._data:
+            history.close()
+        self._data[:] = [histories[index] for index in channel_order]
+        if adopt_channels:
+            self._cfgs = [{**_DEFAULT_CURVE_CFG, "name": name} for name in names]
+            self._rebuild_curves()
+        self._refresh_all()
+
+    def _read_history(self, path):
+        """Channel names and their samples from a saved CSV or JSON file; the caller closes the histories."""
+        histories = []
+        try:
+            with open(path, "r", encoding="utf-8") as source:
+                if str(path).lower().endswith(".json"):
+                    # JSON is a document format; CSV is streamed for large captures.
+                    obj = json.load(source, object_pairs_hook=_HistoryObjectPairs)
+                    channels = _history_json_channels(obj)
+                    names = [name for name, _ in channels]
+                    for name, values in channels:
+                        history = ChartHistory(self.HISTORY_LIMIT)
+                        histories.append(history)
+                        for value in values:
+                            if value is not None:
+                                history.append(float(value))
+                else:
+                    rows = csv.reader(source)
+                    names = next(rows, [])
+                    histories = [ChartHistory(self.HISTORY_LIMIT) for _ in names]
+                    for row in rows:
+                        for index, history in enumerate(histories):
+                            if index < len(row) and row[index].strip():
+                                history.append(float(row[index]))
+        except Exception:
+            for history in histories:
+                history.close()
+            raise
+        return names, histories
+
+    def _history_channel_order(self, names, adopt_channels=False):
+        expected = [cfg.get("name", default_curve_name(i)) for i, cfg in enumerate(self._cfgs)]
+        if not names:
+            raise ValueError(tr("曲线文件没有通道"))
+        if len(names) > 8:
+            raise ValueError(tr("曲线文件最多支持 8 个通道"))
+        if adopt_channels:
+            return list(range(len(names)))
+        if names == expected:
+            return list(range(len(expected)))
+        if (len(names) == len(expected) and len(set(names)) == len(names)
+                and set(names) == set(expected)):
+            return [names.index(name) for name in expected]
+        raise ValueError(tr("曲线文件通道名称或数量与当前配置不一致，请加载对应通道的历史文件"))
+
+    def _load_data(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("加载对比曲线"), "", tr("CSV文件 (*.csv);;JSON文件 (*.json)"))
+        if path:
+            try:
+                self.load_reference(path)
+            except (OSError, ValueError, TypeError, OverflowError) as error:
+                self._mode_label.setText(tr("加载失败: %1", error))
+
+    def configure(self, cfgs, disp_pts=200):
+        if isinstance(cfgs, str):
+            cfgs = json.loads(cfgs)
+        self._cfgs = list(cfgs)[:8]
+        self._rebuild_curves()
+        self.set_display_points(disp_pts)
+
+    def on_parsed(self, data):
+        self._on_parsed_data(data)
+
+    def on_raw(self, data):
+        self._on_raw_data(data)
+
+    def reset_stream(self):
+        for frames in self._raw_frames:
+            frames.reset()
+
+    # -- self-parsing (per-curve) ---------------------------------------------
+
+    def _on_parsed_data(self, data: dict):
+        for i, cfg in enumerate(self._cfgs):
+            try:
+                pm = cfg.get("parseMode", "键值匹配")  # i18n: value
+                val = None
+                if pm == "键值匹配":  # i18n: value
+                    key = cfg.get("key") or cfg.get("name", "")
+                    if key and key in data:
+                        val = data[key]
+                elif pm == "JSON路径":  # i18n: value
+                    jp = cfg.get("jsonPath", "")
+                    if jp:
+                        val = self._resolve_path(data, jp)
+                elif pm == "Modbus":
+                    val = self._extract_modbus(cfg, data)
+                if val is not None:
+                    self.append_value(i, curve_expression(val, cfg.get("expression")))
+            except (ValueError, TypeError, OverflowError, struct.error):
+                # Reject a bad sample without losing the other channels in this frame.
+                continue
+
+    def _on_raw_data(self, raw: bytes):
+        for i, cfg in enumerate(self._cfgs):
+            if cfg.get("parseMode") != "HEX字节提取":  # i18n: value
+                continue
+            fi = _STRUCT_FMT.get(cfg.get("dataType", "float32"))
+            if not fi:
+                continue
+            fmt_c, sz = fi
+            bo = ">" if cfg.get("byteOrder", "大端(BE)") == "大端(BE)" else "<"  # i18n: value
+            off = int(cfg.get("byteOffset", 0))
+            for frame in self._raw_frames[i].feed(raw):
+                payload = self._strip_frame(frame, cfg)
+                if payload is not None and off >= 0 and off + sz <= len(payload):
+                    try:
+                        val = struct.unpack(bo + fmt_c, payload[off:off + sz])[0]
+                        self.append_value(i, curve_expression(val, cfg.get("expression")))
+                    except (ValueError, TypeError, OverflowError, struct.error):
+                        pass
+
+    def modbus_needs(self):
+        """What the Modbus curves read, for the Modbus poller: (slave, table, address, count,
+        period) each, read at the poller's default period. A curve counts whether or not it is on screen."""
+        needs = []
+        for cfg in self._cfgs:
+            if cfg.get("parseMode") != "Modbus":
+                continue
+            try:
+                need = modbus_need(cfg.get("mbArea", "保持寄存器"), int(cfg.get("regIndex", 0)),  # i18n: value
+                                   cfg.get("mbDataType", "uint16"), int(cfg.get("mbSlaveFilter", -1)))
+            except (TypeError, ValueError):
+                continue
+            if need is not None:
+                needs.append(need)
+        return needs
+
+    @staticmethod
+    def _extract_modbus(cfg: dict, data: dict):
+        return modbus_value(
+            data, int(cfg.get("regIndex", 0)), cfg.get("mbDataType", "uint16"),
+            cfg.get("mbRegOrder", "大端(AB CD)"), int(cfg.get("mbFcFilter", -1)),  # i18n: value
+            int(cfg.get("mbSlaveFilter", -1)), cfg.get("mbArea", "保持寄存器"))  # i18n: value
+
+    @staticmethod
+    def _strip_frame(raw: bytes, cfg: dict):
+        data = raw
+        fh = cfg.get("frameHeader", "")
+        ft = cfg.get("frameTail", "")
+        if fh:
+            hdr = _hex_to_bytes(fh)
+            if hdr:
+                idx = data.find(hdr)
+                if idx < 0:
+                    return None
+                data = data[idx + len(hdr):]
+        if ft:
+            tlr = _hex_to_bytes(ft)
+            if tlr:
+                idx = data.find(tlr)
+                if idx < 0:
+                    return None
+                data = data[:idx]
+        return data
+
+    @staticmethod
+    def _resolve_path(data, path: str):
+        for part in path.split("."):
+            if data is None:
+                return None
+            if isinstance(data, dict):
+                data = data.get(part)
+            elif isinstance(data, (list, tuple)):
+                try:
+                    data = data[int(part)]
+                except (ValueError, IndexError):
+                    return None
+            else:
+                return None
+        return data
+
+
+def _hex_to_bytes(s: str) -> bytes:
+    s = s.replace(" ", "")
+    if not s:
+        return b""
+    if len(s) % 2 != 0:
+        s = "0" + s
+    try:
+        return bytes.fromhex(s)
+    except ValueError:
+        return b""
+
+"""Data table shared by the designer preview and exported applications."""
+from datetime import datetime
+
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHeaderView, QTableWidgetItem, QAbstractItemView
+from qfluentwidgets import TableWidget
+
+
+
+
+class DataTableWidget(QWidget):
+    """Either the latest frame as field / value rows, or a log with one row per frame.
+
+    In the log, each column takes the value of the key it is named after and a column named TIME_COLUMN takes the
+    time the frame arrived; frames carrying none of the named keys belong to some other message and are
+    skipped. Beyond the row limit the oldest rows go."""
+
+    TIME_COLUMN = "时间"  # i18n: value
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._serial_connections = SignalConnections(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+        self._table = TableWidget()
+        self._table.setColumnCount(2)
+        self._table.setHorizontalHeaderLabels(["字段", "值"])  # i18n: value  (the default columns, user content)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        layout.addWidget(self._table)
+        self._columns = ["字段", "值"]  # i18n: value
+        self._max_rows = 500
+        self._logging = False
+        self._fit_columns()
+
+    def set_serial_handler(self, handler):
+        self._serial_connections.clear()
+        self._serial_connections.connect(handler.dataReceived, self.on_data)
+
+    def set_columns(self, columns):
+        self._columns = list(columns) or ["字段", "值"]  # i18n: value
+        self._table.setColumnCount(len(self._columns))
+        self._table.setHorizontalHeaderLabels(self._columns)
+        self._fit_columns()
+
+    def _fit_columns(self):
+        """Field / value columns share the width. A log's columns fit what they hold, so a time stamp or a
+        reading is never squeezed into an ellipsis, and the last one takes what is left."""
+        header = self._table.horizontalHeader()
+        header.setResizeContentsPrecision(64)  # sizes from a sample of rows, not the whole log
+        # a log's rows are told apart by their time stamps; row numbers growing to four digits would only
+        # take width from the readings
+        self._table.verticalHeader().setVisible(not self._logging)
+        last = len(self._columns) - 1
+        for column in range(len(self._columns)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents
+                                        if self._logging and column < last else QHeaderView.Stretch)
+
+    def set_max_rows(self, count):
+        self._max_rows = max(10, count)
+        while self._table.rowCount() > self._max_rows:
+            self._table.removeRow(0 if self._logging else self._table.rowCount() - 1)
+
+    def set_record_mode(self, mode):
+        """The recordMode: the latest frame only, or a log with one row per frame."""
+        logging = mode == "逐行记录"  # i18n: value
+        if logging != self._logging:
+            self._logging = logging
+            self.clear_data()
+            self._fit_columns()
+
+    def on_data(self, data):
+        if self._logging:
+            self.log_frame(data)
+        else:
+            self.update_kv_data(data)
+
+    def log_frame(self, data):
+        keys = [name for name in self._columns if name != self.TIME_COLUMN]
+        if not any(key in data for key in keys):
+            return
+        stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self.append_row([stamp if name == self.TIME_COLUMN else ("" if data.get(name) is None else data[name])
+                         for name in self._columns])
+
+    def append_row(self, values):
+        if self._table.rowCount() >= self._max_rows:
+            self._table.removeRow(0)
+        row = self._table.rowCount()
+        self._table.insertRow(row)
+        for column, value in enumerate(values):
+            if column < self._table.columnCount():
+                self._table.setItem(row, column, QTableWidgetItem(str(value)))
+        self._table.scrollToBottom()
+
+    def update_kv_data(self, data):
+        self._table.setRowCount(0)
+        for key, value in data.items():
+            row = self._table.rowCount()
+            if row >= self._max_rows:
+                break
+            self._table.insertRow(row)
+            for column, cell in enumerate((key, value)):
+                if column < self._table.columnCount():
+                    self._table.setItem(row, column, QTableWidgetItem(str(cell)))
+
+    def clear_data(self):
+        self._table.setRowCount(0)
+
+
+class ProgressRingDisplay(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lo = QVBoxLayout(self); lo.setContentsMargins(4,4,4,4)
+        lo.setAlignment(Qt.AlignCenter); lo.setSpacing(4)
+        self._ring = ProgressRing(); self._ring.setRange(0,100); self._ring.setValue(0)
+        self._ring.setFixedSize(80,80)
+        self._ring.setTextVisible(True)
+        self._lbl = CaptionLabel(tr("进度")); self._lbl.setAlignment(Qt.AlignCenter)
+        lo.addWidget(self._ring, 0, Qt.AlignCenter)
+        lo.addWidget(self._lbl)
+    def set_label(self, t): self._lbl.setText(t)
+    def set_value(self, v): self._ring.setValue(int(v))
+    def set_maximum(self, m): self._ring.setMaximum(int(m))
+
+"""Log box shared by the designer preview and exported applications."""
+from datetime import datetime
+from html import escape
+
+from PyQt5.QtGui import QColor
+from PyQt5.QtWidgets import QWidget, QVBoxLayout
+from qfluentwidgets import TextEdit, setCustomStyleSheet
+
+
+from i18n import tr
+
+LOG_STYLE = ("QTextEdit { font-family: Menlo, Consolas, 'Courier New', monospace; font-size: 11px; "
+             "background: #1a1a2e; color: #a8d8ea; border: 1px solid #333; border-radius: 6px; padding: 6px; }")
+LOG_COLORS = {"info": "#a8d8ea", "warn": "#FFD54F", "error": "#EF5350", "ok": "#81C784"}
+
+
+def terminal_scroll_bar(edit):
+    """Recolour Fluent's overlay scroll bar for a dark terminal in both themes. Its light-theme default, a
+    black handle over a white groove, disappears on the dark text and glares when hovered."""
+    bar = edit.scrollDelegate.vScrollBar
+    handle, arrow, groove = QColor(168, 216, 234, 110), QColor(168, 216, 234, 160), QColor(36, 36, 60, 235)
+    bar.setHandleColor(handle, handle)
+    bar.setArrowColor(arrow, arrow)
+    bar.setGrooveColor(groove, groove)
+
+
+class LogDisplayBox(QWidget):
+    """Scrolling, time-stamped log in a dark terminal look: every parsed frame, and the connect,
+    disconnect and error events of every link (serial, TCP, UDP, MQTT). Of a link answering as a Modbus slave it
+    shows the requests and replies (slaveLog), not the slave messages."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._output = TextEdit()
+        self._output.setReadOnly(True)
+        setCustomStyleSheet(self._output, LOG_STYLE, LOG_STYLE)  # the terminal keeps its colours in both themes
+        terminal_scroll_bar(self._output)
+        self._text = self._output
+        layout.addWidget(self._output)
+        self._max_lines = 500
+        self._handler = None
+        self._serial_connections = SignalConnections(self)
+
+    def set_serial_handler(self, handler):
+        if handler is self._handler:
+            return
+        self._serial_connections.clear()
+        self._handler = handler
+        if handler is not None:
+            self._serial_connections.connect(handler.connected, self._on_connected)
+            self._serial_connections.connect(handler.disconnected, self._on_disconnected)
+            self._serial_connections.connect(handler.error, self._on_serial_error)
+            self._serial_connections.connect(handler.dataReceived, self._on_parsed_data)
+            if hasattr(handler, "slaveLog"):
+                self._serial_connections.connect(handler.slaveLog, self.append_log)
+
+    def _on_connected(self, port):
+        self.append_log(tr("已连接: %1", port), "ok")
+
+    def _on_disconnected(self):
+        self.append_log(tr("已断开"), "warn")
+
+    def _on_serial_error(self, message):
+        self.append_log(tr("错误: %1", message), "error")
+
+    def _on_parsed_data(self, data):
+        if getattr(self._handler, "slave_data", False):
+            return  # a slave message: the request and reply lines tell what happened
+        self.append_log(", ".join(f"{key}={value}" for key, value in data.items()))
+
+    def append_log(self, text, level="info"):
+        color = LOG_COLORS.get(level, LOG_COLORS["info"])
+        stamp = datetime.now().strftime("%H:%M:%S")
+        body = escape(str(text)).replace("\n", "<br>")
+        self._output.append(f'<span style="color:#9399b2">[{stamp}]</span> <span style="color:{color}">{body}</span>')
+        self._trim()
+
+    def set_max_lines(self, n):
+        self._max_lines = max(50, n)
+        self._trim()
+
+    def clear_log(self):
+        self._output.clear()
+
+    def _trim(self):
+        doc = self._output.document()
+        while doc.blockCount() > self._max_lines:
+            cursor = self._output.textCursor()
+            cursor.movePosition(cursor.Start)
+            cursor.select(cursor.BlockUnderCursor)
+            cursor.removeSelectedText()
+            cursor.deleteChar()
+
+"""The link every link card (serial, TCP, UDP, MQTT) owns, and its Modbus polling settings and status,
+shared by the designer preview and exported applications.
+
+A link card owns its link. Handed the running application's CommHub, it creates a link of its own and
+registers it there; any number of cards of one kind each have their own link. Handed None, or destroyed,
+the card disconnects its link and takes it off the hub.
+
+Every link card hands the running application's Modbus poller (modbus_poller.py) its default polling
+period, response timeout and default slave (``modbusPeriod``, ``modbusTimeout``, ``modbusSlave``), which
+count while the card is the first in the document whose link is connected and parses Modbus. While its
+link is connected, parses Modbus and can send (a TCP server needs a client, a UDP link with no remote a
+sender), the card's status reads ``<connection> · <poller status>``, with the poller's blocks as its
+tooltip; the poller's waiting status is never shown there.
+
+A serial, TCP or UDP card also has a Modbus role (ModbusSlaveSettings). As a slave it owns a slave data
+table (slave_runtime.ModbusSlaveDevice) and connects its link as a slave whenever the link parses modbus or
+modbus_tcp; while the link answers, the card shows ``<connection> · <slave status>`` in place of the
+poller's status.
+"""
+from functools import partial
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QSizePolicy
+from qfluentwidgets import CaptionLabel, ToolTipFilter, ToolTipPosition
+
+
+from serial_handler import ModbusSlaveDevice
+from serial_handler import MASTER_ROLE, SLAVE_ROLE
+from i18n import tr
+
+# The defaultParser of a link card that uses the project's frame format.
+PROJECT_PARSER = "项目设置"  # i18n: value
+# A link card's displayMode: every row, the main ones, or (the serial card) one toolbar row.
+FULL_MODE, SIMPLE_MODE, ONE_LINE_MODE = "完整", "简洁", "单行"  # i18n: value
+# The parsing modes a link card offers: the project's settings, or one of its own.
+CARD_PARSERS = (PROJECT_PARSER, "line", "hex", "modbus", "modbus_tcp", "modbus_ascii")
+MODBUS_DEFAULTS = (500, 1000, 1)  # modbusPeriod, modbusTimeout, modbusSlave: the poller's own defaults
+MODBUS_RANGES = ((10, 60000), (10, 60000), (1, 247))
+SLAVE_DELAY_RANGE = (0, 5000)  # the response delay, ms
+SLAVE_START_RANGE, SLAVE_COUNT_RANGE = (0, 65535), (0, 10000)  # the first address and size of an area
+
+
+def fluent_tooltip(widget, text=""):
+    """Show ``widget``'s tooltip the Fluent way. Install it once, where the widget is made: the text
+    is read from ``widget.toolTip()`` each time, and an empty one shows nothing."""
+    widget.setToolTip(text)
+    widget.installEventFilter(ToolTipFilter(widget, 300, ToolTipPosition.TOP))
+    return widget
+
+
+def add_value_items(combo, values):
+    """Fill ``combo`` with stored values: each item shows its value translated and keeps the value itself
+    as its data, which is what the card reads back."""
+    for value in values:
+        combo.addItem(tr(value), userData=value)
+
+
+def select_value(combo, value):
+    """Select the item of ``combo`` holding ``value``; nothing changes when none does."""
+    index = combo.findData(value)
+    if index >= 0:
+        combo.setCurrentIndex(index)
+
+
+def status_label(text):
+    """The status of a link card's title row: it takes the room the title leaves, so a long one (the
+    Modbus poller's) never squeezes the title or widens the card; what does not fit is cut at the left.
+    Its tooltip, the whole status, shows the Fluent way."""
+    label = fluent_tooltip(CaptionLabel(text))
+    label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    return label
+
+
+def _whole(value, default, low, high):
+    """A whole number within low–high; the default for what is not a number."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return min(max(number, low), high)
+
+
+def _modbus_setting(index, value):
+    """A whole number within the setting's range; its default for what is not a number."""
+    return _whole(value, MODBUS_DEFAULTS[index], *MODBUS_RANGES[index])
+
+
+def _close_link(link, *_):
+    """A card being destroyed closes its link first: a serial link's reader thread stops before the link
+    goes with the card."""
+    try:
+        link.disconnect()
+    except RuntimeError:
+        pass  # already gone
+
+
+class ModbusLinkSettings:
+    """The link of a link card, its Modbus polling settings, and the poller's status on its status line.
+
+    The card calls ``_init_modbus()`` while it is built and ``_with_poll_status(text)`` for its
+    status while connected, and has ``LINK_CLASS`` (the class of its link), ``_handler`` (its link,
+    None while it is on no hub), ``_serial_connections`` (its subscriptions to the link),
+    ``_attach_link(link)``, which subscribes to a new link and shows its state, ``set_connected()``,
+    ``_connected`` and ``_show_connected()``, which shows the connected status again."""
+
+    LINK_CLASS = None  # SerialHandler, TcpHandler, UdpHandler or MqttHandler
+
+    def _init_modbus(self):
+        self._modbus_settings = MODBUS_DEFAULTS
+        self._modbus_poller = None
+        self._poll_shown = False  # the status shows the poller's
+        self._poller_connections = SignalConnections(self)
+        self._hub = None
+        self._close_on_destroy = None
+
+    @property
+    def link(self):
+        """The card's link: whether it is connected and parses Modbus decides whose settings count."""
+        return self._handler
+
+    def set_serial_handler(self, hub):
+        """Register a link of this card's own on ``hub``, the running application's CommHub, creating
+        it first; None disconnects the link, takes it off the hub and lets it go."""
+        if hub is self._hub:
+            return
+        self._release_link()
+        if hub is None:
+            return
+        link = self.LINK_CLASS(self)
+        self._hub, self._handler = hub, link
+        # Connected after the card's own subscriptions, so on destruction they are released first.
+        self._close_on_destroy = self.destroyed.connect(partial(_close_link, link))
+        hub.add_link(link)
+        self._attach_link(link)
+
+    def _release_link(self):
+        link, hub = self._handler, self._hub
+        if link is None:
+            return
+        self._serial_connections.clear()
+        self.destroyed.disconnect(self._close_on_destroy)
+        self._handler = self._hub = self._close_on_destroy = None
+        link.disconnect()  # while on the hub, so its listeners hear it
+        hub.remove_link(link)
+        link.deleteLater()
+        self.set_connected(False)
+
+    @property
+    def modbus_settings(self):
+        """(polling period ms, response timeout ms, default slave) for the Modbus poller."""
+        return self._modbus_settings
+
+    def set_modbus_period(self, value):
+        self._set_modbus_setting(0, value)
+
+    def set_modbus_timeout(self, value):
+        self._set_modbus_setting(1, value)
+
+    def set_modbus_slave(self, value):
+        self._set_modbus_setting(2, value)
+
+    def _set_modbus_setting(self, index, value):
+        settings = list(self._modbus_settings)
+        settings[index] = _modbus_setting(index, value)
+        self._modbus_settings = tuple(settings)
+        if self._modbus_poller is not None:
+            self._modbus_poller.settings_changed()  # counts at once
+
+    def set_modbus_poller(self, poller):
+        """The running application's Modbus poller: this card hands it its settings, in document
+        order, and shows its status while the card's link is connected and parses Modbus."""
+        if poller is self._modbus_poller:
+            return
+        self._poller_connections.clear()
+        self._modbus_poller = poller
+        if poller is not None:
+            self._poller_connections.connect(poller.statusChanged, self._on_poll_status)
+            poller.add_link_card(self)
+        self._on_poll_status()
+
+    def _on_poll_status(self, *_):
+        """A card that shows the poller's status, or can show it now, shows it again; the others
+        keep what they show (an error, say)."""
+        poller = self._modbus_poller
+        can_show = poller is not None and bool(poller.shown_status(self._handler))
+        if self._connected and (self._poll_shown or can_show):
+            self._show_connected()
+
+    def _with_poll_status(self, text):
+        """``text``, which describes the connection, then `` · `` and the poller's status while the
+        link parses Modbus and can send; and the tooltip for it: the poller's blocks, one per line, or the whole
+        text without blocks. The tooltip is None when the poller's status is not shown. While the link answers
+        as this card's slave, the slave's status takes the poller's place."""
+        slave = getattr(self._handler, "slave_device", None)
+        if slave is not None and slave is getattr(self, "_slave_device", None):
+            self._poll_shown = False
+            text = f"{text} · {slave.status_text()}"
+            return text, text
+        poller = self._modbus_poller
+        status = poller.shown_status(self._handler) if poller is not None else ""
+        self._poll_shown = bool(status)
+        if not status:
+            return text, None
+        text = f"{text} · {status}"
+        return text, poller.tooltip() if poller.blocks() else text
+
+
+class ModbusSlaveSettings(ModbusLinkSettings):
+    """The Modbus role of a serial, TCP or UDP card (``modbusRole``), set at design time, and the slave settings
+    that count in the slave role: the response delay, exception responses, the four areas and the initial
+    values, with the default slave as this slave's address. ``slave_device`` is the card's slave, None in
+    the master role; the card passes it to its
+    link's connect(), which answers with it while it parses modbus or modbus_tcp."""
+
+    def _init_modbus(self):
+        super()._init_modbus()
+        self._modbus_role = MASTER_ROLE
+        self._slave_device = ModbusSlaveDevice(self)
+        self._slave_device.written.connect(self._on_slave_written)
+        self._slave_device.statusChanged.connect(self._on_slave_status)
+
+    @property
+    def slave_device(self):
+        return self._slave_device if self._modbus_role == SLAVE_ROLE else None
+
+    def set_modbus_role(self, value):
+        self._modbus_role = SLAVE_ROLE if value == SLAVE_ROLE else MASTER_ROLE
+
+    def set_modbus_slave(self, value):
+        super().set_modbus_slave(value)
+        self._slave_device.address = self._modbus_settings[2]
+
+    def set_modbus_delay(self, value):
+        self._slave_device.delay = _whole(value, 0, *SLAVE_DELAY_RANGE)
+
+    def set_modbus_exceptions(self, value):
+        self._slave_device.exceptions = bool(value)
+
+    def _set_slave_start(self, table, value):
+        self._slave_device.set_area(table, start=_whole(value, 0, *SLAVE_START_RANGE))
+
+    def _set_slave_count(self, table, value):
+        self._slave_device.set_area(table, count=_whole(value, 100, *SLAVE_COUNT_RANGE))
+
+    def set_slave_co_start(self, value): self._set_slave_start("co", value)
+    def set_slave_co_count(self, value): self._set_slave_count("co", value)
+    def set_slave_di_start(self, value): self._set_slave_start("di", value)
+    def set_slave_di_count(self, value): self._set_slave_count("di", value)
+    def set_slave_hr_start(self, value): self._set_slave_start("hr", value)
+    def set_slave_hr_count(self, value): self._set_slave_count("hr", value)
+    def set_slave_ir_start(self, value): self._set_slave_start("ir", value)
+    def set_slave_ir_count(self, value): self._set_slave_count("ir", value)
+
+    def set_slave_init(self, value):
+        self._slave_device.set_init(value)
+
+    def _on_slave_written(self, message):
+        """A write to the data table: published on the card's link, connected or not, like a frame it read."""
+        publish = getattr(self._handler, "publish_slave_data", None)
+        if publish is not None and self.slave_device is not None:
+            publish(message)
+
+    def _on_slave_status(self):
+        if self._connected and getattr(self._handler, "slave_device", None) is self._slave_device:
+            self._show_connected()
+
+
+# The slave settings of PROPERTY_SETTERS, after the role and the polling settings.
+SLAVE_PROPERTY_SETTERS = (
+    ("modbusDelay", "set_modbus_delay", 0),
+    ("modbusExceptions", "set_modbus_exceptions", True),
+    ("slaveCoStart", "set_slave_co_start", 0),
+    ("slaveCoCount", "set_slave_co_count", 100),
+    ("slaveDiStart", "set_slave_di_start", 0),
+    ("slaveDiCount", "set_slave_di_count", 100),
+    ("slaveHrStart", "set_slave_hr_start", 0),
+    ("slaveHrCount", "set_slave_hr_count", 100),
+    ("slaveIrStart", "set_slave_ir_start", 0),
+    ("slaveIrCount", "set_slave_ir_count", 100),
+    ("slaveInit", "set_slave_init", ""),
+)
+
+# coding: utf-8
+"""Composite card widgets: SerialConfigCard, DataSendCard, DataRecvCard, LogBox, ProgressRing."""
+from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QPainter, QFont
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QSizePolicy, QFrame, QTextEdit,
+)
+from qfluentwidgets import (
+    CardWidget, StrongBodyLabel, BodyLabel, CaptionLabel,
+    PushButton, PrimaryPushButton, ComboBox, LineEdit, SpinBox,
+    ProgressRing, FluentIcon as FIF, ToolButton,
+    CheckBox, TextEdit, isDarkTheme, qconfig,
+)
+
+
+from serial_handler import SerialHandler, _list_all_ports
+
+from i18n import tr
+
+class SerialConfigCard(ModbusSlaveSettings, CardWidget):
+    """Serial port configuration card with three display modes (link_polling.FULL_MODE and the others):
+    full, simple (port and baud) and one line (a toolbar row).
+    One button connects or disconnects the card's own serial link, at the end of the last row shown,
+    so the card works in preview mode. The card is never shorter than its rows: its minimum
+    height is what the rows of its display mode need. Like every link card it hands the Modbus
+    poller its settings and shows the poller's status while its link parses Modbus; in the slave role
+    it answers as a Modbus slave instead (link_polling.ModbusSlaveSettings)."""
+
+    LINK_CLASS = SerialHandler
+    _BAUDS = ["9600", "19200", "38400", "57600", "115200",
+              "230400", "460800", "921600"]
+    _FLOWS = {"无": "none", "RTS/CTS": "rtscts", "XON/XOFF": "xonxoff", "DTR/DSR": "dsrdtr"}  # i18n: value
+    PROPERTY_SETTERS = (
+        ("title", "set_title", "串口配置"),  # i18n: value
+        ("displayMode", "set_display_mode", "完整"),  # i18n: value
+        ("defaultBaud", "set_default_baud", "115200"),
+        ("defaultDatabits", "set_default_databits", "8"),
+        ("defaultParity", "set_default_parity", "None"),
+        ("defaultStopbits", "set_default_stopbits", "1"),
+        ("defaultFlow", "set_default_flow", "无"),  # i18n: value
+        ("defaultParser", "set_default_parser", "项目设置"),  # i18n: value
+        ("modbusRole", "set_modbus_role", "主站"),  # i18n: value
+        ("modbusPeriod", "set_modbus_period", 500),
+        ("modbusTimeout", "set_modbus_timeout", 1000),
+        ("modbusSlave", "set_modbus_slave", 1),
+        *SLAVE_PROPERTY_SETTERS,
+        ("parserConfig", "set_parser_config", {}),
+    )
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._display_mode = FULL_MODE
+        self._parser_config = {}
+        self._connected = False
+        self._handler = None
+        self._poll_tip = False  # the status tooltip is the Modbus poller's
+        self._serial_connections = SignalConnections(self)
+        self._theme_connections = SignalConnections(self)
+        self._init_modbus()
+
+        self._root = QVBoxLayout(self)
+        self._root.setContentsMargins(16, 12, 16, 12)
+        self._root.setSpacing(10)
+
+        # ---- title row ----
+        self._title_w = self._make_row()
+        tl = self._title_w.layout()
+        self._title = StrongBodyLabel(tr("串口配置"))
+        self._status = status_label(tr("未连接"))
+        self._status.setTextColor(QColor("#606060"), QColor("#b0b0b0"))
+        tl.addWidget(self._title); tl.addWidget(self._status, 1)
+        self._root.addWidget(self._title_w)
+
+        LW = 48
+
+        # ---- port row ----
+        self._port_w = self._make_row()
+        pl = self._port_w.layout()
+        self._port_label = BodyLabel(tr("端口")); self._port_label.setFixedWidth(LW)
+        self._port_combo = ComboBox(); self._port_combo.setMinimumWidth(120)
+        self._port_combo.setPlaceholderText(tr("选择串口"))
+        self._search_btn = fluent_tooltip(ToolButton(FIF.SEARCH), tr("搜索串口"))
+        self._search_btn.clicked.connect(self.refresh_ports)
+        pl.addWidget(self._port_label); pl.addWidget(self._port_combo, 1)
+        pl.addWidget(self._search_btn)
+        self._root.addWidget(self._port_w)
+
+        # ---- baud row ----
+        self._baud_w = self._make_row()
+        bl = self._baud_w.layout()
+        self._baud_label = BodyLabel(tr("波特率")); self._baud_label.setFixedWidth(LW)
+        self._baud_combo = ComboBox()
+        self._baud_combo.addItems(self._BAUDS); self._baud_combo.setCurrentIndex(4)
+        bl.addWidget(self._baud_label); bl.addWidget(self._baud_combo, 1)
+        self._root.addWidget(self._baud_w)
+
+        # ---- params row (databits / parity / stopbits) ----
+        self._params_w = self._make_row(spacing=6)
+        pal = self._params_w.layout()
+        first = True
+        for lbl_text, cb_items, attr, idx in [
+            (tr("数据位"), ["5", "6", "7", "8"], "_databits_combo", 3),
+            (tr("校验"),   ["None", "Even", "Odd", "Mark", "Space"], "_parity_combo", 0),
+            (tr("停止位"), ["1", "1.5", "2"], "_stopbits_combo", 0),
+        ]:
+            lbl = CaptionLabel(lbl_text)
+            if first:
+                lbl.setFixedWidth(LW)
+                first = False
+            cb = ComboBox(); cb.addItems(cb_items); cb.setCurrentIndex(idx)
+            setattr(self, attr, cb)
+            pal.addWidget(lbl); pal.addWidget(cb, 1)
+        self._root.addWidget(self._params_w)
+
+        # ---- flow row ----
+        self._flow_w = self._make_row()
+        fl = self._flow_w.layout()
+        self._flow_label = BodyLabel(tr("流控制")); self._flow_label.setFixedWidth(LW)
+        self._flow_combo = ComboBox()
+        add_value_items(self._flow_combo, self._FLOWS)
+        fl.addWidget(self._flow_label); fl.addWidget(self._flow_combo, 1)
+        self._root.addWidget(self._flow_w)
+
+        self._parser_w = self._make_row()
+        self._parser_w.layout().addWidget(BodyLabel(tr("解析模式")))
+        self._parser_combo = ComboBox()
+        add_value_items(self._parser_combo, CARD_PARSERS)
+        self._parser_w.layout().addWidget(self._parser_combo, 1)
+        self._root.addWidget(self._parser_w)
+
+        # ---- the connect / disconnect button, at the end of the last row shown ----
+        self._connect_btn = self._toggle_button()
+        self._connect_btn.clicked.connect(self._on_toggle)
+
+        # ---- single-line row (hidden by default) ----
+        self._sl_w = QWidget()
+        sl = QHBoxLayout(self._sl_w)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(6)
+
+        H = 33
+        self._sl_port = ComboBox(); self._sl_port.setPlaceholderText(tr("串口"))
+        self._sl_port.setMinimumWidth(90); self._sl_port.setFixedHeight(H)
+        self._sl_baud = ComboBox(); self._sl_baud.addItems(self._BAUDS)
+        self._sl_baud.setCurrentIndex(4)
+        self._sl_baud.setFixedWidth(90); self._sl_baud.setFixedHeight(H)
+        self._sl_search = fluent_tooltip(ToolButton(FIF.SEARCH), tr("搜索串口"))
+        self._sl_search.clicked.connect(self.refresh_ports)
+        self._sl_search.setFixedSize(H, H)
+        self._sl_conn = self._toggle_button()
+        self._sl_conn.setFixedHeight(H)
+        self._sl_conn.clicked.connect(self._on_toggle)
+        self._sl_status = fluent_tooltip(CaptionLabel(tr("未连接")))
+        self._sl_status.setTextColor(QColor("#606060"), QColor("#b0b0b0"))
+        # Left: a status that has to shrink (the poller's, see _show_connected) keeps its start.
+        self._sl_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._sl_status.setFixedHeight(H)
+
+        for w, stretch in [(self._sl_port, 2), (self._sl_baud, 0),
+                           (self._sl_search, 0), (self._sl_conn, 0), (self._sl_status, 0)]:
+            sl.addWidget(w, stretch, Qt.AlignVCenter)
+
+        self._sl_w.setFixedHeight(H)
+        self._root.addWidget(self._sl_w)
+        self._sl_w.hide()
+
+        self._root.addStretch(1)
+        self._place_button()
+
+        self.refresh_ports()
+        self._theme_connections.connect(qconfig.themeChangedFinished, self.update)
+
+    def _attach_link(self, link):
+        """Follow the card's new link (link_polling.ModbusLinkSettings.set_serial_handler)."""
+        self._serial_connections.connect(link.connected, self._on_serial_connected)
+        self._serial_connections.connect(link.disconnected, self._on_serial_disconnected)
+        self._serial_connections.connect(link.error, self._on_serial_error)
+        self.set_connected(link.is_connected)
+
+    @staticmethod
+    def _toggle_button():
+        """Connect / disconnect in one button, as wide as the widest of connect / disconnect / cancel, so its
+        row stays put."""
+        button = PrimaryPushButton(tr("连接"))
+        width = 0
+        for text in (tr("连接"), tr("断开"), tr("取消")):
+            button.setText(text)
+            width = max(width, button.sizeHint().width())
+        button.setText(tr("连接"))
+        button.setFixedWidth(width)
+        return button
+
+    def _shown_rows(self):
+        if self._display_mode == ONE_LINE_MODE:
+            return [self._sl_w]
+        rows = [self._title_w, self._port_w, self._baud_w]
+        if self._display_mode == FULL_MODE:
+            rows += [self._params_w, self._flow_w, self._parser_w]
+        return rows
+
+    def _place_button(self):
+        """The button goes at the right end of the last field row shown (the one-line row has its own)."""
+        if self._display_mode != ONE_LINE_MODE:
+            row = self._shown_rows()[-1]
+            button = self._connect_btn
+            if button.parentWidget() is not row:
+                if button.parentWidget() is not None and button.parentWidget().layout() is not None:
+                    button.parentWidget().layout().removeWidget(button)
+                row.layout().addWidget(button)
+                button.setVisible(True)
+        self.setMinimumHeight(self.content_height())
+
+    def content_height(self):
+        """What the shown rows need, with the margins and the spacing between them."""
+        rows = self._shown_rows()
+        margins = self._root.contentsMargins()
+        return (margins.top() + margins.bottom() + sum(row.sizeHint().height() for row in rows)
+                + self._root.spacing() * (len(rows) - 1))
+
+    def minimumSizeHint(self):
+        return QSize(super().minimumSizeHint().width(), self.content_height())
+
+    @staticmethod
+    def _make_row(spacing=8):
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(spacing)
+        return w
+
+    # ---- compact paint ----
+
+    def _content_height(self):
+        m = self._root.contentsMargins()
+        h = m.top() + m.bottom()
+        for i in range(self._root.count()):
+            w = self._root.itemAt(i).widget()
+            if w and not w.isHidden():
+                h += w.sizeHint().height() + self._root.spacing()
+        return max(h, 30)
+
+    def paintEvent(self, event):
+        if self._display_mode == FULL_MODE:
+            super().paintEvent(event)
+            return
+        ch = self._content_height()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        if isDarkTheme():
+            painter.setBrush(QColor(44, 44, 44))
+            painter.setPen(QColor(55, 55, 55))
+        else:
+            painter.setBrush(QColor(255, 255, 255, 230))
+            painter.setPen(QColor(220, 220, 220))
+        painter.drawRoundedRect(0, 0, self.width(), ch, 6, 6)
+        painter.end()
+
+    # ---- mode switching ----
+
+    def set_display_mode(self, mode: str):
+        self._display_mode = mode
+        is_sl = mode == ONE_LINE_MODE
+        compact = mode != FULL_MODE
+        self.setAttribute(Qt.WA_TranslucentBackground, compact)
+        self.setAutoFillBackground(not compact)
+        self._title_w.setVisible(not is_sl)
+        self._port_w.setVisible(not is_sl)
+        self._baud_w.setVisible(not is_sl)
+        self._params_w.setVisible(mode == FULL_MODE)
+        self._flow_w.setVisible(mode == FULL_MODE)
+        self._parser_w.setVisible(mode == FULL_MODE)
+        self._sl_w.setVisible(is_sl)
+        if is_sl:
+            self._root.setContentsMargins(8, 6, 8, 6)
+            self._root.setSpacing(0)
+            self._sync_to_sl()
+        else:
+            self._root.setContentsMargins(16, 12, 16, 12)
+            self._root.setSpacing(10)
+            self._sync_from_sl()
+        self._place_button()
+        self.update()
+        self.adjustSize()
+        self.updateGeometry()
+
+    def _sync_to_sl(self):
+        self._sl_port.clear()
+        for i in range(self._port_combo.count()):
+            self._sl_port.addItem(self._port_combo.itemText(i), self._port_combo.itemData(i))
+        self._sl_port.setCurrentIndex(self._port_combo.currentIndex())
+        self._sl_baud.setCurrentIndex(self._baud_combo.currentIndex())
+        # A disabled preview parent also makes isEnabled() false: take the state, not that.
+        self._sl_conn.setEnabled(True)
+        self._sl_conn.setText(self._connect_btn.text())
+        self._sl_status.setText(self._status.text())
+        self._sl_status.setTextColor(self._status.lightColor, self._status.darkColor)
+
+    def _sync_from_sl(self):
+        idx = self._sl_port.currentIndex()
+        if 0 <= idx < self._port_combo.count():
+            self._port_combo.setCurrentIndex(idx)
+        self._baud_combo.setCurrentIndex(self._sl_baud.currentIndex())
+
+    # ---- connect / disconnect ----
+
+    def _on_toggle(self):
+        if self._connected:
+            self._on_disconnect()
+        else:
+            self._on_connect()
+
+    def _on_connect(self):
+        port = self.port
+        baud = self.baudrate
+        if not port or self._handler is None:  # no link off a hub (the designer canvas)
+            return
+
+        parity_map = {"None": "N", "Even": "E", "Odd": "O", "Mark": "M", "Space": "S"}
+
+        for btn in (self._connect_btn, self._sl_conn):
+            btn.setEnabled(False)
+        self._set_status(tr("连接中..."), "#FF9800")
+
+        ok = self._handler.connect(
+            port, baud,
+            databits=int(self._databits_combo.currentText()),
+            parity=parity_map.get(self._parity_combo.currentText(), "N"),
+            stopbits=float(self._stopbits_combo.currentText()),
+            flowcontrol=self._FLOWS.get(self._flow_combo.currentData(), "none"),
+            parser_type=self.parser_type, parser_config=self.parser_config, slave=self.slave_device,
+        )
+        if not ok:
+            for btn in (self._connect_btn, self._sl_conn):
+                btn.setEnabled(True)
+            self._set_status(tr("连接失败"), "#F44336")
+
+    def _on_disconnect(self):
+        if self._handler is not None:
+            self._handler.disconnect()
+
+    def _on_serial_connected(self, port_name: str):
+        self.set_connected(True)
+
+    def _on_serial_disconnected(self):
+        self.set_connected(False)
+
+    def _on_serial_error(self, msg: str):
+        self._set_status(tr("错误"), "#F44336")
+        self._status.setToolTip(msg)
+        self._sl_status.setToolTip(msg)
+        self._poll_tip = False
+
+    def _set_status(self, text: str, color: str):
+        colors = {
+            "#888": ("#606060", "#b0b0b0"),
+            "#4CAF50": ("#237b27", "#81c784"),
+            "#F44336": ("#c62828", "#ff8a80"),
+            "#FF9800": ("#8a4b00", "#ffb74d"),
+        }
+        light, dark = colors.get(color, (color, color))
+        for label in (self._status, self._sl_status):
+            label.setText(text)
+            label.setTextColor(QColor(light), QColor(dark))
+        self._sl_status.setMinimumWidth(0)  # as wide as its text
+
+    # ---- ports / state ----
+
+    def refresh_ports(self):
+        ports = _list_all_ports()
+        for combo in (self._port_combo, self._sl_port):
+            combo.clear()
+            for p in ports:
+                combo.addItem(f"{p['port']}  {p['description']}")
+            if combo.count() == 0:
+                combo.addItem(tr("无可用串口"))
+
+    def set_connected(self, connected: bool):
+        self._connected = connected
+        editable = not connected
+        for btn in (self._connect_btn, self._sl_conn):
+            btn.setEnabled(True)
+            btn.setText(tr("断开") if connected else tr("连接"))
+        for w in (self._port_combo, self._sl_port, self._baud_combo, self._sl_baud,
+                  self._search_btn, self._sl_search,
+                  self._databits_combo, self._parity_combo,
+                  self._stopbits_combo, self._flow_combo, self._parser_combo):
+            w.setEnabled(editable)
+        if connected:
+            self._show_connected()
+        else:
+            self._set_status(tr("未连接"), "#888")
+            self._show_poll_tip(None)
+
+    def _show_connected(self):
+        """The connection, and the Modbus poller's status while the link parses Modbus, on the status
+        line and in the one-line row alike. The row has little room: there the poller's part may shrink
+        away, cut at its end, but never the connection, so the button stays in sight."""
+        connection = "● " + tr("已连接")
+        text, tip = self._with_poll_status(connection)
+        self._set_status(text, "#4CAF50")
+        if tip is not None:
+            self._sl_status.setMinimumWidth(self._sl_status.fontMetrics().horizontalAdvance(connection))
+        self._show_poll_tip(tip)
+
+    def _show_poll_tip(self, tip):
+        """The poller's tooltip, or none once it is no longer shown; the card's own (an error's) stays."""
+        if tip is not None or self._poll_tip:
+            for label in (self._status, self._sl_status):
+                label.setToolTip(tip or "")
+        self._poll_tip = tip is not None
+
+    # ---- property setters ----
+
+    def set_default_parser(self, value):
+        select_value(self._parser_combo, value)
+
+    def set_parser_config(self, value):
+        self._parser_config = dict(value) if isinstance(value, dict) else {}
+
+    @property
+    def parser_type(self):
+        """None selects the project's parser settings."""
+        mode = self._parser_combo.currentData()
+        return None if mode == CARD_PARSERS[0] else mode
+
+    @property
+    def parser_config(self):
+        """The card's own frame format, or None for the link's rule: the project's settings
+        when the card uses the project's mode, the defaults otherwise."""
+        if self.parser_type is None or not self._parser_config:
+            return None
+        return dict(self._parser_config)
+
+    def set_title(self, t): self._title.setText(t)
+
+    def set_default_baud(self, baud: str):
+        for cb in (self._baud_combo, self._sl_baud):
+            idx = cb.findText(baud)
+            if idx >= 0: cb.setCurrentIndex(idx)
+
+    def set_default_databits(self, v: str):
+        idx = self._databits_combo.findText(v)
+        if idx >= 0: self._databits_combo.setCurrentIndex(idx)
+
+    def set_default_parity(self, v: str):
+        idx = self._parity_combo.findText(v)
+        if idx >= 0: self._parity_combo.setCurrentIndex(idx)
+
+    def set_default_stopbits(self, v: str):
+        idx = self._stopbits_combo.findText(v)
+        if idx >= 0: self._stopbits_combo.setCurrentIndex(idx)
+
+    def set_default_flow(self, v: str):
+        select_value(self._flow_combo, v)
+
+    @property
+    def port(self):
+        c = self._sl_port if self._display_mode == ONE_LINE_MODE else self._port_combo
+        text = c.currentText()
+        if not text or text == tr("无可用串口"):
+            return ""
+        return text.split()[0]
+
+    @property
+    def baudrate(self):
+        c = self._sl_baud if self._display_mode == ONE_LINE_MODE else self._baud_combo
+        return int(c.currentText())
+
+
+from datetime import datetime as _dt
+
+class DataRecvCard(CardWidget):
+    """Data receive card for generated code."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        root = QVBoxLayout(self); root.setContentsMargins(12,10,12,10); root.setSpacing(6)
+        hdr = QHBoxLayout()
+        self._title_lbl = StrongBodyLabel(tr("数据接收")); hdr.addWidget(self._title_lbl)
+        hdr.addStretch()
+        self._counter = CaptionLabel(tr("%1 条", 0))
+        self._counter.setTextColor(QColor("#606060"), QColor("#b0b0b0"))
+        hdr.addWidget(self._counter)
+        root.addLayout(hdr)
+        opt = QHBoxLayout(); opt.setSpacing(8)
+        self._hex_cb = CheckBox(tr("HEX显示")); opt.addWidget(self._hex_cb)
+        self._scroll_cb = CheckBox(tr("自动滚动")); self._scroll_cb.setChecked(True); opt.addWidget(self._scroll_cb)
+        for check in (self._hex_cb, self._scroll_cb):  # macOS would lay them out by a smaller rect
+            check.setAttribute(Qt.WA_LayoutUsesWidgetRect)
+        opt.addStretch()
+        self._clear_btn = PushButton(tr("清空")); self._clear_btn.setFixedWidth(60)
+        self._clear_btn.clicked.connect(self._clear); opt.addWidget(self._clear_btn)
+        root.addLayout(opt)
+        self._text = TextEdit(); self._text.setReadOnly(True)
+        terminal_style = (
+            "QTextEdit { font-family:Menlo,Consolas,'Courier New',monospace;font-size:12px;"
+            "background:#1e1e2e;color:#cdd6f4;border-radius:4px;padding:4px; }")
+        setCustomStyleSheet(self._text, terminal_style, terminal_style)
+        bar = self._text.scrollDelegate.vScrollBar  # light on the dark terminal in both themes
+        bar.setHandleColor(QColor(168, 216, 234, 110), QColor(168, 216, 234, 110))
+        bar.setArrowColor(QColor(168, 216, 234, 160), QColor(168, 216, 234, 160))
+        bar.setGrooveColor(QColor(36, 36, 60, 235), QColor(36, 36, 60, 235))
+        root.addWidget(self._text, 1)
+        self._count = 0; self._max_lines = 1000; self._handler = None
+        self._serial_connections = SignalConnections(self)
+    def set_serial_handler(self, h):
+        if h is self._handler: return
+        self._serial_connections.clear()
+        self._handler = h
+        if h is not None:
+            self._serial_connections.connect(h.rawReceived, self._on_raw)
+            self._serial_connections.connect(h.dataSent, self._on_sent)
+            self._serial_connections.connect(h.connected, self._on_connected)
+            self._serial_connections.connect(h.disconnected, self._on_disconnected)
+    def _on_connected(self, port): self._sys(tr("已连接: %1", port))
+    def _on_disconnected(self): self._sys(tr("已断开"))
+    def _on_raw(self, data):
+        ts = _dt.now().strftime("%H:%M:%S.%f")[:-3]
+        if self._hex_cb.isChecked():
+            txt = " ".join(f"{b:02X}" for b in data)
+        else:
+            decode = getattr(self._handler, "decode_raw", None)  # the hub knows the link's encoding
+            txt = (decode(data) if decode else data.decode("utf-8", errors="replace")).rstrip("\r\n")
+            if not txt: return
+        self._text.append(f'<span style="color:#9399b2">[{ts}]</span> '
+                          f'<span style="color:#a6e3a1">&lt;&lt; {_log_html(txt)}</span>')
+        self._count += 1; self._counter.setText(tr("%1 条", self._count))
+        self._trim(); self._do_scroll()
+    def _on_sent(self, data):
+        ts = _dt.now().strftime("%H:%M:%S.%f")[:-3]
+        if self._hex_cb.isChecked():
+            txt = " ".join(f"{b:02X}" for b in data)
+        else:
+            txt = data.decode("utf-8", errors="replace").rstrip("\r\n")
+            if not txt: return
+        self._text.append(f'<span style="color:#9399b2">[{ts}]</span> '
+                          f'<span style="color:#f9e2af">&gt;&gt; {_log_html(txt)}</span>')
+        self._trim(); self._do_scroll()
+    def _sys(self, msg):
+        ts = _dt.now().strftime("%H:%M:%S")
+        self._text.append(f'<span style="color:#74c7ec">[{ts}] --- {_log_html(msg)} ---</span>')
+        self._trim()
+    def _do_scroll(self):
+        if self._scroll_cb.isChecked():
+            sb = self._text.verticalScrollBar(); sb.setValue(sb.maximum())
+    def _clear(self):
+        self._text.clear(); self._count = 0; self._counter.setText(tr("%1 条", 0))
+    def _trim(self):
+        doc = self._text.document()
+        while doc.blockCount() > self._max_lines:
+            c = self._text.textCursor(); c.movePosition(c.Start)
+            c.select(c.BlockUnderCursor); c.removeSelectedText(); c.deleteChar()
+    def set_title(self, t): self._title_lbl.setText(t)
+    def set_max_lines(self, count):
+        self._max_lines = max(50, count)
+        self._trim()
+
+
+class MainUI(TitleBarLifecycleMixin, FluentWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('串口采集 Demo')
+        self.resize(1180, 910)
+
+        self._page = QWidget()
+        self._page.setObjectName("mainPage")
+        self._page.setFixedSize(1080, 810)
+
+        self.widgets = {}
+        self._theme_containers = []
+        self._create_widgets()
+
+        scroll = ScrollArea()
+        scroll.setObjectName("scrollPage")
+        scroll.enableTransparentBackground()  # before the page is in it: it would also clear the page's
+        scroll.setWidget(self._page)
+        scroll.setWidgetResizable(False)
+        scroll.setAlignment(Qt.AlignCenter)
+
+        self.addSubInterface(scroll, FIF.HOME, tr("主界面"))
+        self.apply_theme()
+        self._external_connections = SignalConnections(self)
+        self._external_connections.connect(
+            qconfig.themeChangedFinished, self.apply_theme)
+
+
+
+    def apply_theme(self):
+        dark = isDarkTheme()
+        background = "#2b2b2b" if dark else "#ffffff"
+        border = "#606060" if dark else "#c8c8c8"
+        foreground = "#f3f3f3" if dark else "#202020"
+        self._page.setStyleSheet(
+            f"QWidget#mainPage {{ background: {background}; "
+            f"border: 1px solid {'#444' if dark else '#ddd'}; }}")
+        for widget, kind in self._theme_containers:
+            if kind == "layout":
+                line = "rgba(255,255,255,0.08)" if dark else "rgba(0,0,0,0.06)"
+                fill = "rgba(255,255,255,0.03)" if dark else "rgba(0,0,0,0.02)"
+                widget.setStyleSheet(
+                    f"QFrame#layoutContainer {{ border: 2px dashed {line}; "
+                    f"background: {fill}; border-radius: 6px; }}")
+            elif kind == "group":
+                widget.setStyleSheet(
+                    f"QGroupBox#groupContainer {{ color: {foreground}; "
+                    f"border: 1px solid {border}; border-radius: 6px; margin-top: 10px; }}"
+                    "QGroupBox#groupContainer::title { subcontrol-origin: margin; "
+                    "subcontrol-position: top left; left: 10px; padding: 0 4px; }")
+            elif kind == "tabs":
+                fill = "#292929" if dark else "#ededed"
+                selected = "#3c3c3c" if dark else "#ffffff"
+                widget.setStyleSheet(
+                    f"QTabWidget#tabContainer::pane {{ border: 1px solid {border}; border-radius: 4px; }}"
+                    "QTabWidget#tabContainer > QTabBar::tab {"
+                    f"color: {foreground}; background: {fill}; "
+                    "padding: 6px 12px; margin-right: 2px; "
+                    "border-top-left-radius: 4px; border-top-right-radius: 4px; }"
+                    "QTabWidget#tabContainer > QTabBar::tab:selected {"
+                    f"background: {selected}; }}")
+        self._page.update()
+
+    def _create_widgets(self):
+
+        self.widgets['title'] = BodyLabel('串口采集 Demo', self._page); _font = self.widgets['title'].font(); _font.setPointSize(22); _font.setBold(True); self.widgets['title'].setFont(_font); self.widgets['title'].setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.widgets['title'].setGeometry(24, 12, 850, 36)
+        self.widgets['title'].show()
+
+        self.widgets['help'] = BodyLabel('连接设备查看温度与压力，可控制设备运行、保存曲线或发送自定义命令。', self._page); _font = self.widgets['help'].font(); _font.setPointSize(13); _font.setBold(False); self.widgets['help'].setFont(_font); self.widgets['help'].setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.widgets['help'].setGeometry(24, 50, 1020, 28)
+        self.widgets['help'].show()
+
+        self.widgets['serial'] = SerialConfigCard(self._page); self.widgets['serial'].set_title('串口配置'); self.widgets['serial'].set_display_mode('单行'); self.widgets['serial'].set_default_baud('115200'); self.widgets['serial'].set_default_databits('8'); self.widgets['serial'].set_default_parity('None'); self.widgets['serial'].set_default_stopbits('1'); self.widgets['serial'].set_default_flow('无'); self.widgets['serial'].set_default_parser('项目设置'); self.widgets['serial'].set_modbus_role('主站'); self.widgets['serial'].set_modbus_period(500); self.widgets['serial'].set_modbus_timeout(1000); self.widgets['serial'].set_modbus_slave(1); self.widgets['serial'].set_modbus_delay(0); self.widgets['serial'].set_modbus_exceptions(True); self.widgets['serial'].set_slave_co_start(0); self.widgets['serial'].set_slave_co_count(100); self.widgets['serial'].set_slave_di_start(0); self.widgets['serial'].set_slave_di_count(100); self.widgets['serial'].set_slave_hr_start(0); self.widgets['serial'].set_slave_hr_count(100); self.widgets['serial'].set_slave_ir_start(0); self.widgets['serial'].set_slave_ir_count(100); self.widgets['serial'].set_slave_init(''); self.widgets['serial'].set_parser_config({})
+        self.widgets['serial'].setGeometry(24, 90, 1032, 48)
+        self.widgets['serial'].show()
+
+        self.widgets['temperature'] = NumericDisplay(self._page); self.widgets['temperature'].set_title('温度'); self.widgets['temperature'].set_unit('°C'); self.widgets['temperature'].set_value('0.00'); self.widgets['temperature'].set_font_size(34)
+        self.widgets['temperature'].setGeometry(24, 155, 240, 120)
+        self.widgets['temperature'].show()
+
+        self.widgets['pressure'] = NumericDisplay(self._page); self.widgets['pressure'].set_title('压力'); self.widgets['pressure'].set_unit('kPa'); self.widgets['pressure'].set_value('0.00'); self.widgets['pressure'].set_font_size(34)
+        self.widgets['pressure'].setGeometry(282, 155, 240, 120)
+        self.widgets['pressure'].show()
+
+        self.widgets['pressure_ring'] = ProgressRingDisplay(self._page); self.widgets['pressure_ring'].set_label('压力满量程'); self.widgets['pressure_ring'].set_maximum(100); self.widgets['pressure_ring'].set_value(0)
+        self.widgets['pressure_ring'].setGeometry(530, 145, 160, 140)
+        self.widgets['pressure_ring'].show()
+
+        self.widgets['running'] = LEDIndicator(self._page); self.widgets['running'].set_color('green'); self.widgets['running'].set_label('设备运行'); self.widgets['running'].set_on(False)
+        self.widgets['running'].setGeometry(730, 154, 220, 40)
+        self.widgets['running'].show()
+
+        self.widgets['start'] = PushButton('启动设备', self._page); self.widgets['start'].setEnabled(True)
+        self.widgets['start'].setGeometry(712, 217, 150, 40)
+        self.widgets['start'].show()
+        self.widgets['start'].clicked.connect(lambda: self._send_text_command(str('START'), '\r\n'))
+
+        self.widgets['stop'] = PushButton('停止设备', self._page); self.widgets['stop'].setEnabled(True)
+        self.widgets['stop'].setGeometry(886, 217, 150, 40)
+        self.widgets['stop'].show()
+        self.widgets['stop'].clicked.connect(lambda: self._send_text_command(str('STOP'), '\r\n'))
+
+        self.widgets['chart'] = RealtimeLineChart(self._page); self.widgets['chart'].configure('[{"name": "温度", "parseMode": "键值匹配", "key": "temperature", "jsonPath": "", "expression": "", "byteOffset": 0, "dataType": "float32", "byteOrder": "大端(BE)", "frameHeader": "", "frameTail": "", "regIndex": 0, "mbDataType": "uint16", "mbRegOrder": "大端(AB CD)", "mbFcFilter": -1, "mbSlaveFilter": -1, "mbArea": "保持寄存器"}, {"name": "压力", "parseMode": "键值匹配", "key": "pressure", "jsonPath": "", "expression": "", "byteOffset": 0, "dataType": "float32", "byteOrder": "大端(BE)", "frameHeader": "", "frameTail": "", "regIndex": 0, "mbDataType": "uint16", "mbRegOrder": "大端(AB CD)", "mbFcFilter": -1, "mbSlaveFilter": -1, "mbArea": "保持寄存器"}]', 200); self.widgets['chart'].set_title('实时采样')
+        self.widgets['chart'].setGeometry(24, 355, 642, 310)
+        self.widgets['chart'].show()
+
+        self.widgets['monitor_tabs'] = QTabWidget(self._page); self.widgets['monitor_tabs'].setObjectName('tabContainer'); self._theme_containers.append((self.widgets['monitor_tabs'], 'tabs')); self.widgets['monitor_tabs'].addTab(QWidget(), '原始数据'); self.widgets['monitor_tabs'].addTab(QWidget(), '字段表格'); self.widgets['monitor_tabs'].addTab(QWidget(), '事件日志')
+        self.widgets['monitor_tabs'].setGeometry(688, 355, 368, 310)
+        self.widgets['monitor_tabs'].show()
+
+        self.widgets['receive'] = DataRecvCard(self.widgets['monitor_tabs'].widget(0)); self.widgets['receive'].set_title('原始串口数据'); self.widgets['receive'].set_max_lines(200)
+        place_tab_child(self.widgets['monitor_tabs'], self.widgets['receive'], 1, 33, 366, 276)
+        self.widgets['receive'].show()
+
+        self.widgets['live_table'] = DataTableWidget(self.widgets['monitor_tabs'].widget(1)); self.widgets['live_table'].set_columns(['数据字段', '当前值']); self.widgets['live_table'].set_record_mode('最新值'); self.widgets['live_table'].set_max_rows(20)
+        place_tab_child(self.widgets['monitor_tabs'], self.widgets['live_table'], 1, 33, 366, 276)
+        self.widgets['live_table'].show()
+
+        self.widgets['event_log'] = LogDisplayBox(self.widgets['monitor_tabs'].widget(2)); self.widgets['event_log'].set_max_lines(200)
+        place_tab_child(self.widgets['monitor_tabs'], self.widgets['event_log'], 1, 33, 366, 276)
+        self.widgets['event_log'].show()
+
+        self.widgets['command'] = LineEdit(self._page); self.widgets['command'].setPlaceholderText('输入 READ、START 或 STOP，按回车发送'); self.widgets['command'].setText(''); self.widgets['command'].setReadOnly(False)
+        self.widgets['command'].setGeometry(24, 690, 440, 36)
+        self.widgets['command'].show()
+        self.widgets['command'].returnPressed.connect(lambda: self._send_text_command(str(self.widgets['command'].text().strip()), '\r\n') if self.widgets['command'].text().strip() else None)
+
+        self.widgets['protocol_hint'] = BodyLabel('默认 115200 / 8N1 · 每行 JSON 或键值文本', self._page); _font = self.widgets['protocol_hint'].font(); _font.setPointSize(12); _font.setBold(False); self.widgets['protocol_hint'].setFont(_font); self.widgets['protocol_hint'].setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.widgets['protocol_hint'].setGeometry(490, 690, 566, 36)
+        self.widgets['protocol_hint'].show()
+
+        self.widgets['setpoint_label'] = BodyLabel('压力中心', self._page); _font = self.widgets['setpoint_label'].font(); _font.setPointSize(13); _font.setBold(False); self.widgets['setpoint_label'].setFont(_font); self.widgets['setpoint_label'].setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.widgets['setpoint_label'].setGeometry(24, 295, 110, 36)
+        self.widgets['setpoint_label'].show()
+
+        self.widgets['setpoint_slider'] = Slider(Qt.Horizontal, self._page); self.widgets['setpoint_slider'].setRange(20, 80); self.widgets['setpoint_slider'].setValue(50)
+        self.widgets['setpoint_slider'].setGeometry(140, 295, 300, 36)
+        self.widgets['setpoint_slider'].show()
+        SendOnRelease(slider_of(self.widgets['setpoint_slider']), lambda v: self._send_text_command(str(v), '\r\n'))
+
+        self.widgets['setpoint_spin'] = SpinBox(self._page); self.widgets['setpoint_spin'].setRange(20, 80); self.widgets['setpoint_spin'].setValue(50); self.widgets['setpoint_spin'].setSuffix(' kPa')
+        self.widgets['setpoint_spin'].setGeometry(460, 295, 160, 36)
+        self.widgets['setpoint_spin'].show()
+        self.widgets['setpoint_spin'].valueChanged.connect(lambda v: self._send_text_command(str(v), '\r\n'))
+
+        _tw = QWidget(self._page); _tl = QHBoxLayout(_tw); _tl.setContentsMargins(0,0,0,0); _sw = SwitchButton(); _sw.setChecked(False); _tl.addWidget(BodyLabel('设备运行')); _tl.addStretch(); _tl.addWidget(_sw); _tw._switch = _sw; self.widgets['run_switch'] = _tw
+        self.widgets['run_switch'].setGeometry(710, 295, 325, 36)
+        self.widgets['run_switch'].show()
+        self.widgets['run_switch']._switch.checkedChanged.connect(lambda c: self._send_text_command(str('START'), '\r\n') if c else self._send_text_command(str('STOP'), '\r\n'))
+
+        self.widgets['reserved'] = PushButton('预留操作（禁用）', self._page); self.widgets['reserved'].setEnabled(False)
+        self.widgets['reserved'].setGeometry(24, 745, 210, 36)
+        self.widgets['reserved'].show()
+        self.widgets['reserved'].clicked.connect(lambda: self._send_text_command(str('STOP'), '\r\n'))
+
+        self.widgets['protocol_info'] = LineEdit(self._page); self.widgets['protocol_info'].setPlaceholderText(''); self.widgets['protocol_info'].setText('协议: JSON / 115200 / 8N1'); self.widgets['protocol_info'].setReadOnly(True)
+        self.widgets['protocol_info'].setGeometry(250, 745, 320, 36)
+        self.widgets['protocol_info'].show()
+
+        self.widgets['command_presets'] = ComboBox(self._page); self.widgets['command_presets'].addItems(['停止设备', '读取一次', '启动设备']); self.widgets['command_presets'].setCurrentIndex(1)
+        self.widgets['command_presets'].setGeometry(590, 745, 240, 36)
+        self.widgets['command_presets'].show()
+        self.widgets['command_presets'].currentIndexChanged.connect(lambda i, _cmds=['STOP', 'READ', 'START']: self._send_text_command(str((_cmds[i] if i < len(_cmds) and _cmds[i] else self.widgets['command_presets'].currentText())), '\r\n') if i >= 0 and (_cmds[i] if i < len(_cmds) and _cmds[i] else self.widgets['command_presets'].currentText()) else None)
+
+        self.widgets['preset_hint'] = BodyLabel('快捷命令 · 选择后发送', self._page); _font = self.widgets['preset_hint'].font(); _font.setPointSize(12); _font.setBold(False); self.widgets['preset_hint'].setFont(_font); self.widgets['preset_hint'].setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.widgets['preset_hint'].setGeometry(850, 745, 200, 36)
+        self.widgets['preset_hint'].show()
+
+
+    def _send_text_command(self, cmd, suffix="\r\n"):
+        if hasattr(self, '_comm_hub') and self._comm_hub.is_connected:
+            self._comm_hub.send_text(cmd + suffix)
+
+    def _command_error(self, error):
+        InfoBar.error(title=tr("提示"), content=str(error), duration=2000, parent=self)
+
+    def _send_hex_command(self, cmd, header="", tail=""):
+        if hasattr(self, '_comm_hub') and self._comm_hub.is_connected:
+            try:
+                frame = command_hex_frame(cmd, header, tail)
+            except ValueError as exc:
+                self._command_error(exc)
+                return
+            self._comm_hub.send(frame)
+
+    def _send_modbus(self, slave, func, address, value=1, data_type="uint16", reg_order="大端(AB CD)"):  # i18n: value
+        # A write goes into the data table of every link card in the 从站 role, connected or not; then one
+        # request per connected link, framed as it parses: RTU, MBAP (modbus_tcp) or ASCII (modbus_ascii).
+        devices = slave_devices(self.widgets.values())
+        if devices:
+            try:
+                slave_command_write(devices, modbus_request(slave, func, address, value, data_type, reg_order))
+            except ValueError as exc:
+                self._command_error(exc)
+                return
+        if hasattr(self, '_comm_hub') and self._comm_hub.is_connected:
+            try:
+                send_modbus_command(self._comm_hub, slave, func, address, value, data_type, reg_order)
+            except ValueError as exc:
+                self._command_error(exc)
+
+    def _send_json_command(self, value, template="{value}", newline="无"):  # i18n: value
+        if hasattr(self, '_comm_hub') and self._comm_hub.is_connected:
+            try:
+                frame = json_command({"commandTemplate": template, "commandJsonNewline": newline}, value)
+            except ValueError as exc:
+                self._command_error(exc)
+                return
+            self._comm_hub.send(frame)
+
+    def _send_packed_value(self, value, fmt, cast=int, tpl="{value}", header="", tail=""):
+        if hasattr(self, '_comm_hub') and self._comm_hub.is_connected:
+            try:
+                frame = command_packed_frame(value, fmt, cast, tpl, header, tail)
+            except ValueError as exc:
+                self._command_error(exc)
+                return
+            self._comm_hub.send(frame)

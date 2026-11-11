@@ -1,0 +1,381 @@
+"""Bounded rendering, lossless history, and standalone exported runtime checks."""
+import csv
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt5.QtCore import QEvent, Qt, QTimer
+from PyQt5.QtTest import QSignalSpy, QTest
+from PyQt5.QtWidgets import QApplication
+from PyQt5 import sip
+
+from app.common import runtime_sources
+from app.common.build_support import build_nuitka_command
+from app.core.chart_runtime import RealtimeLineChart
+from app.core.code_generator import _realtime_chart_class, generate_project
+from app.core.project import ProjectData
+from app.core.protocol_parser import RawFrameBuffer
+from types import SimpleNamespace
+from tests.orderly_exit import CHILD_PRELUDE
+
+
+def click_legend_entry(chart, index):
+    """Click a curve's entry in the chart's header, as a user does to hide or show that curve."""
+    QTest.mouseClick(chart._header, Qt.LeftButton, Qt.NoModifier, chart._header.entry_rect(index).center().toPoint())
+
+
+class ChartTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        namespace = {}
+        with patch.dict(sys.modules, {"serial_handler": SimpleNamespace(RawFrameBuffer=RawFrameBuffer)}):
+            exec(_realtime_chart_class(), namespace)
+        cls.chart_classes = (RealtimeLineChart, namespace["RealtimeLineChart"])
+
+    def make_chart(self, cls):
+        chart = cls()
+        chart.configure([{"name": "temperature", "key": "temp"}], 200)
+        self.addCleanup(lambda: sip.delete(chart) if not sip.isdeleted(chart) else None)
+        return chart
+
+    def test_curve_expressions_all_modes_and_fallback_in_both_runtimes(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            chart.configure([
+                {"key": "v", "expression": "value * 0.1 + 2"},
+                {"parseMode": "JSON路径", "jsonPath": "sensor.v", "expression": "value > 5"},
+                {"parseMode": "HEX字节提取", "dataType": "uint8", "expression": "(value >> 1) & 1"},
+                {"parseMode": "Modbus", "regIndex": 0, "mbFcFilter": 3,
+                 "expression": "value * 2"},
+                {"key": "v", "expression": "value / 0"},
+                {"key": "v"},
+                {"key": "v", "expression": "value.__class__"},
+                {"key": "v", "expression": "__import__('os')"},
+            ])
+            chart.on_parsed({"v": 10, "sensor": {"v": 6}, "fc": 3, "hr0": 7})
+            chart.on_raw(bytes([6]))
+            self.assertEqual([list(h) for h in chart._data],
+                             [[3.0], [1.0], [1.0], [14.0], [10.0], [10.0], [10.0], [10.0]])
+
+    def test_numeric_text_is_converted_before_expression_and_invalid_text_is_rejected(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            chart.configure([{"key": "v", "expression": "value * 0.1"},
+                             {"key": "v", "expression": "42"},
+                             {"key": "v", "expression": "value / 0"}])
+            chart.on_parsed({"v": "125"})
+            self.assertEqual([list(h) for h in chart._data], [[12.5], [42.0], [125.0]])
+            for value in ("bad", "nan", "inf"):
+                chart.on_parsed({"v": value})
+            self.assertEqual([h.count for h in chart._data], [1, 1, 1])
+
+    def test_curve_expression_overflow_complex_and_expensive_integer_fallback(self):
+        expressions = ["value * 1e308", "(-value) ** 0.5", "2 ** 1000000000",
+                       "1 << 1000000000", "(2 ** 62) * 4", "1e309", "value.__class__"]
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            chart.configure([{"key": "v", "expression": expression} for expression in expressions])
+            chart.on_parsed({"v": 10.0})
+            self.assertEqual([list(h) for h in chart._data], [[10.0]] * len(expressions))
+        from app.core.binding_values import _curve_expression_code, curve_expression
+        _curve_expression_code.cache_clear()
+        for _ in range(2):
+            self.assertEqual(curve_expression(5, "invalid("), 5)
+        self.assertEqual(_curve_expression_code.cache_info().hits, 1)
+        for expression, expected in [("-1 >> 1000000000", -1), ("0 << 1000000000", 0),
+                                     ("(-1) ** 1000000001", -1), ("2 ** 62", 2 ** 62),
+                                     ("False and (1 / 0)", False), ("1 < value < 6", True)]:
+            self.assertEqual(curve_expression(5, expression), expected)
+
+    def test_curve_expression_accepts_surrounding_whitespace_in_both_runtimes(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            chart.configure([{"key": "v", "expression": "  value / 2  "}])
+            chart.on_parsed({"v": 125})
+            self.assertEqual(list(chart._data[0]), [62.5])
+
+    def test_rendering_is_batched_and_idle_does_not_redraw(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            curve = chart._curves[0]
+            refreshes = QSignalSpy(chart._refresh_timer.timeout)
+            with patch.object(curve, "setData", wraps=curve.setData) as render:
+                for i in range(2000):
+                    chart.append_value(0, i)
+                render.assert_not_called()
+                self.assertTrue(chart._refresh_timer.isActive())
+                # Wait for the real Qt timeout; a busy CI event loop may deliver
+                # the 33 ms timer after a fixed 90 ms wall-clock wait expires.
+                self.assertTrue(refreshes.wait(3000), "Chart refresh timer did not fire")
+                self.assertEqual(len(refreshes), 1)
+                render.assert_called_once()
+                self.assertEqual(list(render.call_args.args[0]), list(range(1800, 2000)))
+                self.assertFalse(chart._refresh_timer.isActive())
+                # Advance the event loop through several refresh intervals
+                # without new samples, and verify no refresh gets scheduled.
+                idle_timer = QTimer()
+                idle_timer.setSingleShot(True)
+                idle_elapsed = QSignalSpy(idle_timer.timeout)
+                idle_timer.start(chart.REFRESH_MS * 3)
+                self.assertTrue(idle_elapsed.wait(3000), "Idle observation timer did not fire")
+                self.assertEqual(len(refreshes), 1)
+                self.assertFalse(chart._refresh_timer.isActive())
+                render.assert_called_once()
+
+    def test_cache_limit_does_not_truncate_csv_or_json_history(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            count = chart.HISTORY_LIMIT + 17
+            for i in range(count):
+                chart.on_parsed({"temp": i})
+            self.assertEqual(len(chart._data[0]), chart.HISTORY_LIMIT)
+            self.assertEqual(chart._data[0][0], 17)
+            self.assertEqual(chart._data[0].count, count)
+            chart.set_display_points(999999)
+            self.assertEqual(chart._display_points, chart.HISTORY_LIMIT)
+            with tempfile.TemporaryDirectory() as folder:
+                csv_path = Path(folder) / "capture.csv"
+                json_path = Path(folder) / "capture.json"
+                chart.save_data(csv_path)
+                chart.save_data(json_path)
+                with csv_path.open() as source:
+                    rows = list(csv.reader(source))
+                self.assertEqual(rows[0], ["temperature"])
+                self.assertEqual([float(row[0]) for row in rows[1:]], list(range(count)))
+                self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["temperature"], list(range(count)))
+                # Saving must restore the append position in the spool file.
+                chart.append_value(0, count)
+                self.assertEqual(list(chart._data[0].values())[-1], count)
+                chart.load_data(csv_path)
+                self.assertEqual(len(chart._data[0]), chart.HISTORY_LIMIT)
+                self.assertEqual(chart._data[0].count, count)
+
+    def test_clear_and_destroy_close_spool_and_cancel_pending_refresh(self):
+        chart = self.make_chart(RealtimeLineChart)
+        chart.append_value(0, 5)
+        spool = chart._data[0]._file
+        chart.clear_data()
+        self.assertTrue(spool.closed)
+        self.assertFalse(chart._refresh_timer.isActive())
+        self.assertEqual(chart._data[0].count, 0)
+        chart.append_value(0, 6)
+        spool = chart._data[0]._file
+        sip.delete(chart)
+        self.assertTrue(spool.closed)
+
+    def test_bad_history_load_preserves_current_samples(self):
+        chart = self.make_chart(RealtimeLineChart)
+        chart.append_value(0, 42)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "bad.csv"
+            path.write_text("value\n1\nnot-a-number\n")
+            with self.assertRaises(ValueError):
+                chart.load_data(path)
+        self.assertEqual(list(chart._data[0].values()), [42])
+
+    def test_hex_chart_keeps_all_frames_and_resets_partial_on_disconnect(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            chart.configure([{"parseMode": "HEX字节提取", "dataType": "uint16",
+                              "frameHeader": "AA55", "frameTail": "55AA"}])
+            chart.on_raw(bytes.fromhex("aa5500"))
+            self.assertEqual(chart._data[0].count, 0)
+            chart.on_raw(bytes.fromhex("0155aaaa55000255aa"))
+            self.assertEqual(list(chart._data[0].values()), [1, 2])
+            chart.on_raw(bytes.fromhex("aa5500"))
+            chart.reset_stream()
+            chart.on_raw(bytes.fromhex("0355aa"))
+            self.assertEqual(chart._data[0].count, 2)
+
+    def test_history_load_preserves_all_live_parsers_and_matches_reordered_names(self):
+        cfgs = [
+            {"name": "温度", "parseMode": "键值匹配", "key": "custom_temperature"},
+            {"name": "压力", "parseMode": "JSON路径", "jsonPath": "sensors.1.value"},
+            {"name": "计数", "parseMode": "Modbus", "regIndex": 2,
+             "mbDataType": "uint32", "mbRegOrder": "小端(CD AB)",
+             "mbFcFilter": 3, "mbSlaveFilter": 7},
+            {"name": "电压", "parseMode": "HEX字节提取", "byteOffset": 1,
+             "dataType": "uint16", "byteOrder": "小端(LE)",
+             "frameHeader": "AA55", "frameTail": "55AA"},
+        ]
+        recorded = {"温度": [1, 2], "压力": [3, 4], "计数": [5, 6], "电压": [7, 8]}
+        for cls in self.chart_classes:
+            for extension in ("csv", "json"):
+                with self.subTest(runtime=cls.__module__, format=extension):
+                    chart = self.make_chart(cls)
+                    chart.configure(cfgs)
+                    click_legend_entry(chart, 1)
+                    self.assertFalse(chart._curves[1].isVisible())
+                    chart.append_value(0, 999)
+                    chart.on_raw(bytes.fromhex("aa5501"))
+                    with tempfile.TemporaryDirectory() as folder:
+                        path = Path(folder) / f"history.{extension}"
+                        reordered = dict(reversed(list(recorded.items())))
+                        if extension == "json":
+                            path.write_text(json.dumps(reordered), encoding="utf-8")
+                        else:
+                            with path.open("w", encoding="utf-8", newline="") as output:
+                                writer = csv.writer(output)
+                                writer.writerow(reordered)
+                                writer.writerows(zip(*reordered.values()))
+                        chart.load_data(path)
+                    self.assertEqual(chart._cfgs, cfgs)
+                    self.assertFalse(chart._curves[1].isVisible(), "loading keeps a hidden curve hidden")
+                    self.assertEqual([list(h.values()) for h in chart._data],
+                                     list(recorded.values()))
+                    chart.on_parsed({"custom_temperature": 12,
+                                     "sensors": [{}, {"value": 13}],
+                                     "fc": 3, "slave": 7,
+                                     "hr2": 0x5678, "hr3": 0x1234})
+                    chart.on_raw(bytes.fromhex("020355aa"))
+                    self.assertEqual([list(h.values()) for h in chart._data],
+                                     [[1, 2, 12], [3, 4, 13],
+                                      [5, 6, 0x12345678], [7, 8, 770]])
+                    # Modbus filters must also survive history import.
+                    chart.on_parsed({"fc": 4, "slave": 7, "hr2": 1, "hr3": 0})
+                    self.assertEqual(chart._data[2].count, 3)
+
+    def test_history_channel_mismatch_preserves_config_and_samples(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            chart.configure([{"name": "温度", "key": "temp"},
+                             {"name": "压力", "key": "pressure"}])
+            chart.on_parsed({"temp": 42, "pressure": 7})
+            for header in (["温度"], ["温度", "压力", "多余"],
+                           ["改名", "压力"], ["温度", "温度"], list("123456789")):
+                with self.subTest(runtime=cls.__module__, channels=header):
+                    with tempfile.TemporaryDirectory() as folder:
+                        path = Path(folder) / "mismatched.csv"
+                        with path.open("w", encoding="utf-8", newline="") as output:
+                            csv.writer(output).writerows([header, [1] * len(header)])
+                        with self.assertRaises(ValueError):
+                            chart.load_data(path)
+                    self.assertEqual([list(h.values()) for h in chart._data], [[42], [7]])
+                    self.assertEqual(chart._cfgs,
+                                     [{"name": "温度", "key": "temp"},
+                                      {"name": "压力", "key": "pressure"}])
+            chart.on_parsed({"temp": 43, "pressure": 8})
+            self.assertEqual([list(h.values()) for h in chart._data], [[42, 43], [7, 8]])
+
+    def test_empty_default_chart_can_import_arbitrary_history_channels(self):
+        for cls in self.chart_classes:
+            chart = cls()
+            self.addCleanup(lambda chart=chart: sip.delete(chart)
+                            if not sip.isdeleted(chart) else None)
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "history.json"
+                path.write_text(json.dumps({"温度": [1, 2], "压力": [3]}), encoding="utf-8")
+                chart.load_data(path)
+            self.assertEqual([cfg["name"] for cfg in chart._cfgs], ["温度", "压力"])
+            self.assertEqual([list(h.values()) for h in chart._data], [[1, 2], [3]])
+            chart.on_parsed({"温度": 4, "压力": 5})
+            self.assertEqual([list(h.values()) for h in chart._data], [[1, 2, 4], [3, 5]])
+
+    def test_identical_duplicate_channel_names_keep_original_column_order(self):
+        for cls in self.chart_classes:
+            chart = self.make_chart(cls)
+            chart.configure([{"name": "温度", "key": "first"},
+                             {"name": "温度", "key": "second"}])
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "history.csv"
+                path.write_text("温度,温度\n1,2\n", encoding="utf-8")
+                chart.load_data(path)
+            chart.on_parsed({"first": 3, "second": 4})
+            self.assertEqual([list(h.values()) for h in chart._data], [[1, 3], [2, 4]])
+
+
+class StandaloneExportTests(unittest.TestCase):
+    def test_nested_chart_and_serial_card_work_without_designer_imports(self):
+        project = ProjectData()
+        project.serial.update({"parser": "modbus", "parity": "Even", "dataBits": 7})
+        project.widgets = [
+            {"id": "group", "type": "GroupBox", "children": [
+                {"id": "chart", "type": "RealtimeChart",
+                 "properties": {"_curve_0_parseMode": "Modbus", "_curve_0_regIndex": 0}},
+                {"id": "value", "type": "NumericDisplay",
+                 "binding": {"parseMode": "Modbus", "mbRegIndex": 0}},
+            ]},
+            {"id": "serial", "type": "SerialConfigCard",
+             "properties": {"defaultDatabits": "7", "defaultParity": "Even",
+                            "defaultStopbits": "2", "defaultFlow": "RTS/CTS",
+                            "defaultParser": "modbus"}},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            generate_project(project, folder, language="zh_CN")
+            for source in Path(folder).glob("*.py"):
+                compile(source.read_text(encoding="utf-8"), str(source), "exec")
+            code = """
+from unittest.mock import patch, Mock
+from PyQt5.QtWidgets import QApplication, QWidget
+app = QApplication([])
+import serial_handler as runtime
+from ui import RealtimeLineChart, SerialConfigCard, NumericDisplay
+from comm_hub import CommHub
+from data_binding import DataBinding
+hub = CommHub()
+chart = RealtimeLineChart()
+chart.configure([{"parseMode": "Modbus", "regIndex": 0}])
+value = NumericDisplay()
+card = SerialConfigCard()
+card.set_default_databits("7")
+card.set_default_parity("Even")
+card.set_default_stopbits("2")
+card.set_default_flow("RTS/CTS")
+card.set_default_parser("modbus")
+card._port_combo.clear()
+card._port_combo.addItem("TEST fake device")
+ui = QWidget()
+ui.widgets = {"chart": chart, "value": value, "serial": card}
+binding = DataBinding(ui, hub)
+handler = card.link  # the card's own serial link
+assert hub.links == [handler]
+with patch.object(runtime.serial, "Serial") as port, patch.object(runtime, "SerialReaderThread"):
+    port.return_value.write.side_effect = len
+    card._on_connect()
+    assert port.call_args.kwargs["bytesize"] == 7
+    assert port.call_args.kwargs["parity"] == "E"
+    assert port.call_args.kwargs["stopbits"] == 2
+    assert port.call_args.kwargs["rtscts"]
+    # No link card: the poller reads what the chart's curve shows (the value is not on screen) by default.
+    read = bytes.fromhex("010300000001")
+    assert port.return_value.write.call_args_list == [((read + runtime.modbus_crc(read),),)]
+    assert binding.modbus_poller.status() == "1 块 · 轮询中"
+    payload = bytes.fromhex("0103020019")
+    for parsed in handler._parser.feed(payload + runtime.modbus_crc(payload)):
+        handler.dataReceived.emit(parsed)
+    assert chart._data[0][-1] == 25
+    assert value._value.text() == "25"  # the reply names holding register 0
+    assert binding.modbus_poller.status() == "1 块 · 正常"
+    handler.disconnect()
+print("STANDALONE_MODBUS_CHART_OK")
+"""
+            result = subprocess.run([sys.executable, "-c", CHILD_PRELUDE + code], cwd=folder,
+                                    env={**os.environ, "QT_QPA_PLATFORM": "offscreen",
+                                         "PYTHONPATH": ""},
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("STANDALONE_MODBUS_CHART_OK", result.stdout)
+
+    def test_packaged_source_bundle_supports_export_without_python_sources(self):
+        root = Path(__file__).resolve().parents[1]
+        args = build_nuitka_command(root, [sys.executable], "Designer")
+        self.assertTrue(any(arg.endswith("=runtime_sources.json") for arg in args))
+        bundle = root / "build" / "runtime_sources.json"
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder)
+            (target / "runtime_sources.json").write_bytes(bundle.read_bytes())
+            with patch.object(runtime_sources, "ROOT", target), \
+                 patch.dict(vars(runtime_sources), {"__compiled__": True}):
+                output = target / "export"
+                generate_project(ProjectData(), str(output), language="zh_CN")
+                for source in output.glob("*.py"):
+                    compile(source.read_text(encoding="utf-8"), str(source), "exec")
+                for name in runtime_sources.RUNTIME_FILES:
+                    self.assertTrue(runtime_sources.runtime_source(name))

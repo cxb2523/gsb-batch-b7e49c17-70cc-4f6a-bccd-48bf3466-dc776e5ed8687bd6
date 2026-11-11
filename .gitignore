@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+*.egg
+
+# Virtual Environment
+.venv/
+.build-venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Nuitka build output
+build/
+*.build/
+*.dist/
+*.onefile-build/
+*.app/
+nuitka-crash-report.xml
+
+# Packaging output
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Project exports
+output/
+*.uidp
+!demo/project.uidp
+!examples/tutorials/*.uidp
+!examples/industrial/*.uidp
+
+# Cursor
+.cursor/
