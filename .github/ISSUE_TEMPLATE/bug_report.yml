@@ -1,0 +1,106 @@
+name: Bug Report
+description: A chart that does not draw, draws wrongly, or behaves differently to the documentation
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+assignees:
+  - tempus2016
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. The more of the following you fill in, the
+        faster it can be reproduced.
+
+        Please check [Troubleshooting](https://github.com/tempus2016/chartdeck/wiki/Troubleshooting)
+        and the [existing issues](https://github.com/tempus2016/chartdeck/issues) first.
+
+  - type: input
+    id: card_version
+    attributes:
+      label: Chartdeck version
+      description: Press F12 and look at the browser console — the card prints its version on load.
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Settings → System → About
+      placeholder: e.g. 2026.10.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: style
+    attributes:
+      label: Which style or chart type?
+      options:
+        - Classic bar
+        - Thin bar
+        - Segmented bar
+        - Vertical / tank
+        - Ring
+        - Half circle with needle
+        - Three-quarter arc
+        - A history chart
+        - The visual editor
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: How is the card installed?
+      options:
+        - Home Assistant Marketplace (or HACS)
+        - Manually, as a Lovelace resource
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and platform
+      placeholder: e.g. Chrome 141 on Windows, or the iOS companion app
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead? A screenshot helps most with charts.
+    validations:
+      required: true
+
+  - type: textarea
+    id: card_yaml
+    attributes:
+      label: Card configuration
+      description: In the card editor, choose "Show code editor" and paste it here. Secrets removed.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: entity_state
+    attributes:
+      label: The entity's state and attributes
+      description: Developer tools → States, find the entity, and paste its state and attributes. Charts are only as right as the numbers they get.
+      render: yaml
+    validations:
+      required: false
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Browser console output
+      description: Press F12, reload the page, and paste anything red. Leave blank if there is nothing.
+      render: shell
+    validations:
+      required: false

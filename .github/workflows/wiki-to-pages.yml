@@ -1,0 +1,90 @@
+name: Publish the wiki
+
+# The wiki is the documentation, and GitHub wikis are poorly indexed by search engines -
+# which matters when people find this by searching for the thing they are trying to build.
+# This publishes the same pages to GitHub Pages, so the wiki stays the one place they are
+# written and there is nothing to keep in step by hand. How the published site looks lives
+# in docs-theme/ in this repo.
+on:
+  gollum: # fires when a wiki page is edited
+  push:
+    branches: [main]
+    paths: ['docs-theme/**', '.github/workflows/wiki-to-pages.yml']
+  pull_request:
+    paths: ['docs-theme/**', '.github/workflows/wiki-to-pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Builds on pull requests too, so a change to the theme is known to produce a site
+  # before it reaches main. Only the deploy job below is skipped there.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Take a copy of the theme
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: docs-theme
+          path: repo
+          # This job processes wiki content and, on a pull_request, fork-controlled code;
+          # neither should have the job token sitting in .git/config while it runs.
+          persist-credentials: false
+
+      - name: Take a copy of the wiki
+        run: |
+          git clone --depth 1 https://github.com/${{ github.repository }}.wiki.git site
+          rm -rf site/.git
+
+      - name: Turn wiki pages into site pages
+        run: python3 repo/docs-theme/build.py site
+
+      - name: Lay the theme over it
+        run: |
+          cp -r repo/docs-theme/_config.yml \
+                repo/docs-theme/_layouts \
+                repo/docs-theme/assets \
+                site/
+
+      # No configure-pages step: url and baseurl are set in docs-theme/_config.yml, so the
+      # build is the same on a pull request as it is on main.
+      #
+      # Without this the artifact is raw markdown and the site serves a 404, because
+      # nothing turns index.md into index.html - deploy-pages publishes files as they are.
+      - uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
+        with:
+          source: ./site
+          destination: ./_site
+
+      - name: Check the build produced pages, not markdown
+        run: |
+          test -f _site/index.html || { echo "no index.html - Jekyll did not render"; exit 1; }
+          test -f _site/Installation.html || { echo "no Installation.html"; exit 1; }
+          test -f _site/assets/css/docs.css || { echo "theme assets missing"; exit 1; }
+          test -s _site/assets/social-preview.png || { echo "social preview image missing"; exit 1; }
+          grep -q 'og:image' _site/index.html || { echo "index lost its og:image"; exit 1; }
+          grep -q 'class="ph"' _site/index.html || { echo "hero did not build"; exit 1; }
+          echo "$(ls _site/*.html | wc -l) pages built"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ./_site
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

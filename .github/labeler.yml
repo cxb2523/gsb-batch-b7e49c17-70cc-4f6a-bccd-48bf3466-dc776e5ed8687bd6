@@ -1,0 +1,59 @@
+# Path-based pull request labels, applied by .github/workflows/labeler.yml.
+# Every label named here must exist — they are defined in .github/labels.yml.
+
+bars:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/styles/bar*.ts
+          - src/styles/segmented*.ts
+          - src/styles/tank*.ts
+
+gauges:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/styles/ring*.ts
+          - src/styles/arc*.ts
+          - src/styles/needle*.ts
+
+charts:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/charts/**
+
+history:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/data/**
+
+editor:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/editor/**
+
+translations:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/locales/**
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - test/**
+          - '**/*.test.ts'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - README.md
+          - images/**
+          - docs-theme/**
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+          - rollup.config.mjs
+          - eslint.config.mjs
+          - release.config.js
+          - tsconfig.json
+          - vitest.config.ts

@@ -1,0 +1,70 @@
+// The release-notes check in CI runs semantic-release against a throwaway local clone so
+// it needs no credentials of any kind. Only the plugins that shape the notes are wanted
+// there: the publishing ones would be verifying an access it deliberately does not have,
+// and none of them contribute a line to the notes.
+const notesOnly = process.env.RELEASE_NOTES_CHECK === '1';
+
+const plugins = [
+  '@semantic-release/commit-analyzer',
+  [
+    '@semantic-release/release-notes-generator',
+    {
+      preset: 'conventionalcommits',
+      presetConfig: {
+        types: [
+          { type: 'feat', section: 'Features' },
+          { type: 'fix', section: 'Bug Fixes' },
+          { type: 'doc', hidden: false, section: 'Documentation' },
+          { type: 'docs', hidden: false, section: 'Documentation' },
+          { type: 'chore', hidden: true, section: 'Chores' },
+        ],
+      },
+    },
+  ],
+  [
+    '@semantic-release/npm',
+    {
+      npmPublish: false,
+    },
+  ],
+  [
+    // Rebuild once the new version is in package.json, so the bundle that is committed
+    // and attached to the release carries it too.
+    '@semantic-release/exec',
+    {
+      // Rebuild once the new version is in package.json.
+      prepareCmd: 'npm run build',
+    },
+  ],
+  [
+    '@semantic-release/git',
+    {
+      assets: ['README.md', 'package.json', 'package-lock.json', 'dist/*.js', 'dist/*.js.map'],
+    },
+  ],
+  [
+    '@semantic-release/github',
+    {
+      // The main file, one file per language beside it, and a source map for each.
+      assets: ['dist/*.js', 'dist/*.js.map'],
+      // No "released in" comments on issues and pull requests. Turning them on also needs
+      // issues: write and pull-requests: write in .github/workflows/release.yml.
+      successComment: false,
+      failComment: false,
+    },
+  ],
+];
+
+module.exports = {
+  plugins: notesOnly
+    ? plugins.filter((plugin) =>
+        ['@semantic-release/commit-analyzer', '@semantic-release/release-notes-generator'].includes(
+          Array.isArray(plugin) ? plugin[0] : plugin,
+        ),
+      )
+    : plugins,
+  preset: 'conventionalcommits',
+  // Only main releases. A prerelease channel would need a branch of its own under the
+  // ruleset, and .github/workflows/release.yml would have to admit it as well.
+  branches: [{ name: 'main' }],
+};

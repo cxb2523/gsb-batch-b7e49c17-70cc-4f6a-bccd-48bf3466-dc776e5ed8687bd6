@@ -1,0 +1,74 @@
+name: Release
+
+on: workflow_dispatch
+
+# semantic-release tags the commit, pushes the changelog and version bump back, and
+# creates the GitHub release. The default token is read-only, so all three would fail.
+# Nothing here needs issues or pull requests: the only things @semantic-release/github
+# does with them are the success/fail comments and the released labels, and
+# release.config.js turns both comments off. Turning them back on means adding
+# issues: write and pull-requests: write here too.
+permissions:
+  contents: write
+
+jobs:
+  release-bundle:
+    runs-on: ubuntu-latest
+    # id-token and attestations are for the provenance step at the end, which ties the asset
+    # every install downloads to this run and this commit. Nothing before it uses them.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    # main is the only release branch (release.config.js agrees), and the only branch the
+    # ruleset protects.
+    if: github.ref == 'refs/heads/main'
+
+    outputs:
+      tag: ${{ steps.tagged.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # semantic-release authenticates its own pushes with GITHUB_TOKEN, so the
+          # checkout credentials are not needed and would only sit in .git/config
+          # while the release build runs.
+          persist-credentials: false
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+          cache: npm
+      - name: Install dependencies
+        # --ignore-scripts: this job holds contents: write and hands GITHUB_TOKEN to the
+        # release step, so no dependency's install hook should get to run first.
+        run: npm ci --ignore-scripts
+      - name: Release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Was a release made?
+        # semantic-release commits and tags the release locally before pushing, so a new tag
+        # on HEAD is the sign. No tag means nothing to attest.
+        id: tagged
+        run: echo "tag=$(git tag --points-at HEAD | head -n 1)" >> "$GITHUB_OUTPUT"
+      - name: Attest the bundle's provenance
+        # Signed statement that every file in dist/ was built by this workflow from
+        # this commit, checkable with `gh attestation verify`.
+        if: steps.tagged.outputs.tag != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.js
+
+  # The release above is published with GITHUB_TOKEN, which starts no other workflows,
+  # so the release: published trigger never fires. Call the announcement directly.
+  announce:
+    name: Announce in Discussions
+    needs: release-bundle
+    if: needs.release-bundle.outputs.tag != ''
+    permissions:
+      contents: read
+      discussions: write
+    uses: ./.github/workflows/release-announcement.yml
+    with:
+      tag: ${{ needs.release-bundle.outputs.tag }}

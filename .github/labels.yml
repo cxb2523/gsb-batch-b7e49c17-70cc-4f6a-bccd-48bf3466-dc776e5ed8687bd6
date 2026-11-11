@@ -1,0 +1,123 @@
+# Source of truth for repository labels, synced by .github/workflows/labels.yml.
+# Edit here and push to main to create or update labels. Deletion is disabled, so
+# labels not listed here are left alone.
+
+# Type
+- name: bug
+  color: d73a4a
+  description: Something isn't working
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+- name: new chart type
+  color: 3b8bff
+  description: A chart, graph or gauge style the card does not draw yet
+- name: documentation
+  color: 0075ca
+  description: README, wiki, or in-code documentation
+- name: question
+  color: d876e3
+  description: Further information is requested
+
+# Triage
+- name: needs-triage
+  color: ededed
+  description: Awaiting maintainer triage
+- name: needs-info
+  color: d4c5f9
+  description: Waiting on the reporter for more detail
+- name: confirmed
+  color: 0e8a16
+  description: Reproduced
+- name: blocked
+  color: b60205
+  description: Waiting on something outside this repository
+- name: wontfix
+  color: ffffff
+  description: Deliberately not being changed
+- name: duplicate
+  color: cfd3d7
+  description: Already reported elsewhere
+- name: invalid
+  color: e4e669
+  description: Not a problem with this card
+- name: stale
+  color: 795548
+  description: Inactive while waiting for information
+
+# Area
+- name: bars
+  color: 1d76db
+  description: Classic, thin, segmented and vertical bars
+- name: gauges
+  color: 5319e7
+  description: Rings, arcs and needle gauges
+- name: charts
+  color: 0052cc
+  description: Line, area, column, pie and the other chart types
+- name: history
+  color: 006b75
+  description: Reading past values and long-term statistics from Home Assistant
+- name: editor
+  color: 0e8a16
+  description: The visual editor and the card picker
+- name: theming
+  color: f9d0c4
+  description: Colours, severity bands, fonts, light and dark themes
+- name: animation
+  color: fef2c0
+  description: Draw-in, transitions and live updates
+- name: accessibility
+  color: 7057ff
+  description: Screen readers, keyboard use, contrast and reduced motion
+- name: performance
+  color: fbca04
+  description: Load time, bundle size, slow tablets and wall panels
+- name: layout
+  color: c5def5
+  description: Sections view, grid options, sizing and stacks
+- name: compatibility
+  color: e99695
+  description: Behaviour alongside other custom cards or a Home Assistant release
+- name: translations
+  color: bfdadc
+  description: Languages other than English
+- name: tests
+  color: d4c5f9
+  description: The unit suite and coverage
+- name: ci
+  color: bfd4f2
+  description: Workflows, build, release plumbing
+- name: dependencies
+  color: 0366d6
+  description: Dependency updates
+
+# Conversation state, set automatically when somebody comments on an issue
+- name: Developer Reply
+  color: 5319e7
+  description: The developer replied last
+- name: Author Reply
+  color: 1d76db
+  description: Whoever opened the issue replied last
+- name: User Reply
+  color: 0e8a16
+  description: Somebody else replied last
+
+# Ways in for somebody who wants to help
+- name: good first issue
+  color: 7057ff
+  description: Small, self-contained, and someone new to the project could take it
+- name: help wanted
+  color: 008672
+  description: Worth doing, and not currently being worked on
+
+# Where a request has got to. One at a time: planned, then in progress, then implemented
+- name: planned
+  color: c5def5
+  description: Agreed and coming in a future update
+- name: in progress
+  color: fbca04
+  description: Being worked on now
+- name: implemented
+  color: 0e8a16
+  description: Out in a published release

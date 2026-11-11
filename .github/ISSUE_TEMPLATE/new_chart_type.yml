@@ -1,0 +1,49 @@
+name: New chart type
+description: Ask for a chart, graph or gauge style Chartdeck does not draw yet
+title: "[Chart]: "
+labels: ["new chart type", "needs-triage"]
+assignees:
+  - tempus2016
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap board](https://github.com/users/tempus2016/projects/5) first — it may
+        already be planned, in which case a 👍 on its issue helps decide what comes next.
+
+  - type: input
+    id: chart
+    attributes:
+      label: What kind of chart?
+      placeholder: e.g. heatmap, radar, waterfall, box plot
+    validations:
+      required: true
+
+  - type: textarea
+    id: data
+    attributes:
+      label: What would you show with it?
+      description: The sensors involved and what you want to learn from looking at it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: data_kind
+    attributes:
+      label: Does it show values now, or over time?
+      options:
+        - Current values only
+        - History (the last hours or days)
+        - Long-term statistics (weeks, months)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: An example of what it should look like
+      description: A screenshot or link to a chart you like. Paste images straight in.
+    validations:
+      required: false

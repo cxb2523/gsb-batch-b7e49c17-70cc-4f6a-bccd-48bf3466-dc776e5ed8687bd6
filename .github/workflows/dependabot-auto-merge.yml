@@ -1,0 +1,95 @@
+name: Dependabot auto-merge
+
+# Patch and minor bumps of development dependencies are chores. CI still has to pass -
+# this only removes the click, not the gate. For the gate to be real, `main` must have a
+# ruleset requiring the "Lint and test", "Build", "Release notes" and "Dependency review"
+# checks: without required checks, `gh pr merge --auto` merges the moment the PR opens,
+# before CI has run. See SECURITY.md.
+#
+# The exception to "development dependencies are chores" is anything the release job runs
+# while it holds a token that can write to the repository and publish the asset every
+# install downloads. That is not only semantic-release and its plugins: its prepare step
+# runs `npm run build`, so eslint, typescript-eslint, prettier, TypeScript, rollup and every
+# rollup plugin execute in the same process as the token, and any of them could rewrite
+# dist/ before it is committed and attached. A bump to any of those waits for a person,
+# whatever its version step. dependabot.yml groups them as release-tooling so the rest -
+# tooling only the test jobs run - still merges on its own.
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    # Both checked: `github.actor` is who triggered the run, `pull_request.user.login` is who
+    # opened the PR - requiring both closes the gap where a re-triggered event carries a
+    # different actor than the author.
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check the lockfile only re-resolves the bumped packages' own trees
+        # The name checks above look at what Dependabot says it bumped. The lockfile can
+        # change more than that: a bump of vitest can move a copy of semver, minimatch or
+        # supports-color that eslint, rollup and semantic-release load too, and the
+        # cooldown in dependabot.yml does not apply to those. So the diff of package-lock.json
+        # is read, and any package path outside the bumped packages' own node_modules trees
+        # leaves the PR for a person.
+        id: lock
+        run: |
+          changed=$(gh pr diff "$PR_URL" | grep -E '^[-+][[:space:]]+"node_modules/' | sed -E 's/^[-+][[:space:]]+"(node_modules\/[^"]+)".*/\1/' | sort -u || true)
+          outside=""
+          for path in $changed; do
+            own=false
+            IFS=',' read -ra names <<< "$NAMES"
+            for name in "${names[@]}"; do
+              name=$(echo "$name" | xargs)
+              case "$path" in
+                "node_modules/$name"|"node_modules/$name/"*) own=true ;;
+              esac
+            done
+            if [ "$own" = false ]; then outside="$outside $path"; fi
+          done
+          if [ -n "$outside" ]; then
+            echo "left for a person: the lockfile also changes$outside"
+            echo "own_tree=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "own_tree=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          NAMES: ${{ steps.meta.outputs.dependency-names }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Let it merge itself once the checks are green
+        # Only patch and minor bumps of development dependencies merge unattended. A runtime
+        # dependency ends up in the bundle every install loads, and a major bump can change
+        # behaviour - both want a person to look, whatever the version step.
+        #
+        # The name checks are substring matches over a comma-separated list, so each one
+        # covers a family: 'rollup' also catches rollup-plugin-* and @rollup/*, 'eslint'
+        # catches eslint-*, typescript-eslint and @typescript-eslint/*, 'typescript' the
+        # compiler, 'conventional-changelog' the notes preset. They must keep matching the
+        # release-tooling patterns in dependabot.yml.
+        if: >-
+          steps.lock.outputs.own_tree == 'true' &&
+          steps.meta.outputs.dependency-type == 'direct:development' &&
+          (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+           steps.meta.outputs.update-type == 'version-update:semver-minor') &&
+          !contains(steps.meta.outputs.dependency-names, 'semantic-release') &&
+          !contains(steps.meta.outputs.dependency-names, 'conventional-changelog') &&
+          !contains(steps.meta.outputs.dependency-names, 'rollup') &&
+          !contains(steps.meta.outputs.dependency-names, 'terser') &&
+          !contains(steps.meta.outputs.dependency-names, 'typescript') &&
+          !contains(steps.meta.outputs.dependency-names, 'tslib') &&
+          !contains(steps.meta.outputs.dependency-names, 'eslint') &&
+          !contains(steps.meta.outputs.dependency-names, 'prettier')
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

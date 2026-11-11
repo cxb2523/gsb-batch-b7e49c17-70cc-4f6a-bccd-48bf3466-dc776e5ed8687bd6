@@ -1,0 +1,36 @@
+name: Feature Request
+description: Suggest something an existing style or the editor should be able to do
+title: "[FR]: "
+labels: ["enhancement", "needs-triage"]
+assignees:
+  - tempus2016
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. For a whole new kind of chart, use the **New chart type** form instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to show?
+      description: The data and the question it answers, rather than the solution. "Which batteries need changing this month" beats "add a sort option".
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like the card to do?
+      description: Describe it, sketch it, or paste a screenshot of something close.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: Other cards, templates, card-mod.
+    validations:
+      required: false

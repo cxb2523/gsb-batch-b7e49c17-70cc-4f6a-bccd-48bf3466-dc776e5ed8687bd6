@@ -1,0 +1,48 @@
+# Groups the "What's Changed" list GitHub generates for a release by label, so
+# dependency bumps collapse into one section instead of padding the top.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+      - stale
+    authors:
+      - dependabot
+  categories:
+    - title: New chart types
+      labels:
+        - new chart type
+    - title: New features
+      labels:
+        - enhancement
+    - title: Bug fixes
+      labels:
+        - bug
+    - title: Editor
+      labels:
+        - editor
+    - title: Theming and animation
+      labels:
+        - theming
+        - animation
+    - title: Accessibility and performance
+      labels:
+        - accessibility
+        - performance
+    - title: Translations
+      labels:
+        - translations
+    - title: Documentation
+      labels:
+        - documentation
+    - title: CI & maintenance
+      labels:
+        - ci
+        - tests
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other changes
+      labels:
+        - "*"
