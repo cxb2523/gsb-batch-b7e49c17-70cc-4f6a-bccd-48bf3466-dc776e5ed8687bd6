@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SentriX · Evidencia E2E</title>
+  <style>
+    :root { font-family: Inter, system-ui, sans-serif; color: #082957; background: #f3f7fd; }
+    body { margin: 0; padding: 48px; }
+    main { max-width: 1120px; margin: auto; }
+    h1 { font-size: 42px; margin: 0 0 8px; }
+    .subtitle { color: #58739a; margin-bottom: 34px; }
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+    .card, .sources { background: white; border: 1px solid #d5e1f1; border-radius: 16px; padding: 24px; box-shadow: 0 8px 24px #123b6810; }
+    .card strong { display: block; font-size: 34px; color: #0b65d8; margin: 12px 0 4px; }
+    .ok { color: #12856f; font-weight: 700; }
+    .sources { margin-top: 22px; }
+    .source { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; border-top: 1px solid #e2eaf5; }
+    .source:first-of-type { border-top: 0; }
+    code { font-size: 16px; color: #244c7a; }
+    .badge { background: #e4f6f1; color: #087760; padding: 8px 12px; border-radius: 999px; font-weight: 700; }
+    footer { margin-top: 24px; color: #6881a2; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>SentriX · Comprobación E2E</h1>
+    <p class="subtitle">Ejecución real: frontend + FastAPI + MediaMTX · 17/10/2026</p>
+    <section class="summary">
+      <article class="card">Pruebas unitarias<strong>14/14</strong><span class="ok">Aprobadas</span></article>
+      <article class="card">Caja negra<strong>6/6</strong><span class="ok">Aprobadas</span></article>
+      <article class="card">Integración real<strong>4/4</strong><span class="ok">Aprobadas</span></article>
+      <article class="card">Flujo E2E<strong>4/4</strong><span class="ok">Aprobadas</span></article>
+    </section>
+    <section class="sources">
+      <h2>Fuentes utilizadas exclusivamente para la prueba</h2>
+      <div class="source"><code>https://184.194.94.182/camera01/</code><span class="badge">HTTP 200 · disponible</span></div>
+      <div class="source"><code>https://184.194.94.182/camera03/</code><span class="badge">HTTP 200 · disponible</span></div>
+      <p><strong>Resultado global: 28/28 pruebas aprobadas, 0 fallos.</strong></p>
+    </section>
+    <footer>La verificación no exige registrar previamente las cámaras en FastAPI.</footer>
+  </main>
+</body>
+</html>

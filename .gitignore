@@ -1,0 +1,81 @@
+node_modules/
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Configuración privada local (incluye entornos de pruebas)
+.env
+.env.*
+!.env.example
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Backend Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp*/
+.coverage
+htmlcov/
+
+# Datos y diagnósticos generados
+/backend/data/
+/data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.log
+/modelo/gpu_profile_*.json
+/modelo/gpu_validation.json
+
+# Respaldos privados y archivos temporales de edicion
+*.backup
+*.bak
+*.orig
+*.tmp
+*~
+
+# Persistencia SQLite (tambien en las pruebas y en las nuevas capas)
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-journal
+
+# Pesos distribuidos aparte, en cualquier carpeta
+*.onnx
+*.onnx.data
+
+# Despliegue: estado y configuración local de Terraform, huellas SSH
+/deploy/azure/terraform/.terraform/
+/deploy/azure/terraform/terraform.tfstate*
+/deploy/azure/terraform/terraform.tfvars
+/deploy/azure/.known_hosts
+
+# Reglas del frontend (main)
+node_modules/
+.svelte-kit/
+build/
+data/*.json
+!data/.gitkeep
+.DS_Store
+playwright-report/
+test-results/

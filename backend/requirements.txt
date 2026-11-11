@@ -1,0 +1,15 @@
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
+pytest>=8,<10
+aiortc==1.15.0
+python-dotenv==1.2.4
+# Subida y URLs firmadas de los clips en un bucket S3 compatible (Cloudflare R2).
+boto3>=1.34,<2
+# Validación de los tokens de sesión de Clerk (solo con SENTRIX_AUTH_MODE both o clerk).
+PyJWT[crypto]>=2.10,<3
+
+psycopg[binary]>=3.2,<4
+
+# Decodificacion RTSP/RTSPS; compatible con aiortc 1.15.0.
+av>=14,<18

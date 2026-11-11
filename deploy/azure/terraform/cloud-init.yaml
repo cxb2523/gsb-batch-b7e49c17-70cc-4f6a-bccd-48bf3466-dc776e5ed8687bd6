@@ -1,0 +1,11 @@
+#cloud-config
+# Solo instala herramientas. Las claves y el código llegan después por SSH (preparar_nodos.py).
+package_update: true
+packages:
+  - docker.io
+  - curl
+  - ca-certificates
+runcmd:
+  - systemctl enable --now docker
+  - usermod -aG docker sentrix
+  - curl -fsSL https://tailscale.com/install.sh | sh

@@ -1,0 +1,6 @@
+# Copiar como terraform.tfvars. `subir` y `bajar` reemplazan allowed_ssh_cidr por tu IP pública actual.
+subscription_id  = "ID-DE-TU-SUSCRIPCION"
+allowed_ssh_cidr = "TU.IP.PUBLICA.AQUI/32"
+location         = "northcentralus"
+node_count       = 3
+vm_size          = "Standard_B2as_v2"
