@@ -1,0 +1,516 @@
+{
+  "generatedAt": "2026-10-14T15:05:58.947Z",
+  "identity": {
+    "aid": "8704",
+    "app_name": "kylin_read",
+    "version_code": "74032",
+    "version_name": "7.4.0.32",
+    "update_version_code": "74032"
+  },
+  "releasedProviderChanged": false,
+  "results": [
+    {
+      "label": "native-tabs",
+      "endpoint": "/reading/bookapi/bookmall/tab/v",
+      "http": 200,
+      "bytes": 38537,
+      "summary": {
+        "code": 0,
+        "message": "SUCCESS",
+        "keys": [
+          "code",
+          "message",
+          "data",
+          "log_id"
+        ],
+        "dataKeys": [
+          "tab_index",
+          "tab_item",
+          "cold_start_info"
+        ],
+        "labels": [
+          "推荐",
+          "东北后妈，整顿全家",
+          "听懂物品说话，我屡破奇案",
+          "近身保镖",
+          "逆转人生之重生大东北",
+          "人鱼赴归潮",
+          "总裁是我前女友"
+        ],
+        "works": [
+          {
+            "id": "7693516944581872664",
+            "title": "东北后妈，整顿全家",
+            "total": 120
+          },
+          {
+            "id": "7687171381556956222",
+            "title": "听懂物品说话，我屡破奇案",
+            "total": 125
+          },
+          {
+            "id": "7686871423154916414",
+            "title": "近身保镖",
+            "total": 74
+          },
+          {
+            "id": "7690965755168312344",
+            "title": "逆转人生之重生大东北",
+            "total": 81
+          },
+          {
+            "id": "7687189939640880152",
+            "title": "人鱼赴归潮",
+            "total": 88
+          },
+          {
+            "id": "7688352674999176254",
+            "title": "总裁是我前女友",
+            "total": 95
+          }
+        ],
+        "structural": [
+          {
+            "tab_type": 8
+          },
+          {
+            "next_offset": 1
+          },
+          {
+            "has_more": false
+          },
+          {
+            "cell_id": "6952850996422770718"
+          },
+          {
+            "next_offset": 6
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          }
+        ],
+        "tabs": []
+      }
+    },
+    {
+      "label": "native-comic-tab",
+      "endpoint": "/reading/bookapi/bookmall/tab/v",
+      "http": 200,
+      "bytes": 39416,
+      "summary": {
+        "code": 0,
+        "message": "SUCCESS",
+        "keys": [
+          "code",
+          "message",
+          "data",
+          "log_id"
+        ],
+        "dataKeys": [
+          "tab_index",
+          "tab_item",
+          "cold_start_info"
+        ],
+        "labels": [
+          "推荐",
+          "东北后妈，整顿全家",
+          "听懂物品说话，我屡破奇案",
+          "大唐第一军火商",
+          "总裁是我前女友",
+          "逆转人生之重生大东北",
+          "透视神瞳：我是华夏第一鉴宝师"
+        ],
+        "works": [
+          {
+            "id": "7693516944581872664",
+            "title": "东北后妈，整顿全家",
+            "total": 120
+          },
+          {
+            "id": "7687171381556956222",
+            "title": "听懂物品说话，我屡破奇案",
+            "total": 125
+          },
+          {
+            "id": "7691584238314867736",
+            "title": "大唐第一军火商",
+            "total": 521
+          },
+          {
+            "id": "7688352674999176254",
+            "title": "总裁是我前女友",
+            "total": 95
+          },
+          {
+            "id": "7690965755168312344",
+            "title": "逆转人生之重生大东北",
+            "total": 81
+          },
+          {
+            "id": "7677857163456285720",
+            "title": "透视神瞳：我是华夏第一鉴宝师",
+            "total": 52
+          }
+        ],
+        "structural": [
+          {
+            "tab_type": 8
+          },
+          {
+            "next_offset": 1
+          },
+          {
+            "has_more": false
+          },
+          {
+            "cell_id": "6952850996422770718"
+          },
+          {
+            "next_offset": 6
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          }
+        ],
+        "tabs": []
+      }
+    },
+    {
+      "label": "native-search-tab",
+      "endpoint": "/reading/bookapi/search/tab/v",
+      "http": 200,
+      "bytes": 0,
+      "error": "EMPTY_RESPONSE"
+    },
+    {
+      "label": "native-search-tab-second-sample",
+      "endpoint": "/reading/bookapi/search/tab/v",
+      "http": 200,
+      "bytes": 0,
+      "error": "EMPTY_RESPONSE"
+    },
+    {
+      "label": "existing-board-independent-identity",
+      "endpoint": "/reading/bookapi/bookmall/cell/change/v",
+      "http": 200,
+      "bytes": 93424,
+      "summary": {
+        "code": 0,
+        "message": "SUCCESS",
+        "keys": [
+          "data",
+          "log_id",
+          "code",
+          "message"
+        ],
+        "dataKeys": [
+          "cell_view",
+          "has_more",
+          "next_offset",
+          "session_id",
+          "rank_version"
+        ],
+        "labels": [
+          "糯糯下山，师兄们都慌了",
+          "我家仙妻不太正经",
+          "万妖图录传第一季",
+          "全民御兽：大家却说御龙师没用",
+          "荒岛上还摆高姿态",
+          "天生三目，从底层少年到封号斗罗",
+          "天灾末世，她囤满物资后所向披靡！",
+          "谁说没灵根不能修仙的？之无灵证道",
+          "公路求生榜一说她要走到公路尽头",
+          "新路旧账",
+          "你让我当牛马我在荒岛成王第一季",
+          "大明大秦：千古第一直臣第1季",
+          "家有五女，穿越来的他连夜搞事业啦",
+          "反派亲妈：反派漂亮亲妈十斤反骨",
+          "秦始皇：朕有华夏全明星阵容",
+          "漫剧",
+          "推荐榜",
+          "热播榜",
+          "新剧榜",
+          "AI剧",
+          "热搜榜",
+          "必看榜",
+          "收藏榜"
+        ],
+        "works": [
+          {
+            "id": "7677801492920667198",
+            "title": "糯糯下山，师兄们都慌了",
+            "total": 63
+          },
+          {
+            "id": "7691967671054634008",
+            "title": "我家仙妻不太正经",
+            "total": 122
+          },
+          {
+            "id": "7621200213801176126",
+            "title": "万妖图录传第一季",
+            "total": 81
+          },
+          {
+            "id": "7690806482689870872",
+            "title": "全民御兽：大家却说御龙师没用",
+            "total": 133
+          },
+          {
+            "id": "7693164412823161880",
+            "title": "荒岛上还摆高姿态",
+            "total": 109
+          },
+          {
+            "id": "7693496847930772505",
+            "title": "天生三目，从底层少年到封号斗罗",
+            "total": 282
+          },
+          {
+            "id": "7682325650463542334",
+            "title": "天灾末世，她囤满物资后所向披靡！",
+            "total": 536
+          },
+          {
+            "id": "7637569673411709976",
+            "title": "谁说没灵根不能修仙的？之无灵证道",
+            "total": 78
+          },
+          {
+            "id": "7691938290202577944",
+            "title": "公路求生榜一说她要走到公路尽头",
+            "total": 132
+          },
+          {
+            "id": "7692828891253066776",
+            "title": "新路旧账",
+            "total": 43
+          },
+          {
+            "id": "7673888102712101950",
+            "title": "你让我当牛马我在荒岛成王第一季",
+            "total": 215
+          },
+          {
+            "id": "7690132347185810457",
+            "title": "大明大秦：千古第一直臣第1季",
+            "total": 175
+          },
+          {
+            "id": "7688646466708966462",
+            "title": "家有五女，穿越来的他连夜搞事业啦",
+            "total": 1000
+          },
+          {
+            "id": "7680187265020070937",
+            "title": "反派亲妈：反派漂亮亲妈十斤反骨",
+            "total": 153
+          },
+          {
+            "id": "7682809595617627161",
+            "title": "秦始皇：朕有华夏全明星阵容",
+            "total": 416
+          }
+        ],
+        "structural": [
+          {
+            "has_more": true
+          },
+          {
+            "next_offset": 15
+          },
+          {
+            "cell_id": "7470092475068071998"
+          },
+          {
+            "next_offset": 15
+          },
+          {
+            "has_more": true
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "selector_item_id": "comic_series_rank"
+          },
+          {
+            "is_selected": true
+          },
+          {
+            "selector_item_id": "comic_series_hot_rank"
+          },
+          {
+            "is_selected": true
+          },
+          {
+            "selector_item_id": "comic_series_hot_play"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "comic_series_new_rank"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "ai_playlet"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "ai_playlet_hot_sc"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "ai_playlet_hot_play"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "ai_playlet_new_rank"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "ai_playlet_hot_search"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "ai_playlet_must_watch"
+          },
+          {
+            "is_selected": false
+          },
+          {
+            "selector_item_id": "ai_playlet_followed"
+          },
+          {
+            "is_selected": false
+          }
+        ],
+        "tabs": []
+      }
+    },
+    {
+      "label": "series-independent-identity",
+      "endpoint": "/novel/player/multi_video_detail/v1/",
+      "http": 200,
+      "bytes": 169043,
+      "summary": {
+        "code": 0,
+        "message": "请求成功",
+        "keys": [
+          "BaseResp",
+          "code",
+          "data",
+          "debug_info",
+          "log_id",
+          "message"
+        ],
+        "dataKeys": [
+          "7695370827507698713"
+        ],
+        "labels": [
+          "到末世十年后竟然遇到四个尸王第一季"
+        ],
+        "works": [
+          {
+            "id": "7695370827507698713",
+            "title": "到末世十年后竟然遇到四个尸王第一季",
+            "total": 155
+          }
+        ],
+        "structural": [],
+        "tabs": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+.cache-policy{margin:20px 0;padding:24px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.cache-policy-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}
+.cache-policy-heading h2{font-size:16px;font-weight:500;margin:0 0 8px}
+.cache-policy-heading p,.cache-policy-heading>span,.cache-policy-note{font-size:12px;line-height:1.8;color:var(--muted)}
+.cache-policy-heading p{margin:0}
+.cache-policy fieldset{min-width:0;padding:0;margin:0;border:0}
+.cache-policy-fields{display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap}
+.cache-policy-fields>label{display:grid;grid-template-columns:1fr auto;gap:8px;flex:1;min-width:180px;font-size:13px}
+.cache-policy-fields label>span,.cache-policy-fields small{font-size:11px;color:var(--muted)}
+.cache-policy-fields input{grid-column:1/-1;width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);padding:10px 12px;font:inherit}
+.cache-policy-fields small{grid-column:1/-1;line-height:1.5}
+.cache-policy-save{display:flex;flex-direction:column;gap:8px;padding-top:24px}
+.cache-limit-presets{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;font-size:12px;color:var(--muted)}
+.cache-limit-presets button{padding:6px 10px;border:1px solid var(--line);border-radius:5px;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.cache-limit-presets button.selected{border-color:var(--brand);color:var(--brand);background:color-mix(in srgb,var(--brand) 8%,transparent)}
+.cache-policy button:disabled,.cache-policy input:disabled,.cache-priority select:disabled{opacity:.5;cursor:not-allowed}
+.cache-policy-note{margin:16px 0 0}
+.cache-priority{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}
+.cache-priority select{padding:7px 22px 7px 9px;border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);font:inherit}
+@media(max-width:700px){.cache-policy{padding:18px}.cache-policy-heading{align-items:flex-start;flex-direction:column;gap:8px}.cache-policy-fields{gap:14px}.cache-policy-save{padding-top:0;flex-direction:row;align-items:center;width:100%}}

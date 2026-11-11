@@ -1,0 +1,13 @@
+.diagnostic-button{border:1px solid var(--border,#ded9ce);border-radius:8px;background:transparent;color:var(--muted,#766f65);padding:7px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
+.sleep-control{display:flex;align-items:center;gap:7px;color:#8c8276;font-size:12px;margin-left:auto}
+.sleep-control select{max-width:190px;padding:6px 8px;border:1px solid #dcd5c8;border-radius:7px;background:#fbf8f0;color:#443a30;font:inherit}
+.quality-select{max-width:160px;background:#272622;color:#eee9dd;border:1px solid #57534a;border-radius:5px;padding:4px;font-size:11px}
+.player-inline-error{color:#ffd2bb;margin:3px 10px;font-size:12px}
+.transition-player{position:relative;background:#171716}
+.transition-player .error-state{color:#ece5d6}
+.season-end-overlay{position:absolute;inset:0;z-index:4;overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;background:rgba(22,21,19,.96);color:#f6f0df;text-align:center}
+.season-end-overlay h2{margin:0;font-size:24px;color:#fff6e8}.season-end-overlay p{margin:0;color:#bdb2a1;font-size:13px}.season-end-overlay .eyebrow{color:#e17557}.season-end-overlay .secondary-button{background:#302c26;color:#f8edda;border-color:#655746}
+.end-recommendations{width:100%;max-width:750px;display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin:4px 0}.end-recommendations>button{width:calc((100% - 60px)/6);display:flex;flex-direction:column;gap:6px;border:0;background:none;color:#eee3d0;padding:0;min-width:0;cursor:pointer;text-align:left;font-size:12px}.end-recommendations .cover{width:100%;aspect-ratio:3/4;border-radius:8px;overflow:hidden}.end-recommendations .cover img{width:100%;height:100%;object-fit:cover}.end-recommendations>button>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%}
+.player-surface:fullscreen .transition-player{width:100%;height:100%;aspect-ratio:auto}.player-surface:fullscreen .season-end-overlay{padding:4vh 8vw}.player-surface:fullscreen .end-recommendations{max-width:1000px}.player-surface:fullscreen .season-end-overlay h2{font-size:32px}
+@media(max-width:1100px){.control-row{flex-wrap:wrap}.sleep-control select{max-width:140px}.end-recommendations{gap:7px}.season-end-overlay{padding:14px;gap:8px}.season-end-overlay h2{font-size:20px}}
+.fullscreen-sleep{display:none}.player-surface:fullscreen .fullscreen-sleep{display:flex;justify-content:flex-end;padding:4px 10px}.player-surface:fullscreen .sleep-control{color:#eadfcd}.player-surface:fullscreen .sleep-control select{background:#29251f;color:#f7eddc;border-color:#736650}

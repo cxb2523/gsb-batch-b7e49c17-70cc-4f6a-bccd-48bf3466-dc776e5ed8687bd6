@@ -1,0 +1,42 @@
+{
+  "name": "hongguo-manju-desktop",
+  "version": "0.1.4",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "main": "dist/main/main.cjs",
+  "description": "个人使用的红果漫剧 Windows 桌面客户端",
+  "author": "Personal Desktop Project",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs && tsx --test --test-concurrency=1 tests/*.test.ts src/renderer/playback-state.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build-main.mjs && vite build",
+    "start": "electron .",
+    "runtime": "node scripts/prepare-runtime.mjs",
+    "package:win": "npm run build && electron-builder --win --x64",
+    "release:verify": "node scripts/verify-update-release.mjs",
+    "probe": "node scripts/probe.mjs",
+    "probe:signed": "node scripts/signed-probe.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.64.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "sm-crypto": "0.5.8"
+  }
+}

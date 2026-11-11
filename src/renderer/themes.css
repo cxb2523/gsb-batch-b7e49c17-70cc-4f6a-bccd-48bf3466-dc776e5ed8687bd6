@@ -1,0 +1,195 @@
+/* ==================================================================
+   界面主题
+   默认主题（paper）继续使用 styles.css 原有样式；
+   以下仅覆盖用户主动选择的外观，不影响任何播放或缓存逻辑。
+================================================================== */
+
+/* ------------------------------------------------------------------
+   01 · 午夜影院 / CINEMA NOIR
+------------------------------------------------------------------ */
+html[data-theme="cinema"]{
+  --paper:#0c0a09;--ink:#f4ecdf;--brand:#d9a566;--brand-soft:#b8533a;
+  --muted:#a49486;--line:#f4ecdf1f;--panel:#171210;
+  --display-font:"Noto Serif SC","Source Han Serif SC","STSong","SimSun",serif;
+  color-scheme:dark;background:#0c0a09;
+}
+html[data-theme="cinema"] body{background:#0c0a09;color:var(--ink)}
+html[data-theme="cinema"] .app-shell{background:radial-gradient(1000px 560px at 84% -8%,#2b1b1226,transparent 68%),#0c0a09}
+html[data-theme="cinema"] ::selection{background:#d9a56638}
+html[data-theme="cinema"] ::-webkit-scrollbar-thumb{background:#f4ecdf26}
+html[data-theme="cinema"] ::-webkit-scrollbar-thumb:hover{background:#f4ecdf40}
+html[data-theme="cinema"] .workspace{position:relative}
+html[data-theme="cinema"] .topbar{
+  position:absolute;left:0;right:0;top:0;height:88px;z-index:30;border-bottom:0;
+  background:linear-gradient(180deg,#0c0a09f7 0%,#0c0a09c9 58%,#0c0a0900 100%);
+}
+html[data-theme="cinema"] .content-scroll{padding-top:0}
+html[data-theme="cinema"] .catalog-page{padding-top:104px}
+html[data-theme="cinema"] .discover-page{padding-top:0}
+html[data-theme="cinema"] .detail-page{padding-top:104px}
+html[data-theme="cinema"] .brand{color:var(--ink)}
+html[data-theme="cinema"] .search-box{background:#ffffff07;border-color:#ffffff17}
+html[data-theme="cinema"] .search-box:focus-within{border-color:#d9a56666}
+html[data-theme="cinema"] .search-box input::placeholder{color:#8d7b6a}
+html[data-theme="cinema"] .top-import{border-color:#d9a56666;color:#e8cda7;background:#d9a5660a}
+html[data-theme="cinema"] .top-import:hover{border-color:var(--brand);background:#d9a56614}
+html[data-theme="cinema"] .diagnostic-button{border-color:var(--line);color:var(--muted);background:transparent}
+html[data-theme="cinema"] .appearance-button.has-theme{color:var(--brand)}
+html[data-theme="cinema"] .spotlight{height:clamp(410px,46vh,480px);min-height:410px;align-items:flex-end;margin-bottom:22px}
+html[data-theme="cinema"] .spotlight-art{inset:0 0 0 43%;background:#1a1410}
+html[data-theme="cinema"] .spotlight-art img{object-position:center 24%;filter:saturate(.92) contrast(1.03)}
+html[data-theme="cinema"] .spotlight::after{
+  background:
+    linear-gradient(90deg,#0c0a09 0%,#0c0a09 40%,#0c0a09e6 47%,#0c0a0900 64%),
+    linear-gradient(0deg,#0c0a09 0%,#0c0a09d0 10%,#0c0a0900 36%);
+}
+html[data-theme="cinema"] .spotlight-copy{padding:112px 0 40px var(--page-gutter);width:58%;max-width:760px}
+html[data-theme="cinema"] .featured-label{color:var(--brand);font-family:"Cascadia Mono",Consolas,monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase}
+html[data-theme="cinema"] .spotlight h2{font-size:clamp(40px,4vw,56px);line-height:1.27;letter-spacing:.01em;margin:14px 0 10px;max-width:620px;text-shadow:0 2px 30px #00000066}
+html[data-theme="cinema"] .spotlight-meta{color:var(--muted);font-size:12px}
+html[data-theme="cinema"] .spotlight-copy p{color:#b6a898;max-width:530px;line-height:1.9;font-size:13px}
+html[data-theme="cinema"] .spotlight-actions{gap:12px}
+html[data-theme="cinema"] .spotlight-actions .primary-button,
+html[data-theme="cinema"] .spotlight-actions .secondary-button{min-width:118px;border-radius:3px}
+html[data-theme="cinema"] .primary-button{background:var(--brand);color:#191008}
+html[data-theme="cinema"] .primary-button:hover:not(:disabled){background:#e5b478}
+html[data-theme="cinema"] .secondary-button{border-color:#f4ecdf30;background:#f4ecdf0a;color:var(--ink)}
+html[data-theme="cinema"] .secondary-button:hover:not(:disabled){background:#f4ecdf14;border-color:var(--brand);color:var(--brand)}
+html[data-theme="cinema"] .is-favorite{color:var(--brand)}
+html[data-theme="cinema"] .is-favorite svg{fill:#d9a56624}
+html[data-theme="cinema"] .hero-pagination span{background:#f4ecdf40}
+html[data-theme="cinema"] .hero-pagination button.selected span,
+html[data-theme="cinema"] .hero-pagination button:hover span{background:var(--brand)}
+html[data-theme="cinema"] .section-heading h2{font-size:23px;letter-spacing:.02em}
+html[data-theme="cinema"] .section-rule{background:var(--line)}
+html[data-theme="cinema"] .resume-card{border-color:var(--line);background:linear-gradient(180deg,#191411,#14100d)}
+html[data-theme="cinema"] .resume-card:hover{border-color:#d9a56655;box-shadow:0 16px 38px #0000004d}
+html[data-theme="cinema"] .resume-card > .cover{background:#221a16}
+html[data-theme="cinema"] .resume-play{border-color:#f4ecdf40}
+html[data-theme="cinema"] .resume-card:hover .resume-play{color:var(--brand);border-color:var(--brand)}
+html[data-theme="cinema"] .resume-progress{background:#f4ecdf12}
+html[data-theme="cinema"] .resume-progress i{background:var(--brand)}
+html[data-theme="cinema"] .resume-empty{color:var(--muted);border-color:var(--line)}
+html[data-theme="cinema"] .poster-wrap{background:#221a16;border:1px solid var(--line)}
+html[data-theme="cinema"] .work-card:hover .poster-wrap{border-color:#d9a56666;box-shadow:0 16px 38px #00000059}
+html[data-theme="cinema"] .work-card h3{color:var(--ink);font-weight:400}
+html[data-theme="cinema"] .work-card p{color:#8f8176}
+html[data-theme="cinema"] .episode-badge{background:#080605d9;color:#e5c99f;border:1px solid #d9a56633}
+html[data-theme="cinema"] .poster-hover > span{background:var(--brand);color:#191008}
+html[data-theme="cinema"] .cover{background:#221a16}
+html[data-theme="cinema"] .cover-placeholder{background:linear-gradient(140deg,#251c17,#191310);color:#8f8176}
+html[data-theme="cinema"] .skeleton-card > div,
+html[data-theme="cinema"] .skeleton-card i,
+html[data-theme="cinema"] .skeleton-card span{background:linear-gradient(100deg,#1b1512 30%,#241c18 50%,#1b1512 70%);background-size:300% 100%}
+html[data-theme="cinema"] .state-icon{background:#d9a56610;border-color:#d9a56633;color:#cfa06a}
+html[data-theme="cinema"] .spinner{border-color:#f4ecdf1f;border-top-color:var(--brand)}
+html[data-theme="cinema"] .page-footer{color:#8f8176;border-color:var(--line)}
+html[data-theme="cinema"] .page-heading p{color:var(--muted)}
+html[data-theme="cinema"] .back-button{color:var(--muted)}
+html[data-theme="cinema"] .favorite-button{background:#f4ecdf08;border-color:var(--line);color:#b6a898}
+html[data-theme="cinema"] .favorite-button:hover,
+html[data-theme="cinema"] .favorite-button.is-favorite{color:var(--brand);border-color:#d9a56655;background:#d9a5660d}
+html[data-theme="cinema"] .background-cache-entry{color:var(--muted)}
+html[data-theme="cinema"] .series-buffer{background:#14100d;border-color:var(--line)}
+html[data-theme="cinema"] .cache-heading b{color:var(--brand)}
+html[data-theme="cinema"] .cache-progress{background:var(--line)}
+html[data-theme="cinema"] .cache-progress::-webkit-progress-bar{background:var(--line)}
+html[data-theme="cinema"] .cache-progress::-webkit-progress-value{background:var(--brand)}
+html[data-theme="cinema"] .player{border-color:#ffffff1a;box-shadow:0 24px 60px #00000066}
+html[data-theme="cinema"] .player-controls{background:var(--panel)}
+html[data-theme="cinema"] .control-button{color:#cdbfb1}
+html[data-theme="cinema"] .control-button:hover:not(:disabled){color:var(--brand);background:#d9a56610}
+html[data-theme="cinema"] .time-label{color:#cdbfb1}
+html[data-theme="cinema"] .time-label i{color:#85776a}
+html[data-theme="cinema"] .definition-label{color:var(--muted)}
+html[data-theme="cinema"] .speed-select{background:var(--panel);color:#cdbfb1}
+html[data-theme="cinema"] .speed-select option{background:var(--panel);color:var(--ink)}
+html[data-theme="cinema"] .big-play{background:var(--brand);color:#191008}
+html[data-theme="cinema"] .big-play:hover{background:#e5b478}
+html[data-theme="cinema"] input[type="range"]{background:linear-gradient(to right,var(--brand) var(--range-progress),#f4ecdf24 var(--range-progress))}
+html[data-theme="cinema"] input[type="range"]::-webkit-slider-thumb{background:var(--brand)}
+html[data-theme="cinema"] .now-playing{border-color:var(--line)}
+html[data-theme="cinema"] .now-playing strong{color:var(--ink)}
+html[data-theme="cinema"] .sleep-control{color:var(--muted)}
+html[data-theme="cinema"] .sleep-control select{background:#191411;border-color:var(--line);color:var(--ink)}
+html[data-theme="cinema"] .toggle-label{color:var(--muted)}
+html[data-theme="cinema"] .toggle-track{background:#5a4d42}
+html[data-theme="cinema"] .toggle-label input:checked + .toggle-track{background:var(--brand)}
+html[data-theme="cinema"] .toggle-track::after{background:#f4ecdf}
+html[data-theme="cinema"] .story-info h2{color:var(--ink)}
+html[data-theme="cinema"] .story-info p{color:var(--muted)}
+html[data-theme="cinema"] .category-chips span{border-color:var(--line);color:var(--muted)}
+html[data-theme="cinema"] .episode-panel{background:#14100d;border-color:var(--line)}
+html[data-theme="cinema"] .ep-head{color:var(--ink)}
+html[data-theme="cinema"] .episode-grid button{background:#1b1512;border-color:#f4ecdf0d;color:#a49486}
+html[data-theme="cinema"] .episode-grid button:hover{background:#241c18;color:var(--brand)}
+html[data-theme="cinema"] .episode-grid button.current{background:#d9a56612;border-color:#d9a566aa;color:var(--brand)}
+html[data-theme="cinema"] .playback-recommendations{border-color:var(--line)}
+html[data-theme="cinema"] .related-heading h2{color:var(--ink)}
+html[data-theme="cinema"] .related-reason{color:var(--brand)}
+html[data-theme="cinema"] .related-note,
+html[data-theme="cinema"] .related-empty{color:var(--muted)}
+html[data-theme="cinema"] .season-end-overlay{background:#0c0a09f5;color:var(--ink)}
+html[data-theme="cinema"] .season-end-overlay .eyebrow{color:var(--brand)}
+html[data-theme="cinema"] .season-end-overlay p{color:var(--muted)}
+html[data-theme="cinema"] .season-end-overlay .secondary-button{background:#1b1512;border-color:#f4ecdf26;color:var(--ink)}
+html[data-theme="cinema"] .season-end-overlay .primary-button{border-radius:3px}
+html[data-theme="cinema"] .end-recommendations > button{color:var(--ink)}
+html[data-theme="cinema"] .cache-summary > div,
+html[data-theme="cinema"] .cache-storage,
+html[data-theme="cinema"] .cache-policy,
+html[data-theme="cinema"] .cache-add-panel,
+html[data-theme="cinema"] .cache-cleanup,
+html[data-theme="cinema"] .cache-task{background:linear-gradient(180deg,#181310,#14100d);border-color:var(--line)}
+html[data-theme="cinema"] .cache-summary b{color:#efdfc9}
+html[data-theme="cinema"] .cache-storage h2,
+html[data-theme="cinema"] .cache-policy-heading h2,
+html[data-theme="cinema"] .cache-add-panel h2,
+html[data-theme="cinema"] .cache-list-heading h2,
+html[data-theme="cinema"] .cache-cleanup h2,
+html[data-theme="cinema"] .cache-empty h3{color:var(--ink)}
+html[data-theme="cinema"] .cache-path{color:var(--ink)!important}
+html[data-theme="cinema"] .cache-storage p,
+html[data-theme="cinema"] .cache-policy-heading p,
+html[data-theme="cinema"] .cache-policy-heading > span,
+html[data-theme="cinema"] .cache-policy-note,
+html[data-theme="cinema"] .cache-cleanup p,
+html[data-theme="cinema"] .cache-footnote{color:var(--muted)}
+html[data-theme="cinema"] .cache-task-cover{background:#241c18;color:var(--muted)}
+html[data-theme="cinema"] .cache-status{background:#f4ecdf0d;color:var(--muted)}
+html[data-theme="cinema"] .cache-status.complete{background:#52745f22;color:#a5c2ac}
+html[data-theme="cinema"] .cache-filters .selected{background:#d9a56618;color:var(--brand)}
+html[data-theme="cinema"] .cache-message{border-color:#d9a56644;color:var(--brand)}
+html[data-theme="cinema"] .cache-add-panel input,
+html[data-theme="cinema"] .cache-favorites select,
+html[data-theme="cinema"] .cache-performance select,
+html[data-theme="cinema"] .cache-priority select,
+html[data-theme="cinema"] .cache-policy-fields input{background:#0f0b09;border-color:var(--line);color:var(--ink)}
+html[data-theme="cinema"] .cache-limit-presets button{background:transparent;border-color:var(--line);color:var(--muted)}
+html[data-theme="cinema"] .cache-limit-presets button.selected{border-color:var(--brand);color:var(--brand);background:#d9a56610}
+html[data-theme="cinema"] .cache-performance strong{color:var(--brand)}
+html[data-theme="cinema"] .cache-task-actions .cache-remove{color:var(--muted)}
+html[data-theme="cinema"] .cache-watched{color:var(--brand)}
+html[data-theme="cinema"] .modal-backdrop{background:#070504b8}
+html[data-theme="cinema"] .import-modal,
+html[data-theme="cinema"] .appearance-modal{background:var(--panel);border-color:#f4ecdf1f}
+html[data-theme="cinema"] .import-modal textarea{background:#0f0b09;border-color:var(--line);color:var(--ink)}
+html[data-theme="cinema"] .import-modal textarea::placeholder{color:#8d7b6a}
+html[data-theme="cinema"] .modal-icon{background:#d9a56610;color:var(--brand)}
+html[data-theme="cinema"] .inline-error{color:#e69784}
+html[data-theme="cinema"] .update-panel{background:var(--panel);border-color:var(--line);box-shadow:0 18px 60px #00000080}
+html[data-theme="cinema"] .update-prompt{background:var(--panel);border-color:#f4ecdf1f}
+html[data-theme="cinema"] .update-prompt-icon{background:#d9a56610;color:var(--brand)}
+html[data-theme="cinema"] .update-prompt-versions{background:#0f0b09;border-color:var(--line)}
+html[data-theme="cinema"] .toast{background:var(--panel);border-color:var(--line);color:var(--ink)}
+html[data-theme="cinema"] .appearance-option{background:#0f0b09;border-color:var(--line)}
+html[data-theme="cinema"] .appearance-option.selected{border-color:var(--brand)}
+html[data-theme="cinema"] .appearance-footer{border-color:var(--line)}
+html[data-theme="cinema"] .appearance-modal .secondary-button{background:#f4ecdf0a}
+/* 播放页在某些主题下增加了顶栏高度，缩短一点画面区，确保控制条在首屏可见 */
+html[data-theme="cinema"] .video-stage,
+html[data-theme="neon"] .video-stage,
+html[data-theme="arcade"] .video-stage{height:min(51vh,480px)}
+
+/* 首页尚未加载出主视觉（加载/出错/空内容）时，避免内容压在悬浮顶栏下面 */
+html[data-theme="cinema"] .discover-page:not(:has(.spotlight)){padding-top:104px}

@@ -1,0 +1,147 @@
+{
+  "generatedAt": "2026-10-14T15:37:13.919Z",
+  "identity": {
+    "aid": "8704",
+    "app_name": "kylin_read",
+    "version_code": "74032",
+    "version_name": "7.4.0.32",
+    "update_version_code": "74032"
+  },
+  "releasedProviderChanged": false,
+  "soundAuditionVerified": false,
+  "cellIdDiscoveredFromIndependentHome": false,
+  "passed": true,
+  "catalog": {
+    "label": "推荐榜",
+    "source": "原生漫剧榜单",
+    "count": 15,
+    "hasMore": true,
+    "nextOffset": 15,
+    "items": [
+      {
+        "id": "7677801492920667198",
+        "title": "糯糯下山，师兄们都慌了",
+        "cover": "https://p9-novel-sign.byteimg.com/novel-pic/596f73a90e0c4cff2d95ee3b1afd4268~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=VkrW0RPfY7lktkLkjUFSLFRxLJU%3D",
+        "description": "六岁那年，云糯糯被师父派下山历练，顺便寻找失散多年的五位师兄。她本以为师兄们只是普通修士，生活过得不太好。可随着她一路寻找，才发现大师兄竟是镇压天下的九天仙尊，二师兄是统御九幽的魔界帝君，三师兄是丹道圣人。小奶娃背着一柄破旧黑铁巨剑，带着上古异兽，一路闯荡修仙界，顺手把五位绝世大佬师兄全部喊回了家。",
+        "total": 63
+      },
+      {
+        "id": "7690806482689870872",
+        "title": "全民御兽：大家却说御龙师没用",
+        "cover": "https://p9-novel-sign.byteimg.com/novel-pic/863f8085516dd84740db3fac7cf87a3d~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=DxWCpyc6fxecbf94EkhcivupiJU%3D",
+        "description": "穿越御兽世界，林北觉醒龙族亲和，却因龙族稀少，遭人嘲笑。谁料他拥有龙族编辑器，给龙添翅膀、叠属性、融合能力。别人苦寻强大宠兽，他却将幼龙一步步改造成逆天神兽。究竟还能合成怎样的龙？一场越改越离谱的御兽之旅，就此开启！",
+        "total": 133
+      },
+      {
+        "id": "7615465407347952664",
+        "title": "聚宝仙盆之杂灵根才是真BOSS",
+        "cover": "https://p3-novel-sign.byteimg.com/novel-pic/0ccc7748ad4959559e5744da16cfaf94~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=yjUYKEeA76%2FsCBLqXo%2FCeIl5sjQ%3D",
+        "description": "贺平生做杂役时捡破盆，发现其复制强化力。借此强化药材、功法、法器等，从炼气一层升至五层。他遭玲珑、御兽宗弟子等欺压，靠智慧和宝盆化解。参与翠屏山秘境，战胜玲珑、玉德、冯道姑等一众敌对势力，后突破至筑基期，在太虚老祖的“夺舍”危机之后，宗门灭顶之灾来临之际紧急传送离去，不知未来去向何方。",
+        "total": 99
+      },
+      {
+        "id": "7692006315324886040",
+        "title": "流放苦寒边关，罪妻医术无双带夫君封侯",
+        "cover": "https://p9-novel-sign.byteimg.com/novel-pic/d62a80b074cd6dd5c14d3e7d35f08acf~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=cDFcLEdSYZESrFNKSJQoHx2oYl0%3D",
+        "description": "关棠沦为发配边关的罪奴，身价仅五百文。若无人买下，她便要被送往后营。危急关头，她拦下顾渊，自荐为妻，许诺能治好他父亲多年顽疾。顾家徒有四壁，婆母愁苦，弟妹尚幼，公爹卧病在床。关棠凭借医术，采药、撑起摇摇欲坠的家。边关战事四起，顾渊披甲上阵杀敌，关棠留守后方救治伤员。顾渊从底层校尉奋勇征战，屡立战功，一路晋升为大将军，夫妻二人守望相助，在苦寒边关相守，共守岁月圆满余生。",
+        "total": 143
+      },
+      {
+        "id": "7693496847930772505",
+        "title": "天生三目，从底层少年到封号斗罗",
+        "cover": "https://p6-novel-sign.byteimg.com/novel-pic/fc2f94ac631bfef7c8793292e933bf34~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=gUyPZoPJ0ZZyNUTwlkTiQ9iJoyY%3D",
+        "description": "。在魂师的世界里，出身底层的少年身负罕见的天生三目武魂，自幼受尽旁人冷眼与排挤。可他从未向命运低头，凭借三眼独有的看破虚妄的能力，踏上艰难的魂师修炼之路。觉醒武魂，猎杀魂兽，一次次突破自身极限。前路强敌林立，重重危机接踵而至，少年以平凡之躯逆势崛起，从底层一步步奋力攀登，向着封号斗罗的至高境界进发，书写属于三眼魂师的传奇。",
+        "total": 282
+      },
+      {
+        "id": "7621200213801176126",
+        "title": "万妖图录传第一季",
+        "cover": "https://p9-novel-sign.byteimg.com/novel-pic/d276704b9a05ee371eb1a1c0e42ca581~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=oST5VWOOintjjP%2BKHHPzf3lD5Ns%3D",
+        "description": "以妖魔之血为墨，以百妖谱为卷，可摹画其形，夺其神通。姜月初一朝醒来，却成了盛世大唐的一介少女。在这长安月下，繁华与腐朽共生，仙佛绝迹，妖魔横行。所幸斩杀生物便能增长道行，将妖魔一一绘入妖谱，化作自身的力量。从虎山神的霸道刀法，到青面狼君的鹰视狼顾。从白蛟龙的控水之能，到黑山熊君的万钧之力！姜月初偶尔也会苦恼，自己的神通怎么越来越多了？",
+        "total": 81
+      },
+      {
+        "id": "7690163276214176792",
+        "title": "万妖图录传第十三季",
+        "cover": "https://p9-novel-sign.byteimg.com/novel-pic/083b05acd4229e746738f2d0f4d9311a~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=ptiLwQ9Gh9sHoJGa5WfTh738isc%3D",
+        "description": "以妖魔之血为墨，以百妖谱为卷，可摹画其形，夺其神通。姜月初一朝醒来，却变身成了盛世大唐的一介少女；在这长安月下，繁华与腐朽共生，仙佛绝迹，妖魔横行；所幸斩杀生物便能增长道行，将妖魔一一绘入妖谱，化作自身的力量；姜月初开始了斩妖夺神通，以绝色之姿镇压万古妖魔之路，逐渐揭开这个世界的迷雾。",
+        "total": 209
+      },
+      {
+        "id": "7693164412823161880",
+        "title": "荒岛上还摆高姿态",
+        "cover": "https://p3-novel-sign.byteimg.com/novel-pic/969de063937d4fc0082fdc126b7dc04c~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=R3lKcu67d1cOWE%2FW1frYxL4PDN4%3D",
+        "description": "遭遇海难，苏澈和十多名女性流落荒岛，却因一场诬陷被女营集体驱逐。绝境中他觉醒深海搁浅系统，拥有万物合成与生存情报能力。苏澈搭建安全营地，狩猎野兽、烧制陶器海盐、制作武器药品，依靠实力积累起大量生存资源。",
+        "total": 109
+      },
+      {
+        "id": "7682809595617627161",
+        "title": "秦始皇：朕有华夏全明星阵容",
+        "cover": "https://p3-novel-sign.byteimg.com/novel-pic/f9f74c4c0898f301cd296737dfefd343~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=y6lf6FOjeMQKgTml6xnRoMwWGBM%3D",
+        "description": "一个普通医学生，被塞进时空机，一睁眼竟回到了秦朝。任务是辅佐那位一统之主，让大秦走得更稳、更远。金手指？一台时空机，加上满脑子的历史知识。一统之主皱眉问：“你有何本事？”“那还用说，我会摇人啊！”于是，一位运筹帷幄的谋士率先登场，平定乱局，谋划长远。紧接着，各个时代的能人高手陆续到位：军备升级、后勤成形、情报网不断延伸，经济起飞、基建铺开，一条前所未有的强秦之路，就此开启！",
+        "total": 416
+      },
+      {
+        "id": "7691967671054634008",
+        "title": "我家仙妻不太正经",
+        "cover": "https://p6-novel-sign.byteimg.com/novel-pic/d81c8207964f44caaa73cc4ed218ed71~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=CUgXwM3Lho9AQEEn%2Boj6wgTbDaM%3D",
+        "description": "林鹤熬夜加班猝死后穿越到苍明界，成了没有灵根的废柴，还被迫娶了只能坐轮椅的残疾女子。洞房当晚他却发现妻子也是蓝星穿越者。靠着母亲留下的神秘绿葫芦，夫妻二人种灵草捕鱼赚灵石，在修仙界苟住发育。只是林鹤渐渐发现，真正身怀天命的，似乎是自己的仙妻。",
+        "total": 122
+      },
+      {
+        "id": "7691938290202577944",
+        "title": "公路求生榜一说她要走到公路尽头",
+        "cover": "https://p6-novel-sign.byteimg.com/novel-pic/aa59e5d183a569e58f0c91cc36196cdb~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=8eZ2Rp1zoRvI3xqm6tO%2F3Yn%2Fzf8%3D",
+        "description": "末路求生世界正在降临，倒计时5，4，3，2，1这里是强者的天堂，弱者的地狱，上辈子苟活八年终成炮灰，这一世他不再低调。抢物资、选三轮车、一刀秒杀嚣张保安，更拿下全区首杀，响彻频道，这一次，他要走到最后！",
+        "total": 132
+      },
+      {
+        "id": "7682325650463542334",
+        "title": "天灾末世，她囤满物资后所向披靡！",
+        "cover": "https://p6-novel-sign.byteimg.com/novel-pic/0c0907b28087190efe4faba8ded4771f~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=%2BN0t1wpAaax1UDcRTPJim6svdSA%3D",
+        "description": "韩清夏被至亲推向绝境，失去家园，没能守住重要伙伴。再次睁眼，她回到了灾变来临前，并意外激活超级领主系统。她果断卖房筹资、囤积物资，将废弃防空洞升级为坚固基地，与战犬夏天并肩成长。危机爆发后，她凭借清醒判断、强大异能和充足准备救下幸存者，组建盛夏联盟。面对旧日亲人的算计、各方势力的试探与接连不断的考验，韩清夏不再退让。这一世，她要守住伙伴、掌握命运，在废墟之上建起属于自己的家园。",
+        "total": 536
+      },
+      {
+        "id": "7689688591462566974",
+        "title": "游戏入侵：普攻加血一箭亿万伤屠戮神明",
+        "cover": "https://p3-novel-sign.byteimg.com/novel-pic/33dd23522dd95fefcd2b2004f75e0f25~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=eTZsGBBkOodSbhDavJRegMSDUJk%3D",
+        "description": "2037年阿来特星系神明降临蓝星，人类惨遭屠戮。拥有万亿血量、真伤普攻的张毅战死，重生回到网游诸神黄昏开服日。前世他因没钱手术失去妹妹，见证人类灭亡。这一世看完八小时隐藏宣传片，觉醒天罚之手天赋，玩弓箭手堆攻速刷怪叠血量，带着伙伴抢占机缘，誓要救下妹妹，以凡人之躯对抗神明。",
+        "total": 619
+      },
+      {
+        "id": "7690964201052834841",
+        "title": "惊悚游戏：我只是有亿点点钱",
+        "cover": "https://p9-novel-sign.byteimg.com/novel-pic/c4ea0776d106293145a8212cc6217dd7~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=n%2Bw1oW5QcnvvSLQ%2FibGDfD1nKFc%3D",
+        "description": "惊悚游戏降临，全民陷入死亡副本！苏辰意外成为玩家，面对诡异横行的血色列车副本，所有人都在寻找生路，唯有他获得神秘能力——无限额度！当别人为了活命小心试探规则时，苏辰却发现，惊悚世界中的一切，都存在交易的可能。危险的诡异、隐藏的规则、无法破解的困局。在一次次生死挑战中，他逐渐揭开惊悚游戏背后的秘密。别人拼命逃离，他却开始掌控这场游戏。",
+        "total": 146
+      },
+      {
+        "id": "7690132347185810457",
+        "title": "大明大秦：千古第一直臣第1季",
+        "cover": "https://p6-novel-sign.byteimg.com/novel-pic/6e78de6772dc6e186b5e30f6d94c936c~tplv-81nmtwyey9-superreso-aifit:400:0.image?lk3s=ae45642e&x-expires=1797176239&x-signature=nNaOG66Xm5upaY3FktnUTsB45s0%3D",
+        "description": "外卖员元林意外获得特殊系统，可以穿梭不同历史时期，通过完成任务、弥补历史遗憾获得奖励。于是，他先后走进大明、大秦、大唐、五代十国与东汉末年，与朱元璋、嬴政、李世民等历史人物相遇。凭借现代思维和独特行事风格，元林一次次卷入时代风云，在啼笑皆非的碰撞中改变许多人的命运，也在漫长的历史旅途中留下属于自己的传奇。",
+        "total": 175
+      }
+    ]
+  },
+  "work": {
+    "id": "7677801492920667198",
+    "title": "糯糯下山，师兄们都慌了",
+    "total": 63
+  },
+  "episode": {
+    "id": "7677804745699888153",
+    "order": 1,
+    "detailDuration": 138,
+    "apiDuration": 138.438,
+    "duration": 138.437007,
+    "time": 138.437007,
+    "ended": true,
+    "frames": 4153,
+    "audioBytes": 2243498,
+    "wallSeconds": 46.59290000003576,
+    "seeked": true,
+    "resumed": true
+  }
+}

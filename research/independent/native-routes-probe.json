@@ -1,0 +1,121 @@
+{
+  "generatedAt": "2026-10-14T15:16:23.776Z",
+  "identity": {
+    "aid": "8704",
+    "app_name": "kylin_read",
+    "version_code": "74032",
+    "version_name": "7.4.0.32",
+    "update_version_code": "74032"
+  },
+  "releasedProviderChanged": false,
+  "results": [
+    {
+      "label": "native-comic-series-route",
+      "endpoint": "/reading/bookapi/bookmall/tab/v/",
+      "http": 200,
+      "bytes": 38715,
+      "summary": {
+        "code": 0,
+        "message": "SUCCESS",
+        "keys": [
+          "code",
+          "message",
+          "data",
+          "log_id"
+        ],
+        "dataKeys": [
+          "tab_index",
+          "tab_item",
+          "cold_start_info"
+        ],
+        "labels": [
+          "推荐",
+          "东北后妈，整顿全家",
+          "听懂物品说话，我屡破奇案",
+          "总裁是我前女友",
+          "人鱼赴归潮",
+          "逆转人生之重生大东北",
+          "透视神瞳：我是华夏第一鉴宝师"
+        ],
+        "works": [
+          {
+            "id": "7693516944581872664",
+            "title": "东北后妈，整顿全家",
+            "total": 120
+          },
+          {
+            "id": "7687171381556956222",
+            "title": "听懂物品说话，我屡破奇案",
+            "total": 125
+          },
+          {
+            "id": "7688352674999176254",
+            "title": "总裁是我前女友",
+            "total": 95
+          },
+          {
+            "id": "7687189939640880152",
+            "title": "人鱼赴归潮",
+            "total": 88
+          },
+          {
+            "id": "7690965755168312344",
+            "title": "逆转人生之重生大东北",
+            "total": 81
+          },
+          {
+            "id": "7677857163456285720",
+            "title": "透视神瞳：我是华夏第一鉴宝师",
+            "total": 52
+          }
+        ],
+        "structural": [
+          {
+            "tab_type": 8
+          },
+          {
+            "next_offset": 1
+          },
+          {
+            "has_more": false
+          },
+          {
+            "cell_id": "6952850996422770718"
+          },
+          {
+            "next_offset": 6
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          },
+          {
+            "cell_id": 0
+          }
+        ],
+        "tabs": []
+      }
+    },
+    {
+      "label": "native-search-route",
+      "endpoint": "/reading/bookapi/search/tab/v/",
+      "http": 200,
+      "bytes": 0,
+      "error": "EMPTY_RESPONSE"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+import {spawnSync} from 'node:child_process';
+import {stat,mkdir} from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const bundle=path.join(root,'runtime-bundle');
+const jdk=process.env.HONGGUO_JDK;
+if(!jdk)throw new Error('Set HONGGUO_JDK to a complete JDK 17+ directory first.');
+const compiler=path.join(jdk,'bin','javac.exe');
+await stat(compiler);await stat(path.join(bundle,'dependencies.jar'));await mkdir(path.join(bundle,'classes'),{recursive:true});
+const result=spawnSync(compiler,['--release','17','-encoding','UTF-8','-cp',path.join(bundle,'dependencies.jar'),'-d',path.join(bundle,'classes'),path.join(root,'runtime','SignerBridge.java')],{cwd:root,windowsHide:true,encoding:'utf8'});
+if(result.status!==0)throw new Error(result.stderr||'Bridge compilation failed');
+console.log('Bridge compiled. Run npm run build and desktop playback verification before packaging.');

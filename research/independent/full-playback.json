@@ -1,0 +1,239 @@
+{
+  "generatedAt": "2026-10-14T15:08:31.451Z",
+  "identity": {
+    "aid": "8704",
+    "app_name": "kylin_read",
+    "version_code": "74032",
+    "version_name": "7.4.0.32",
+    "update_version_code": "74032"
+  },
+  "releasedProviderChanged": false,
+  "soundAuditionVerified": false,
+  "passed": true,
+  "series": [
+    {
+      "id": "7695370827507698713",
+      "title": "到末世十年后竟然遇到四个尸王第一季",
+      "total": 155,
+      "episodes": [
+        {
+          "order": 1,
+          "id": "7695386527160863769",
+          "detailDuration": 60,
+          "apiDuration": 60.034,
+          "definition": "540p",
+          "duration": 60.033333,
+          "time": 60.033333,
+          "maxTime": 60.033333,
+          "ended": true,
+          "frames": 1801,
+          "audioBytes": 976303,
+          "wallSeconds": 20.23640000003576,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 2,
+          "id": "7695386808800005145",
+          "detailDuration": 45,
+          "apiDuration": 45.134,
+          "definition": "540p",
+          "duration": 45.133333,
+          "time": 45.133333,
+          "maxTime": 45.133333,
+          "ended": true,
+          "frames": 1354,
+          "audioBytes": 733435,
+          "wallSeconds": 15.174899999976159,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 3,
+          "id": "7695386631972326425",
+          "detailDuration": 45,
+          "apiDuration": 45.7,
+          "definition": "540p",
+          "duration": 45.7,
+          "time": 45.7,
+          "maxTime": 45.7,
+          "ended": true,
+          "frames": 1371,
+          "audioBytes": 741526,
+          "wallSeconds": 15.370300000011921,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 78,
+          "id": "7695386582622145561",
+          "detailDuration": 45,
+          "apiDuration": 45.034,
+          "definition": "540p",
+          "duration": 45.033333,
+          "time": 45.033333,
+          "maxTime": 45.033333,
+          "ended": true,
+          "frames": 1351,
+          "audioBytes": 727817,
+          "wallSeconds": 15.162600000023842,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 155,
+          "id": "7695386533234215961",
+          "detailDuration": 37,
+          "apiDuration": 37.634,
+          "definition": "540p",
+          "duration": 37.633333,
+          "time": 37.633333,
+          "maxTime": 37.633333,
+          "ended": true,
+          "frames": 1129,
+          "audioBytes": 606741,
+          "wallSeconds": 12.674099999964238,
+          "seeked": true,
+          "resumed": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": 1,
+          "to": 2,
+          "trigger": "ended"
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "trigger": "ended"
+        },
+        {
+          "from": 3,
+          "to": 78,
+          "trigger": "ended"
+        },
+        {
+          "from": 78,
+          "to": 155,
+          "trigger": "ended"
+        }
+      ],
+      "fullPlaybackVerified": true
+    },
+    {
+      "id": "7692043430955863102",
+      "title": "反向拿捏：和闺蜜穿七零带着婆婆一起离",
+      "total": 126,
+      "episodes": [
+        {
+          "order": 1,
+          "id": "7692096762072288280",
+          "detailDuration": 148,
+          "apiDuration": 148.353,
+          "definition": "540p",
+          "duration": 148.351995,
+          "time": 148.351995,
+          "maxTime": 148.351995,
+          "ended": true,
+          "frames": 4450,
+          "audioBytes": 2397271,
+          "wallSeconds": 49.719,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 2,
+          "id": "7692096729776131096",
+          "detailDuration": 201,
+          "apiDuration": 201.736,
+          "definition": "540p",
+          "duration": 201.735011,
+          "time": 201.735011,
+          "maxTime": 201.735011,
+          "ended": true,
+          "frames": 6052,
+          "audioBytes": 3257854,
+          "wallSeconds": 67.51629999995231,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 3,
+          "id": "7692096716048190488",
+          "detailDuration": 193,
+          "apiDuration": 193.284,
+          "definition": "540p",
+          "duration": 193.282993,
+          "time": 193.282993,
+          "maxTime": 193.282993,
+          "ended": true,
+          "frames": 5795,
+          "audioBytes": 3118886,
+          "wallSeconds": 64.72630000001192,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 63,
+          "id": "7692096794360040472",
+          "detailDuration": 60,
+          "apiDuration": 60.256,
+          "definition": "540p",
+          "duration": 60.256009,
+          "time": 60.256009,
+          "maxTime": 60.256009,
+          "ended": true,
+          "frames": 1805,
+          "audioBytes": 976671,
+          "wallSeconds": 20.224399999976157,
+          "seeked": true,
+          "resumed": true
+        },
+        {
+          "order": 126,
+          "id": "7692096843806673944",
+          "detailDuration": 96,
+          "apiDuration": 96.015,
+          "definition": "540p",
+          "duration": 96.013991,
+          "time": 96.013991,
+          "maxTime": 96.013991,
+          "ended": true,
+          "frames": 2853,
+          "audioBytes": 1551518,
+          "wallSeconds": 32.196300000011924,
+          "seeked": true,
+          "resumed": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": 1,
+          "to": 2,
+          "trigger": "ended"
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "trigger": "ended"
+        },
+        {
+          "from": 3,
+          "to": 63,
+          "trigger": "ended"
+        },
+        {
+          "from": 63,
+          "to": 126,
+          "trigger": "ended"
+        }
+      ],
+      "fullPlaybackVerified": true
+    }
+  ],
+  "share": {
+    "matches": true,
+    "total": 155
+  }
+}

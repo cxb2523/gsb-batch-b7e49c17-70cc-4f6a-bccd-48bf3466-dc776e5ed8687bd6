@@ -1,0 +1,50 @@
+[
+  {
+    "host": "reading.snssdk.com",
+    "version": "",
+    "query": "到末世十年后竟然遇到四个尸王",
+    "variant": "baseline",
+    "http": 200,
+    "bytes": 0,
+    "contentType": "application/json",
+    "summary": {
+      "empty": true
+    }
+  },
+  {
+    "host": "reading.snssdk.com",
+    "version": "",
+    "query": "反向拿捏",
+    "variant": "baseline",
+    "http": 200,
+    "bytes": 0,
+    "contentType": "application/json",
+    "summary": {
+      "empty": true
+    }
+  },
+  {
+    "host": "reading.snssdk.com",
+    "version": ":version",
+    "query": "到末世十年后竟然遇到四个尸王",
+    "variant": "baseline",
+    "http": 200,
+    "bytes": 0,
+    "contentType": "application/json",
+    "summary": {
+      "empty": true
+    }
+  },
+  {
+    "host": "reading.snssdk.com",
+    "version": ":version",
+    "query": "反向拿捏",
+    "variant": "baseline",
+    "http": 200,
+    "bytes": 0,
+    "contentType": "application/json",
+    "summary": {
+      "empty": true
+    }
+  }
+]

@@ -1,0 +1,162 @@
+{
+  "generatedAt": "2026-10-14T15:36:33.399Z",
+  "releasedProviderChanged": false,
+  "rows": [
+    {
+      "identity": "independent",
+      "host": "api5-normal-sinfonlinea.fqnovel.com",
+      "kind": "suggest",
+      "endpoint": "/reading/bookapi/search/suggest/v",
+      "params": {
+        "q": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed"
+      },
+      "http": 200,
+      "bytes": 53,
+      "summary": {
+        "code": 100103,
+        "keys": [
+          "code",
+          "message",
+          "data"
+        ],
+        "labels": []
+      }
+    },
+    {
+      "identity": "independent",
+      "host": "api5-normal-sinfonlinea.fqnovel.com",
+      "kind": "search",
+      "endpoint": "/reading/bookapi/search/tab/v/",
+      "params": {
+        "query": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed",
+        "count": 0,
+        "offset": 0,
+        "use_correct": true
+      },
+      "http": 200,
+      "bytes": 0,
+      "empty": true
+    },
+    {
+      "identity": "short-drama-control",
+      "host": "api5-normal-sinfonlinea.fqnovel.com",
+      "kind": "suggest",
+      "endpoint": "/reading/bookapi/search/suggest/v",
+      "params": {
+        "q": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed"
+      },
+      "http": 200,
+      "bytes": 53,
+      "summary": {
+        "code": 100103,
+        "keys": [
+          "code",
+          "message",
+          "data"
+        ],
+        "labels": []
+      }
+    },
+    {
+      "identity": "short-drama-control",
+      "host": "api5-normal-sinfonlinea.fqnovel.com",
+      "kind": "search",
+      "endpoint": "/reading/bookapi/search/tab/v/",
+      "params": {
+        "query": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed",
+        "count": 0,
+        "offset": 0,
+        "use_correct": true
+      },
+      "http": 200,
+      "bytes": 0,
+      "empty": true
+    },
+    {
+      "identity": "independent",
+      "host": "reading.snssdk.com",
+      "kind": "suggest",
+      "endpoint": "/reading/bookapi/search/suggest/v",
+      "params": {
+        "q": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed"
+      },
+      "http": 200,
+      "bytes": 53,
+      "summary": {
+        "code": 100103,
+        "keys": [
+          "code",
+          "message",
+          "data"
+        ],
+        "labels": []
+      }
+    },
+    {
+      "identity": "independent",
+      "host": "reading.snssdk.com",
+      "kind": "search",
+      "endpoint": "/reading/bookapi/search/tab/v/",
+      "params": {
+        "query": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed",
+        "count": 0,
+        "offset": 0,
+        "use_correct": true
+      },
+      "http": 200,
+      "bytes": 0,
+      "empty": true
+    },
+    {
+      "identity": "short-drama-control",
+      "host": "reading.snssdk.com",
+      "kind": "suggest",
+      "endpoint": "/reading/bookapi/search/suggest/v",
+      "params": {
+        "q": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed"
+      },
+      "http": 200,
+      "bytes": 53,
+      "summary": {
+        "code": 100103,
+        "keys": [
+          "message",
+          "data",
+          "code"
+        ],
+        "labels": []
+      }
+    },
+    {
+      "identity": "short-drama-control",
+      "host": "reading.snssdk.com",
+      "kind": "search",
+      "endpoint": "/reading/bookapi/search/tab/v/",
+      "params": {
+        "query": "到末世十年后竟然遇到四个尸王",
+        "search_source": 1,
+        "tab_name": "feed",
+        "count": 0,
+        "offset": 0,
+        "use_correct": true
+      },
+      "http": 200,
+      "bytes": 0,
+      "empty": true
+    }
+  ]
+}
