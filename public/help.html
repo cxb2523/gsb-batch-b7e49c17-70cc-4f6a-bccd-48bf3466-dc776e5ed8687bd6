@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>PullMD · Hilfe / Help</title>
+  <link rel="icon" href="favicon.ico" sizes="48x48">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="theme-color" content="#0e1016">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root,
+    [data-theme="dark"] {
+      --bg:#0e1016; --bg-elev:#14171f; --bg-input:#11141b; --bg-result:#0a0c12;
+      --border:#1f2330; --border-strong:#2a3040;
+      --fg:#e7e9ee; --fg-muted:#8b91a1; --fg-dim:#5a6072; --fg-faint:#353a48;
+      --accent:#ff5722; --accent-hover:#ff7043; --accent-fg:#fff;
+      --accent-soft:rgba(255,87,34,0.12);
+      --link:#6cc4ff; --good:#6bff9c; --good-bg:rgba(107,255,156,0.08);
+      --bad:#ff7a7a; --bad-bg:rgba(255,122,122,0.08);
+      --radius:10px; --radius-lg:14px;
+      --shadow:0 1px 0 rgba(255,255,255,0.02) inset, 0 8px 24px rgba(0,0,0,0.35);
+      --gridline:rgba(255,255,255,0.025);
+    }
+    [data-theme="paper"] {
+      --bg:#f6f3ee; --bg-elev:#fff; --bg-input:#fff; --bg-result:#fbf9f4;
+      --border:#e6e0d4; --border-strong:#cdc5b3;
+      --fg:#1c1a17; --fg-muted:#6b6557; --fg-dim:#918a7a; --fg-faint:#cdc5b3;
+      --accent:#d84315; --accent-hover:#bf360c; --accent-fg:#fff;
+      --accent-soft:rgba(216,67,21,0.10);
+      --link:#1976d2; --good:#1b5e20; --good-bg:rgba(27,94,32,0.08);
+      --bad:#c62828; --bad-bg:rgba(198,40,40,0.06);
+      --shadow:0 1px 2px rgba(60,40,20,0.04), 0 8px 24px rgba(60,40,20,0.06);
+      --gridline:rgba(60,40,20,0.03);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+    body {
+      font-family:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+      background:var(--bg); color:var(--fg);
+      min-height:100vh; min-height:100dvh; line-height:1.6;
+      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+      padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      background-image:
+        linear-gradient(var(--gridline) 1px, transparent 1px),
+        linear-gradient(90deg, var(--gridline) 1px, transparent 1px);
+      background-size:32px 32px;
+    }
+
+    .container { max-width:780px; margin:0 auto; padding:3rem 1.25rem 6rem; }
+
+    /* Header */
+    .brand {
+      display:flex; align-items:center; justify-content:space-between;
+      margin-bottom:2.5rem;
+    }
+    .brand-mark { display:inline-flex; align-items:center; gap:0.625rem; text-decoration:none; color:var(--fg); }
+    .brand-mark img { height:1.75rem; width:1.75rem; border-radius:6px; display:block; }
+    .brand-mark .wordmark { font-size:1.375rem; font-weight:700; letter-spacing:-0.02em; }
+    .brand-mark .wordmark .accent { color:var(--accent); }
+    .brand-mark .sub { font-size:0.6875rem; color:var(--fg-dim); letter-spacing:0.06em; text-transform:uppercase; font-family:'JetBrains Mono',ui-monospace,monospace; margin-left:0.625rem; padding-left:0.625rem; border-left:1px solid var(--border-strong); }
+    .brand-actions { display:inline-flex; gap:0.375rem; align-items:center; }
+    .icon-btn {
+      width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center;
+      background:transparent; border:1px solid var(--border-strong); border-radius:6px;
+      color:var(--fg-muted); cursor:pointer; padding:0; text-decoration:none;
+      transition:color 0.15s, border-color 0.15s;
+    }
+    .icon-btn:hover { color:var(--accent); border-color:var(--accent); }
+    .icon-btn svg { display:block; }
+    [data-theme="dark"]  .theme-toggle .icon-sun  { display:block; }
+    [data-theme="dark"]  .theme-toggle .icon-moon { display:none; }
+    [data-theme="paper"] .theme-toggle .icon-sun  { display:none; }
+    [data-theme="paper"] .theme-toggle .icon-moon { display:block; }
+
+    .lang-btn {
+      height:28px; padding:0 0.5rem; display:inline-flex; align-items:center; justify-content:center;
+      background:transparent; border:1px solid var(--border-strong); border-radius:6px;
+      color:var(--fg-muted); font-family:'JetBrains Mono',ui-monospace,monospace;
+      font-size:0.6875rem; font-weight:600; letter-spacing:0.06em; cursor:pointer;
+      transition:color 0.15s, border-color 0.15s;
+    }
+    .lang-btn:hover { color:var(--accent); border-color:var(--accent); }
+
+    /* Hero */
+    h1 { font-size:clamp(1.875rem,4vw,2.5rem); font-weight:700; letter-spacing:-0.025em; line-height:1.15; margin-bottom:0.5rem; }
+    .lede { color:var(--fg-muted); font-size:1rem; margin-bottom:3rem; max-width:60ch; line-height:1.65; }
+
+    /* TOC */
+    .toc {
+      background:var(--bg-elev); border:1px solid var(--border); border-radius:var(--radius-lg);
+      padding:1rem 1.125rem; margin-bottom:4rem;
+      font-family:'JetBrains Mono',ui-monospace,monospace; font-size:0.8125rem;
+    }
+    .toc-label { font-size:0.625rem; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--fg-dim); margin-bottom:0.5rem; }
+    .toc ul { list-style:none; display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:0.25rem 1rem; }
+    .toc a { color:var(--link); text-decoration:none; }
+    .toc a:hover { text-decoration:underline; }
+    .toc a::before { content:'·  '; color:var(--fg-faint); }
+
+    /* Sections */
+    section { margin-bottom:4.5rem; scroll-margin-top:1rem; }
+    section + section { padding-top:1rem; }
+    h2 {
+      font-size:1.5rem; font-weight:700; letter-spacing:-0.02em;
+      margin-bottom:1.5rem; padding-bottom:0.625rem;
+      border-bottom:1px solid var(--border);
+      display:flex; align-items:baseline; gap:0.75rem;
+    }
+    h2 .kicker {
+      font-family:'JetBrains Mono',ui-monospace,monospace;
+      font-size:0.6875rem; font-weight:600; color:var(--fg-faint);
+      letter-spacing:0.08em; text-transform:uppercase;
+    }
+    h3 {
+      font-size:1rem; font-weight:600; margin:2.25rem 0 0.875rem;
+      color:var(--fg); letter-spacing:-0.005em;
+    }
+    p { margin-bottom:1.125rem; color:var(--fg); max-width:65ch; line-height:1.65; }
+    p.muted { color:var(--fg-muted); margin-top:1rem; }
+
+    code {
+      font-family:'JetBrains Mono',ui-monospace,monospace;
+      font-size:0.85em; padding:0.075rem 0.375rem; border-radius:4px;
+      background:var(--accent-soft); color:var(--accent);
+    }
+    a { color:var(--link); text-decoration:underline; text-underline-offset:2px; }
+    a:hover { text-decoration-color:var(--accent); }
+
+    ul.doc-list, ol.doc-list { padding-left:1.25rem; margin-bottom:1.5rem; }
+    ul.doc-list li, ol.doc-list li { margin-bottom:0.5rem; max-width:62ch; line-height:1.6; }
+
+    /* Code/copy block */
+    .copybox {
+      position:relative; background:var(--bg-result);
+      border:1px solid var(--border); border-radius:var(--radius);
+      margin:0.5rem 0 1.75rem;
+    }
+    .copybox-header {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:0.5rem 0.75rem; border-bottom:1px solid var(--border);
+    }
+    .copybox-label {
+      font-family:'JetBrains Mono',ui-monospace,monospace; font-size:0.625rem;
+      font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--fg-dim);
+    }
+    .copybox-btn {
+      padding:0.25rem 0.625rem; font-size:0.6875rem; font-weight:600; font-family:inherit;
+      color:var(--fg); background:var(--bg-elev); border:1px solid var(--border-strong);
+      border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:0.3rem;
+      transition:color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .copybox-btn:hover { color:var(--accent); border-color:var(--accent); }
+    .copybox-btn.copied { color:var(--good); border-color:var(--good); background:var(--good-bg); }
+    .copybox pre {
+      padding:0.875rem 1rem; overflow-x:auto;
+      font-family:'JetBrains Mono',ui-monospace,monospace; font-size:0.8125rem;
+      line-height:1.55; color:var(--fg); white-space:pre-wrap; word-break:break-word;
+      tab-size:2;
+    }
+
+    /* Table */
+    .table {
+      width:100%; border-collapse:separate; border-spacing:0;
+      border:1px solid var(--border); border-radius:var(--radius);
+      font-size:0.875rem; overflow:hidden; margin:0.5rem 0 1.75rem;
+    }
+    .table th, .table td { padding:0.625rem 0.875rem; text-align:left; border-bottom:1px solid var(--border); vertical-align:top; }
+    .table tr:last-child th, .table tr:last-child td { border-bottom:none; }
+    .table th {
+      background:var(--bg-elev); color:var(--fg-dim);
+      font-family:'JetBrains Mono',ui-monospace,monospace; font-size:0.6875rem;
+      font-weight:600; letter-spacing:0.06em; text-transform:uppercase;
+    }
+    .table td code { font-size:0.8125rem; }
+
+    /* Callout */
+    .callout {
+      padding:0.875rem 1rem; margin-bottom:1rem;
+      border:1px solid var(--accent); border-radius:var(--radius);
+      background:var(--accent-soft); color:var(--fg);
+    }
+    .callout strong { color:var(--accent); }
+
+    .download-btn {
+      display:inline-flex; align-items:center; gap:0.5rem;
+      padding:0.5rem 0.875rem; margin-top:0.25rem;
+      background:var(--accent); color:var(--accent-fg); border:none; border-radius:var(--radius);
+      font-weight:600; font-size:0.875rem; text-decoration:none;
+      transition:background 0.15s, transform 0.1s;
+    }
+    .download-btn:hover { background:var(--accent-hover); }
+    .download-btn:active { transform:scale(0.97); }
+
+    /* i18n visibility */
+    body[data-lang="de"] [lang="en"] { display:none; }
+    body[data-lang="en"] [lang="de"] { display:none; }
+
+    /* Footer */
+    .foot {
+      margin-top:3rem; padding-top:1.25rem; border-top:1px solid var(--border);
+      font-family:'JetBrains Mono',ui-monospace,monospace; font-size:0.75rem; color:var(--fg-dim);
+      display:flex; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;
+    }
+    .foot a { color:var(--link); }
+
+    @media (max-width:480px) {
+      .container { padding:1.5rem 1rem 4rem; }
+      .toc ul { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body data-theme="dark" data-lang="de">
+  <script>
+    // Pre-paint: theme + lang from localStorage / system
+    (function () {
+      try {
+        var t = localStorage.getItem('pullmd-theme') || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'paper' : 'dark');
+        document.body.setAttribute('data-theme', t);
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', t === 'paper' ? '#f6f3ee' : '#0e1016');
+        var l = localStorage.getItem('pullmd-lang');
+        if (l !== 'de' && l !== 'en') l = (navigator.language || 'en').toLowerCase().indexOf('de') === 0 ? 'de' : 'en';
+        document.body.setAttribute('data-lang', l);
+        document.documentElement.lang = l;
+      } catch (e) {}
+    })();
+  </script>
+
+  <div class="container">
+    <header class="brand">
+      <a href="/" class="brand-mark" title="zurück zu PullMD / back to PullMD">
+        <img src="icon-192.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{textContent:'M',style:'display:inline-flex;align-items:center;justify-content:center;width:1.75rem;height:1.75rem;border-radius:6px;background:var(--accent);color:var(--accent-fg);font-weight:700;font-size:0.95rem;'}))">
+        <span class="wordmark"><span class="accent">Pull</span>MD</span>
+        <span class="sub" lang="de">Hilfe</span>
+        <span class="sub" lang="en">Help</span>
+      </a>
+      <span class="brand-actions">
+        <button id="theme-btn" class="icon-btn theme-toggle" type="button" title="Theme">
+          <svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+          <svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+        <button id="lang-btn" class="lang-btn" type="button" title="Language"><span id="lang-label">EN</span></button>
+        <a href="/" class="icon-btn" title="zurück / back">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+        </a>
+      </span>
+    </header>
+
+    <h1 lang="de">PullMD Hilfe</h1>
+    <h1 lang="en">PullMD Help</h1>
+
+    <p class="lede" lang="de">Diese Seite erklärt, was PullMD macht, wie der Cache funktioniert und wie du den Service in Claude Code oder anderen KI-Agenten einrichtest.</p>
+    <p class="lede" lang="en">This page explains what PullMD does, how the cache works, and how to wire it into Claude Code or any other AI agent.</p>
+
+    <nav class="toc">
+      <div class="toc-label">
+        <span lang="de">Inhalt</span><span lang="en">Contents</span>
+      </div>
+      <ul lang="de">
+        <li><a href="#whats-new">Neu in v3</a></li>
+        <li><a href="#what">Was macht PullMD?</a></li>
+        <li><a href="#cache">Cache & TTL</a></li>
+        <li><a href="#agent">In KI-Agenten einrichten</a></li>
+        <li><a href="#endpoints">Endpunkte</a></li>
+        <li><a href="#api">API-Parameter</a></li>
+        <li><a href="#headers">Response-Header</a></li>
+        <li><a href="#query">Query-Extraktion</a></li>
+        <li><a href="#files">Dateien konvertieren</a></li>
+        <li><a href="#share">Share-Links</a></li>
+        <li><a href="#frontmatter">Frontmatter</a></li>
+        <li><a href="#recipes">Site-Recipes</a></li>
+        <li><a href="#auth">Authentifizierung</a></li>
+        <li><a href="#clients">Client-Erkennung</a></li>
+      </ul>
+      <ul lang="en">
+        <li><a href="#whats-new">New in v3</a></li>
+        <li><a href="#what">What PullMD does</a></li>
+        <li><a href="#cache">Cache & TTL</a></li>
+        <li><a href="#agent">Set up in AI agents</a></li>
+        <li><a href="#endpoints">Endpoints</a></li>
+        <li><a href="#api">API parameters</a></li>
+        <li><a href="#headers">Response headers</a></li>
+        <li><a href="#query">Query extraction</a></li>
+        <li><a href="#files">Converting files</a></li>
+        <li><a href="#share">Share links</a></li>
+        <li><a href="#frontmatter">Frontmatter</a></li>
+        <li><a href="#recipes">Site recipes</a></li>
+        <li><a href="#auth">Authentication</a></li>
+        <li><a href="#clients">Client detection</a></li>
+      </ul>
+    </nav>
+
+    <!-- ===================================================== -->
+    <section id="whats-new">
+      <h2><span lang="de">Neu in v3</span><span lang="en">New in v3</span><span class="kicker">v__PULLMD_VERSION__</span></h2>
+      <p lang="de">In v3 ist PullMD von einem reinen Web-Reader zu einem allgemeinen <strong>Alles-zu-Markdown</strong>-Dienst gewachsen. Alles über die normale Web-Extraktion hinaus ist optional und lässt sich einzeln aktivieren:</p>
+      <p lang="en">In v3, PullMD grew from a web-page reader into a general <strong>anything-to-Markdown</strong> service. Everything beyond plain web extraction is optional and enabled individually:</p>
+      <ul class="doc-list" lang="de">
+        <li><strong>Sauberer Body</strong> - der Markdown-Body ist standardmäßig nur noch <code># Titel</code> + Inhalt; Quell-URL, Datum und Metadaten liegen im YAML-Frontmatter, statt im Text wiederholt zu werden (spart Tokens).</li>
+        <li><strong>Dokumente</strong> - PDF, Word, PowerPoint, Excel, EPUB u. a. per URL oder Upload (Drag-and-drop in der Web-Oberfläche).</li>
+        <li><strong>Formate ohne Sidecar</strong> - E-Mails (<code>.eml</code>, <code>.msg</code>), gespeicherte Seiten (<code>.mhtml</code>), OpenDocument, RTF, Kalender und Kontakte, CSV/JSON/XML, Notebooks, Quelltext, Text und Untertitel per Upload.</li>
+        <li><strong>PDF-Tabellen (OCR)</strong> - optionaler, hochwertiger PDF-Pfad mit <code>?pdf=ocr</code> für saubere Tabellen.</li>
+        <li><strong>Bilder & Audio</strong> - optionale Bildbeschreibung und Audio-Transkription.</li>
+        <li><strong>YouTube</strong> - Titel, Beschreibung und Transkript mit klickbaren Timecodes, ohne API-Key.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><strong>Clean body</strong> - the Markdown body is now just <code># Title</code> + content; the source URL, date and metadata live in the YAML frontmatter instead of being repeated in the text (saves tokens).</li>
+        <li><strong>Documents</strong> - PDF, Word, PowerPoint, Excel, EPUB and more, by URL or upload (drag-and-drop in the web UI).</li>
+        <li><strong>Formats without a sidecar</strong> - e-mails (<code>.eml</code>, <code>.msg</code>), saved pages (<code>.mhtml</code>), OpenDocument, RTF, calendars and contacts, CSV/JSON/XML, notebooks, source code, text and subtitles as uploads.</li>
+        <li><strong>PDF tables (OCR)</strong> - an optional high-quality PDF path with <code>?pdf=ocr</code> for clean tables.</li>
+        <li><strong>Images & audio</strong> - optional image captioning and audio transcription.</li>
+        <li><strong>YouTube</strong> - title, description and transcript with clickable timecodes, no API key.</li>
+      </ul>
+
+      <h3 lang="de">Seitdem dazugekommen</h3>
+      <h3 lang="en">Added since</h3>
+      <ul class="doc-list" lang="de">
+        <li><strong>Hacker News</strong> (v3.1) - eigene Pipeline für Items, Kommentar-Permalinks und Listings, mit sauberem verschachteltem Kommentarbaum statt Layout-Tabellen.</li>
+        <li><strong>Teilen aus der PWA</strong> (v3.1) - Share-Button neben Kopieren übergibt das Markdown an das native Share-Sheet; der Frontmatter-Schalter wirkt sofort, ohne zweiten Pull.</li>
+        <li><strong>Transkript-Status</strong> (v3.2) - <code>X-Transcript-Status</code> unterscheidet bei YouTube ein fehlendes Transkript von einer temporären Sperre.</li>
+        <li><strong>SSRF-Schutz</strong> (v3.3) - Anfragen an interne Adressen werden standardmäßig abgelehnt, siehe <a href="#endpoints">Endpunkte</a>.</li>
+        <li><strong>Query-Extraktion</strong> (v3.4) - <code>?query=</code> liefert nur die zur Frage passenden Abschnitte statt der ganzen Seite, siehe <a href="#query">Query-Extraktion</a>.</li>
+        <li><strong>Site-Recipes</strong> (v3.5/v3.6) - pro Host konfigurierbare Extraktion, inklusive Frontmatter aus JSON-LD und <code>select.content</code>, um den Artikel-Body direkt zu benennen.</li>
+        <li><strong>Coverage Guard</strong> (v3.7) - erkennt Extraktionen, die nur einen Bruchteil der Seite behalten haben, und holt den fehlenden Teil nach.</li>
+        <li><strong>Kontenverwaltung</strong> (v3.8) - wer kein Admin ist, kann Einträge aus der eigenen Historie löschen; die Selbstregistrierung lässt sich schließen, und Konten lassen sich per CLI anlegen, siehe <a href="#auth">Authentifizierung</a>.</li>
+        <li><strong>Download-Button</strong> (v3.9) - speichert das Ergebnis als <code>.md</code>-Datei; den Dateinamen schlägt der Server vor (<code>X-Suggested-Filename</code>), auf Wunsch mit Datums-Präfix.</li>
+        <li><strong>Sidecar-Health</strong> (v3.10) - <code>GET /api/status</code> meldet, ob die Extraktions-Sidecars antworten, und liefert <code>503</code> sobald einer ausfällt. Für externes Monitoring gedacht: ein toter Renderer nimmt den Dienst nicht runter, er verschlechtert nur still das Ergebnis.</li>
+        <li><strong>Cache-Aufbewahrung</strong> (v3.11) - <code>PULLMD_CACHE_RETENTION_DAYS</code> legt fest, wie lange Cache-Einträge und Share-Links leben; Standard 90 Tage, <code>0</code> = unbegrenzt.</li>
+        <li><strong>Reverse-Proxy und Limits</strong> (v3.13) - <code>PULLMD_TRUST_PROXY</code> legt fest, wann Weiterleitungs-Header zählen; Login und Registrierung sind pro Client-Adresse begrenzt, die kostenpflichtigen Medien-Stufen teilen sich ein Stundenbudget, und abgerufene Seiten haben eine Größengrenze. Siehe <a href="#auth">Authentifizierung</a>.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><strong>Hacker News</strong> (v3.1) - a dedicated pipeline for items, comment permalinks and listings, producing a clean nested comment tree instead of layout-table soup.</li>
+        <li><strong>Share from the PWA</strong> (v3.1) - a share button next to Copy hands the Markdown to the native share sheet; the frontmatter toggle now applies instantly, with no second pull.</li>
+        <li><strong>Transcript status</strong> (v3.2) - <code>X-Transcript-Status</code> tells a missing YouTube transcript apart from a temporary block.</li>
+        <li><strong>SSRF protection</strong> (v3.3) - requests to internal addresses are rejected by default, see <a href="#endpoints">Endpoints</a>.</li>
+        <li><strong>Query extraction</strong> (v3.4) - <code>?query=</code> returns only the sections relevant to your question instead of the whole page, see <a href="#query">Query extraction</a>.</li>
+        <li><strong>Site recipes</strong> (v3.5/v3.6) - per-host extraction tuning, including frontmatter from JSON-LD and <code>select.content</code> to name the article body outright.</li>
+        <li><strong>Coverage guard</strong> (v3.7) - detects extractions that kept only a sliver of the page and recovers the rest.</li>
+        <li><strong>Account controls</strong> (v3.8) - a non-admin can delete entries from their own history, self-registration can be closed, and accounts can be created from the CLI, see <a href="#auth">Authentication</a>.</li>
+        <li><strong>Download button</strong> (v3.9) - saves the result as a <code>.md</code> file, named by the server (<code>X-Suggested-Filename</code>), optionally with a date prefix.</li>
+        <li><strong>Sidecar health</strong> (v3.10) - <code>GET /api/status</code> reports whether the extraction sidecars respond, and answers <code>503</code> as soon as one is down. Meant for external monitoring: a dead renderer does not take the service down, it just quietly degrades the result.</li>
+        <li><strong>Cache retention</strong> (v3.11) - <code>PULLMD_CACHE_RETENTION_DAYS</code> sets how long cache rows and share links live; default 90 days, <code>0</code> keeps them forever.</li>
+        <li><strong>Reverse proxy and limits</strong> (v3.13) - <code>PULLMD_TRUST_PROXY</code> decides when forwarding headers count; login and signup are limited per client address, the paid media tiers share an hourly budget, and fetched pages have a size limit. See <a href="#auth">Authentication</a>.</li>
+      </ul>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="what">
+      <h2><span lang="de">Was macht PullMD?</span><span lang="en">What PullMD does</span><span class="kicker">/api</span></h2>
+      <p lang="de">PullMD ruft eine beliebige URL ab und liefert sie als sauberes Markdown zurück. Je nach Quelle wird der passende Extraktions-Pfad gewählt:</p>
+      <p lang="en">PullMD fetches any URL and returns it as clean Markdown. It picks the right extraction path depending on the source:</p>
+      <ul class="doc-list" lang="de">
+        <li><strong>Reddit</strong> — eigene Pipeline für Posts, Kommentare, Subreddit-Listings (mit Tiefe und Limit konfigurierbar). Braucht auf dem Server Reddit-API-Zugangsdaten; Reddit schließt diesen Zugang bis März 2027.</li>
+        <li><strong>Hacker News</strong> — eigene Pipeline für Items, Kommentar-Permalinks und Listings (Front/Newest/Ask/Show/Jobs); verschachtelte Kommentare mit konfigurierbarer Tiefe.</li>
+        <li><strong>Cloudflare-Markdown</strong> — wenn die Quelle <code>Accept: text/markdown</code> nativ unterstützt, wird das direkt durchgereicht (sauberster Output).</li>
+        <li><strong>Readability + Trafilatura</strong> — für statisches HTML laufen beide Extraktoren; die Ausgabe mit der besseren Qualitätsbewertung gewinnt. Trafilatura ist ein optionaler Sidecar; ohne ihn bleibt es bei Readability.</li>
+        <li><strong>Headless Chromium</strong> — wenn die statische Extraktion dünn oder nach Layout-Soup aussieht (typisch für SPAs), wird die Seite im Playwright-Sidecar gerendert und danach neu extrahiert. Mit <code>?render=force</code> bzw. <code>?render=skip</code> erzwing- oder abschaltbar.</li>
+        <li><strong>Dokumente, YouTube, Bilder, Audio</strong> — je nach Instanz-Konfiguration; siehe <a href="#files">Dateien konvertieren</a>.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><strong>Reddit</strong> — dedicated pipeline for posts, comments, subreddit listings (configurable depth and limit). Needs Reddit API credentials on the server; Reddit closes this access by March 2027.</li>
+        <li><strong>Hacker News</strong> — dedicated pipeline for items, comment permalinks, and listings (front/newest/ask/show/jobs); nested comments with configurable depth.</li>
+        <li><strong>Cloudflare-Markdown</strong> — when the source supports <code>Accept: text/markdown</code> natively, that's passed through directly (cleanest output).</li>
+        <li><strong>Readability + Trafilatura</strong> — static HTML runs through both extractors and the one with the better quality score wins. Trafilatura is an optional sidecar; without it, Readability alone is used.</li>
+        <li><strong>Headless Chromium</strong> — when static extraction comes out thin or looks like layout soup (typical for SPAs), the page is rendered in the Playwright sidecar and re-extracted. Force or disable it with <code>?render=force</code> / <code>?render=skip</code>.</li>
+        <li><strong>Documents, YouTube, images, audio</strong> — depending on how the instance is configured; see <a href="#files">Converting files</a>.</li>
+      </ul>
+      <p lang="de">Drei Korrekturen laufen darüber: <strong>Site-Recipes</strong> passen die Extraktion pro Host an (siehe <a href="#recipes">Site-Recipes</a>), und der <strong>Coverage Guard</strong> greift ein, wenn die Extraktion nur einen Bruchteil einer großen Seite behalten hat, und konvertiert stattdessen den Container mit dem eigentlichen Body. Er kann ein Ergebnis nur vergrößern, meldet sich als <code>source: coverage-guard</code> und lässt sich mit <code>PULLMD_COVERAGE_GUARD=off</code> abschalten. Verteilt eine Seite einen Text auf mehrere kurze <code>&lt;article&gt;</code>-Blöcke desselben Autors, fügt <strong>Article Series</strong> sie zusammen (<code>source: article-series</code>, abschaltbar mit <code>PULLMD_ARTICLE_SERIES=off</code>).</p>
+      <p lang="en">Three corrections sit on top: <strong>site recipes</strong> tune extraction per host (see <a href="#recipes">Site recipes</a>), and the <strong>coverage guard</strong> steps in when an extraction kept only a sliver of a large page, converting the container that actually holds the body instead. It can only grow a result, reports itself as <code>source: coverage-guard</code>, and is switched off with <code>PULLMD_COVERAGE_GUARD=off</code>. When a page splits one piece of writing across several short <code>&lt;article&gt;</code> blocks by the same author, <strong>article series</strong> joins them (<code>source: article-series</code>, switched off with <code>PULLMD_ARTICLE_SERIES=off</code>).</p>
+      <p lang="de">Welcher Pfad genommen wurde, sieht man im Response-Header <code>X-Source</code> und in der History neben jedem Eintrag.</p>
+      <p lang="en">Which path was used shows up in the response header <code>X-Source</code> and next to each entry in the history.</p>
+      <p lang="de"><strong>Was PullMD nicht macht:</strong> Bot-Schutz-Challenges lösen. Antwortet eine Seite mit einer Cloudflare- oder Bunny-Shield-Interstitial ("Just a moment…", "Establishing a secure connection…"), kommt <code>502</code> mit <code>"code":"bot_challenge"</code> und dem Anbieter im Fehlertext - statt eines nackten 403 oder der Challenge-Seite als Markdown. Der Headless-Browser kommt dort ebenfalls nicht durch. Ausweg: Seite im Browser öffnen, als HTML speichern und <a href="#files">hochladen</a>.</p>
+      <p lang="en"><strong>What PullMD does not do:</strong> solve bot-protection challenges. When a site answers with a Cloudflare or Bunny Shield interstitial ("Just a moment…", "Establishing a secure connection…"), you get <code>502</code> with <code>"code":"bot_challenge"</code> and the vendor in the error text - instead of a bare 403 or the challenge page as Markdown. The headless browser does not get past these walls either. Way out: open the page in your browser, save it as HTML and <a href="#files">upload it</a>.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="cache">
+      <h2><span lang="de">Cache & TTL</span><span lang="en">Cache & TTL</span><span class="kicker">SQLite</span></h2>
+      <p lang="de">Jeder Pull wird in einer SQLite-Datenbank gespeichert. Zwei Zeitspannen sind wichtig:</p>
+      <p lang="en">Every pull is stored in a SQLite database. Two timeouts matter:</p>
+      <table class="table">
+        <thead>
+          <tr>
+            <th lang="de">Was</th><th lang="de">Wert</th><th lang="de">Wann zurücksetzen?</th>
+            <th lang="en">What</th><th lang="en">Value</th><th lang="en">When does it reset?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td lang="de"><strong>Re-Fetch</strong> von der Quelle</td>
+            <td lang="de"><code>1 Stunde</code></td>
+            <td lang="de">Bei jedem erfolgreichen Pull derselben URL — egal ob über <code>/api?url=…</code> oder über <code>/s/:id</code>.</td>
+            <td lang="en"><strong>Re-fetch</strong> from source</td>
+            <td lang="en"><code>1 hour</code></td>
+            <td lang="en">On every successful pull of the same URL — regardless of whether it came through <code>/api?url=…</code> or <code>/s/:id</code>.</td>
+          </tr>
+          <tr>
+            <td lang="de"><strong>Share-Link-Lebensdauer</strong></td>
+            <td lang="de"><code>90 Tage</code> (Standard)</td>
+            <td lang="de">Bei jedem Re-Fetch (=> Cache schreibt). Auch <code>/s/:id</code>-Aufrufe verlängern, da sie nach 1 h einen Re-Fetch auslösen. Einstellbar über <code>PULLMD_CACHE_RETENTION_DAYS</code>; <code>0</code> = unbegrenzt.</td>
+            <td lang="en"><strong>Share link lifetime</strong></td>
+            <td lang="en"><code>90 days</code> (default)</td>
+            <td lang="en">On every re-fetch (= cache write). <code>/s/:id</code> requests extend it too, since they trigger a re-fetch after 1h. Configurable via <code>PULLMD_CACHE_RETENTION_DAYS</code>; <code>0</code> = unlimited.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 lang="de">So funktioniert <code>/s/:id</code></h3>
+      <h3 lang="en">How <code>/s/:id</code> behaves</h3>
+      <ul class="doc-list" lang="de">
+        <li>Cache &lt; 1 h alt → liefert die gespeicherte Version sofort.</li>
+        <li>Cache ≥ 1 h alt → ruft die Quelle frisch ab, schreibt zurück, liefert das neue Markdown.</li>
+        <li>Quelle nicht erreichbar (404, Netzwerk, …) → liefert den letzten gespeicherten Stand als Snapshot. Keine Stille-Failure-Lücke.</li>
+        <li>Cache &gt; Aufbewahrungsfrist (Standard 90 Tage) ohne Re-Fetch → Eintrag wird beim nächsten Schreibvorgang gelöscht; Share-Link gibt 404 zurück.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li>Cache &lt; 1 h old → returns the stored version immediately.</li>
+        <li>Cache ≥ 1 h old → re-fetches the source, writes back, serves the new markdown.</li>
+        <li>Source unreachable (404, network, …) → falls back to the last stored snapshot. No silent failure.</li>
+        <li>Cache &gt; the retention period (default 90 days) without a re-fetch → entry is pruned on next write; share link returns 404.</li>
+      </ul>
+
+      <h3 lang="de">Tipp: Subreddit als Live-Feed</h3>
+      <h3 lang="en">Tip: subreddit as a live feed</h3>
+      <p lang="de">Pull einmal einen Subreddit-Listing-Link, merke dir die Share-ID — und ruf danach nur noch <code>/s/:id</code> auf. Nach jeder Stunde löst der nächste Aufruf einen frischen Fetch aus, die Share-ID bleibt stabil, der Inhalt aktualisiert sich. Praktisch für KI-Agenten, die einen festen Endpoint mit regelmäßig aktuellem Inhalt brauchen.</p>
+      <p lang="en">Pull a subreddit-listing URL once, remember the share ID — and from then on only call <code>/s/:id</code>. After each hour the next request triggers a fresh fetch, the share ID stays stable, and the content updates. Handy for AI agents that need a fixed endpoint with regularly refreshed content.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="agent">
+      <h2><span lang="de">In KI-Agenten einrichten</span><span lang="en">Set up in AI agents</span><span class="kicker">setup</span></h2>
+
+      <h3 lang="de">Option 1 — Universal: Prompt einfügen</h3>
+      <h3 lang="en">Option 1 — Universal: paste a prompt</h3>
+      <p lang="de">Funktioniert in <em>jedem</em> Chat-Agent (ChatGPT, Claude.ai, Gemini, Perplexity, …). Kopiere den Block, füge ihn als System- oder Custom-Instruction ein:</p>
+      <p lang="en">Works in <em>any</em> chat-style agent (ChatGPT, Claude.ai, Gemini, Perplexity, …). Copy the block, paste it as a system or custom instruction:</p>
+
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">prompt · drop-in</span>
+          <button class="copybox-btn" data-copy="agent-prompt">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="agent-prompt">When you need to read a web page, fetch it via PullMD instead of your
+built-in fetch/browse tool - not just when that one fails:
+
+  GET __PULLMD_URL__/api?url=&lt;URL&gt;
+
+Returns clean Markdown (text/markdown). Optional query params:
+
+  comments=false        skip Reddit / Hacker News comments
+  comment_depth=N|all   comment nesting depth (default 3)
+  frontmatter=true      prepend YAML metadata block
+  format=text           strip Markdown, return plain text
+  nocache=true          bypass the 1h cache and refetch
+  render=force|skip     override the auto headless-Chromium fallback
+  extractor=readability|trafilatura|playwright   force one extractor
+  pdf=ocr               high-quality PDF conversion (tables)
+  query=&lt;text&gt;          got a specific question? pass it and get back only
+                        the matching sections (70-95% fewer tokens)
+  max_tokens=N          budget for query= (default 600, 64-20000)
+  lang=de|en            language for the comments section header
+
+Response headers worth checking:
+  X-Source       reddit | hackernews | cloudflare | readability |
+                 trafilatura | playwright | recipe-content |
+                 coverage-guard | article-series | markitdown | youtube | pdf-ocr | ...
+  X-Quality      0.0-1.0 extraction confidence
+  X-Share-Id     32-hex permalink, openable as /s/&lt;id&gt;
+  X-Transcript-Status  youtube only: ok | none | blocked | error
+                 (blocked/error = transient, not cached — retry later)
+
+Reddit URLs are auto-detected (incl. redd.it short links and /s/ shares).
+Hacker News URLs are auto-detected too — items, comment permalinks, and the
+front/newest/ask/show/jobs listings.
+Use this whenever you would otherwise fetch raw HTML — the markdown is
+much cleaner and saves significant context window space. When you only
+need specific information rather than the whole document, pass your
+question as query= and get back just the relevant sections.</pre>
+      </div>
+
+      <h3 lang="de">Option 2 — Claude Code Skill</h3>
+      <h3 lang="en">Option 2 — Claude Code skill</h3>
+      <p lang="de">Für Claude Code gibt es eine fertige Skill, die <code>WebFetch</code> automatisch durch PullMD ersetzt (mit Fallback). Lade sie als Zip und entpacke nach <code>~/.claude/skills/</code>:</p>
+      <p lang="en">For Claude Code there's a ready-made skill that automatically routes <code>WebFetch</code> through PullMD (with fallback). Download the zip and unpack into <code>~/.claude/skills/</code>:</p>
+
+      <p><a class="download-btn" href="/pullmd.zip" download>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        <span lang="de">pullmd.zip herunterladen</span><span lang="en">Download pullmd.zip</span>
+      </a></p>
+
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">install · shell</span>
+          <button class="copybox-btn" data-copy="install-shell">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="install-shell">curl -O __PULLMD_URL__/pullmd.zip
+mkdir -p ~/.claude/skills
+unzip pullmd.zip -d ~/.claude/skills/
+# Restart Claude Code; the skill activates on web-reading requests.</pre>
+      </div>
+
+      <p lang="de"><strong>Upgrade von vor v3:</strong> Die Skill hieß früher <code>web-reader</code>. Das neue Zip ersetzt eine bestehende Installation <strong>nicht</strong> — erst die alte entfernen (<code>rm -rf ~/.claude/skills/web-reader</code>), sonst sind beide Skills parallel aktiv.</p>
+      <p lang="en"><strong>Upgrading from pre-v3:</strong> the skill used to be called <code>web-reader</code>. The new zip does <strong>not</strong> replace an existing install — remove the old one first (<code>rm -rf ~/.claude/skills/web-reader</code>), otherwise both skills stay active side by side.</p>
+
+      <h3 lang="de">Option 3 — MCP-Server (remote)</h3>
+      <h3 lang="en">Option 3 — MCP server (remote)</h3>
+      <p lang="de">PullMD läuft als <strong>remote MCP-Server</strong> unter <code>__PULLMD_URL__/mcp</code> (Streamable-HTTP-Transport, stateless). Drei Tools: <code>read_url</code>, <code>get_share</code>, <code>list_recent</code>. Server-seitige Updates erreichen automatisch alle Clients — keine lokale Installation nötig. Ist eine Anmeldung aktiv, listet <code>list_recent</code> nur die eigenen Konversionen.</p>
+      <p lang="en">PullMD runs as a <strong>remote MCP server</strong> at <code>__PULLMD_URL__/mcp</code> (Streamable-HTTP transport, stateless). Three tools: <code>read_url</code>, <code>get_share</code>, <code>list_recent</code>. Server-side updates reach every client automatically — no local install needed. With sign-in enabled, <code>list_recent</code> lists only your own conversions.</p>
+
+      <p class="muted" lang="de"><strong>Claude Code</strong> — Prompt einfügen, Claude installiert es selbst:</p>
+      <p class="muted" lang="en"><strong>Claude Code</strong> — paste this prompt and Claude will install it for you:</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">prompt · claude code</span>
+          <button class="copybox-btn" data-copy="mcp-prompt">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="mcp-prompt-de" lang="de">Installiere den PullMD MCP-Server in Claude Code (User-Scope):
+- Name: pullmd
+- Transport: http
+- URL: __PULLMD_URL__/mcp
+
+Nutze: claude mcp add --transport http pullmd __PULLMD_URL__/mcp
+Danach: claude mcp list zur Verifikation.</pre>
+        <pre id="mcp-prompt-en" lang="en">Install the PullMD MCP server in Claude Code (user scope):
+- Name: pullmd
+- Transport: http
+- URL: __PULLMD_URL__/mcp
+
+Run: claude mcp add --transport http pullmd __PULLMD_URL__/mcp
+Then: claude mcp list to verify.</pre>
+      </div>
+
+      <p class="muted" lang="de"><strong>Claude Code</strong> — direkt im Terminal:</p>
+      <p class="muted" lang="en"><strong>Claude Code</strong> — directly in the terminal:</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">claude code · cli</span>
+          <button class="copybox-btn" data-copy="mcp-cc">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="mcp-cc">claude mcp add --transport http pullmd __PULLMD_URL__/mcp</pre>
+      </div>
+
+      <p class="muted" lang="de"><strong>Claude Desktop</strong> / <strong>Cursor</strong> / andere — JSON-Konfig:</p>
+      <p class="muted" lang="en"><strong>Claude Desktop</strong> / <strong>Cursor</strong> / others — JSON config:</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">mcp config snippet</span>
+          <button class="copybox-btn" data-copy="mcp-json">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="mcp-json">{
+  "mcpServers": {
+    "pullmd": {
+      "type": "http",
+      "url": "__PULLMD_URL__/mcp"
+    }
+  }
+}</pre>
+      </div>
+
+      <p class="muted" lang="de">Sobald registriert, erscheinen die drei Tools nativ im Agent — keine Prompt-Anweisungen nötig, das LLM erkennt sie über ihre Schema-Beschreibungen.</p>
+      <p class="muted" lang="en">Once registered, the three tools surface natively in the agent — no prompt instructions needed, the LLM picks them up via their schema descriptions.</p>
+
+      <p class="muted" lang="de"><code>read_url</code> kennt dieselben Stellschrauben wie die REST-API: <code>comments</code>, <code>comment_depth</code>, <code>comment_limit</code>, <code>frontmatter</code>, <code>lang</code>, <code>nocache</code>, <code>extractor</code>, <code>yt_timecodes</code>, <code>yt_chunk</code>, <code>pdf_ocr</code> (statt <code>pdf=ocr</code>), <code>query</code> und <code>max_tokens</code> sowie, nur für Reddit, <code>images</code> (<code>"on"</code> / <code>"off"</code>). MCP-Antworten haben keine Response-Header; findet die Query-Extraktion nichts, steht stattdessen ein Kommentar im Markdown.</p>
+      <p class="muted" lang="en"><code>read_url</code> exposes the same knobs as the REST API: <code>comments</code>, <code>comment_depth</code>, <code>comment_limit</code>, <code>frontmatter</code>, <code>lang</code>, <code>nocache</code>, <code>extractor</code>, <code>yt_timecodes</code>, <code>yt_chunk</code>, <code>pdf_ocr</code> (instead of <code>pdf=ocr</code>), <code>query</code> and <code>max_tokens</code>, plus <code>images</code> (<code>"on"</code> / <code>"off"</code>) for Reddit only. MCP responses carry no headers; when query extraction finds no match it prepends an in-band comment to the markdown instead.</p>
+
+      <div class="callout">
+        <p lang="de" style="margin:0;"><strong>Instanz mit Login?</strong> Dann brauchen <code>/api</code> und <code>/mcp</code> Zugangsdaten: einen API-Key als <code>Authorization: Bearer pmd_…</code> oder OAuth für Claude Desktop und claude.ai. Details unter <a href="#auth">Authentifizierung</a>.</p>
+        <p lang="en" style="margin:0;"><strong>Instance with login?</strong> Then <code>/api</code> and <code>/mcp</code> need credentials: an API key as <code>Authorization: Bearer pmd_…</code>, or OAuth for Claude Desktop and claude.ai. Details under <a href="#auth">Authentication</a>.</p>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="endpoints">
+      <h2><span lang="de">Endpunkte</span><span lang="en">Endpoints</span><span class="kicker">http</span></h2>
+      <p lang="de">Alles, was die Instanz nach außen anbietet. <code>GET /api</code> ist der Hauptweg, der Rest ist Beiwerk für PWA, Betrieb und Integration.</p>
+      <p lang="en">Everything the instance exposes. <code>GET /api</code> is the main path; the rest supports the PWA, operations, and integration.</p>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th lang="de">Zweck</th>
+            <th lang="en">Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>GET /api?url=…</code></td>
+            <td lang="de">URL zu Markdown. Siehe <a href="#api">API-Parameter</a>.</td>
+            <td lang="en">URL to Markdown. See <a href="#api">API parameters</a>.</td>
+          </tr>
+          <tr><td><code>GET /api/stream?url=…</code></td>
+            <td lang="de">Dieselbe Konvertierung als Server-Sent-Events: <code>status</code>-Events pro Extraktionsstufe, dann ein <code>result</code>- oder <code>error</code>-Event. Die PWA zeigt damit den Fortschritt an.</td>
+            <td lang="en">The same conversion as Server-Sent Events: a <code>status</code> event per extraction stage, then one <code>result</code> or <code>error</code> event. This is what drives the PWA's progress display.</td>
+          </tr>
+          <tr><td><code>POST /api/html</code></td>
+            <td lang="de">Gespeicherte HTML-Datei konvertieren (max. 10 MB).</td>
+            <td lang="en">Convert a saved HTML file (max 10 MB).</td>
+          </tr>
+          <tr><td><code>POST /api/file</code></td>
+            <td lang="de">Dokument-Upload konvertieren (max. 25 MB). Mit <code>?async=1</code> im Hintergrund, siehe <a href="#files">Dateien konvertieren</a>.</td>
+            <td lang="en">Convert an uploaded document (max 25 MB). With <code>?async=1</code> in the background, see <a href="#files">Converting files</a>.</td>
+          </tr>
+          <tr><td><code>GET · DELETE /api/file/jobs/:id</code></td>
+            <td lang="de">Ergebnis eines Async-Uploads abholen bzw. löschen.</td>
+            <td lang="en">Fetch or delete the result of an async upload.</td>
+          </tr>
+          <tr><td><code>GET /s/:id</code></td>
+            <td lang="de">Share-Link, aktualisiert sich selbst. Siehe <a href="#share">Share-Links</a>.</td>
+            <td lang="en">Share link, refreshes itself. See <a href="#share">Share links</a>.</td>
+          </tr>
+          <tr><td><code>GET /api/history</code></td>
+            <td lang="de">Letzte Konversionen als JSON (<code>?limit=</code>, Default 20, 1 bis 100). Angemeldete sehen ihre eigenen.</td>
+            <td lang="en">Recent conversions as JSON (<code>?limit=</code>, default 20, 1 to 100). Signed-in callers see their own.</td>
+          </tr>
+          <tr><td><code>GET /api/archive</code></td>
+            <td lang="de">Seitenweise durch das ganze Archiv (<code>?limit=</code> Default 50, 1 bis 200, <code>?offset=</code>).</td>
+            <td lang="en">Paginated full archive (<code>?limit=</code> default 50, 1 to 200, <code>?offset=</code>).</td>
+          </tr>
+          <tr><td><code>GET /api/storage</code></td>
+            <td lang="de">Cache-Größe und Aufbewahrungsdauer.</td>
+            <td lang="en">Cache size and retention.</td>
+          </tr>
+          <tr><td><code>GET /api/stats</code></td>
+            <td lang="de">Extraktions-Telemetrie: Quellen, Qualität, Laufzeit (<code>?window=-7 days</code>). Die Listen pro Domain gibt es nur für den Admin, oder für alle, wenn Auth aus und die öffentliche History an ist.</td>
+            <td lang="en">Extraction telemetry: sources, quality, latency (<code>?window=-7 days</code>). The per-domain lists are included only for the admin, or for everyone when auth is off and public history is on.</td>
+          </tr>
+          <tr><td><code>GET /api/config</code></td>
+            <td lang="de">Was auf dieser Instanz aktiv ist (Auth-Modus, Dokumente, Vision, STT, PDF-OCR, YouTube). Die PWA blendet danach ihre Bedienelemente ein oder aus.</td>
+            <td lang="en">What is enabled on this instance (auth mode, documents, vision, STT, PDF OCR, YouTube). The PWA shows or hides its controls accordingly.</td>
+          </tr>
+          <tr><td><code>GET /api/recipes/status</code></td>
+            <td lang="de">Welche <a href="#recipes">Site-Recipes</a> geladen bzw. abgelehnt wurden.</td>
+            <td lang="en">Which <a href="#recipes">site recipes</a> loaded or were rejected.</td>
+          </tr>
+          <tr><td><code>GET /api/status</code></td>
+            <td lang="de">Erreichbarkeit der Extraktions-Sidecars (trafilatura, Playwright, markitdown). <code>200</code> wenn alle konfigurierten antworten, <code>503</code> sobald einer ausfällt — gedacht für externes Monitoring. Ebenfalls <code>503</code> (<code>degraded</code>, <code>policy-missing</code>): ein Playwright-Sidecar, der die Adress-Policy nicht meldet, also ein <code>pullmd-playwright</code>-Image älter als v3.15.2. Es rendert noch, folgt aber Redirects in interne Netze; auf dasselbe Release wie <code>pullmd</code> aktualisieren.</td>
+            <td lang="en">Health of the extraction sidecars (trafilatura, Playwright, markitdown). <code>200</code> when every configured one answers, <code>503</code> as soon as one is down — meant for external monitoring. Also <code>503</code> (<code>degraded</code>, <code>policy-missing</code>): a Playwright sidecar that does not report the address policy, i.e. a <code>pullmd-playwright</code> image older than v3.15.2. It still renders but follows redirects into internal networks; update it to the same release as <code>pullmd</code>.</td>
+          </tr>
+          <tr><td><code>POST /mcp</code></td>
+            <td lang="de">MCP-Server (Streamable-HTTP, stateless), drei Tools.</td>
+            <td lang="en">MCP server (Streamable HTTP, stateless), three tools.</td>
+          </tr>
+          <tr><td><code>GET /pullmd.zip</code></td>
+            <td lang="de">Claude-Code-Skill mit der URL dieser Instanz. <code>/web-reader.zip</code> leitet hierher weiter.</td>
+            <td lang="en">Claude Code skill with this instance's URL baked in. <code>/web-reader.zip</code> redirects here.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted" lang="de">Zum Schutz vor Server-Side Request Forgery (SSRF) werden Anfragen an private, loopback-, link-local-, CGNAT- und Cloud-Metadata-Adressen (z. B. <code>169.254.169.254</code>, <code>100.100.100.200</code>) standardmäßig abgelehnt - auch wenn eine URL erst per Redirect dorthin führt und auch über IPv6-Übergangsadressen. <code>/api</code> und das MCP-Tool <code>read_url</code> prüfen vorab und antworten mit <code>403</code>, bevor irgendetwas geholt wird; <code>/api/stream</code> meldet die Ablehnung als <code>error</code>-Event. Selbst-Hoster können mit <code>PULLMD_ALLOWED_HOSTS</code> (kommagetrennte CIDRs und/oder Hostnamen) gezielt interne Ziele freigeben. Der Playwright-Sidecar wendet dieselbe Regel auf alles an, was Chromium selbst lädt (Redirects, Meta-Refresh, Skript-Navigation, iframes, Subressourcen).</p>
+      <p class="muted" lang="en">To guard against Server-Side Request Forgery (SSRF), requests to private, loopback, link-local, CGNAT and cloud-metadata addresses (e.g. <code>169.254.169.254</code>, <code>100.100.100.200</code>) are rejected by default - including when a URL only reaches them via redirect, and including IPv6 transition addressing. <code>/api</code> and the MCP <code>read_url</code> tool check up front and answer <code>403</code> before fetching anything; <code>/api/stream</code> surfaces the refusal as an <code>error</code> event. Self-hosters can allow specific internal targets via <code>PULLMD_ALLOWED_HOSTS</code> (comma-separated CIDRs and/or hostnames). The Playwright sidecar applies the same rule to everything Chromium loads on its own (redirects, meta refresh, script navigation, iframes, subresources).</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="api">
+      <h2><span lang="de">API-Parameter</span><span lang="en">API parameters</span><span class="kicker">GET /api</span></h2>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Param</th>
+            <th lang="de">Default</th><th lang="de">Beschreibung</th>
+            <th lang="en">Default</th><th lang="en">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>url</code></td><td>—</td>
+            <td lang="de">Pflicht. Beliebige öffentliche URL.</td>
+            <td lang="en">Required. Any public URL.</td>
+          </tr>
+          <tr><td><code>comments</code></td><td><code>true</code></td>
+            <td lang="de">Kommentare einschließen (Reddit und Hacker News). <code>false</code> liefert nur den Post. Bei anderen URLs wirkungslos.</td>
+            <td lang="en">Include comments (Reddit and Hacker News). <code>false</code> returns just the post. No effect on other URLs.</td>
+          </tr>
+          <tr><td><code>comment_depth</code></td><td><code>3</code></td>
+            <td lang="de">Maximale Verschachtelungstiefe (1–10), für Reddit und Hacker News. <code>all</code> zeigt den ganzen Thread: keine Tiefengrenze, und bei Reddit werden eingeklappte Kommentare („weitere Kommentare“, „Thread fortsetzen“) mit zusätzlichen Abrufen nachgeladen. In der Oberfläche ist das der Schalter „Alle“.</td>
+            <td lang="en">Max nesting depth (1–10), for Reddit and Hacker News. <code>all</code> returns the whole thread: no depth limit, and on Reddit collapsed comments ("load more", "continue this thread") are loaded with extra requests. In the web UI this is the "All" switch.</td>
+          </tr>
+          <tr><td><code>comment_limit</code></td><td>—</td>
+            <td lang="de">Optionale Obergrenze für Top-Level-Kommentare. Reddit liefert pro Abruf etwa 200 Kommentare; was fehlt, steht als Hinweis unter den Kommentaren.</td>
+            <td lang="en">Optional cap on top-level comments. Reddit returns about 200 comments per request; anything missing is noted below the comments.</td>
+          </tr>
+          <tr><td><code>frontmatter</code></td><td><code>false</code></td>
+            <td lang="de">YAML-Frontmatter mit Metadaten voranstellen.</td>
+            <td lang="en">Prepend YAML frontmatter with metadata.</td>
+          </tr>
+          <tr><td><code>format</code></td><td><code>md</code></td>
+            <td lang="de"><code>text</code> = Markdown-Formatierung entfernen, Plaintext zurückgeben. <code>json</code> = strukturiert mit Metadaten.</td>
+            <td lang="en"><code>text</code> = strip Markdown, return plain text. <code>json</code> = structured with metadata.</td>
+          </tr>
+          <tr><td><code>nocache</code></td><td><code>false</code></td>
+            <td lang="de">1-h-Cache umgehen, immer frisch holen.</td>
+            <td lang="en">Bypass the 1-hour cache, always refetch.</td>
+          </tr>
+          <tr><td><code>render</code></td><td>auto</td>
+            <td lang="de"><code>force</code> = immer im Headless-Browser rendern, <code>skip</code> = nie. Umgeht den Cache.</td>
+            <td lang="en"><code>force</code> = always render in the headless browser, <code>skip</code> = never. Bypasses the cache.</td>
+          </tr>
+          <tr><td><code>extractor</code></td><td>auto</td>
+            <td lang="de">Erzwingt <code>readability</code>, <code>trafilatura</code> oder <code>playwright</code> und überspringt die Qualitätsauswahl. Notausgang, wenn die Automatik bei einer Seite danebengreift. Umgeht den Cache; bei Reddit wirkungslos.</td>
+            <td lang="en">Forces <code>readability</code>, <code>trafilatura</code> or <code>playwright</code> and skips the quality pick. An escape hatch for sites where the automatic choice is wrong. Bypasses the cache; ignored for Reddit.</td>
+          </tr>
+          <tr><td><code>pdf</code></td><td>—</td>
+            <td lang="de"><code>ocr</code> schickt PDFs durch die hochwertige OCR-Stufe (saubere Tabellen). Braucht einen serverseitigen OCR-Key; ohne ihn bleibt es beim normalen Pfad. Umgeht den Cache.</td>
+            <td lang="en"><code>ocr</code> routes PDFs through the high-quality OCR tier (clean tables). Needs a server-side OCR key; without one the normal path is used. Bypasses the cache.</td>
+          </tr>
+          <tr><td><code>yt_timecodes</code></td><td><code>links</code></td>
+            <td lang="de">YouTube-Transkript: <code>links</code> = klickbare Zeitstempel, <code>plain</code> = <code>[MM:SS]</code>, <code>none</code> = nur Text. Umgeht den Cache.</td>
+            <td lang="en">YouTube transcript: <code>links</code> = clickable timestamps, <code>plain</code> = <code>[MM:SS]</code>, <code>none</code> = text only. Bypasses the cache.</td>
+          </tr>
+          <tr><td><code>yt_chunk</code></td><td><code>30</code></td>
+            <td lang="de">Blockgröße des Transkripts in Sekunden; <code>0</code> behält die Original-Schnipsel. Umgeht den Cache.</td>
+            <td lang="en">Transcript block size in seconds; <code>0</code> keeps the original snippets. Bypasses the cache.</td>
+          </tr>
+          <tr><td><code>lang</code></td><td><code>de</code></td>
+            <td lang="de">Sprache des Kommentar-Headers (<code>de</code> oder <code>en</code>).</td>
+            <td lang="en">Language for the comments header (<code>de</code> or <code>en</code>).</td>
+          </tr>
+          <tr><td><code>images</code></td><td><span lang="de">Instanz</span><span lang="en">instance</span></td>
+            <td lang="de">Nur Reddit-Posts: <code>on</code> / <code>off</code> (auch <code>true</code>/<code>1</code>, <code>false</code>/<code>0</code>) beschreibt und transkribiert die Bilder des Posts mit dem Vision-Modell der Instanz. Braucht ein Vision-Modell und <code>PULLMD_EMBEDDED_IMAGES</code> ungleich <code>off</code>, siehe <a href="#files">Dateien konvertieren</a>. Andere Werte liefern bei Reddit-URLs <code>400</code>, bei anderen URLs ist der Parameter wirkungslos. Umgeht den Cache nicht.</td>
+            <td lang="en">Reddit posts only: <code>on</code> / <code>off</code> (also <code>true</code>/<code>1</code>, <code>false</code>/<code>0</code>) describes and transcribes the post's images with the instance's vision model. Needs a vision model and <code>PULLMD_EMBEDDED_IMAGES</code> other than <code>off</code>, see <a href="#files">Converting files</a>. Other values return <code>400</code> for Reddit URLs; for other URLs the parameter has no effect. Does not bypass the cache.</td>
+          </tr>
+          <tr><td><code>query</code></td><td>—</td>
+            <td lang="de">Für eine konkrete Frage an eine lange Seite: Frage hier übergeben, zurück kommen nur die passenden Abschnitte statt der ganzen Seite, siehe <a href="#query">Query-Extraktion</a>.</td>
+            <td lang="en">For a specific question about a long page: pass the question here and get back only the matching sections instead of the whole page, see <a href="#query">Query extraction</a>.</td>
+          </tr>
+          <tr><td><code>max_tokens</code></td><td><code>600</code></td>
+            <td lang="de">Token-Budget für <code>query</code> (64–20000). Ohne <code>query</code> wirkungslos; höher setzen, wenn die Antwort über mehrere Abschnitte verteilt liegt. Wird nur geprüft, wenn <code>query</code> gesetzt ist; ein ungültiger Wert liefert <code>400</code>.</td>
+            <td lang="en">Token budget for <code>query</code> (64–20000). No effect without <code>query</code>; raise it when the answer likely spans several sections. Only validated when <code>query</code> is set; an invalid value returns <code>400</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted" lang="de">Dieselben Parameter gelten für <code>GET /api/stream</code>. Alles, was das erwartete Ergebnis verändert (<code>comment_depth</code>, <code>comment_limit</code>, <code>render</code>, <code>extractor</code>, <code>pdf=ocr</code>, <code>yt_*</code>), umgeht den Cache, damit der neue Wert auch wirklich greift.</p>
+      <p class="muted" lang="en">The same parameters apply to <code>GET /api/stream</code>. Anything that changes the expected result (<code>comment_depth</code>, <code>comment_limit</code>, <code>render</code>, <code>extractor</code>, <code>pdf=ocr</code>, <code>yt_*</code>) bypasses the cache so the new value actually takes effect.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="headers">
+      <h2><span lang="de">Response-Header</span><span lang="en">Response headers</span><span class="kicker">http</span></h2>
+      <p lang="de">Jede Antwort von <code>/api</code> trägt mit, wie sie zustande kam. Für Agenten ist das der billigste Weg, die Qualität einer Extraktion zu beurteilen, ohne den Text zu analysieren.</p>
+      <p lang="en">Every <code>/api</code> response carries how it was produced. For agents that is the cheapest way to judge an extraction without analyzing the text.</p>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Header</th>
+            <th lang="de">Inhalt</th>
+            <th lang="en">Contents</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>X-Source</code></td>
+            <td lang="de"><code>reddit</code> · <code>hackernews</code> · <code>cloudflare</code> · <code>readability</code> · <code>readability-fallback</code> · <code>trafilatura</code> · <code>playwright</code> · <code>recipe-content</code> · <code>coverage-guard</code> · <code>article-series</code> · <code>markitdown</code> · <code>youtube</code> · <code>image-caption</code> · <code>audio-transcript</code> · <code>pdf-ocr</code> · <code>email</code> · <code>text</code> · <code>markdown</code> · <code>subtitles</code> · <code>opendocument</code> · <code>rtf</code> · <code>calendar</code> · <code>contact</code> · <code>data</code> · <code>feed</code> · <code>notebook</code> · <code>code</code></td>
+            <td lang="en"><code>reddit</code> · <code>hackernews</code> · <code>cloudflare</code> · <code>readability</code> · <code>readability-fallback</code> · <code>trafilatura</code> · <code>playwright</code> · <code>recipe-content</code> · <code>coverage-guard</code> · <code>article-series</code> · <code>markitdown</code> · <code>youtube</code> · <code>image-caption</code> · <code>audio-transcript</code> · <code>pdf-ocr</code> · <code>email</code> · <code>text</code> · <code>markdown</code> · <code>subtitles</code> · <code>opendocument</code> · <code>rtf</code> · <code>calendar</code> · <code>contact</code> · <code>data</code> · <code>feed</code> · <code>notebook</code> · <code>code</code></td>
+          </tr>
+          <tr><td><code>X-Quality</code></td>
+            <td lang="de"><code>0.0</code>–<code>1.0</code>, Konfidenz der Extraktion. Niedrige Werte heißen dünner oder verrauschter Text.</td>
+            <td lang="en"><code>0.0</code>–<code>1.0</code> extraction confidence. Low values mean thin or noisy output.</td>
+          </tr>
+          <tr><td><code>X-Share-Id</code></td>
+            <td lang="de">32-stellige Hex-ID, aufrufbar als <code>/s/&lt;id&gt;</code>. Fehlt bei <code>/api/html</code> und <code>/api/file</code>, weil lokale Dateien nicht gecacht werden.</td>
+            <td lang="en">32-hex id, openable as <code>/s/&lt;id&gt;</code>. Absent on <code>/api/html</code> and <code>/api/file</code>, since local files are never cached.</td>
+          </tr>
+          <tr><td><code>X-Suggested-Filename</code></td>
+            <td lang="de">Vorgeschlagener Dateiname für den Download, z. B. <code>YT-vortrag-titel-dQw4w9WgXcQ.md</code>. YouTube bekommt Titel plus Video-ID, Bilder, Audio und Dokumente den ursprünglichen Dateinamen, alles andere den Titel. Self-Hoster können mit <code>PULLMD_FILENAME_DATE_PREFIX</code> ein Datum voranstellen (Vorlage mit den Platzhaltern <code>YYYY MM DD HH mm ss</code>, z. B. <code>YYYY-MM-DD-</code>). Der Download-Button in der Web-Oberfläche speichert das Ergebnis unter genau diesem Namen. Bei <code>/api/stream</code> gibt es keine Header, dort steckt derselbe Wert als <code>suggestedFilename</code> im <code>result</code>-Event.</td>
+            <td lang="en">Suggested download filename, e.g. <code>YT-talk-title-dQw4w9WgXcQ.md</code>. YouTube gets title plus video id, images, audio and documents keep their original file name, everything else uses the title. Self-hosters can prepend a date with <code>PULLMD_FILENAME_DATE_PREFIX</code> (a template with the tokens <code>YYYY MM DD HH mm ss</code>, e.g. <code>YYYY-MM-DD-</code>). The download button in the web UI saves the result under exactly this name. <code>/api/stream</code> has no headers, so there the same value travels as <code>suggestedFilename</code> in the <code>result</code> event.</td>
+          </tr>
+          <tr><td><code>X-Transcript-Status</code></td>
+            <td lang="de">Nur YouTube: <code>ok</code> · <code>none</code> · <code>blocked</code> · <code>error</code>. <code>blocked</code> (Rate-Limit, HTTP 429) und <code>error</code> sind vorübergehend und werden nicht gecacht - später erneut versuchen. <code>none</code> heißt, das Video hat wirklich kein Transkript.</td>
+            <td lang="en">YouTube only: <code>ok</code> · <code>none</code> · <code>blocked</code> · <code>error</code>. <code>blocked</code> (rate limit, HTTP 429) and <code>error</code> are transient and not cached - retry later. <code>none</code> means the video genuinely has no transcript.</td>
+          </tr>
+          <tr><td><code>X-Extracted</code></td>
+            <td lang="de"><code>true</code>/<code>false</code>. Nur vorhanden, wenn <code>query</code> aktiv ist.</td>
+            <td lang="en"><code>true</code>/<code>false</code>. Present only when <code>query</code> is active.</td>
+          </tr>
+          <tr><td><code>X-Extract-Confidence</code></td>
+            <td lang="de"><code>high</code> · <code>medium</code> · <code>low</code>. Fehlt, wenn die Seite ohnehin klein genug war und die Extraktion übersprungen wurde.</td>
+            <td lang="en"><code>high</code> · <code>medium</code> · <code>low</code>. Absent when the page was small enough that extraction was skipped.</td>
+          </tr>
+          <tr><td><code>X-Extract-Sections</code></td>
+            <td lang="de">Anzahl der zurückgelieferten Abschnitte.</td>
+            <td lang="en">Number of returned sections.</td>
+          </tr>
+          <tr><td><code>X-Extract-Original-Tokens</code><br><code>X-Extract-Returned-Tokens</code></td>
+            <td lang="de">Geschätzte Tokenzahl (Zeichen / 4) der ganzen Seite und der Antwort. Die Differenz ist die Ersparnis.</td>
+            <td lang="en">Estimated token count (chars / 4) of the full page and of the response. The difference is what you saved.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted" lang="de">MCP-Antworten haben keine Header. Dort landen dieselben Angaben im Frontmatter bzw. bei <code>format=json</code> im <code>extract</code>-Objekt.</p>
+      <p class="muted" lang="en">MCP responses have no headers. There the same data lands in the frontmatter, or in the <code>extract</code> object with <code>format=json</code>.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="query">
+      <h2><span lang="de">Query-Extraktion</span><span lang="en">Query extraction</span><span class="kicker">?query=</span></h2>
+      <p lang="de">Wer eine konkrete Frage an eine lange Seite hat, braucht selten die ganze Seite. <code>?query=</code> nimmt die Frage in natürlicher Sprache entgegen und liefert nur die passenden Abschnitte - auf langen Seiten typischerweise 70-95 % weniger Tokens. Die ganze Seite lohnt sich dann noch, wenn man sie wirklich komplett braucht: zusammenfassen, übersetzen, archivieren.</p>
+      <p lang="en">When you have a specific question about a long page, you rarely need the whole page. <code>?query=</code> takes that question in natural language and returns only the matching sections - typically 70-95% fewer tokens on long pages. Fetching the full page still makes sense when you genuinely need all of it: summarizing, translating, archiving.</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">example</span>
+          <button class="copybox-btn" data-copy="query-example">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="query-example">curl -s "__PULLMD_URL__/api?url=https://example.com/long-article&amp;query=how+does+caching+work&amp;max_tokens=800"</pre>
+      </div>
+      <ul class="doc-list" lang="de">
+        <li>BM25-Ranking über die Überschriften-Abschnitte des konvertierten Markdowns (bei weniger als zwei Überschriften über Absätze). Keine Netzwerkaufrufe, kein LLM, keine zusätzlichen Kosten.</li>
+        <li><code>max_tokens</code> begrenzt die Ausgabe (Default <code>600</code>, 64–20000, geschätzt als Zeichen / 4).</li>
+        <li>Codeblöcke, Tabellen, Listen und Zitate werden nie zerschnitten - passt ein Teil, bleibt der ganze Block. Lücken zwischen den ausgewählten Stellen markiert ein <code>&lt;!-- … --&gt;</code>.</li>
+        <li>Passt nichts, oder ist die Seite ohnehin klein genug, kommt die ganze Seite zurück (im ersten Fall mit <code>confidence: low</code>).</li>
+        <li>Extrahiert wird aus der bereits gecachten Vollversion: mehrere Fragen an dieselbe URL kosten innerhalb der Cache-Stunde einen einzigen Abruf.</li>
+        <li>Ohne <code>query</code> (oder mit leerem Wert) ist die Antwort byte-identisch zu vorher - keine zusätzlichen Header, keine zusätzlichen Felder.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li>BM25 ranking over the heading-based sections of the converted Markdown (paragraph-level for pages with fewer than two headings). No network calls, no LLM, no extra cost.</li>
+        <li><code>max_tokens</code> caps the output (default <code>600</code>, 64–20000, estimated as chars / 4).</li>
+        <li>Code fences, tables, lists and blockquotes are never split - if part of one matches, the whole block is kept. Gaps between selected regions are marked with <code>&lt;!-- … --&gt;</code>.</li>
+        <li>If nothing matches, or the page is small enough already, the full page comes back (with <code>confidence: low</code> in the first case).</li>
+        <li>Extraction runs on the already-cached full page: several questions against one URL cost a single fetch within the cache hour.</li>
+        <li>Without <code>query</code> (or with an empty value) the response is byte-identical to before - no extra headers, no extra fields.</li>
+      </ul>
+      <p class="muted" lang="de">Mit <code>?frontmatter=true</code> kommen <code>extracted</code>, <code>extract_confidence</code>, <code>sections_selected</code>, <code>original_tokens</code> und <code>returned_tokens</code> dazu; <code>format=json</code> liefert dieselben Werte im <code>extract</code>-Objekt.</p>
+      <p class="muted" lang="en">With <code>?frontmatter=true</code> you also get <code>extracted</code>, <code>extract_confidence</code>, <code>sections_selected</code>, <code>original_tokens</code> and <code>returned_tokens</code>; <code>format=json</code> returns the same values in the <code>extract</code> object.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="files">
+      <h2><span lang="de">Dateien konvertieren</span><span lang="en">Converting files</span><span class="kicker">POST /api/html · /api/file</span></h2>
+      <p lang="de">Nicht alles steht als abrufbare URL im Netz. Zwei Upload-Wege decken den Rest ab. Die hochgeladene Datei wird <strong>nie</strong> gespeichert; es gibt keinen History-Eintrag, keinen Share-Link und keine <code>X-Share-Id</code>.</p>
+      <p lang="en">Not everything lives at a fetchable URL. Two upload paths cover the rest. The uploaded file is <strong>never</strong> stored; there is no history entry, no share link and no <code>X-Share-Id</code>.</p>
+
+      <h3 lang="de">Gespeicherte HTML-Seiten</h3>
+      <h3 lang="en">Saved HTML pages</h3>
+      <p lang="de">Bereits gespeicherte Seiten ("Seite speichern unter", SingleFile-Exports) lassen sich direkt konvertieren: die <code>.html</code>-Datei auf die PullMD-Oberfläche ziehen (Desktop) oder den gestrichelten Hinweis unter dem URL-Feld antippen, um eine Datei zu wählen (Desktop + Mobile) - oder per API:</p>
+      <p lang="en">Already-saved pages ("Save Page As", SingleFile exports) can be converted directly: drag-and-drop the <code>.html</code> file onto the PullMD UI (desktop) or tap the dashed hint below the URL field to pick a file (desktop and mobile) - or via the API:</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">post · html</span>
+          <button class="copybox-btn" data-copy="post-html">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="post-html">curl -s -X POST --data-binary @page.html \
+  -H 'Content-Type: text/html' \
+  -H 'X-Filename: page.html' \
+  "__PULLMD_URL__/api/html"</pre>
+      </div>
+      <p lang="de">Optionale Parameter: <code>url=…</code> (Original-URL - aktiviert Site-Recipes und den verlinkten Header), <code>format=json|text</code>, <code>frontmatter=true</code>, <code>extractor=readability|trafilatura</code>. Statt des Headers <code>X-Filename</code> (URI-encodiert) geht auch <code>?filename=</code>; der Header hält den Dateinamen aus Access-Logs heraus. Maximal 10 MB. Findet die Extraktion so gut wie keinen Inhalt - typisch für eine gespeicherte JavaScript-App-Hülle - kommt <code>422</code> mit der Bitte, stattdessen die Original-URL zu schicken.</p>
+      <p lang="en">Optional parameters: <code>url=…</code> (original URL - enables site recipes and the linked header), <code>format=json|text</code>, <code>frontmatter=true</code>, <code>extractor=readability|trafilatura</code>. Instead of the <code>X-Filename</code> header (URI-encoded) you can use <code>?filename=</code>; the header keeps the file name out of access logs. Max 10 MB. If extraction finds almost no content - typical for a saved JavaScript app shell - you get a <code>422</code> asking for the original URL instead.</p>
+
+      <h3 lang="de">Formate, die PullMD selbst liest</h3>
+      <h3 lang="en">Formats PullMD reads itself</h3>
+      <p lang="de">Diese Formate liest PullMD selbst, ein Sidecar ist nicht nötig. Hochgeladen werden sie wie Dokumente - per Drag-and-drop, Dateiauswahl oder <code>POST /api/file</code>:</p>
+      <p lang="en">PullMD reads these formats itself, no sidecar needed. They are uploaded like documents - drag-and-drop, file picker or <code>POST /api/file</code>:</p>
+      <ul class="doc-list" lang="de">
+        <li><strong>E-Mails</strong> (<code>.eml</code>, z.B. aus Thunderbird, Apple Mail oder Gmails "Original herunterladen", und Outlooks <code>.msg</code>) - Betreff, Von, An, Cc und Datum als Kopf, darunter der Mailtext (der HTML-Teil, sonst der Klartext). Anhänge werden nur mit Namen aufgelistet, nicht umgewandelt. Im Frontmatter stehen Betreff, Absender und Datum (<code>source: email</code>); <code>lang=en</code> schaltet die Kopfzeilen auf Englisch.</li>
+        <li><strong>Gespeicherte Seiten</strong> (<code>.mhtml</code> / <code>.mht</code>, "Seite speichern unter > Webseite, eine Datei" in Chrome und Edge) - läuft wie eine hochgeladene HTML-Datei, nur dass die Original-URL aus der Datei mitkommt: Sie steht im Frontmatter, und Site-Recipes greifen wie beim normalen Abruf.</li>
+        <li><strong>Text und Markdown</strong> (<code>.txt</code>, <code>.md</code>) - werden durchgereicht, mit einer Titelzeile (erste Überschrift, sonst der Dateiname) und Frontmatter. Ein eigenes YAML-Frontmatter einer Notiz bleibt als <code>yaml</code>-Codeblock erhalten. Dateien im alten Windows-Zeichensatz werden erkannt.</li>
+        <li><strong>Untertitel</strong> (<code>.srt</code>, <code>.vtt</code>) - Nummern, Zeitstempel und Formatierungen fallen weg, wiederholte Zeilen automatischer Untertitel werden zusammengefasst, längere Sprechpausen ergeben einen neuen Absatz.</li>
+        <li><strong>OpenDocument</strong> (<code>.odt</code>, <code>.ods</code>, <code>.odp</code> aus LibreOffice und OpenOffice) - Texte mit Überschriften, fett und kursiv, Links, Listen, Tabellen und Fußnoten; Tabellendokumente mit einer Tabelle je Blatt; Präsentationen mit einem Abschnitt je Folie samt Sprechernotizen. Titel, Autor und Datum kommen aus den Dokumenteigenschaften. Bilder, Diagramme und eingebettete Objekte fallen weg, passwortgeschützte Dateien ergeben <code>422</code>.</li>
+        <li><strong>RTF</strong> (<code>.rtf</code>) - Absätze, Überschriften, fett und kursiv, Links, Listen und Tabellen. Kopf- und Fußzeilen sowie Fußnoten fallen weg. RTF mit eingebettetem HTML (so speichert Outlook HTML-Mails) läuft über die HTML-Extraktion; das hilft auch bei <code>.msg</code>-Dateien, deren HTML nur im RTF-Teil steckt.</li>
+        <li><strong>Kalender und Kontakte</strong> (<code>.ics</code>, <code>.vcf</code>) - Termine mit Beginn, Ende, Ort, Organisator, Teilnehmern, Wiederholung und Beschreibung, Einladungen und Absagen werden als solche markiert; Kontakte mit Organisation, Telefon, E-Mail, Adresse und Geburtstag. Mehrere Einträge in einer Datei ergeben je einen Abschnitt.</li>
+        <li><strong>Daten</strong> (<code>.csv</code>, <code>.tsv</code>, <code>.json</code>, <code>.xml</code>) - CSV und TSV als Tabelle (Trennzeichen wird erkannt, auch das Semikolon aus deutschem Excel), JSON und XML als Codeblock. RSS- und Atom-Feeds werden zu einer Liste der Einträge mit Link, Datum und Text.</li>
+        <li><strong>Jupyter-Notebooks</strong> (<code>.ipynb</code>) - Textzellen als Text, Codezellen als Codeblock, Ausgaben als Text; Bildausgaben erscheinen nur als Platzhalter.</li>
+        <li><strong>Quelltext, Konfiguration, Logs</strong> (<code>.py</code>, <code>.js</code>, <code>.yaml</code>, <code>.sql</code>, <code>.log</code>, <code>Dockerfile</code> und viele mehr) - die Datei als Codeblock mit passender Sprache, darüber der Dateiname. <code>.env</code>-Dateien werden bewusst nicht angenommen, weil sie meist Zugangsdaten enthalten. Textformate wie <code>.rst</code>, <code>.adoc</code> und <code>.org</code> werden wie <code>.txt</code> durchgereicht.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><strong>E-mails</strong> (<code>.eml</code>, e.g. from Thunderbird, Apple Mail or Gmail's "Download message", and Outlook's <code>.msg</code>) - subject, from, to, cc and date as a header block, followed by the message text (the HTML part, otherwise the plain text). Attachments are only listed by name, not converted. The frontmatter carries subject, sender and date (<code>source: email</code>); <code>lang=en</code> switches the header labels to English.</li>
+        <li><strong>Saved pages</strong> (<code>.mhtml</code> / <code>.mht</code>, "Save page as > Webpage, single file" in Chrome and Edge) - handled like an uploaded HTML file, except that the original URL comes along from the file: it lands in the frontmatter, and site recipes apply as for a live fetch.</li>
+        <li><strong>Text and Markdown</strong> (<code>.txt</code>, <code>.md</code>) - passed through with a title line (the first heading, otherwise the file name) and frontmatter. A note's own YAML frontmatter is kept as a <code>yaml</code> code block. Files in the legacy Windows character set are detected.</li>
+        <li><strong>Subtitles</strong> (<code>.srt</code>, <code>.vtt</code>) - numbers, timestamps and styling are dropped, repeated lines from auto-generated captions are collapsed, and longer pauses start a new paragraph.</li>
+        <li><strong>OpenDocument</strong> (<code>.odt</code>, <code>.ods</code>, <code>.odp</code> from LibreOffice and OpenOffice) - text documents with headings, bold and italic, links, lists, tables and footnotes; spreadsheets with one table per sheet; presentations with one section per slide, including speaker notes. Title, author and date come from the document properties. Images, charts and embedded objects are dropped; password-protected files return <code>422</code>.</li>
+        <li><strong>RTF</strong> (<code>.rtf</code>) - paragraphs, headings, bold and italic, links, lists and tables. Headers, footers and footnotes are dropped. RTF with embedded HTML (the way Outlook stores HTML mails) goes through the HTML extraction; this also helps <code>.msg</code> files whose HTML exists only inside the RTF body.</li>
+        <li><strong>Calendars and contacts</strong> (<code>.ics</code>, <code>.vcf</code>) - events with start, end, location, organizer, attendees, recurrence and description, with invitations and cancellations marked as such; contacts with organization, phone, e-mail, address and birthday. Several entries in one file give one section each.</li>
+        <li><strong>Data</strong> (<code>.csv</code>, <code>.tsv</code>, <code>.json</code>, <code>.xml</code>) - CSV and TSV as a table (the delimiter is detected, including the semicolon from German Excel), JSON and XML as a code block. RSS and Atom feeds become a list of their entries with link, date and text.</li>
+        <li><strong>Jupyter notebooks</strong> (<code>.ipynb</code>) - text cells as text, code cells as code blocks, outputs as text; image outputs only appear as a placeholder.</li>
+        <li><strong>Source code, config, logs</strong> (<code>.py</code>, <code>.js</code>, <code>.yaml</code>, <code>.sql</code>, <code>.log</code>, <code>Dockerfile</code> and many more) - the file as a code block with the matching language, the file name above it. <code>.env</code> files are deliberately not accepted, since they usually hold credentials. Text formats such as <code>.rst</code>, <code>.adoc</code> and <code>.org</code> are passed through like <code>.txt</code>.</li>
+      </ul>
+      <p lang="de">Eine Datei, die nicht zum Format passt (keine Mail-Header, keine Untertitel-Zeitstempel, kein Kalendereintrag, Binärdaten als <code>.txt</code>, ein kaputtes oder verschlüsseltes Dokument) oder bei der eine gespeicherte Seite kaum Inhalt enthält, ergibt <code>422</code>.</p>
+      <p lang="en">A file that does not match its format (no mail headers, no subtitle timestamps, no calendar entry, binary data as <code>.txt</code>, a broken or encrypted document), or a saved page with almost no content, returns <code>422</code>.</p>
+
+      <h3 lang="de">Dokumente</h3>
+      <h3 lang="en">Documents</h3>
+      <p lang="de">PDF, Word, PowerPoint, Excel, EPUB, ZIP (Inhalt wird aufgelistet), CSV, JSON und XML werden zu Markdown konvertiert. Liegt das Dokument im Netz, reicht die normale API - der Dokumenttyp wird am Content-Type erkannt:</p>
+      <p lang="en">PDF, Word, PowerPoint, Excel, EPUB, ZIP (contents listed), CSV, JSON and XML are converted to Markdown. If the document is online, the regular API is enough - the type is detected from the content type:</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">get · document url</span>
+          <button class="copybox-btn" data-copy="get-doc">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="get-doc">curl -s "__PULLMD_URL__/api?url=https://example.com/report.pdf"</pre>
+      </div>
+      <p lang="de">Lokale Dateien gehen per Upload - rohe Bytes im Body, Content-Type der Datei, maximal 25 MB. In der Web-Oberfläche funktioniert dafür derselbe Drag-and-drop bzw. die Dateiauswahl:</p>
+      <p lang="en">Local files go through the upload path - raw bytes in the body, the file's content type, max 25 MB. In the web UI the same drag-and-drop and file picker handle it:</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">post · file</span>
+          <button class="copybox-btn" data-copy="post-file">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="post-file">curl -s -X POST --data-binary @report.pdf \
+  -H 'Content-Type: application/pdf' \
+  -H 'X-Filename: report.pdf' \
+  "__PULLMD_URL__/api/file"</pre>
+      </div>
+      <p lang="de">Optionale Parameter: <code>format=json|text</code>, <code>frontmatter=true</code>, <code>pdf=ocr</code>. Die Dokument-Konvertierung braucht den markitdown-Sidecar; ist er nicht konfiguriert, antworten Dokument-URLs und <code>/api/file</code> mit <code>502</code>. Ob diese Instanz ihn hat, verrät <code>/api/config</code>.</p>
+      <p lang="en">Optional parameters: <code>format=json|text</code>, <code>frontmatter=true</code>, <code>pdf=ocr</code>. Document conversion needs the markitdown sidecar; without it, document URLs and <code>/api/file</code> return <code>502</code>. Whether this instance has it is reported by <code>/api/config</code>.</p>
+      <p lang="de">Mit <code>?async=1</code> antwortet <code>/api/file</code> sofort mit <code>202</code> und einer Job-ID und konvertiert im Hintergrund; das Ergebnis (immer JSON) holst du mit <code>GET /api/file/jobs/:id</code> ab und löschst es mit <code>DELETE</code>. Es liegt bis dahin höchstens 60 Minuten (einstellbar) im Arbeitsspeicher und geht bei einem Neustart verloren. Kann der Server den Job nicht annehmen, antwortet er normal mit <code>200</code>; Skripte müssen beides behandeln. Die Web-Oberfläche nutzt das, damit du die App während einer langen Konvertierung verlassen kannst.</p>
+      <p lang="en">With <code>?async=1</code>, <code>/api/file</code> answers at once with <code>202</code> and a job id and converts in the background; you fetch the result (always JSON) with <code>GET /api/file/jobs/:id</code> and remove it with <code>DELETE</code>. Until then it is held in memory for up to 60 minutes (configurable) and is lost on a restart. If the server cannot queue the job, it answers normally with <code>200</code>; scripts have to handle both. The web UI uses this so you can leave the app during a long conversion.</p>
+
+      <h3 lang="de">Bilder, Audio, YouTube</h3>
+      <h3 lang="en">Images, audio, YouTube</h3>
+      <p lang="de">Bilder und Audio funktionieren über denselben Weg (URL oder Upload). Standardmäßig kommen nur Metadaten zurück - EXIF beim Bild, Track-Infos beim Audio. Hat die Instanz ein Vision- bzw. Speech-to-Text-Modell hinterlegt, kommt eine Bildbeschreibung bzw. ein Transkript dazu; die verwendeten Modelle und der Tokenverbrauch stehen dann im <a href="#frontmatter">Frontmatter</a>. YouTube-URLs liefern Titel, Beschreibung und Transkript, wenn die Instanz das aktiviert hat. Bildbeschreibung, Transkription und PDF-OCR teilen sich ein Stundenbudget pro Benutzer bzw. Client-Adresse (<code>PULLMD_LLM_RATE_LIMIT</code>, Standard 30); darüber hinaus kommt das Ergebnis ohne Modellaufruf zurück und wird nicht gecacht.</p>
+      <p lang="en">Images and audio work the same way (URL or upload). By default you only get metadata - EXIF for images, track info for audio. If the instance has a vision or speech-to-text model configured, you also get a caption or a transcript; the models used and the token spend then show up in the <a href="#frontmatter">frontmatter</a>. YouTube URLs return title, description and transcript when the instance enables it. Captioning, transcription and PDF OCR share an hourly budget per user or client address (<code>PULLMD_LLM_RATE_LIMIT</code>, default 30); beyond it you get the result without a model call, and it is not cached.</p>
+      <p lang="de"><strong>Bilder in Reddit-Posts:</strong> Bei einem Bild-Post ist das Bild oft der eigentliche Inhalt. Hat die Instanz ein Vision-Modell, beschreibt PullMD jedes Bild eines Reddit-<em>Posts</em> (einzelnes Bild, Galerie oder im Text eingebettetes Bild; Bilder in Kommentaren nicht) kurz (ein bis zwei Sätze) und transkribiert den lesbaren Text. Beides steht als Zitatblock direkt unter dem Bild, beschriftet mit <code>Bildbeschreibung</code> und <code>Bildtranskript</code> (mit <code>lang=en</code>: <code>Image description</code> und <code>Image transcript</code>). Das ist standardmäßig aus: <code>PULLMD_EMBEDDED_IMAGES</code> steht auf <code>on-request</code>, Bilder werden also nur mit <code>images=on</code> (MCP: <code>images: "on"</code>) verarbeitet; <code>always</code> macht es zum Standard, <code>off</code> schaltet es hart ab. Ohne Anforderung steht unter jedem Bild ohne Transkript die Zeile <code>Bild nicht transkribiert</code>, damit man merkt, dass Kontext fehlt; ohne Vision-Modell oder mit <code>off</code> bleibt der Text unverändert (Ausnahme: früher gespeicherte Transkripte erscheinen weiterhin, sofern die Instanz nicht auf <code>off</code> steht). Im <a href="#frontmatter">Frontmatter</a> zählt <code>images_transcribed</code> (z. B. <code>1/2</code>). Grenzen: nur Reddit, nur Bilder von <code>i.redd.it</code> und <code>preview.redd.it</code> (einzelne Bild-Posts als jpg, png oder webp, Galerie- und Textbilder nur, wenn Reddit sie als nicht animiertes Bild ausweist; höchstens 20 MB), höchstens <code>PULLMD_EMBEDDED_IMAGES_MAX</code> Bilder pro Post (Standard 4), 90 Sekunden Gesamtzeit je Post. Jedes neu transkribierte Bild verbraucht eine Einheit des Stundenbudgets. Transkripte werden pro Bild gespeichert: Dasselbe Bild wird nur einmal transkribiert, egal in welcher URL-Form der Post abgerufen wird (<code>old.reddit.com</code>, <code>redd.it</code>-Kurzlink, <code>/s/</code>-Share-Link), solange die Cache-Aufbewahrung es behält; jede spätere Extraktion nutzt es ohne neuen Modellaufruf. Lehnt der Anbieter ein Bild mit 400, 413, 415 oder 422 ab, gilt es nur für dieses gecachte Ergebnis als gescheitert: Solange der Eintrag frisch ist, wird es nicht erneut versucht, nach Ablauf des Eintrags oder über eine andere URL-Form des Posts dagegen schon. Scheitert ein Bild nur vorübergehend (Budget, Zeitlimit, Serverfehler), kommt das Ergebnis trotzdem, wird aber nicht gecacht; die übrigen Bilder des Posts bleiben gespeichert. Der transkribierte Text stammt aus dem Bild und ist nicht vertrauenswürdig (Prompt Injection möglich); die Beschriftung kennzeichnet ihn.</p>
+      <p lang="en"><strong>Images in Reddit posts:</strong> On an image post the image is often the actual content. If the instance has a vision model, PullMD describes each image of a Reddit <em>post</em> (a single image, a gallery or an image embedded in the text; not images in comments) briefly (one or two sentences) and transcribes the legible text. Both appear as a blockquote directly under the image, labelled <code>Bildbeschreibung</code> and <code>Bildtranskript</code> (with <code>lang=en</code>: <code>Image description</code> and <code>Image transcript</code>). This is off by default: <code>PULLMD_EMBEDDED_IMAGES</code> is <code>on-request</code>, so images are only processed with <code>images=on</code> (MCP: <code>images: "on"</code>); <code>always</code> makes it the default, <code>off</code> switches it off for good. When not requested, every image without a transcript gets an <code>Image not transcribed</code> line so you can tell context is missing; without a vision model, or with <code>off</code>, the text is unchanged (exception: transcripts stored earlier are still shown unless the instance is set to <code>off</code>). In the <a href="#frontmatter">frontmatter</a>, <code>images_transcribed</code> counts them (e.g. <code>1/2</code>). Limits: Reddit only, only images from <code>i.redd.it</code> and <code>preview.redd.it</code> (single-image posts as jpg, png or webp, gallery and inline images only when Reddit marks them as non-animated images; at most 20 MB), at most <code>PULLMD_EMBEDDED_IMAGES_MAX</code> images per post (default 4), 90 seconds overall per post. Each newly transcribed image uses one unit of the hourly budget. Transcripts are stored per image: the same image is transcribed once, whichever URL form of the post is requested (<code>old.reddit.com</code>, a <code>redd.it</code> short link, a <code>/s/</code> share link), for as long as cache retention keeps it; every later extraction reuses it without a new model call. If the provider rejects an image with 400, 413, 415 or 422, it counts as failed for that cached result only: it is not retried while the entry is fresh, but it is retried after the entry expires or with another URL form of the post. If an image only misses temporarily (budget, deadline, server error) the result is still returned but not cached; the post's other images stay stored. The transcribed text comes from the image and is not trustworthy (prompt injection is possible); the label marks it.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="share">
+      <h2><span lang="de">Share-Links</span><span lang="en">Share links</span><span class="kicker">/s/:id</span></h2>
+      <p lang="de">Jeder Pull bekommt eine 32-stellige Hex-ID (128 Bit Zufall, nicht erratbar) als Share-Link, der den exakten Markdown-Stand zurückliefert. Die ID erscheint im Response-Header <code>X-Share-Id</code> und in der Share-Bar unter dem URL-Feld.</p>
+      <p lang="en">Every pull gets a 32-hex share ID (128 random bits, not guessable) returning the exact markdown snapshot. The ID surfaces in the response header <code>X-Share-Id</code> and in the share bar below the URL field.</p>
+      <ul class="doc-list" lang="de">
+        <li><code>GET /s/:id</code> liefert den Markdown (Content-Type <code>text/markdown</code>).</li>
+        <li>Wenn der Eintrag &lt; 1 h alt ist: Sofortantwort aus dem Cache. Sonst: frischer Fetch der Quelle und schreibt zurück.</li>
+        <li>Die ID bleibt stabil — Re-Fetch ändert nur Inhalt + <code>created_at</code>, nicht die <code>share_id</code>.</li>
+        <li>Damit ist der Share-Link auch ein <em>Live-Endpoint</em>: ein KI-Agent kann ihn als festen URL benutzen und kriegt automatisch frisches Markdown.</li>
+        <li>Maximales Alter im Cache: <code>PULLMD_CACHE_RETENTION_DAYS</code> (Standard 90 Tage, <code>0</code> = unbegrenzt) ohne Re-Fetch. Da aber jeder <code>/s/:id</code>-Aufruf nach 1 h einen Re-Fetch auslöst, verlängert sich die Lebensdauer mit jeder Nutzung.</li>
+        <li>Ist die Quelle nicht erreichbar, wird der letzte Snapshot zurückgegeben — der Link bleibt also auch bei toten Seiten nutzbar.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><code>GET /s/:id</code> returns the markdown (Content-Type <code>text/markdown</code>).</li>
+        <li>If the row is &lt; 1h old: instant cache response. Otherwise: fresh fetch from the source, written back to cache.</li>
+        <li>The ID is stable — refresh only updates content + <code>created_at</code>, not the <code>share_id</code>.</li>
+        <li>This makes the share link a <em>live endpoint</em>: an AI agent can pin it as a fixed URL and automatically get refreshed markdown.</li>
+        <li>Max age in cache: <code>PULLMD_CACHE_RETENTION_DAYS</code> (default 90 days, <code>0</code> = unlimited) without a refresh. But since every <code>/s/:id</code> hit older than 1h triggers a refresh, lifetime extends with usage.</li>
+        <li>If the source is unreachable, the last snapshot is returned — so the link keeps working even if the source dies.</li>
+      </ul>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="frontmatter">
+      <h2><span lang="de">Frontmatter</span><span lang="en">Frontmatter</span><span class="kicker">YAML</span></h2>
+      <p lang="de">Mit <code>?frontmatter=true</code> wird vor dem Inhalt ein YAML-Block mit Metadaten eingefügt. Felder mit leerem Wert werden weggelassen:</p>
+      <p lang="en">With <code>?frontmatter=true</code> a YAML metadata block is prepended to the content. Empty fields are omitted:</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">example</span>
+          <button class="copybox-btn" data-copy="fm-example">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="fm-example">---
+title: "Why I migrated my side-project from Postgres to SQLite"
+url: https://news.ycombinator.com/item?id=42424242
+source: readability
+fetched: 2026-04-25T13:53:00Z
+quality: 0.85
+author: kentonv
+published: 2026-04-24T18:42:00Z
+description: "After two years on managed Postgres..."
+language: en
+share_id: a3f9c2b7
+---</pre>
+      </div>
+      <p class="muted" lang="de">Basis-Felder: <code>title, url, source, fetched, quality, author, published, modified, description, language, image, site, extractor_reason, share_id</code>. Je nach Quelle zusätzlich: <code>subreddit, upvotes, images_transcribed</code> (Reddit) · <code>duration, views</code> (YouTube) · <code>image_size, audio_seconds, llm_model, llm_tokens, llm_prompt_tokens, llm_completion_tokens</code> (Media) · <code>pdf_pages</code> (PDF-OCR). MCP-Antworten ergänzen <code>share_url, cached, refreshed, age_ms</code>. Mit <code>PULLMD_FRONTMATTER_FIELDS</code> lässt sich die Auswahl serverseitig einschränken.</p>
+      <p class="muted" lang="en">Base fields: <code>title, url, source, fetched, quality, author, published, modified, description, language, image, site, extractor_reason, share_id</code>. Depending on the source, additionally: <code>subreddit, upvotes, images_transcribed</code> (Reddit) · <code>duration, views</code> (YouTube) · <code>image_size, audio_seconds, llm_model, llm_tokens, llm_prompt_tokens, llm_completion_tokens</code> (media) · <code>pdf_pages</code> (PDF OCR). MCP responses add <code>share_url, cached, refreshed, age_ms</code>. <code>PULLMD_FRONTMATTER_FIELDS</code> can trim the selection server-side.</p>
+      <p class="muted" lang="de">Bei aktiver <a href="#query">Query-Extraktion</a> kommen <code>extracted</code>, <code>extract_confidence</code>, <code>sections_selected</code>, <code>original_tokens</code> und <code>returned_tokens</code> dazu. <a href="#recipes">Site-Recipes</a> können weitere Felder beisteuern, etwa aus dem JSON-LD einer Seite.</p>
+      <p class="muted" lang="en">With <a href="#query">query extraction</a> active, <code>extracted</code>, <code>extract_confidence</code>, <code>sections_selected</code>, <code>original_tokens</code> and <code>returned_tokens</code> are added. <a href="#recipes">Site recipes</a> can contribute further fields, e.g. from a page's JSON-LD.</p>
+      <p class="muted" lang="de">In der Web-App schaltet der <strong>Frontmatter</strong>-Regler die Anzeige sofort um - der YAML-Block erscheint oder verschwindet, ohne dass man erneut auf Pull drücken muss.</p>
+      <p class="muted" lang="en">In the web app the <strong>Frontmatter</strong> toggle switches the view instantly - the YAML block appears or disappears with no second Pull.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="recipes">
+      <h2><span lang="de">Site-Recipes</span><span lang="en">Site recipes</span><span class="kicker">json</span></h2>
+      <p lang="de">Manche Seiten brauchen Nachhilfe: eine Paywall-Hülle, ein Cookie-Banner mitten im Text, ein Layout, in dem die Automatik den falschen Block für den Artikel hält. Site-Recipes sind kleine JSON-Einträge pro Host, die genau das geradebiegen.</p>
+      <p lang="en">Some sites need a nudge: a paywall wrapper, a cookie banner in the middle of the text, a layout where the automatic pick grabs the wrong block. Site recipes are small per-host JSON entries that straighten exactly that out.</p>
+      <ul class="doc-list" lang="de">
+        <li><strong>Rendern erzwingen</strong> - Seiten, die ohne JavaScript nichts hergeben, gehen direkt in den Headless-Browser.</li>
+        <li><strong>Störendes entfernen</strong> (<code>select.remove</code>) - seitenspezifische Banner, Teaser, Skelette.</li>
+        <li><strong>Body benennen</strong> (<code>select.content</code>) - statt die Automatik raten zu lassen, sagt das Recipe direkt, welche Container den Artikel bilden. Ergebnis trägt <code>source: recipe-content</code>.</li>
+        <li><strong>Frontmatter füllen</strong> - Felder aus dem JSON-LD der Seite oder per CSS-Selektor, z. B. Bewertung, Adresse oder Preisrahmen.</li>
+        <li><strong>Tabellen wiederherstellen</strong> (<code>grid-to-table</code>) - Vergleichstabellen, die nur aus CSS-Grid-<code>div</code>s bestehen, werden als echte Tabelle ausgegeben; Icons lassen sich vorher in Text wie "ja"/"nein" umwandeln.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><strong>Force rendering</strong> - pages that are empty without JavaScript go straight to the headless browser.</li>
+        <li><strong>Remove noise</strong> (<code>select.remove</code>) - site-specific banners, teasers, skeletons.</li>
+        <li><strong>Name the body</strong> (<code>select.content</code>) - instead of letting the automatic pick guess, the recipe says which containers make up the article. Output carries <code>source: recipe-content</code>.</li>
+        <li><strong>Fill frontmatter</strong> - fields from the page's JSON-LD or via CSS selectors, e.g. rating, address, or price range.</li>
+        <li><strong>Rebuild tables</strong> (<code>grid-to-table</code>) - comparison tables built only from CSS-grid <code>div</code>s come out as a real table; icons can be turned into text such as "yes"/"no" first.</li>
+      </ul>
+      <p lang="de">Ein paar Recipes werden mitgeliefert. Selbst-Hoster legen eigene unter <code>data/site-recipes.json</code> ab oder setzen <code>PULLMD_SITE_RECIPES</code> auf einen Pfad; nach Änderungen muss die Instanz neu starten. Was geladen wurde und was abgelehnt, zeigt <code>GET /api/recipes/status</code>. Wie man ein Recipe schreibt (und beisteuert), steht in <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/SITE-RECIPES.md" target="_blank" rel="noopener">SITE-RECIPES.md</a>.</p>
+      <p lang="en">A few recipes ship with PullMD. Self-hosters add their own in <code>data/site-recipes.json</code> or point <code>PULLMD_SITE_RECIPES</code> at a path; the instance needs a restart after changes. <code>GET /api/recipes/status</code> reports what loaded and what was rejected. How to write (and contribute) one is documented in <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/SITE-RECIPES.md" target="_blank" rel="noopener">SITE-RECIPES.md</a>.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="auth">
+      <h2><span lang="de">Authentifizierung</span><span lang="en">Authentication</span><span class="kicker">optional</span></h2>
+      <p lang="de">Standardmäßig ist eine PullMD-Instanz offen. Self-Hoster können das umstellen; welcher Modus hier läuft, steht in <code>/api/config</code> unter <code>authMode</code>.</p>
+      <p lang="en">By default a PullMD instance is open. Self-hosters can change that; the mode in use here is reported by <code>/api/config</code> as <code>authMode</code>.</p>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Modus</th>
+            <th lang="de">Bedeutung</th>
+            <th lang="en">Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>disabled</code></td>
+            <td lang="de">Default. Kein Login, alles offen.</td>
+            <td lang="en">Default. No login, everything open.</td>
+          </tr>
+          <tr><td><code>single-admin</code></td>
+            <td lang="de">Ein Benutzer aus den Server-Einstellungen, keine Selbstregistrierung. Für den Heimserver.</td>
+            <td lang="en">One user from the server settings, no self-signup. For a homelab.</td>
+          </tr>
+          <tr><td><code>multi-user</code></td>
+            <td lang="de">Registrierung unter <code>/signup</code>, Login unter <code>/login</code>, getrennte Daten pro Benutzer. Die Registrierung lässt sich mit <code>PULLMD_ALLOW_SIGNUP=false</code> schließen.</td>
+            <td lang="en">Sign up at <code>/signup</code>, log in at <code>/login</code>, per-user data isolation. Self-signup can be closed with <code>PULLMD_ALLOW_SIGNUP=false</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p lang="de">Ist ein Modus aktiv, brauchen <code>/api</code>, <code>/api/stream</code>, die Upload-Endpunkte, <code>/mcp</code> sowie History und Archiv Zugangsdaten. Öffentlich bleiben die Startseite, diese Hilfeseite, das Skill-Zip und vor allem die <a href="#share">Share-Links</a> unter <code>/s/:id</code> - geteilte Inhalte bleiben also teilbar.</p>
+      <p lang="en">With a mode active, <code>/api</code>, <code>/api/stream</code>, the upload endpoints, <code>/mcp</code>, history and archive all need credentials. The start page, this help page, the skill zip and above all the <a href="#share">share links</a> at <code>/s/:id</code> stay public - shared content stays shareable.</p>
+      <h3 lang="de">Drei Wege hinein</h3>
+      <h3 lang="en">Three ways in</h3>
+      <ul class="doc-list" lang="de">
+        <li><strong>Session-Cookie</strong> - der Login im Browser. Die Web-App nutzt ihn automatisch; die Sitzung hält 90 Tage und verlängert sich bei Nutzung.</li>
+        <li><strong>API-Key</strong> - unter <code>/settings</code> erzeugen und als <code>Authorization: Bearer pmd_…</code> mitschicken. Der Schlüssel wird nur einmal angezeigt, danach liegt serverseitig nur noch sein Hash. Das ist der Weg für curl, Skripte und die Claude-Code-CLI.</li>
+        <li><strong>OAuth</strong> - für Clients ohne Header-Feld, namentlich Claude Desktop und claude.ai im Web. Der Client entdeckt alles Nötige selbst; man verbindet ihn mit <code>__PULLMD_URL__/mcp</code> und landet beim ersten Klick auf der Login- und Zustimmungsseite dieser Instanz. Die so ausgestellten Tokens gelten nur für <code>/mcp</code>; Skripte gegen <code>/api</code> brauchen einen API-Key.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><strong>Session cookie</strong> - the browser login. The web app uses it automatically; the session lasts 90 days and extends with use.</li>
+        <li><strong>API key</strong> - create one at <code>/settings</code> and send it as <code>Authorization: Bearer pmd_…</code>. The key is shown once; only its hash is kept server-side. This is the path for curl, scripts and the Claude Code CLI.</li>
+        <li><strong>OAuth</strong> - for clients without a header field, namely Claude Desktop and claude.ai on the web. The client discovers what it needs on its own; point it at <code>__PULLMD_URL__/mcp</code> and the first click takes you to this instance's login and consent screen. Tokens issued this way are valid on <code>/mcp</code> only; scripts calling <code>/api</code> need an API key.</li>
+      </ul>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">api key · curl + mcp</span>
+          <button class="copybox-btn" data-copy="auth-key">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="auth-key">curl -s -H "Authorization: Bearer pmd_YOURKEY" \
+  "__PULLMD_URL__/api?url=https://example.com"
+
+claude mcp add --transport http pullmd __PULLMD_URL__/mcp \
+  --header "Authorization: Bearer pmd_YOURKEY"</pre>
+      </div>
+      <p class="muted" lang="de">Fehlen die Zugangsdaten, antwortet die API mit <code>401</code>; im Browser wird stattdessen zur Login-Seite weitergeleitet und danach zurück zur ursprünglichen Seite.</p>
+      <p class="muted" lang="en">Without credentials the API answers <code>401</code>; in the browser you are redirected to the login page and back afterwards.</p>
+      <p class="muted" lang="de">Login und Registrierung sind pro Client-Adresse begrenzt: 10 Login-Versuche pro Minute, 5 Registrierungen pro Stunde, danach kommt das Formular mit <code>429</code> und <code>Retry-After</code> zurück. Formulare (Login, Registrierung, Logout, OAuth-Zustimmung) werden nur angenommen, wenn <code>Origin</code> bzw. <code>Referer</code> diesen Host oder den Host von <code>PUBLIC_URL</code> nennt.</p>
+      <p class="muted" lang="en">Login and signup are limited per client address: 10 login attempts per minute, 5 signups per hour, after that the form comes back with <code>429</code> and <code>Retry-After</code>. Form posts (login, signup, logout, OAuth consent) are accepted only when <code>Origin</code> or <code>Referer</code> names this host or the host of <code>PUBLIC_URL</code>.</p>
+      <p class="muted" lang="de"><strong>Selbst-Hoster hinter einem Reverse-Proxy:</strong> <code>PULLMD_TRUST_PROXY</code> setzen (meist <code>1</code>, oder die Adresse des Proxys, wenn der Port auch direkt erreichbar ist) und <code>PUBLIC_URL</code> auf die öffentliche Adresse. Ohne die Einstellung teilen sich alle Clients ein Rate-Limit, weil jede Anfrage von der Adresse des Proxys zu kommen scheint. Der Proxy darf keine <code>Referrer-Policy: no-referrer</code> senden, sonst schicken Browser Formulare mit <code>Origin: null</code> ab, und der Login wird abgelehnt. Details in <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/MIGRATION.md" target="_blank" rel="noopener">MIGRATION.md</a>.</p>
+      <p class="muted" lang="en"><strong>Self-hosters behind a reverse proxy:</strong> set <code>PULLMD_TRUST_PROXY</code> (usually <code>1</code>, or the proxy's address when the port is also reachable directly) and <code>PUBLIC_URL</code> to the public address. Without the setting all clients share one rate limit, because every request appears to come from the proxy's address. The proxy must not send <code>Referrer-Policy: no-referrer</code>, or browsers post forms with <code>Origin: null</code> and login is refused. Details in <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/MIGRATION.md" target="_blank" rel="noopener">MIGRATION.md</a>.</p>
+
+      <h3 lang="de">Benutzerverwaltung</h3>
+      <h3 lang="en">Managing users</h3>
+      <p lang="de">Konten verwaltet der Betreiber auf der Kommandozeile der Instanz; eine Oberfläche dafür gibt es nicht. In <code>single-admin</code> stammt der eine Benutzer aus den Server-Einstellungen, in <code>multi-user</code> registrieren sich Benutzer selbst - es sei denn, <code>PULLMD_ALLOW_SIGNUP</code> steht auf <code>false</code>. Dann ist <code>create-user</code> der Weg, trotzdem Konten anzulegen.</p>
+      <p lang="en">Accounts are managed by the operator on the instance's command line; there is no UI for it. In <code>single-admin</code> the single user comes from the server settings, in <code>multi-user</code> users sign up themselves - unless <code>PULLMD_ALLOW_SIGNUP</code> is <code>false</code>. In that case <code>create-user</code> is how accounts still get created.</p>
+      <div class="copybox">
+        <div class="copybox-header">
+          <span class="copybox-label">admin cli</span>
+          <button class="copybox-btn" data-copy="auth-users">
+            <span lang="de">Kopieren</span><span lang="en">Copy</span>
+          </button>
+        </div>
+        <pre id="auth-users">docker compose exec pullmd node scripts/admin.js list-users
+docker compose exec pullmd node scripts/admin.js create-user someone@example.com
+docker compose exec pullmd node scripts/admin.js make-admin someone@example.com
+docker compose exec pullmd node scripts/admin.js reset-password someone@example.com</pre>
+      </div>
+      <ul class="doc-list" lang="de">
+        <li><code>list-users</code> - alle Konten mit ID, E-Mail, Admin-Flag und Anlagedatum.</li>
+        <li><code>create-user &lt;email&gt;</code> - legt ein Konto an und fragt das Passwort interaktiv ab (mindestens 8 Zeichen). Das Konto bekommt <em>keine</em> Admin-Rechte.</li>
+        <li><code>make-admin &lt;email&gt;</code> - befördert ein bestehendes Konto zum Admin. Bewusst ein eigener Schritt.</li>
+        <li><code>reset-password &lt;email&gt;</code> - setzt das Passwort neu und wirft dabei alle offenen Sitzungen des Benutzers weg.</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><code>list-users</code> - every account with id, email, admin flag and creation date.</li>
+        <li><code>create-user &lt;email&gt;</code> - creates an account and prompts for the password interactively (8 characters minimum). The account gets <em>no</em> admin rights.</li>
+        <li><code>make-admin &lt;email&gt;</code> - promotes an existing account to admin. Deliberately a separate step.</li>
+        <li><code>reset-password &lt;email&gt;</code> - sets a new password and drops all of that user's open sessions.</li>
+      </ul>
+      <p class="muted" lang="de">Ohne Docker läuft derselbe Befehl als <code>node scripts/admin.js …</code> im Verzeichnis der Instanz. <strong>Wichtig:</strong> <code>create-user</code> und <code>reset-password</code> lesen das Passwort von der Standardeingabe, es braucht also <code>docker compose exec</code> oder <code>docker exec -it</code>. Ein <code>docker exec</code> ohne <code>-i</code> hängt die Eingabe nicht an; der Befehl bricht dann mit einer Meldung und Code 2 ab und nennt die funktionierenden Aufrufe. Alternativ lässt sich das Passwort hineinpipen: <code>echo "…" | docker exec -i &lt;container&gt; node scripts/admin.js …</code>.</p>
+      <p class="muted" lang="en">Without Docker the same command runs as <code>node scripts/admin.js …</code> in the instance's directory. <strong>Important:</strong> <code>create-user</code> and <code>reset-password</code> read the password from standard input, so use <code>docker compose exec</code> or <code>docker exec -it</code>. A plain <code>docker exec</code> without <code>-i</code> does not attach input; the command then aborts with a message and exit code 2 that names the invocations which do work. You can also pipe the password in: <code>echo "…" | docker exec -i &lt;container&gt; node scripts/admin.js …</code>.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="clients">
+      <h2><span lang="de">Client-Erkennung</span><span lang="en">Client detection</span><span class="kicker">history</span></h2>
+      <p lang="de">Jeder Eintrag in der History kriegt ein Client-Badge — daran sieht man, woher der Pull kam:</p>
+      <p lang="en">Every history entry gets a client badge so you can see where the pull originated:</p>
+      <ul class="doc-list" lang="de">
+        <li><strong>Browser</strong> — normale Web-UI im Browser-Tab.</li>
+        <li><strong>PWA</strong> — installierte Progressive Web App (Standalone-Mode, Android/iOS/Desktop).</li>
+        <li><strong>Claude</strong> — User-Agent enthält „Claude" (z. B. via Skill).</li>
+        <li><strong>API</strong> — alles andere (curl, Skript, MCP-Wrapper, …).</li>
+      </ul>
+      <ul class="doc-list" lang="en">
+        <li><strong>Browser</strong> — regular web UI in a browser tab.</li>
+        <li><strong>PWA</strong> — installed Progressive Web App (standalone mode, Android/iOS/desktop).</li>
+        <li><strong>Claude</strong> — User-Agent contains "Claude" (e.g. via the skill).</li>
+        <li><strong>API</strong> — anything else (curl, scripts, MCP wrappers, …).</li>
+      </ul>
+    </section>
+
+    <div class="foot" role="contentinfo">
+      <span lang="de">PullMD · self-hosted · <a href="/">zurück zur App</a></span>
+      <span lang="en">PullMD · self-hosted · <a href="/">back to app</a></span>
+      <span class="foot-credit">
+        <a href="https://github.com/AeternaLabsHQ/pullmd/releases/tag/v__PULLMD_VERSION__"
+           target="_blank" rel="noopener">v__PULLMD_VERSION__</a>
+        ·
+        Built by <a href="https://github.com/AeternaLabsHQ" target="_blank" rel="noopener">Aeterna Labs</a>
+        ·
+        <a href="https://github.com/AeternaLabsHQ/pullmd" target="_blank" rel="noopener">GitHub</a>
+        ·
+        <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
+      </span>
+    </div>
+  </div>
+
+  <script>
+    // ---- Theme toggle ----
+    document.getElementById('theme-btn').addEventListener('click', function () {
+      var next = document.body.getAttribute('data-theme') === 'paper' ? 'dark' : 'paper';
+      document.body.setAttribute('data-theme', next);
+      document.querySelector('meta[name="theme-color"]').setAttribute('content', next === 'paper' ? '#f6f3ee' : '#0e1016');
+      try { localStorage.setItem('pullmd-theme', next); } catch (e) {}
+    });
+
+    // ---- Lang toggle ----
+    function syncLangLabel() {
+      var cur = document.body.getAttribute('data-lang');
+      document.getElementById('lang-label').textContent = cur === 'de' ? 'EN' : 'DE';
+    }
+    syncLangLabel();
+    document.getElementById('lang-btn').addEventListener('click', function () {
+      var next = document.body.getAttribute('data-lang') === 'de' ? 'en' : 'de';
+      document.body.setAttribute('data-lang', next);
+      document.documentElement.lang = next;
+      try { localStorage.setItem('pullmd-lang', next); } catch (e) {}
+      syncLangLabel();
+    });
+
+    // ---- Copy boxes ----
+    document.querySelectorAll('.copybox-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-copy');
+        // Allow lang-aware copy: if data-copy is a base id and no element
+        // matches, try `${id}-${currentLang}`.
+        var src = document.getElementById(id);
+        if (!src) {
+          var lang = document.body.getAttribute('data-lang') || 'de';
+          src = document.getElementById(id + '-' + lang);
+        }
+        if (!src) return;
+        var text = src.textContent;
+        navigator.clipboard.writeText(text).then(function () {
+          btn.classList.add('copied');
+          var spans = btn.querySelectorAll('span');
+          spans.forEach(function (s) {
+            s.dataset._orig = s.textContent;
+            s.textContent = s.lang === 'de' ? 'Kopiert!' : 'Copied!';
+          });
+          setTimeout(function () {
+            btn.classList.remove('copied');
+            spans.forEach(function (s) {
+              if (s.dataset._orig) s.textContent = s.dataset._orig;
+            });
+          }, 2000);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

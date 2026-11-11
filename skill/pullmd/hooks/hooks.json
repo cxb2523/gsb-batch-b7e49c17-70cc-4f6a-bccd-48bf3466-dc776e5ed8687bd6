@@ -1,0 +1,17 @@
+{
+  "description": "Intercept WebFetch calls and route them through PullMD for cleaner Markdown output",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "The user has a self-hosted PullMD service that converts web pages to clean Markdown. It produces much better results than WebFetch.\n\nThe tool call is attempting to use WebFetch with this input: $TOOL_INPUT\n\nDecide what to do:\n\n1. If the URL is a GitHub URL (github.com, raw.githubusercontent.com) → ALLOW WebFetch (GitHub works better with gh CLI or direct fetch)\n2. If the URL is a JSON API endpoint (contains /api/, returns JSON, or has Accept: application/json) → ALLOW WebFetch\n3. If the conversation already shows a failed PullMD curl attempt for this same URL → ALLOW WebFetch (it's the fallback)\n4. For ALL other web pages → DENY WebFetch and tell Claude to use PullMD instead\n\nWhen denying, respond with a JSON object with permissionDecision 'deny' and a systemMessage instructing Claude to use this exact command instead:\n\ncurl -s \"__PULLMD_URL__/api?url=<THE_URL>\"\n\nAdd &nocache=true if the user asked for fresh content. Add &comments=true if the user wants full page content including comments.\n\nWhen allowing, respond with permissionDecision 'allow'.",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

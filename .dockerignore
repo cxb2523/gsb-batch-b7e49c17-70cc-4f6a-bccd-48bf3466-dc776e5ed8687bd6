@@ -1,0 +1,11 @@
+node_modules
+data
+.git
+docs
+website
+test
+.env*
+.claude
+_archive
+.superpowers
+SESSION_LOG.md

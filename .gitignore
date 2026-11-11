@@ -1,0 +1,22 @@
+node_modules/
+.env
+data/
+
+# Internal / dev-only — never publish
+CLAUDE.md
+!website/CLAUDE.md
+docs/
+!website/docs/
+skill/web-reader-workspace/
+.claude/
+_archive/
+
+# Python sidecar build artifacts
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Local session notes (never committed to public repo)
+SESSION_LOG.md

@@ -1,0 +1,1442 @@
+import express from 'express';
+import { extractPost, normalizeRedditUrl, RedditUnsupportedPageError } from './lib/reddit.js';
+import { extractHn, normalizeHnUrl } from './lib/hackernews.js';
+import { extractWeb, extractHtml, extractFile } from './lib/web.js';
+import { createCache, readCacheRetentionDays } from './lib/cache.js';
+import { createAuth, formatBootstrapError } from './lib/auth.js';
+import { createOAuth, mountOAuthRoutes, oauthCors } from './lib/oauth/index.js';
+import { qualityScore } from './lib/scoring.js';
+import { buildFrontmatter, mergeMediaFrontmatter, mergeFrontmatter, validateFrontmatterFields } from './lib/frontmatter.js';
+import { queryExtract } from './lib/query-extract.js';
+import { suggestFilename } from './lib/filename.js';
+import { mcpHandler } from './lib/mcp.js';
+import { refreshShareEntry as refreshShare } from './lib/share-refresh.js';
+import { recentHistory, PUBLIC_HISTORY_DISABLED } from './lib/history.js';
+import { renderHelp, renderIndex, getSkillZip, publicUrlFor, PULLMD_VERSION } from './lib/distrib.js';
+import { getRecipeStatus, loadRecipes, applyRecipesInvalidation, computeRecipesHash } from './lib/recipes.js';
+import { assertUrlAllowed, SsrfError } from './lib/ssrf.js';
+import { BotChallengeError } from './lib/challenge.js';
+import { createRateLimiter } from './lib/oauth/rate-limit.js';
+import { ignoredModelEnvWarning } from './lib/llm/providers.js';
+import { createLlmBudget } from './lib/llm/budget.js';
+import { parseImagesParam, resolveEmbeddedImages, cachedImagesIncomplete, embeddedImagesModeWarning, redditImageOptions, imageStoreFrom } from './lib/embedded-images.js';
+import { createStatusChecker } from './lib/status.js';
+import { createForwardedHeaderNotice } from './lib/proxy-notice.js';
+import { stripMarkdown } from './lib/strip-markdown.js';
+import { createFileJobStore } from './lib/file-jobs.js';
+import path from 'node:path';
+import fs from 'node:fs';
+
+function isRedditUrl(url) {
+  try {
+    normalizeRedditUrl(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isHnUrl(url) {
+  try {
+    normalizeHnUrl(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// query-extract: gated helpers shared by all four GET /api body-producing
+// paths. Never called unless a non-empty `query` param is present.
+function setExtractHeaders(res, ex) {
+  res.set('X-Extracted', ex.extracted ? 'true' : 'false');
+  if (ex.confidence != null) res.set('X-Extract-Confidence', ex.confidence);
+  res.set('X-Extract-Sections', String(ex.sectionsSelected));
+  res.set('X-Extract-Original-Tokens', String(ex.originalTokens));
+  res.set('X-Extract-Returned-Tokens', String(ex.returnedTokens));
+}
+
+function extractJson(ex) {
+  return {
+    extracted: ex.extracted,
+    confidence: ex.confidence,
+    sectionsSelected: ex.sectionsSelected,
+    originalTokens: ex.originalTokens,
+    returnedTokens: ex.returnedTokens,
+  };
+}
+
+function extractFrontmatterFields(ex) {
+  return [
+    ['extracted', ex.extracted],
+    ['extract_confidence', ex.confidence],
+    ['sections_selected', ex.sectionsSelected],
+    ['original_tokens', ex.originalTokens],
+    ['returned_tokens', ex.returnedTokens],
+  ];
+}
+
+function logQueryExtract(url, query, ex) {
+  console.log(`[query-extract] ${url} q="${query}" ${ex.originalTokens}->${ex.returnedTokens} tokens, ${ex.sectionsSelected} sections, confidence=${ex.confidence}`);
+}
+
+function detectClient(ua, clientMode) {
+  // Explicit client-mode header from the frontend trumps UA sniffing
+  if (clientMode === 'pwa') return 'pwa';
+  if (!ua) return 'api';
+  const lower = ua.toLowerCase();
+  if (lower.includes('claude') || lower.includes('anthropic')) return 'claude';
+  if (lower.includes('curl') || lower.includes('wget') || lower.includes('python-requests') || lower.includes('httpie') || lower.includes('node-fetch') || lower.includes('axios')) return 'api';
+  if (lower.includes('mozilla') || lower.includes('chrome') || lower.includes('safari') || lower.includes('firefox') || lower.includes('edge')) return 'browser';
+  return 'api';
+}
+
+function readDisablePublicHistoryEnv() {
+  const v = process.env.DISABLE_PUBLIC_HISTORY;
+  if (v == null) return false;
+  const s = String(v).toLowerCase().trim();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'on';
+}
+
+const TRUST_PROXY_OFF = new Set(['', 'false', 'off', 'no', '0']);
+const TRUST_PROXY_ON = new Set(['true', 'on', 'yes']);
+
+/**
+ * Map PULLMD_TRUST_PROXY to an Express `trust proxy` value. Unset/empty/false
+ * keeps it off (forwarding headers ignored). `true` trusts every hop, a plain
+ * integer is a hop count, anything else is a comma-separated list of
+ * addresses, CIDRs or Express keywords (loopback, linklocal, uniquelocal).
+ * Express treats the strings "true"/"1" as addresses, so they are converted.
+ */
+export function parseTrustProxy(raw) {
+  const s = String(raw ?? '').trim();
+  const lower = s.toLowerCase();
+  if (TRUST_PROXY_OFF.has(lower)) return false;
+  if (TRUST_PROXY_ON.has(lower)) return true;
+  if (/^\d+$/.test(s)) return Number(s);
+  const list = s.split(',').map((x) => x.trim()).filter(Boolean);
+  return list.length ? list : false;
+}
+
+// Shared by every app in this process, so the notice is logged at most once.
+let processForwardedHeaderNotice = null;
+
+function applyTrustProxy(app, value) {
+  try {
+    app.set('trust proxy', value);
+  } catch (err) {
+    console.warn(`Ignoring invalid PULLMD_TRUST_PROXY (${err.message}); forwarding headers stay untrusted.`);
+    app.set('trust proxy', false);
+  }
+}
+
+/**
+ * `comment_depth`: a positive integer, or `all` for no limit plus loading
+ * what Reddit collapsed. Anything else falls back to the default of 3.
+ */
+export function parseCommentDepth(value) {
+  if (value === undefined || value === '') return 3;
+  if (String(value).trim().toLowerCase() === 'all') return 'all';
+  const n = parseInt(value, 10);
+  return Number.isInteger(n) && n >= 1 ? n : 3;
+}
+
+export function createApp(overrides = {}) {
+  const app = express();
+  // Before any route: req.ip / req.secure (rate limiters, cookie flags)
+  // depend on it.
+  applyTrustProxy(app, overrides.trustProxy ?? parseTrustProxy(process.env.PULLMD_TRUST_PROXY));
+  if (!app.get('trust proxy')) {
+    // Behaviour stays the same; this only tells the operator once that a
+    // proxy is in front and PULLMD_TRUST_PROXY is missing.
+    app.use(overrides.forwardedHeaderNotice
+      || (processForwardedHeaderNotice ??= createForwardedHeaderNotice()));
+  }
+  const extract = overrides.extractPost || extractPost;
+  const extractHnFn = overrides.extractHn || extractHn;
+  const extractWebFn = overrides.extractWeb || extractWeb;
+  const extractHtmlFn = overrides.extractHtml || extractHtml;
+  const extractFileFn = overrides.extractFile || extractFile;
+  const cache = overrides.cache || null;
+  const auth = overrides.auth || null;
+  const oauth = overrides.oauth || null;
+  const statusChecker = overrides.statusChecker || createStatusChecker();
+  const disablePublicHistory = overrides.disablePublicHistory ?? readDisablePublicHistoryEnv();
+  // Optional date prefix for the suggested download filename, e.g.
+  // "YYYY-MM-DD-HH-mm-ss-". Unset = no prefix.
+  const filenameDatePrefix = overrides.filenameDatePrefix ?? (process.env.PULLMD_FILENAME_DATE_PREFIX || '');
+  // Only used for the cache-less /api/storage answer; with a cache attached the
+  // cache reports its own configured retention.
+  const cacheRetentionDays = overrides.retentionDays ?? readCacheRetentionDays();
+  // Throttles /s/:id MISSES only (#58). A valid link is never counted, so a
+  // script that legitimately walks hundreds of its own share links stays
+  // unaffected; an enumeration script, which sees almost nothing but misses,
+  // hits the ceiling after 120 guesses per minute and IP.
+  const shareMissLimiter = overrides.shareMissLimiter ?? createRateLimiter({ windowMs: 60_000, max: 120 });
+  // Hourly budget for paid provider tiers (image caption, audio transcription,
+  // PDF OCR), per user or client address. Over budget the request falls back
+  // to the non-provider path instead of failing (PULLMD_LLM_RATE_LIMIT).
+  const llmBudget = overrides.llmBudget ?? createLlmBudget();
+  // Results of `POST /api/file?async=1`, held in memory until picked up
+  // (lib/file-jobs.js). Misses on the pickup routes are throttled like /s/:id.
+  const fileJobs = overrides.fileJobs ?? createFileJobStore();
+  const jobMissLimiter = overrides.jobMissLimiter ?? createRateLimiter({ windowMs: 60_000, max: 120 });
+
+  // Embedded image transcripts (Reddit only for now). The `images` param is
+  // validated for Reddit URLs only; other URLs ignore it, even when invalid.
+  // @returns {{ imagesMode: 'on'|'off' } | { error: string }}
+  function imagesModeFor(url, raw) {
+    if (!isRedditUrl(url)) return { imagesMode: 'off' };
+    const parsed = parseImagesParam(raw);
+    if (parsed === null) return { error: 'invalid images parameter (expected on or off)' };
+    return { imagesMode: resolveEmbeddedImages(parsed) };
+  }
+
+  // A cached Reddit row is a miss when this request wants images and the row
+  // has fewer resolved images than the instance would produce now.
+  function cachedRowLacksImages(url, cached, imagesMode) {
+    return isRedditUrl(url) && imagesMode === 'on' && cachedImagesIncomplete(cached.metadata);
+  }
+
+  // Suggest a download filename to the client. Cosmetic by nature: a failure
+  // here must never cost the caller their markdown, hence the swallowed catch.
+  function filenameFor(opts) {
+    try {
+      return suggestFilename({ ...opts, datePrefixFormat: filenameDatePrefix, now: new Date() });
+    } catch (err) {
+      console.warn('Suggested-filename generation failed:', err.message);
+      return null;
+    }
+  }
+
+  function setFilenameHeader(res, opts) {
+    const name = filenameFor(opts);
+    if (name) res.set('X-Suggested-Filename', name);
+  }
+
+  const gate = auth ? auth.requireAuth() : (req, res, next) => next();
+
+  // Delete scope depends on the caller. The cache is URL-deduped and shared,
+  // so dropping a `conversions` row affects every user's history - that stays
+  // admin-only. A regular user's delete only unlinks the entry from their own
+  // history (`user_fetches`); the shared row and its share link survive.
+  const isGlobalScope = (req) => !auth || auth.mode === 'disabled' || !!req.user?.is_admin;
+
+  // Templated help page + skill zip (PUBLIC_URL substitution).
+  // Must come BEFORE express.static so they win over the raw files in /public.
+  app.get(['/help', '/help.html'], (req, res) => {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderHelp(publicUrlFor(req)));
+  });
+
+  // Templated index page (substitutes PUBLIC_URL + version).
+  // Must come BEFORE express.static so it wins over the raw file in /public.
+  app.get(['/', '/index.html'], (req, res) => {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderIndex(publicUrlFor(req), { disablePublicHistory }));
+  });
+
+  app.get('/pullmd.zip', async (req, res, next) => {
+    try {
+      const buf = await getSkillZip(publicUrlFor(req));
+      res.set('Content-Type', 'application/zip');
+      res.set('Content-Disposition', 'attachment; filename="pullmd.zip"');
+      res.set('Content-Length', String(buf.length));
+      res.send(buf);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Legacy path from pre-v3 docs and installed help pages.
+  app.get('/web-reader.zip', (req, res) => {
+    res.redirect(301, '/pullmd.zip');
+  });
+
+  // Service worker must never be cached so browsers pick up updates immediately.
+  app.get('/sw.js', (req, res) => {
+    res.set('Content-Type', 'application/javascript');
+    res.set('Cache-Control', 'no-store');
+    res.sendFile('sw.js', { root: 'public' });
+  });
+
+  app.use(express.static('public', { extensions: ['html'] }));
+
+  if (auth) {
+    app.use(auth.middleware());
+    auth.mountAuthRoutes(app);
+  }
+  if (oauth) {
+    mountOAuthRoutes(app, oauth);
+  }
+
+  // MCP endpoint (stateless Streamable-HTTP transport).
+  // Each request gets a fresh MCP server + transport bound to the same deps.
+  const mcp = mcpHandler({
+    extract,
+    extractHn: extractHnFn,
+    extractWeb: extractWebFn,
+    cache,
+    qualityScore,
+    buildFrontmatter,
+    isRedditUrl,
+    isHnUrl,
+    llmBudget,
+    disablePublicHistory,
+  });
+  // CORS first so OPTIONS preflight short-circuits before `gate` would 401.
+  app.use('/mcp', oauthCors);
+  app.post('/mcp', gate, express.json({ limit: '1mb' }), mcp);
+  app.get('/mcp', gate, mcp);
+  app.delete('/mcp', gate, mcp);
+
+  app.get('/share', gate, (req, res) => {
+    let link = req.query.link || req.query.url || '';
+    if (!link && req.query.text) {
+      const urlMatch = req.query.text.match(/https?:\/\/\S+/);
+      if (urlMatch) link = urlMatch[0];
+    }
+    res.redirect(302, `/#url=${encodeURIComponent(link)}`);
+  });
+
+  // Refresh a stale share-cache entry by re-extracting from its source URL
+  // (lib/share-refresh.js, shared with the MCP get_share tool). Errors
+  // propagate; the caller serves the stale snapshot then.
+  async function refreshShareEntry(entry, client, llmAllowed) {
+    const r = await refreshShare(entry, {
+      cache,
+      extract,
+      extractHn: extractHnFn,
+      extractWeb: extractWebFn,
+      isRedditUrl,
+      isHnUrl,
+      client,
+      userId: null,
+      llmAllowed,
+    });
+    return r.markdown;
+  }
+
+  // Share endpoint: return cached markdown by share ID, refreshing if stale.
+  app.get('/s/:id', async (req, res) => {
+    if (!cache) {
+      return res.status(404).json({ error: 'Cache not available' });
+    }
+
+    const entry = cache.getByShareId(req.params.id);
+    if (!entry) {
+      const key = shareMissLimiter.keyFor(req);
+      if (!shareMissLimiter.check(key)) {
+        res.set('Retry-After', String(shareMissLimiter.retryAfterSeconds(key)));
+        return res.status(429).json({ error: 'rate_limited' });
+      }
+      return res.status(404).json({ error: 'Share link not found or expired' });
+    }
+
+    let markdown = entry.markdown;
+    const ageMs = Date.now() - new Date(entry.created_at + 'Z').getTime();
+    const STALE_MS = 60 * 60 * 1000;
+    if (ageMs > STALE_MS) {
+      const client = detectClient(req.headers['user-agent'], req.headers['x-client-mode']);
+      try {
+        markdown = await refreshShareEntry(entry, client, llmBudget.forRequest(req));
+      } catch (err) {
+        // Source is unreachable / failed — serve the stale snapshot.
+        console.warn('Share-link refresh failed for', entry.url, '—', err.message);
+      }
+    }
+
+    // Prefer the H1 of what we are about to serve over the stored title: after
+    // a refresh the row in hand is the pre-refresh one.
+    setFilenameHeader(res, {
+      source: entry.source,
+      title: markdown.match(/^#\s+(.+)$/m)?.[1] || entry.title,
+      url: entry.url,
+      shareId: req.params.id,
+    });
+
+    const format = req.query.format;
+    if (format === 'text') {
+      res.set('Content-Type', 'text/plain; charset=utf-8');
+      return res.send(stripMarkdown(markdown));
+    }
+    res.set('Content-Type', 'text/markdown; charset=utf-8');
+    return res.send(markdown);
+  });
+
+  app.get('/api', gate, async (req, res) => {
+    const { url, comments, comment_depth, comment_limit, format, nocache, frontmatter, lang, render, extractor, yt_timecodes, yt_chunk, pdf, query, max_tokens, images } = req.query;
+    const wantFrontmatter = frontmatter === 'true' || frontmatter === '1';
+    const reqLang = lang === 'en' ? 'en' : 'de';
+    const validExtractor = (extractor === 'readability' || extractor === 'trafilatura' || extractor === 'playwright')
+      ? extractor : undefined;
+    const validYtTimecodes = (yt_timecodes === 'links' || yt_timecodes === 'plain' || yt_timecodes === 'none') ? yt_timecodes : undefined;
+    const validYtChunk = (yt_chunk !== undefined && /^\d+$/.test(yt_chunk)) ? parseInt(yt_chunk, 10) : undefined;
+    const explicitYtParams = validYtTimecodes !== undefined || validYtChunk !== undefined;
+    // query-extract: gated feature. `queryActive` decides everything below —
+    // an empty/absent query must leave every byte of the response untouched.
+    const trimmedQuery = typeof query === 'string' ? query.trim() : '';
+    const queryActive = trimmedQuery.length > 0;
+
+    if (!url) {
+      return res.status(400).json({ error: 'Missing required parameter: url' });
+    }
+
+    // max_tokens is only meaningful (and only validated) when query-extract is
+    // actually active — validating it unconditionally would 400 requests that
+    // pass max_tokens without a query, which is a behavior change on the
+    // byte-identical default path.
+    let maxTokens = 600;
+    if (queryActive && max_tokens !== undefined) {
+      if (!/^\d+$/.test(max_tokens) || Number(max_tokens) < 64 || Number(max_tokens) > 20000) {
+        return res.status(400).json({ error: 'Invalid max_tokens parameter: must be an integer between 64 and 20000' });
+      }
+      maxTokens = Number(max_tokens);
+    }
+
+    const imagesCheck = imagesModeFor(url, images);
+    if (imagesCheck.error) {
+      return res.status(400).json({ error: imagesCheck.error });
+    }
+    const { imagesMode } = imagesCheck;
+
+    try {
+      await assertUrlAllowed(url);
+    } catch (err) {
+      if (err instanceof SsrfError) {
+        return res.status(403).json({ error: `URL not allowed: ${err.message}` });
+      }
+      throw err;
+    }
+
+    const client = detectClient(req.headers['user-agent'], req.headers['x-client-mode'] || req.query.client_mode);
+    // Explicit comment_depth/comment_limit changes the expected output, but we
+    // don't store these params per cache row — bypass the cache so the new
+    // values actually take effect (the fresh response then overwrites the row).
+    const explicitCommentParams = comment_depth !== undefined || comment_limit !== undefined;
+    const explicitRenderParam = render === 'force' || render === 'skip';
+    const useCache = cache && nocache !== 'true' && nocache !== '1' && !explicitCommentParams && !explicitRenderParam && !validExtractor && !explicitYtParams && pdf !== 'ocr';
+
+    const wantComments = comments !== 'false' && comments !== '0';
+    const t0 = Date.now();
+
+    if (useCache) {
+      const cached = cache.get(url);
+      if (cached) {
+        const structuredCached = isRedditUrl(url) || isHnUrl(url);
+        const hasComments = cached.markdown.includes('\n## Kommentare') || cached.markdown.includes('\n## Comments');
+        if ((!structuredCached || !wantComments || hasComments) && !cachedRowLacksImages(url, cached, imagesMode)) {
+          const baseMd = cached.markdown;
+          const cachedQuality = qualityScore(baseMd);
+          const titleMatchCached = baseMd.match(/^#\s+(.+)$/m);
+          // Serve the full metadata persisted at extraction time (image/og:image,
+          // description, author, language, site, …) instead of rebuilding a
+          // minimal {title,url,quality} object — those fields were silently
+          // dropped on cache hits before. title/url/quality are renormalized from
+          // the cached row (markdown H1 + live quality) so they stay authoritative.
+          const cachedMeta = cached.metadata || {};
+          const outMeta = {
+            ...cachedMeta,
+            title: titleMatchCached?.[1] || cached.title || cachedMeta.title || null,
+            sourceUrl: url,
+            quality: cachedQuality,
+          };
+          // Reddit/HN mirror their fresh paths: a minimal frontmatter object plus
+          // mergeMediaFrontmatter for the structured fields (subreddit/author/…).
+          const fmInput = structuredCached
+            ? { title: outMeta.title, sourceUrl: url, quality: cachedQuality }
+            : outMeta;
+
+          let bodyMd = baseMd;
+          let ex = null;
+          if (queryActive) {
+            ex = queryExtract(bodyMd, trimmedQuery, { maxTokens });
+            bodyMd = ex.markdown;
+            logQueryExtract(url, trimmedQuery, ex);
+          }
+
+          const fm = wantFrontmatter
+            ? buildFrontmatter(fmInput, { source: cached.source, shareId: cached.share_id })
+            : '';
+          let md = wantFrontmatter
+            ? mergeMediaFrontmatter(fm + bodyMd, cachedMeta, cached.source)
+            : fm + bodyMd;
+          if (ex && wantFrontmatter) md = mergeFrontmatter(md, extractFrontmatterFields(ex));
+          res.set('X-Source', cached.source);
+          res.set('X-Quality', String(cachedQuality));
+          if (cached.share_id) res.set('X-Share-Id', cached.share_id);
+          setFilenameHeader(res, { source: cached.source, title: outMeta.title, url, shareId: cached.share_id });
+          if (ex) setExtractHeaders(res, ex);
+          if (cache) cache.logExtraction({
+            url, source: cached.source, quality: cachedQuality, markdownLen: baseMd.length,
+            extractorReason: null, durationMs: Date.now() - t0, client, cached: true,
+          });
+          if (format === 'json') {
+            return res.json({
+              markdown: md,
+              metadata: outMeta,
+              source: cached.source,
+              shareId: cached.share_id || null,
+              ...(ex ? { extract: extractJson(ex) } : {}),
+            });
+          }
+          if (format === 'text') {
+            res.set('Content-Type', 'text/plain; charset=utf-8');
+            return res.send(stripMarkdown(md));
+          }
+          res.set('Content-Type', 'text/markdown; charset=utf-8');
+          return res.send(md);
+        }
+      }
+    }
+
+    if (isRedditUrl(url)) {
+      try {
+        const r = await extract(url, {
+          comments: wantComments,
+          commentDepth: parseCommentDepth(comment_depth),
+          commentLimit: comment_limit ? parseInt(comment_limit, 10) : null,
+          lang: reqLang,
+          withMeta: true,
+          ...redditImageOptions(imagesMode, llmBudget.forRequest(req), imageStoreFrom(cache)),
+        });
+        // Test doubles may return a bare string; production returns { markdown, meta }.
+        const baseMd = typeof r === 'string' ? r : r.markdown;
+        const redditMeta = typeof r === 'string' ? null : r.meta;
+        // noStore: an image missed for a transient reason; serve, don't cache.
+        const noStore = typeof r !== 'string' && !!r.noStore;
+
+        let shareId = null;
+        const titleMatch = baseMd.match(/^#\s+(.+)$/m);
+        if (cache && !noStore) {
+          shareId = cache.put({ url, title: titleMatch?.[1] || 'Reddit Post', markdown: baseMd, source: 'reddit', client, user_id: req.user?.id ?? null, metadata: redditMeta });
+        }
+
+        let bodyMd = baseMd;
+        let ex = null;
+        if (queryActive) {
+          ex = queryExtract(bodyMd, trimmedQuery, { maxTokens });
+          bodyMd = ex.markdown;
+          logQueryExtract(url, trimmedQuery, ex);
+        }
+
+        const quality = qualityScore(baseMd);
+        const fm = wantFrontmatter
+          ? buildFrontmatter({ title: titleMatch?.[1] || null, sourceUrl: url, quality }, { source: 'reddit', shareId })
+          : '';
+        let markdown = wantFrontmatter
+          ? mergeMediaFrontmatter(fm + bodyMd, redditMeta, 'reddit')
+          : fm + bodyMd;
+        if (ex && wantFrontmatter) markdown = mergeFrontmatter(markdown, extractFrontmatterFields(ex));
+
+        res.set('X-Source', 'reddit');
+        res.set('X-Quality', String(quality));
+        if (shareId) res.set('X-Share-Id', shareId);
+        setFilenameHeader(res, { source: 'reddit', title: titleMatch?.[1] || null, url, shareId });
+        if (ex) setExtractHeaders(res, ex);
+        if (cache) cache.logExtraction({
+          url, source: 'reddit', quality, markdownLen: baseMd.length,
+          extractorReason: null, durationMs: Date.now() - t0, client, cached: false,
+        });
+        if (format === 'json') {
+          return res.json({
+            markdown,
+            metadata: {
+              title: titleMatch?.[1] || null,
+              description: null, canonical: null, author: null,
+              publishedTime: null, modifiedTime: null,
+              ogTitle: null, ogDescription: null, ogImage: null,
+              ogSiteName: null, ogType: null,
+              twitterCard: null, twitterTitle: null, twitterDescription: null, twitterImage: null,
+              language: null, sourceUrl: url, statusCode: 200,
+              quality,
+            },
+            source: 'reddit',
+            shareId: shareId || null,
+            ...(ex ? { extract: extractJson(ex) } : {}),
+          });
+        }
+        if (format === 'text') {
+          res.set('Content-Type', 'text/plain; charset=utf-8');
+          return res.send(stripMarkdown(markdown));
+        }
+        res.set('Content-Type', 'text/markdown; charset=utf-8');
+        return res.send(markdown);
+      } catch (err) {
+        if (err instanceof RedditUnsupportedPageError) {
+          return res.status(400).json({ error: err.message, code: err.code });
+        }
+        if (err.message.includes('not found') || err.message.includes('Not found')) {
+          return res.status(404).json({ error: 'Post not found' });
+        }
+        if (err.message.includes('Rate limited') || err.message.includes('429')) {
+          return res.status(502).json({ error: 'Reddit rate limit. Try again later.' });
+        }
+        if (err.message.includes('403') || err.message.includes('Blocked')) {
+          return res.status(502).json({ error: 'Reddit blocked the request.' });
+        }
+        console.error('API error:', err);
+        return res.status(500).json({ error: 'Internal server error' });
+      }
+    }
+
+    // Hacker News: dedicated Algolia-backed extractor. On any failure we fall
+    // through to the generic web pipeline below (worst case = today's output).
+    if (isHnUrl(url)) {
+      try {
+        const r = await extractHnFn(url, {
+          comments: wantComments,
+          commentDepth: parseCommentDepth(comment_depth),
+          commentLimit: comment_limit ? parseInt(comment_limit, 10) : null,
+          lang: reqLang,
+          withMeta: true,
+        });
+        const baseMd = typeof r === 'string' ? r : r.markdown;
+        const hnMeta = typeof r === 'string' ? null : r.meta;
+        const titleMatch = baseMd.match(/^#\s+(.+)$/m);
+        let shareId = null;
+        if (cache) {
+          shareId = cache.put({ url, title: titleMatch?.[1] || 'Hacker News', markdown: baseMd, source: 'hackernews', client, user_id: req.user?.id ?? null, metadata: hnMeta });
+        }
+
+        let bodyMd = baseMd;
+        let ex = null;
+        if (queryActive) {
+          ex = queryExtract(bodyMd, trimmedQuery, { maxTokens });
+          bodyMd = ex.markdown;
+          logQueryExtract(url, trimmedQuery, ex);
+        }
+
+        const quality = qualityScore(baseMd);
+        const fm = wantFrontmatter
+          ? buildFrontmatter({ title: titleMatch?.[1] || null, sourceUrl: url, quality }, { source: 'hackernews', shareId })
+          : '';
+        let markdown = wantFrontmatter
+          ? mergeMediaFrontmatter(fm + bodyMd, hnMeta, 'hackernews')
+          : fm + bodyMd;
+        if (ex && wantFrontmatter) markdown = mergeFrontmatter(markdown, extractFrontmatterFields(ex));
+        res.set('X-Source', 'hackernews');
+        res.set('X-Quality', String(quality));
+        if (shareId) res.set('X-Share-Id', shareId);
+        setFilenameHeader(res, { source: 'hackernews', title: titleMatch?.[1] || null, url, shareId });
+        if (ex) setExtractHeaders(res, ex);
+        if (cache) cache.logExtraction({
+          url, source: 'hackernews', quality, markdownLen: baseMd.length,
+          extractorReason: null, durationMs: Date.now() - t0, client, cached: false,
+        });
+        if (format === 'json') {
+          return res.json({
+            markdown,
+            metadata: {
+              title: titleMatch?.[1] || null,
+              description: null, canonical: null, author: null,
+              publishedTime: null, modifiedTime: null,
+              ogTitle: null, ogDescription: null, ogImage: null,
+              ogSiteName: null, ogType: null,
+              twitterCard: null, twitterTitle: null, twitterDescription: null, twitterImage: null,
+              language: null, sourceUrl: url, statusCode: 200,
+              quality,
+            },
+            source: 'hackernews',
+            shareId: shareId || null,
+            ...(ex ? { extract: extractJson(ex) } : {}),
+          });
+        }
+        if (format === 'text') {
+          res.set('Content-Type', 'text/plain; charset=utf-8');
+          return res.send(stripMarkdown(markdown));
+        }
+        res.set('Content-Type', 'text/markdown; charset=utf-8');
+        return res.send(markdown);
+      } catch (err) {
+        console.warn(`[hn] ${url} failed (${err.message}); falling back to web pipeline`);
+        // fall through to the generic web pipeline below
+      }
+    }
+
+    try {
+      const result = await extractWebFn(url, {
+        comments: false,
+        render: explicitRenderParam ? render : undefined,
+        extractor: validExtractor,
+        ytTimecodes: validYtTimecodes,
+        ytChunk: validYtChunk,
+        pdfOcr: pdf === 'ocr',
+        llmAllowed: llmBudget.forRequest(req),
+      });
+
+      let shareId = null;
+      if (cache && !result.noStore) {
+        shareId = cache.put({ url, title: result.title, markdown: result.markdown, source: result.source, client, user_id: req.user?.id ?? null, metadata: result.metadata });
+      }
+
+      let bodyMd = result.markdown;
+      let ex = null;
+      if (queryActive) {
+        ex = queryExtract(bodyMd, trimmedQuery, { maxTokens });
+        bodyMd = ex.markdown;
+        logQueryExtract(url, trimmedQuery, ex);
+      }
+
+      const fm = wantFrontmatter
+        ? buildFrontmatter(result.metadata || {}, { source: result.source, shareId })
+        : '';
+      const finalMd = fm + bodyMd;
+
+      let outMd = wantFrontmatter
+        ? mergeMediaFrontmatter(finalMd, result.metadata, result.source)
+        : finalMd;
+      if (ex && wantFrontmatter) outMd = mergeFrontmatter(outMd, extractFrontmatterFields(ex));
+
+      res.set('X-Source', result.source);
+      setFilenameHeader(res, {
+        source: result.source,
+        title: result.metadata?.title || result.title,
+        url,
+        shareId,
+      });
+      if (result.transcriptStatus) res.set('X-Transcript-Status', result.transcriptStatus);
+      if (result.metadata?.quality !== undefined) {
+        res.set('X-Quality', String(result.metadata.quality));
+      }
+      if (shareId) res.set('X-Share-Id', shareId);
+      if (ex) setExtractHeaders(res, ex);
+      if (cache) cache.logExtraction({
+        url, source: result.source,
+        quality: result.metadata?.quality,
+        markdownLen: result.markdown.length,
+        extractorReason: result.metadata?.extractorReason || null,
+        durationMs: Date.now() - t0,
+        client, cached: false,
+      });
+      if (format === 'json') {
+        return res.json({
+          markdown: outMd,
+          metadata: result.metadata || null,
+          source: result.source,
+          shareId: shareId || null,
+          ...(ex ? { extract: extractJson(ex) } : {}),
+        });
+      }
+      if (format === 'text') {
+        res.set('Content-Type', 'text/plain; charset=utf-8');
+        return res.send(stripMarkdown(outMd));
+      }
+      res.set('Content-Type', 'text/markdown; charset=utf-8');
+      return res.send(outMd);
+    } catch (err) {
+      if (err instanceof SsrfError) {
+        // Blocked below the up-front check: a hop the page took after the
+        // first (a redirect or a render-time navigation). Same answer.
+        return res.status(403).json({ error: `URL not allowed: ${err.message}` });
+      }
+      if (err instanceof BotChallengeError) {
+        // Not a PullMD failure: the upstream refuses non-browser clients.
+        // Still 502 (upstream), but machine-readable so clients can tell it
+        // apart from a transient fetch error and skip retries.
+        console.warn('Bot challenge:', err.vendor, url);
+        return res.status(502).json({ error: err.message, code: 'bot_challenge', vendor: err.vendor });
+      }
+      console.error('Web extraction error:', err);
+      return res.status(502).json({ error: `Failed to extract page: ${err.message}` });
+    }
+  });
+
+  // Convert a local / pre-fetched HTML document (issue #28). Privacy by
+  // design: no cache.put() - no history entry, no share link; telemetry
+  // logs a constant placeholder instead of a (potentially sensitive)
+  // file name. No Playwright either - user-supplied HTML must never run
+  // in a server-side browser.
+  const MIN_LOCAL_HTML_CONTENT_CHARS = 200;
+  app.post('/api/html', gate, express.text({ type: ['text/html', 'application/xhtml+xml'], limit: '10mb' }), async (req, res) => {
+    const { url, format, frontmatter, extractor } = req.query;
+    // Prefer the X-Filename header (PWA) over ?filename= — header values stay
+    // out of reverse-proxy access logs, query strings don't. Sent URI-encoded.
+    let filename = req.query.filename;
+    const filenameHeader = req.headers['x-filename'];
+    if (filenameHeader) {
+      try { filename = decodeURIComponent(filenameHeader); } catch { filename = filenameHeader; }
+    }
+    const wantFrontmatter = frontmatter === 'true' || frontmatter === '1';
+    const validExtractor = (extractor === 'readability' || extractor === 'trafilatura') ? extractor : undefined;
+
+    // express.text leaves req.body unset when the Content-Type doesn't match.
+    if (typeof req.body !== 'string' || !req.body.trim()) {
+      return res.status(400).json({ error: 'Send raw HTML in the request body with Content-Type: text/html' });
+    }
+    if (url) {
+      try { new URL(url); } catch { return res.status(400).json({ error: 'Invalid url parameter' }); }
+    }
+
+    const client = detectClient(req.headers['user-agent'], req.headers['x-client-mode'] || req.query.client_mode);
+    const t0 = Date.now();
+
+    try {
+      const result = await extractHtmlFn(req.body, { url, filename, extractor: validExtractor });
+
+      if ((result.metadata?.contentLength ?? 0) < MIN_LOCAL_HTML_CONTENT_CHARS) {
+        return res.status(422).json({
+          error: 'Extraction found almost no content - this file looks like a JavaScript app shell. Submit the original URL instead. / Die Extraktion fand kaum Inhalt - die Datei wirkt wie eine JavaScript-App. Bitte übermittle stattdessen die Original-URL.',
+        });
+      }
+
+      const fm = wantFrontmatter
+        ? buildFrontmatter(result.metadata || {}, { source: result.source, shareId: null })
+        : '';
+      const finalMd = fm + result.markdown;
+
+      res.set('X-Source', result.source);
+      // The upload has no URL of its own - the original file name is the next
+      // best basename source for the fallback chain.
+      setFilenameHeader(res, {
+        source: result.source,
+        title: result.metadata?.title || result.title,
+        url: url || filename,
+        shareId: null,
+      });
+      if (result.metadata?.quality !== undefined) {
+        res.set('X-Quality', String(result.metadata.quality));
+      }
+      if (cache) cache.logExtraction({
+        url: 'local-file',                       // constant placeholder - never the file name
+        source: result.source,
+        quality: result.metadata?.quality,
+        markdownLen: result.markdown.length,
+        extractorReason: result.metadata?.extractorReason || null,
+        durationMs: Date.now() - t0,
+        client, cached: false,
+      });
+      if (format === 'json') {
+        return res.json({
+          markdown: finalMd,
+          metadata: result.metadata || null,
+          source: result.source,
+          shareId: null,
+        });
+      }
+      if (format === 'text') {
+        res.set('Content-Type', 'text/plain; charset=utf-8');
+        return res.send(stripMarkdown(finalMd));
+      }
+      res.set('Content-Type', 'text/markdown; charset=utf-8');
+      return res.send(finalMd);
+    } catch (err) {
+      console.error('Local HTML extraction error:', err);
+      return res.status(500).json({ error: `Failed to extract HTML: ${err.message}` });
+    }
+  });
+
+  // Convert an uploaded document (PDF/Office/EPUB/ZIP/CSV/JSON/XML) via the
+  // markitdown sidecar. Same privacy model as /api/html: no cache.put (no
+  // history, no share link), telemetry logs a constant placeholder.
+  const MAX_FILE_BYTES = '25mb';
+
+  // Shared by the synchronous answer and the async job: extract, shape the
+  // markdown the JSON format returns, log telemetry. Throws on failure.
+  // Uses only the plain values in `job`, never req or res.
+  async function convertFile(job) {
+    const t0 = Date.now();
+    const result = await extractFileFn(job.body, {
+      filename: job.filename,
+      contentType: job.contentType,
+      pdfOcr: job.pdfOcr,
+      llmAllowed: job.llmAllowed,
+      lang: job.lang,
+    });
+
+    const fm = job.wantFrontmatter
+      ? buildFrontmatter(result.metadata || {}, { source: result.source, shareId: null })
+      : '';
+    const finalMd = fm + result.markdown;
+
+    const outMd = job.wantFrontmatter
+      ? mergeMediaFrontmatter(finalMd, result.metadata, result.source)
+      : finalMd;
+
+    // Uploaded documents are exactly the case the file-source rule exists for:
+    // the original file name beats a title guessed out of the document.
+    const suggestedFilename = filenameFor({
+      source: result.source,
+      title: result.metadata?.title || result.title,
+      url: job.filename,
+      shareId: null,
+    });
+    if (cache) cache.logExtraction({
+      url: 'local-file',
+      source: result.source,
+      quality: result.metadata?.quality,
+      markdownLen: result.markdown.length,
+      extractorReason: null,
+      durationMs: Date.now() - t0,
+      client: job.client, cached: false,
+    });
+    return { result, outMd, suggestedFilename };
+  }
+
+  // The store does not bound error strings; an upstream message could be huge.
+  const MAX_JOB_ERROR_CHARS = 500;
+  const capJobError = (s) => String(s).slice(0, MAX_JOB_ERROR_CHARS);
+
+  // Background half of `POST /api/file?async=1`. Settles the job on every
+  // path (finish or fail), so it never holds a slot until the pending
+  // timeout, and never rejects: the returned promise is not awaited.
+  function runFileJob(id, job) {
+    (async () => {
+      try {
+        const { result, outMd, suggestedFilename } = await convertFile(job);
+        // finish() throws on a result JSON.stringify cannot handle; the catch
+        // below fails the job then.
+        fileJobs.finish(id, {
+          markdown: outMd,
+          metadata: result.metadata || null,
+          source: result.source,
+          shareId: null,
+          suggestedFilename,
+        });
+      } catch (err) {
+        if (err?.status === 422) {
+          fileJobs.fail(id, { error: capJobError(err.message), httpStatus: 422 });
+          return;
+        }
+        console.error('File conversion error:', err);
+        fileJobs.fail(id, { error: capJobError(`Failed to convert file: ${err?.message}`), httpStatus: 502 });
+      }
+    })().catch((err) => {
+      // Only reachable if fail() itself threw; the pending timeout settles the job.
+      console.error('File job bookkeeping error:', err);
+    });
+  }
+
+  // Job owner: the user id, or null when auth is off. The client key counts
+  // jobs per user or per client address, like lib/llm/budget.js; req.ip
+  // honours the trust proxy setting, a raw header never counts.
+  const jobOwner = (req) => req.user?.id ?? null;
+  const jobClientKey = (req) => (req.user?.id != null ? `user:${req.user.id}` : `ip:${jobMissLimiter.keyFor(req)}`);
+
+  app.post('/api/file', gate, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), async (req, res) => {
+    const { format, frontmatter, pdf, lang } = req.query;
+    let filename = req.query.filename;
+    const filenameHeader = req.headers['x-filename'];
+    if (filenameHeader) {
+      try { filename = decodeURIComponent(filenameHeader); } catch { filename = filenameHeader; }
+    }
+    const contentType = req.headers['content-type'] || 'application/octet-stream';
+    const wantFrontmatter = frontmatter === 'true' || frontmatter === '1';
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Send the raw file bytes in the request body. / Sende die rohen Datei-Bytes im Request-Body.' });
+    }
+
+    // Everything taken from `req` is read here, before a 202 could be sent:
+    // the background conversion must not touch req or res afterwards.
+    const job = {
+      body: req.body,
+      filename,
+      contentType,
+      wantFrontmatter,
+      pdfOcr: pdf === 'ocr',
+      lang: lang === 'en' ? 'en' : 'de',
+      client: detectClient(req.headers['user-agent'], req.headers['x-client-mode'] || req.query.client_mode),
+      llmAllowed: llmBudget.forRequest(req),
+    };
+
+    const wantAsync = req.query.async === '1' || req.query.async === 'true';
+    const jobId = wantAsync ? fileJobs.create({ owner: jobOwner(req), clientKey: jobClientKey(req) }) : null;
+    if (jobId) {
+      res.set('Cache-Control', 'no-store');
+      res.status(202).json({ jobId, status: 'pending' });
+      runFileJob(jobId, job);
+      return;
+    }
+
+    try {
+      const { result, outMd, suggestedFilename } = await convertFile(job);
+
+      res.set('X-Source', result.source);
+      if (suggestedFilename) res.set('X-Suggested-Filename', suggestedFilename);
+      if (result.metadata?.quality !== undefined) {
+        res.set('X-Quality', String(result.metadata.quality));
+      }
+      if (format === 'json') {
+        return res.json({ markdown: outMd, metadata: result.metadata || null, source: result.source, shareId: null });
+      }
+      if (format === 'text') {
+        res.set('Content-Type', 'text/plain; charset=utf-8');
+        return res.send(stripMarkdown(outMd));
+      }
+      res.set('Content-Type', 'text/markdown; charset=utf-8');
+      return res.send(outMd);
+    } catch (err) {
+      if (err.status === 422) {
+        return res.status(422).json({ error: err.message });
+      }
+      console.error('File conversion error:', err);
+      // 502: the markitdown sidecar is an upstream dependency (same as the web /api path).
+      return res.status(502).json({ error: `Failed to convert file: ${err.message}` });
+    }
+  });
+
+  // Pickup for async file jobs. Unknown, expired, deleted and foreign jobs
+  // all get the same 404, and only misses count against the limiter (like
+  // /s/:id), so polling one's own job is never throttled.
+  const JOB_ID_RE = /^[0-9a-f]{32}$/;
+  const JOB_NOT_FOUND = 'Job not found or expired. / Auftrag nicht gefunden oder abgelaufen.';
+  // Before `gate`, so even a 401 is not cached.
+  const noStore = (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); };
+
+  function jobMiss(req, res) {
+    const key = jobMissLimiter.keyFor(req);
+    if (!jobMissLimiter.check(key)) {
+      res.set('Retry-After', String(jobMissLimiter.retryAfterSeconds(key)));
+      return res.status(429).json({ error: 'rate_limited' });
+    }
+    return res.status(404).json({ error: JOB_NOT_FOUND });
+  }
+
+  app.get('/api/file/jobs/:id', noStore, gate, (req, res) => {
+    const id = req.params.id;
+    const job = JOB_ID_RE.test(id) ? fileJobs.get(id, jobOwner(req)) : null;
+    if (!job) return jobMiss(req, res);
+    if (job.status === 'done') return res.json({ status: 'done', ...job.result });
+    if (job.status === 'error') return res.json({ status: 'error', error: job.error, httpStatus: job.httpStatus });
+    return res.json({ status: 'pending' });
+  });
+
+  app.delete('/api/file/jobs/:id', noStore, gate, (req, res) => {
+    const id = req.params.id;
+    if (!JOB_ID_RE.test(id) || !fileJobs.delete(id, jobOwner(req))) return jobMiss(req, res);
+    return res.status(204).end();
+  });
+
+  app.get('/api/stream', gate, async (req, res) => {
+    const { url, comments, comment_depth, comment_limit, frontmatter, lang, nocache, render, extractor, yt_timecodes, yt_chunk, pdf, images } = req.query;
+    const wantFrontmatter = frontmatter === 'true' || frontmatter === '1';
+    const reqLang = lang === 'en' ? 'en' : 'de';
+    const validExtractor = (extractor === 'readability' || extractor === 'trafilatura' || extractor === 'playwright')
+      ? extractor : undefined;
+    const validYtTimecodes = (yt_timecodes === 'links' || yt_timecodes === 'plain' || yt_timecodes === 'none') ? yt_timecodes : undefined;
+    const validYtChunk = (yt_chunk !== undefined && /^\d+$/.test(yt_chunk)) ? parseInt(yt_chunk, 10) : undefined;
+    const explicitYtParams = validYtTimecodes !== undefined || validYtChunk !== undefined;
+
+    if (!url) {
+      return res.status(400).json({ error: 'Missing required parameter: url' });
+    }
+    // Checked before the SSE headers go out, like the missing url above.
+    const imagesCheck = imagesModeFor(url, images);
+    if (imagesCheck.error) {
+      return res.status(400).json({ error: imagesCheck.error });
+    }
+    const { imagesMode } = imagesCheck;
+
+    res.set('Content-Type', 'text/event-stream; charset=utf-8');
+    res.set('Cache-Control', 'no-cache');
+    res.set('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const send = (event, data) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    const emit = (stage, data = {}) => send('status', { stage, ...data });
+
+    const ac = new AbortController();
+    req.on('close', () => ac.abort());
+
+    const client = detectClient(req.headers['user-agent'], req.headers['x-client-mode'] || req.query.client_mode);
+    const wantComments = comments !== 'false' && comments !== '0';
+    const explicitRenderParam = render === 'force' || render === 'skip';
+    const explicitCommentParams = comment_depth !== undefined || comment_limit !== undefined;
+    const useCache = cache && nocache !== 'true' && nocache !== '1' && !explicitRenderParam && !explicitCommentParams && !validExtractor && !explicitYtParams && pdf !== 'ocr';
+    const t0 = Date.now();
+
+    try {
+      // Same guard as /api, and deliberately ahead of the cache lookup: a row
+      // cached before a host became blocked must not be served through here.
+      // Headers are already flushed, so a rejection surfaces as an SSE error
+      // event via the catch below instead of a 403.
+      try {
+        await assertUrlAllowed(url);
+      } catch (err) {
+        if (err instanceof SsrfError) throw new Error(`URL not allowed: ${err.message}`);
+        throw err;
+      }
+
+      // Cache hit fast path
+      if (useCache) {
+        const cached = cache.get(url);
+        if (cached) {
+          const structuredCached = isRedditUrl(url) || isHnUrl(url);
+          const hasComments = cached.markdown.includes('\n## Kommentare') || cached.markdown.includes('\n## Comments');
+          if ((!structuredCached || !wantComments || hasComments) && !cachedRowLacksImages(url, cached, imagesMode)) {
+            emit('fetching', { url, cached: true });
+            const baseMd = cached.markdown;
+            const cachedQuality = qualityScore(baseMd);
+            const titleMatchCached = baseMd.match(/^#\s+(.+)$/m);
+            const fm = wantFrontmatter
+              ? buildFrontmatter({ title: titleMatchCached?.[1] || cached.title, sourceUrl: url, quality: cachedQuality }, { source: cached.source, shareId: cached.share_id })
+              : '';
+            send('result', {
+              markdown: wantFrontmatter
+                ? mergeMediaFrontmatter(fm + baseMd, cached.metadata, cached.source)
+                : fm + baseMd,
+              source: cached.source,
+              shareId: cached.share_id || null,
+              // SSE headers are long gone by the time the result exists, so the
+              // suggestion travels in the payload instead of X-Suggested-Filename.
+              suggestedFilename: filenameFor({
+                source: cached.source,
+                title: titleMatchCached?.[1] || cached.title,
+                url,
+                shareId: cached.share_id,
+              }),
+            });
+            cache.logExtraction({
+              url, source: cached.source, quality: cachedQuality, markdownLen: (fm + baseMd).length,
+              extractorReason: null, durationMs: Date.now() - t0, client, cached: true,
+            });
+            return res.end();
+          }
+        }
+      }
+
+      // Reddit-specific errors (404, 429, 403) are mapped to HTTP status codes in /api.
+      // Here they bubble to the outer catch and surface via the error event's message,
+      // which lib/reddit.js already populates with user-readable strings.
+      if (isRedditUrl(url)) {
+        emit('fetching', { url });
+        const r = await extract(url, {
+          comments: wantComments,
+          commentDepth: parseCommentDepth(comment_depth),
+          commentLimit: comment_limit ? parseInt(comment_limit, 10) : null,
+          lang: reqLang,
+          withMeta: true,
+          ...redditImageOptions(imagesMode, llmBudget.forRequest(req), imageStoreFrom(cache)),
+        });
+        // Test doubles may return a bare string; production returns { markdown, meta }.
+        const baseMd = typeof r === 'string' ? r : r.markdown;
+        const redditMeta = typeof r === 'string' ? null : r.meta;
+        const noStore = typeof r !== 'string' && !!r.noStore;
+        emit('extracting', { source: 'reddit' });
+        const titleMatch = baseMd.match(/^#\s+(.+)$/m);
+        let shareId = null;
+        if (cache && !noStore) {
+          shareId = cache.put({ url, title: titleMatch?.[1] || 'Reddit Post', markdown: baseMd, source: 'reddit', client, user_id: req.user?.id ?? null, metadata: redditMeta });
+        }
+        const quality = qualityScore(baseMd);
+        const fm = wantFrontmatter
+          ? buildFrontmatter({ title: titleMatch?.[1] || null, sourceUrl: url, quality }, { source: 'reddit', shareId })
+          : '';
+        const outMdReddit = wantFrontmatter
+          ? mergeMediaFrontmatter(fm + baseMd, redditMeta, 'reddit')
+          : fm + baseMd;
+        send('result', {
+          markdown: outMdReddit, source: 'reddit', shareId: shareId || null,
+          suggestedFilename: filenameFor({ source: 'reddit', title: titleMatch?.[1] || null, url, shareId }),
+        });
+        if (cache) cache.logExtraction({ url, source: 'reddit', quality, markdownLen: baseMd.length, extractorReason: null, durationMs: Date.now() - t0, client, cached: false });
+        return res.end();
+      }
+
+      // Hacker News: dedicated extractor; on failure fall through to the web path.
+      if (isHnUrl(url)) {
+        try {
+          emit('fetching', { url });
+          const r = await extractHnFn(url, {
+            comments: wantComments,
+            commentDepth: parseCommentDepth(comment_depth),
+            commentLimit: comment_limit ? parseInt(comment_limit, 10) : null,
+            lang: reqLang,
+            withMeta: true,
+          });
+          const baseMd = typeof r === 'string' ? r : r.markdown;
+          const hnMeta = typeof r === 'string' ? null : r.meta;
+          emit('extracting', { source: 'hackernews' });
+          const titleMatch = baseMd.match(/^#\s+(.+)$/m);
+          let shareId = null;
+          if (cache) {
+            shareId = cache.put({ url, title: titleMatch?.[1] || 'Hacker News', markdown: baseMd, source: 'hackernews', client, user_id: req.user?.id ?? null, metadata: hnMeta });
+          }
+          const quality = qualityScore(baseMd);
+          const fm = wantFrontmatter
+            ? buildFrontmatter({ title: titleMatch?.[1] || null, sourceUrl: url, quality }, { source: 'hackernews', shareId })
+            : '';
+          const outMdHn = wantFrontmatter
+            ? mergeMediaFrontmatter(fm + baseMd, hnMeta, 'hackernews')
+            : fm + baseMd;
+          send('result', {
+            markdown: outMdHn, source: 'hackernews', shareId: shareId || null,
+            suggestedFilename: filenameFor({ source: 'hackernews', title: titleMatch?.[1] || null, url, shareId }),
+          });
+          if (cache) cache.logExtraction({ url, source: 'hackernews', quality, markdownLen: baseMd.length, extractorReason: null, durationMs: Date.now() - t0, client, cached: false });
+          return res.end();
+        } catch (err) {
+          console.warn(`[hn] stream ${url} failed (${err.message}); falling back to web`);
+          // fall through to the web path below
+        }
+      }
+
+      // Web path with optional Playwright fallback inside extractWeb
+      const result = await extractWebFn(url, {
+        comments: false,
+        render: explicitRenderParam ? render : undefined,
+        extractor: validExtractor,
+        ytTimecodes: validYtTimecodes,
+        ytChunk: validYtChunk,
+        pdfOcr: pdf === 'ocr',
+        llmAllowed: llmBudget.forRequest(req),
+        emit,
+        signal: ac.signal,
+      });
+
+      let shareId = null;
+      if (cache && !result.noStore) {
+        shareId = cache.put({ url, title: result.title, markdown: result.markdown, source: result.source, client, user_id: req.user?.id ?? null, metadata: result.metadata });
+      }
+
+      const fm = wantFrontmatter
+        ? buildFrontmatter(result.metadata || {}, { source: result.source, shareId })
+        : '';
+      const finalMd = fm + result.markdown;
+
+      const outMd = wantFrontmatter
+        ? mergeMediaFrontmatter(finalMd, result.metadata, result.source)
+        : finalMd;
+
+      send('result', {
+        markdown: outMd, source: result.source, shareId: shareId || null,
+        transcriptStatus: result.transcriptStatus || null,
+        suggestedFilename: filenameFor({
+          source: result.source,
+          title: result.metadata?.title || result.title,
+          url,
+          shareId,
+        }),
+      });
+      if (cache) cache.logExtraction({
+        url, source: result.source,
+        quality: result.metadata?.quality,
+        markdownLen: result.markdown.length,
+        extractorReason: result.metadata?.extractorReason || null,
+        durationMs: Date.now() - t0,
+        client, cached: false,
+      });
+      res.end();
+    } catch (err) {
+      console.error('SSE stream error:', err);
+      const message = err instanceof SsrfError ? `URL not allowed: ${err.message}` : String(err?.message ?? err) || 'Internal error';
+      send('error', { message });
+      res.end();
+    }
+  });
+
+  // Sidecar health for external monitoring. Ungated like the other aggregate
+  // endpoints, because a monitor polls it without credentials, and it says no
+  // more about the instance than /api/config already does.
+  //
+  // 503 on degraded is deliberate: a plain HTTP monitor has to catch a dead
+  // sidecar too. The Playwright sidecar once crash-looped for eight weeks
+  // while extraction quietly fell back to empty results - nothing was watching
+  // because there was nothing to watch. A Playwright sidecar too old to
+  // enforce the address policy counts as degraded and gets the same 503: it
+  // still renders, so a status code is the only signal a plain monitor sees.
+  app.get('/api/status', async (req, res) => {
+    let status;
+    try {
+      status = await statusChecker();
+    } catch (err) {
+      console.warn('Status check failed:', err.message);
+      status = { ok: false, version: PULLMD_VERSION, services: {}, error: 'check-failed' };
+    }
+    res.status(status.ok ? 200 : 503).json(status);
+  });
+
+  app.get('/api/recipes/status', (req, res) => {
+    const status = getRecipeStatus();
+    const ok = status.rejected === 0;
+    res.json({
+      ok,
+      loaded:   status.loaded,
+      rejected: status.rejected,
+      sources:  status.sources,
+      filteredFrontmatterFields: status.filteredFrontmatterFields || [],
+    });
+  });
+
+  app.get('/api/stats', (req, res) => {
+    if (!cache) return res.json({ total: 0, window: '-7 days' });
+    const window = req.query.window || '-7 days';
+    const stats = cache.extractionStats(window);
+    // The per-domain lists name the sites that were fetched, across all
+    // users. They are included only for callers who may see the global
+    // history: the admin, or anyone when auth is off and public history is on.
+    const showDomains = isGlobalScope(req) && (!!req.user || !disablePublicHistory);
+    if (!showDomains) {
+      delete stats.lowQualityDomains;
+      delete stats.fallbackByDomain;
+    }
+    res.json(stats);
+  });
+
+  app.get('/api/storage', (req, res) => {
+    if (!cache) return res.json({ total: 0, retentionDays: cacheRetentionDays });
+    res.json(cache.storageStats());
+  });
+
+  app.get('/api/config', (req, res) => {
+    res.json({
+      disablePublicHistory,
+      authMode: auth ? auth.mode : 'disabled',
+      authMisconfigured: !!auth?.isMisconfigured,
+      signupOpen: !!auth?.signupOpen,
+      markitdown: !!process.env.MARKITDOWN_URL,
+      vision: !!(process.env.PULLMD_VISION_API_KEY || process.env.PULLMD_LLM_API_KEY),
+      stt: !!(process.env.PULLMD_STT_API_KEY || process.env.PULLMD_LLM_API_KEY),
+      pdfOcr: !!process.env.PULLMD_PDF_OCR_API_KEY,
+      markitdownYoutube: !!process.env.MARKITDOWN_YOUTUBE,
+    });
+  });
+
+  app.get('/api/history', gate, (req, res) => {
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 20, 100));
+    const { denied, items } = recentHistory({ cache, user: req.user, disablePublicHistory, limit });
+    if (denied) {
+      return res.status(403).json({ error: PUBLIC_HISTORY_DISABLED });
+    }
+    res.json(items);
+  });
+
+  app.get('/api/archive', gate, (req, res) => {
+    if (disablePublicHistory && !req.user) {
+      return res.status(403).json({ error: PUBLIC_HISTORY_DISABLED });
+    }
+    if (!cache) {
+      return res.json({ items: [], total: 0 });
+    }
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 50, 200));
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    if (req.user) {
+      return res.json(cache.historyPageForUser(req.user.id, limit, offset));
+    }
+    res.json(cache.historyPage(limit, offset));
+  });
+
+  // With public history off, an anonymous caller may not see other people's
+  // conversions, so they may not delete them either. Without this, the
+  // privacy switch hid the list while DELETE /api/cache still wiped it.
+  const denyAnonymousPrivate = (req, res, next) => {
+    if (disablePublicHistory && !req.user) {
+      return res.status(403).json({ error: PUBLIC_HISTORY_DISABLED });
+    }
+    next();
+  };
+
+  app.delete('/api/cache/:id', gate, denyAnonymousPrivate, (req, res) => {
+    if (!cache) {
+      return res.status(404).json({ error: 'Cache not available' });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'Invalid ID' });
+    const isGlobal = isGlobalScope(req);
+    const result = isGlobal
+      ? cache.delete(id)
+      : cache.forgetForUser(req.user.id, id);
+    if (!result.changes) {
+      return res.status(404).json({ error: 'Entry not found', id });
+    }
+    res.json({ ok: true, id, scope: isGlobal ? 'global' : 'user' });
+  });
+
+  app.delete('/api/cache', gate, denyAnonymousPrivate, (req, res) => {
+    if (!cache) {
+      return res.status(404).json({ error: 'Cache not available' });
+    }
+    if (isGlobalScope(req)) {
+      const result = cache.deleteAll();
+      return res.json({ ok: true, scope: 'global', removed: result.changes });
+    }
+    const result = cache.forgetAllForUser(req.user.id);
+    res.json({ ok: true, scope: 'user', removed: result.changes });
+  });
+
+  // Friendly JSON for body-parser limit violations. Mounted last; non-413
+  // errors fall through to Express' default handler. /api/html names its
+  // 10 MB cap and /api/file its 25 MB cap; other routes (e.g. /mcp at 1 MB) get the generic message.
+  app.use((err, req, res, next) => {
+    if (err?.type === 'entity.too.large') {
+      let error = 'Request body too large. / Anfrage zu groß.';
+      if (req.path === '/api/html') error = 'File too large (max 10 MB). / Datei zu groß (max. 10 MB).';
+      else if (req.path === '/api/file') error = 'File too large (max 25 MB). / Datei zu groß (max. 25 MB).';
+      return res.status(413).json({ error });
+    }
+    next(err);
+  });
+
+  return app;
+}
+
+const isDirectRun = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'));
+if (isDirectRun || process.argv[1]?.endsWith('server.js')) {
+  const port = process.env.PORT || 3000;
+  // Read once so a malformed value warns a single time and cache + app agree.
+  const retentionDays = readCacheRetentionDays();
+  const cache = createCache(process.env.CACHE_DB || './data/cache.db', { retentionDays });
+  const mode = process.env.PULLMD_AUTH_MODE || 'disabled';
+  const auth = createAuth({ db: cache.db, mode, env: process.env, publicUrl: process.env.PUBLIC_URL });
+  try {
+    await auth.runMigration();
+  } catch (err) {
+    if (err && err.code === 'ERR_BOOTSTRAP_MISSING_CREDENTIALS') {
+      console.error(formatBootstrapError(mode));
+      process.exit(1);
+    }
+    throw err;
+  }
+  // Load site recipes (default + optional user overlay)
+  const defaultRecipesPath = path.resolve(process.cwd(), 'site-recipes.default.json');
+  const userRecipesPath = process.env.PULLMD_SITE_RECIPES
+    || (fs.existsSync(path.resolve(process.cwd(), 'data/site-recipes.json'))
+          ? path.resolve(process.cwd(), 'data/site-recipes.json')
+          : null);
+  loadRecipes({ defaultPath: defaultRecipesPath, userPath: userRecipesPath });
+  validateFrontmatterFields();
+
+  const modelEnvWarning = ignoredModelEnvWarning(process.env);
+  if (modelEnvWarning) console.warn(`[config] ${modelEnvWarning}`);
+  const imagesModeWarning = embeddedImagesModeWarning(process.env);
+  if (imagesModeWarning) console.warn(`[config] ${imagesModeWarning}`);
+
+  // Hash recipe content; if changed since last boot, invalidate cache.
+  const recipesHash = computeRecipesHash([defaultRecipesPath, userRecipesPath].filter(Boolean));
+  applyRecipesInvalidation(cache, recipesHash);
+  const invalidationStamp = cache.getMeta('recipes_invalidated_at');
+  if (invalidationStamp) cache.setRecipesInvalidatedAt(invalidationStamp);
+
+  let oauth = null;
+  if (process.env.OAUTH_JWT_SECRET) {
+    try {
+      oauth = createOAuth({
+        db: cache.db,
+        auth,
+        env: process.env,
+      });
+      auth.setAccessTokenVerifier(async (token) => {
+        try {
+          const payload = await oauth.tokens.verifyAccessToken(token);
+          const userId = parseInt(payload.sub, 10);
+          if (!userId) return null;
+          const u = cache.db.prepare("SELECT id, email, is_admin FROM users WHERE id = ?").get(userId);
+          return u ? { id: u.id, email: u.email, is_admin: !!u.is_admin } : null;
+        } catch { return null; }
+      });
+    } catch (err) {
+      console.error('OAuth setup failed:', err.message);
+      process.exit(1);
+    }
+  } else {
+    console.log('OAuth disabled (set OAUTH_JWT_SECRET to enable claude.ai web connector flow)');
+  }
+
+  const app = createApp({ cache, auth, oauth, retentionDays });
+  app.listen(port, () => {
+    console.log(`PullMD running on http://localhost:${port} (auth: ${mode})`);
+  });
+}

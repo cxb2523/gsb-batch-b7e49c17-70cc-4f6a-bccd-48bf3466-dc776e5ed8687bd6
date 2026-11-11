@@ -1,0 +1,111 @@
+name: Build and push Docker images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore: ['website/**', '.github/workflows/docs.yml']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['website/**', '.github/workflows/docs.yml']
+  workflow_dispatch:
+
+env:
+  GHCR: ghcr.io
+  NAMESPACE: aeternalabshq
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pullmd
+            context: .
+            dockerfile: ./Dockerfile
+            readme: ./README.md
+            short: "Self-hosted URL-to-Markdown service with stable, refreshable share links."
+          - name: pullmd-trafilatura
+            context: ./trafilatura-sidecar
+            dockerfile: ./trafilatura-sidecar/Dockerfile
+            readme: ./trafilatura-sidecar/README.md
+            short: "Trafilatura HTML-to-Markdown extractor sidecar for PullMD."
+          - name: pullmd-playwright
+            context: ./playwright-sidecar
+            dockerfile: ./playwright-sidecar/Dockerfile
+            readme: ./playwright-sidecar/README.md
+            short: "Headless Chromium renderer sidecar for PullMD — handles JavaScript-rendered pages."
+          - name: pullmd-markitdown
+            context: ./markitdown-sidecar
+            dockerfile: ./markitdown-sidecar/Dockerfile
+            readme: ./markitdown-sidecar/README.md
+            short: "MarkItDown document-conversion sidecar for PullMD — converts PDF, Office, EPUB, and more."
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.GHCR }}/${{ env.NAMESPACE }}/${{ matrix.name }}
+            ${{ env.NAMESPACE }}/${{ matrix.name }}
+          # Tag plan:
+          #   - vX.Y.Z tag push      → vX.Y.Z, X.Y, X, latest
+          #   - main push (untagged) → main, sha-<sha>
+          # `latest=auto` applies :latest only on semver tag pushes, not on
+          # branch pushes to main.
+          flavor: |
+            latest=auto
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
+
+      - name: Sync Docker Hub README + short description
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.NAMESPACE }}/${{ matrix.name }}
+          short-description: ${{ matrix.short }}
+          readme-filepath: ${{ matrix.readme }}

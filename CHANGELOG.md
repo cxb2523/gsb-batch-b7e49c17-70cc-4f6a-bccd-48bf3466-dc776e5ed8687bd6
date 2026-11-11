@@ -1,0 +1,644 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Self-hosters should consult [`MIGRATION.md`](./MIGRATION.md) when upgrading across a major version.
+
+---
+
+## [Unreleased]
+
+## [3.19.0] - 2026-11-11
+
+### Added
+
+- **File conversions that survive leaving the web app.** A mobile OS cuts the open `POST /api/file` request when the app goes to the background, so a long conversion (audio transcription, PDF OCR) ended in "Network error: server unreachable." while the server finished the work and discarded the result. `POST /api/file?async=1` now answers `202` with a job id and converts in the background; `GET /api/file/jobs/{id}` returns the state or the finished Markdown and `DELETE` removes it. The web app shows upload progress, says when it is safe to leave, remembers the job and shows the result on return. The uploaded file is never stored; the finished result waits in memory for up to 60 minutes (`PULLMD_FILE_JOB_TTL_MINUTES`, `0` turns async jobs off) within `PULLMD_FILE_JOB_MAX_MB` (64). When a job cannot be queued the request is converted synchronously, so a client that sends `async=1` handles both `202` and `200`. `/api/file` without `async` is unchanged. With sign-in enabled a job belongs to the account that created it; without sign-in the 128-bit job id is the only credential, as with share links (`SECURITY.md`).
+
+### Fixed
+
+- **MCP `get_share` refreshes a Hacker News share through the Hacker News extractor.** A share row older than one hour was refreshed through the web pipeline, so the share lost its comments and came back as `source: web`. `GET /s/:id` already did this right; both now use the same refresh logic for Reddit, Hacker News and web pages.
+- **`npm start` passes `--max-http-header-size=65536`.** The Docker image starts the server with this flag since 3.18.2 so YouTube URLs do not fail on large response headers, but `npm start` did not, so an install without Docker still failed with `fetch failed` on YouTube URLs.
+
+## [3.18.2] - 2026-11-08
+
+### Fixed
+
+- **The SSRF guard now connects to the address it checked.** The static fetch path resolved a hostname, checked the answers, and then let the HTTP client resolve the name a second time for the socket, so a name that changed its answer in between (DNS rebinding) could reach an internal address. This was documented as an accepted residual since v3.3.0. The guard now hands the validated addresses to the connection (undici `Agent` with a pinned lookup), one DNS query per request instead of two, and every redirect hop is pinned the same way. A hostname the connector sees without a prior check is resolved and checked before the socket opens. The Playwright sidecar is unchanged: Chromium resolves names itself, and that residual stays documented in `SECURITY.md`.
+
+## [3.18.1] - 2026-11-07
+
+Not released on its own: these fixes ship in 3.18.2.
+
+### Fixed
+
+- YouTube URLs failed with `fetch failed` because the response headers exceeded the default limit of 16 KB. The server now starts with `--max-http-header-size=65536`.
+- **Pages that split one piece of writing across several `<article>` blocks now keep all of them.** Readability commits to one candidate, so a series of short posts by the same author came back as a single post, and the coverage guard does not reach pages this short. Blocks that open with the same link now count as a series, unless they carry headings, are mostly links, or hold too little of the page. That leaves teaser lists and discussions alone. Each block is converted on its own and joined, without duplicates, stray blocks by others, or trailing counters. Reported as `source: article-series`, with the numbers in `metadata.extractorReason`; `PULLMD_ARTICLE_SERIES=off` turns it off.
+
+### Changed
+
+- **The docs now state how Reddit access works today.** They described reading Reddit without API credentials as a lower rate limit and pointed to `prefs/apps` for new credentials. Reddit blocks these requests and no longer accepts new API access requests, and it closes public API access in March 2027 ([announcement](https://www.reddit.com/r/redditdev/comments/1wubcvf/)). See [Reddit access](./README.md#reddit-access). PullMD has no login or session cookie option, and none is planned.
+
+## [3.18.0] - 2026-11-04
+
+### Added
+
+- **E-mail upload (`.eml`).** Drop a saved e-mail onto the web UI, pick it with the file picker, or `POST` it to `/api/file`, and get the message as Markdown: the subject as title, From, To, Cc and Date below it, then the message text. The HTML part goes through the same extraction as `POST /api/html`; the plain-text part is used when there is no HTML part or it yields almost nothing, and a short HTML-only mail is converted directly. Attachments are listed by name only, not converted. Parsing happens inside pullmd (new dependency `postal-mime`), so it works without the markitdown sidecar. `frontmatter=true` fills `title`, `author`, `published` and `source: email`; `lang=en` switches the header labels to English (the web UI sends its current language). A file without mail headers returns `422`. Like other uploads, nothing is cached or shared.
+- **More upload formats, all read without the markitdown sidecar.** Outlook e-mails (`.msg`, new dependency `@kenjiuno/msgreader`) give the same result as `.eml`. Saved pages (`.mhtml` / `.mht`, Chrome's and Edge's "Webpage, single file") are extracted like `POST /api/html`, and the original URL stored in the file is passed along, so it appears as the frontmatter `url` and site recipes apply. Text and Markdown files (`.txt`, `.md`) are passed through with a title line and frontmatter; a note's own YAML frontmatter is kept as a fenced `yaml` block, and non-UTF-8 files are decoded as Windows-1252. Subtitles (`.srt`, `.vtt`) become readable paragraphs without numbers, timestamps or styling, with rolling auto-caption repeats collapsed. Files that do not match their format answer `422`. The web UI's drop hint and file picker now say "file" instead of "HTML file".
+- **Even more upload formats, read without the markitdown sidecar.** OpenDocument text, spreadsheets and presentations (`.odt`, `.ods`, `.odp`): headings, bold and italic, links, lists, tables and footnotes; one table per sheet; one section per slide with speaker notes. They are read with a small built-in ZIP reader that caps the unpacked size. RTF (`.rtf`): paragraphs, headings, bold and italic, links, lists and tables. Calendar files (`.ics`): start, end, location, organizer, attendees, recurrence and description per event, with invitations and cancellations marked. Contacts (`.vcf`, including vCard 2.1). Data files: `.csv` and `.tsv` as a table with the delimiter detected, `.json` and `.xml` as a code block, RSS and Atom feeds as a list of entries. Jupyter notebooks (`.ipynb`). Source code, config and log files (`.py`, `.js`, `.yaml`, `.log`, `Dockerfile` and many more) as a code block in the right language; `.env` is deliberately not accepted. Prose markup (`.rst`, `.adoc`, `.org`) is passed through like `.txt`. New `source` values: `opendocument`, `rtf`, `calendar`, `contact`, `data`, `feed`, `notebook`, `code`. **Behaviour change:** uploaded `.csv`, `.json` and `.xml` files used to go to the markitdown sidecar and now are read by pullmd itself, so they work without it; the markitdown sidecar also produced a table for CSV. Documents fetched by URL are unchanged.
+- **Whole Reddit threads: `comment_depth=all`.** No depth limit, a first page of up to 500 comments instead of ~200, and the comments Reddit collapses ("load more comments", "continue this thread") are loaded and put back where they belong, with indentation counted from the top of the thread. Loading takes at most 20 extra Reddit requests per conversion with API credentials and 5 without (new `PULLMD_REDDIT_MORE_REQUESTS`, `0` turns it off) and stops early on a rate limit; whatever is still missing is noted below the comments. Works in `/api`, `/api/stream` and the MCP `read_url` tool (`comment_depth: "all"`); on Hacker News it lifts the depth limit. The web UI gets an "All" switch next to the depth field that greys the number out, and the comment controls (comments, depth, all) now form one group, set off from Frontmatter and PDF-OCR by a thin rule.
+- **Outlook `.msg` files whose HTML exists only inside the RTF body** are now read from that HTML (new direct dependency `@kenjiuno/decompressrtf`, already used by `@kenjiuno/msgreader`), so links and formatting survive. Before, the plain-text body was used.
+
+### Fixed
+
+- **Missing Reddit comments are now noted.** Reddit's comment JSON stops at a depth and size limit and puts the rest behind "load more comments" and "continue this thread" placeholders, which PullMD dropped without a word. A numeric `comment_depth` (1-10) is still a single request, but whatever is missing within that depth is now noted below the comments ("Nicht geladen: 3 weitere Kommentare" / "Not loaded: 3 more comments"); placeholders below `comment_depth` or beyond `comment_limit` are not counted. The count in the header can stay below Reddit's total, which includes deleted and removed comments.
+- **Replies to a deleted Reddit comment are no longer dropped.** A deleted or removed comment took all its replies with it. It now shows as `*[deleted]*` / `*[removed]*` with its replies below, and is left out only when nothing below it remains.
+- **Negative Reddit comment scores** read `[-3]` instead of `[+-3]`.
+- **Page titles no longer pick up icon labels.** The title was read from every `<title>` element on the page, including those inside inline SVG icons, so a page with payment logos came out as "MHTML - WikipediaPayPal LogoVisa Logo...". Only the document title is used now. Seen on a saved page; it applies to all HTML extraction.
+
+## [3.17.0] - 2026-11-02
+
+### Added
+
+- **`/api/status` flags a Playwright sidecar that predates the SSRF fix.** The fix for [GHSA-26wr-prg5-vr77](https://github.com/AeternaLabsHQ/pullmd/security/advisories/GHSA-26wr-prg5-vr77) (v3.15.2) lives in the sidecar, and an older `pullmd-playwright` image silently ignores the `allowedHosts` field pullmd sends, so a new `pullmd` next to an old sidecar stayed vulnerable with nothing to show for it. The sidecar's `/health` now reports `"policy": {"ssrf": 1}`, and `/api/status` reports a Playwright sidecar without it (or with an older revision) as `{"status": "degraded", "error": "policy-missing"}` and answers `503`, so the documented plain-HTTP Uptime Kuma monitor catches it. Renders are not blocked; the check only reports. **Behaviour change on upgrade:** an instance that updates `pullmd` but keeps a `pullmd-playwright` image older than 3.17.0 now gets `503` from `/api/status` until the sidecar is updated too.
+
+### Fixed
+
+- **Reddit pages that are not posts no longer crash the extractor.** Any `reddit.com` URL went down the post path, so a rules page, wiki page, user profile or sorted listing (`/r/x/top/`) failed with `Cannot read properties of undefined (reading 'data')`. Only posts (including comment permalinks), galleries and subreddit front pages are read now; anything else answers `400` with `{"code":"reddit_unsupported_page"}` and a readable message, without a request to Reddit. The MCP `read_url` tool returns the same message.
+- **A blocked Reddit request no longer stores an empty post.** Without API credentials, Reddit answers the JSON request with `403` and sends the old.reddit fallback to its login page with a `200`. PullMD parsed that login page as the post and cached an empty entry titled "Reddit Post". The fallback now reports the block (`502`, "Reddit blocked the request.") and nothing is cached. Setting `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` avoids the block.
+- **`DISABLE_PUBLIC_HISTORY` now also blocks anonymous deletes.** With the switch on and no sign-in, `/api/history` and `/api/archive` were hidden, but `DELETE /api/cache` still cleared the whole cache and `DELETE /api/cache/:id` removed single entries (their ids are sequential), share links included. Both routes now answer `403` for anonymous callers when public history is off. Instances with sign-in were not affected; with sign-in off and public history on, deletes stay open as before. `SECURITY.md` now describes what that open mode exposes.
+- **README: the self-hosted OCR note promised too much.** It said `PULLMD_PDF_OCR_BASE_URL` could point at a local engine such as Docling. PullMD sends the Mistral OCR request shape (`POST /ocr`), which Docling does not speak, so that setup never worked without a translating adapter. The README and `.env.example` now say so, and that the OCR tier handles PDFs only.
+
+## [3.16.0] - 2026-10-25
+
+### Added
+
+- **Reddit post images are described and transcribed.** On an image post the image is often the actual content: PullMD used to return the title, a bare `![](...)` and comments that all replied to a screenshot the reader could not see, so a downstream LLM had no way to follow the thread. With a vision provider configured, each eligible image of a Reddit **post** (a single image, a gallery, or an image referenced inline in a text post; comment images are not touched) now gets a short description (one or two sentences) plus a transcript of its legible text, set directly under the image as a blockquote labelled `Bildbeschreibung` / `Bildtranskript` (`Image description` / `Image transcript` with `lang=en`). The labels mark the text as machine-derived from the image, and every line is `>`-prefixed so transcribed text can never open a heading or be mistaken for the comments section. The feature is opt-in because it is the first time PullMD sends images found *inside* a page to a provider (until now vision only ran on uploads and direct image URLs). `PULLMD_EMBEDDED_IMAGES` is `off` (hard off, a request cannot switch it on), `on-request` (the default: no provider calls unless a request passes `images=on`, or `images: "on"` on the MCP `read_url` tool) or `always` (on unless a request passes `images=off`); an invalid value warns at startup and falls back to `on-request`. **Behaviour change on upgrade:** on an instance with a vision provider and the default `on-request`, image posts now carry a one-line `Image not transcribed` marker under each image that has no transcript, so an LLM reading the output (MCP returns no frontmatter by default) can tell context is missing and ask for it; without a vision provider, or with `off`, the body is byte-identical to 3.15.2 (the one exception: transcripts stored earlier, while a provider was configured, are still shown unless the instance is set to `off`). Frontmatter gains `images_transcribed: "<done>/<total>"` (also without a provider, as a hint that images were skipped) and the usual `llm_*` usage fields summed over the images. Limits: Reddit only, hosts `i.redd.it` and `preview.redd.it` only (checked on every redirect hop, on top of the SSRF guard), single images must be jpg/jpeg/png/webp, gallery and inline images must be non-animated images according to Reddit's metadata, and every download must be served as `image/*` (no GIF or video), at most `PULLMD_EMBEDDED_IMAGES_MAX` images per post (default 4, range 1-20; later gallery items stay marked), downloads capped at 20 MB, 90 seconds overall per post. Each new image costs one unit of the hourly `PULLMD_LLM_RATE_LIMIT` budget. Transcripts are stored per image, so the same image is transcribed once, whichever URL form of the post is requested (`old.reddit.com`, a `redd.it` short link, a `/s/` share link, with or without a trailing slash or tracking parameters), for as long as cache retention keeps it: any later extraction (a cache miss, `nocache`, a share refresh) reuses the stored transcripts with no download, no model call and no budget, also for a request that passes `images=off` or does not ask for images (an instance set to `off` ignores them). Each result is stored as soon as it is in, so a gallery with one failing image keeps the others. An image that is unusable (HTTP 4xx other than 408/429, not an image, over 20 MB, host or SSRF rejection, or a provider answer of 400, 413, 415 or 422) counts as failed for that cached result only: it is not retried while that row is fresh, but it is retried after the row expires or with another URL form of the post. Failures are never stored per image, so neither a misconfigured model nor a post that points at another post's image id under a failing URL can mark an image failed for everyone. Clearing the whole cache forgets all stored transcripts. With `always`, a share link refresh (`/s/:id`, no sign-in needed) can transcribe new images too, charged to the viewer's address. A transient miss (budget exhausted, the 90 second deadline, an HTTP 5xx, a DNS failure, any other provider error) still serves the result but does not cache the page, and a share refresh keeps the old snapshot and restarts its one-hour refresh clock, so it is not refetched on every view. A cached row with fewer resolved images than the instance would now produce is treated as a miss for an `images=on` request, so `images` does not need `nocache`. The transcribed text is third-party content from an image and can carry prompt injection; treat it like any other fetched page text.
+- **README: choosing a vision model.** A small measured comparison (nine Reddit images, prompt tokens, time, cost, observed errors) of `claude-haiku-5-5`, `gpt-4.1-mini`, `gpt-4o-mini` and `claude-sonnet-5-5`, plus the settings for Claude models through Anthropic's OpenAI-compatible endpoint. The `gpt-4o-mini` default is unchanged.
+- **Startup warning for open paid tiers** ([#72](https://github.com/AeternaLabsHQ/pullmd/issues/72)). With `PULLMD_AUTH_MODE` disabled and a provider key set (`PULLMD_VISION_API_KEY`, `PULLMD_STT_API_KEY`, `PULLMD_LLM_API_KEY`, `PULLMD_PDF_OCR_API_KEY`), the server now logs one `[auth]` line: every client that can reach the port can use those tiers, bounded only by `PULLMD_LLM_RATE_LIMIT` (or with no limit when it is `0`). `docker-compose.yml` shows the loopback port binding `127.0.0.1:${PORT:-3000}:3000` as a comment. No defaults change.
+
+### Fixed
+
+- **Image captions were cut off mid-sentence with verbose models.** The plain caption path (image uploads and URLs that point straight at an image) capped the answer at 500 output tokens. Claude Haiku 5.5 writes long, structured captions and hit that cap, so the caption ended mid-sentence. The cap is now 1500 (the `max_completion_tokens` retry for reasoning models moves from 4000 to 5000, keeping the same reasoning headroom). Models that finish earlier stop on their own, so nothing changes for them.
+- **Reddit text arrived HTML-escaped.** Reddit's JSON API escapes `&`, `<` and `>` in every text field unless the request sets `raw_json=1`, so comment quotes came out as `&gt;quote` instead of a Markdown quote, links carried `&amp;` between their parameters, and the editor's empty-paragraph marker showed up as `&amp;#x200B;`. All Reddit JSON requests (posts, subreddit about and listing) now pass `raw_json=1`, and lines holding only a zero-width space (`&#x200B;`) are dropped from post and comment text.
+
+## [3.15.2] - 2026-10-19
+
+### Security
+
+- **SSRF through the Playwright sidecar** ([GHSA-26wr-prg5-vr77](https://github.com/AeternaLabsHQ/pullmd/security/advisories/GHSA-26wr-prg5-vr77), reported by [@yassertioursi](https://github.com/yassertioursi)). The SSRF guard checked the submitted URL in Node and then handed it to the sidecar, where Chromium navigated on its own: a public page answering with a `302`, a `<meta http-equiv="refresh">`, a `location` assignment, an `<iframe>` or a `fetch()` could reach an internal host on the sidecar's network, and for the top-level navigations the response body came back as the rendered Markdown. Reachable unauthenticated on the default compose file via `render=force`, `extractor=playwright`, the automatic render fallback and the MCP `read_url` tool. The sidecar now enforces the same address policy as `lib/ssrf.js` on every request Chromium makes (`playwright-sidecar/ssrf.py`): a `page.route()` handler for first hops, a CDP `Fetch` session for redirect hops (Playwright continues those itself without consulting routes), a WebSocket route, and service workers are blocked. `PULLMD_ALLOWED_HOSTS` travels with each render request, so the exceptions stay in one place. A blocked main-frame navigation fails the render with `403` `{"code":"ssrf_blocked"}`; `/api` and `read_url` answer `403 URL not allowed` for `render=force` / `extractor=playwright` and cache nothing, the automatic fallback keeps the static result of the first hop and records the refusal in `extractorReason`. **Both images change: update `pullmd-playwright` together with `pullmd`**, a new `pullmd` alone does not close this.
+
+## [3.15.1] - 2026-10-19
+
+### Fixed
+
+- **Bot-protection challenge pages are reported, not extracted** (#67, #68). A Cloudflare managed challenge (`cf-mitigated: challenge`) or a Bunny Shield proof-of-work page (`cdn-challenge: true`, or the same interstitial delivered with HTTP 200, which gocomics.com does for some user agents) used to surface either as an opaque `Page fetch failed with status 403` or, worse, as the interstitial itself rendered to Markdown ("Establishing a secure connection ... Request ID: ..."). `/api` now answers `502` with `{"code":"bot_challenge","vendor":"..."}` and the workaround in the error text, the Playwright sidecar is not consulted when the first fetch already hit the wall (it is rejected by these walls too), and nothing lands in the cache or history. When only the headless render runs into the challenge while the plain fetch got the real page (gocomics.com from some networks), the static extraction is kept and `extractorReason` records why. Detection is header-first with a narrow body sniff (`lib/challenge.js`); ordinary pages that merely mention a vendor are untouched.
+
+### Documentation
+
+- **README opens with what PullMD does, not with its history.** The head is now tagline, a "Why PullMD" section with a measured before/after token table (plain `curl` vs PullMD vs `?query=`, `cl100k_base` tokenizer, 2026-10-16), a highlights list, and the quick start. The "What's new in v3" section, which had stopped at 3.13, is gone from the README; this changelog is the single record. The MCP badge pointed at `#mcp-server`, a heading that does not exist (it is `3. MCP server`); the version-pinning note linked to the removed section and now points at `MIGRATION.md`. The screenshot URL is absolute because the Docker Hub copy of the README has no repository to resolve a relative path against.
+
+## [3.15.0] - 2026-10-14
+
+### Added
+
+- **Recipe action `prepend-text`.** Inserts a fixed text at the start of every matched element, for labels a page only shows through CSS (an icon in `::before`).
+
+### Changed
+
+- **finanzfluss.de comparison pages label pros and cons.** The bullets on the provider cards are told apart on the page only by their icons; they now start with `Vorteil:` or `Nachteil:`.
+
+## [3.14.0] - 2026-10-14
+
+### Added
+
+- **Recipe action `grid-to-table`.** Rebuilds a comparison "table" drawn with CSS grid (a flat list of `<div>` cells plus an inline `grid-template-columns`) as a real `<table>`. Extractors see no rows or columns in such markup and used to output a run of loose words, or drop the block entirely. Several grids in one container (a sticky header grid above the body grid, for example) are merged into one table; the column count comes from `repeat(N, …)`, the track list, or an explicit `columns`. See [`SITE-RECIPES.md`](./SITE-RECIPES.md#rebuilding-a-css-grid-as-a-table-with-grid-to-table).
+- **Recipe action `replace-with-text`.** Replaces matched elements with a fixed `text` or with the value of one of their attributes (`attr`), so icon-only cells (check marks, icons with an `aria-label`, logo images) survive as words.
+- **Built-in recipe `finanzfluss-vergleich`.** On finanzfluss.de comparison pages (`/vergleich/**`) the provider comparison table now comes out as a Markdown table between the intro and the article, with check-mark icons as `ja`/`nein`. The provider cards in the article, which the page renders twice (mobile and desktop layout), now appear once.
+
+### Changed
+
+- **Markdown tables come out without column padding.** The HTML-to-Markdown converter padded every cell with spaces to the width of the longest cell in its column. Renderers ignore that padding, but it was paid for in tokens whenever the output went to an LLM: a German Wikipedia list of cities shrinks from 123,508 to 83,804 characters, a wide comparison table to about a quarter of its size. Cell contents are unchanged, and the padding is removed only after the extractor choice, so which extractor wins on a page does not change. Cached results keep their old formatting until they are fetched again.
+
+### Fixed
+
+- **`select.content` kept the wrong order for nested matches.** When an earlier match sat deeper inside a preceding wrapper than a later one, the blocks came out in reverse. linkedom's `compareDocumentPosition` reports that case backwards; the order now comes from a tree walk.
+
+## [3.13.1] - 2026-10-14
+
+### Fixed
+
+- **Tables inside Webflow "HTML Embed" blocks are no longer dropped.** Webflow wraps its custom-HTML component in `div.w-embed`, and sites use it for hand-built comparison tables. Trafilatura discards every element whose class contains `embed`, so whenever Trafilatura won the extractor comparison those tables disappeared without a trace. Preprocessing now removes the `w-embed` class from such a div when it contains a `<table>`; icon and widget embeds are left alone.
+
+## [3.13.0] - 2026-10-09
+
+### Action required if you run behind a reverse proxy
+
+PullMD now takes the client address, the request scheme and the host from forwarding headers (`X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`) only when the new `PULLMD_TRUST_PROXY` says the connecting peer is a proxy. It is off by default. The bundled `docker-compose.traefik.yml` sets it to `1`, so instances started from that file need no change. If PullMD sits behind any other reverse proxy, tunnel or load balancer, or behind Traefik with a compose file of your own, check these three points when upgrading (details in [`MIGRATION.md`](./MIGRATION.md#action-required-if-you-run-behind-a-reverse-proxy)):
+
+1. **Set `PULLMD_TRUST_PROXY`**, usually to `1` (one proxy in front). If the container port is also reachable directly, not only through the proxy, list the proxy's address or network instead (for example `PULLMD_TRUST_PROXY=172.18.0.0/16`), because a hop count trusts whatever connects. If your compose file lists environment variables one by one, add the line `- PULLMD_TRUST_PROXY=${PULLMD_TRUST_PROXY:-}` as well. Without the setting every request appears to come from the proxy, and all clients share one rate-limit bucket: 10 login attempts per minute, 5 signups per hour, 120 unknown share-id lookups per minute, the OAuth endpoint limits, and the hourly media-provider budget of anonymous callers. PullMD then logs once per process: `Requests arrive through a proxy but PULLMD_TRUST_PROXY is not set: all clients share one rate-limit bucket and the client address is the proxy's. See MIGRATION.md.`
+2. **Set `PUBLIC_URL`** to the public origin, e.g. `https://pullmd.example.com`. The session cookie's `Secure` flag and, when `PUBLIC_URL` is unset, the base URL on the help page, in the skill zip and in MCP share URLs used to follow `X-Forwarded-Proto` / `X-Forwarded-Host` from any request. They now follow them only through a trusted proxy, and an `https://` `PUBLIC_URL` keeps the cookie `Secure` either way.
+3. **Login and other form posts are checked against the host.** `POST /login`, `/signup`, `/logout` and `/oauth/consent` are accepted only when the browser's `Origin` header (or, without one, `Referer`) names the host the request arrived for or the host of `PUBLIC_URL`. A proxy that rewrites `Host` to an internal name needs `PUBLIC_URL` set, otherwise login answers `403`. Do not serve PullMD with `Referrer-Policy: no-referrer`: under that policy browsers send `Origin: null` and no `Referer` on form posts, which is refused. The browser default (`strict-origin-when-cross-origin`) and `same-origin` work. PullMD sets no `Referrer-Policy` of its own.
+
+### Security
+
+- **Forwarding headers count only from a configured proxy.** Rate-limit keys (share links, OAuth, login, signup, media budget) come from Express's `req.ip`, and the session cookie's `Secure` flag and the request-derived base URL from `req.secure`, `req.protocol` and `req.host`. Those honour `X-Forwarded-*` only for peers covered by `PULLMD_TRUST_PROXY`; before, the limiter read the first `X-Forwarded-For` entry and the other two read `X-Forwarded-Proto` / `X-Forwarded-Host` of every request.
+- **Login and signup are rate-limited per client address.** `POST /login` allows 10 attempts per minute, `POST /signup` 5 per hour. Every attempt counts, successful or not. Beyond that the form page comes back with `429`, a translated "too many attempts" message and `Retry-After`.
+- **Form posts must come from this site.** `POST /login`, `/signup`, `/logout` and `/oauth/consent` check `Origin` (or `Referer`) against the request's host and the host of `PUBLIC_URL`, comparing hostnames only, so an instance served as plain HTTP behind a TLS tunnel still matches. A post that carries neither header (curl, scripts) is accepted; `Origin: null` without a usable `Referer` is refused with `403`.
+- **OAuth access tokens are accepted only on the MCP endpoint.** They are issued for the MCP resource (audience `<PUBLIC_URL>/mcp`), and the auth middleware now verifies them only on `/mcp` and `/mcp/`. On every other route, `/api/me` included, such a bearer is treated like any unknown token. API keys, sessions and the legacy admin token are unchanged.
+- **MCP `list_recent` is scoped like `GET /api/history`.** A signed-in caller (session, API key, OAuth token or legacy admin token) gets their own conversions; with auth disabled the shared history is listed unless `DISABLE_PUBLIC_HISTORY` is set, in which case the tool returns an error result.
+- **`/api/stats` lists per-domain figures only for global-history viewers.** The aggregate counts stay public. `lowQualityDomains` and `fallbackByDomain` are included for the admin, or for everyone when auth is off and public history is enabled.
+- **Hourly budget for the paid media tiers.** Image captioning, audio transcription and PDF OCR share a budget of `PULLMD_LLM_RATE_LIMIT` requests per hour (default `30`, `0` = off), counted per signed-in user or, without sign-in, per client address. Over budget a request takes the path an instance without that provider would take (metadata only for images and audio, the regular markitdown conversion for PDFs); that result is served but not cached. A tier without a configured provider never consumes budget.
+- **Size limit and deadline for outbound fetches.** Page and document fetches and the Playwright sidecar's response are read with a limit of `PULLMD_MAX_FETCH_BYTES` (default 50 MB). A declared `Content-Length` above the limit is refused before reading; otherwise the body is counted and the read stops once it passes the limit. A page fetch keeps its 15 s header timeout and now also has to deliver headers plus body within 60 s; the sidecar keeps its 25 s timeout. Both cases surface as an ordinary extraction error.
+- **Stricter email rules for new accounts.** Signup, `createUser` and `scripts/admin.js create-user` require exactly one `@`, a non-empty local part, a dotted domain, and no whitespace, control characters or ``<>"'()`;,\``. Login still looks up the trimmed, lowercased string, so existing accounts keep working.
+- **The help page escapes the origin it embeds**, the in-process skill-zip cache keeps at most 8 entries, and the PWA builds its account slot with DOM methods instead of an HTML string (service worker cache `v33`).
+- **`.dockerignore` excludes `.env*`** and local working directories (`.claude`, `_archive`, `.superpowers`, `SESSION_LOG.md`) from the image build context. Nothing reads `.env.example` at runtime.
+
+### Added
+
+- **`PULLMD_TRUST_PROXY`** maps to Express's `trust proxy`. Unset, empty, `false`, `off`, `no` or `0` keep it off. `true` / `yes` / `on` trusts every hop, an integer is a hop count, anything else is a comma-separated list of addresses, CIDRs or the Express keywords `loopback`, `linklocal` and `uniquelocal`. An invalid list logs a warning and leaves it off. `docker-compose.traefik.yml` defaults it to `1`; `docker-compose.yml` passes it through and leaves it off unless set.
+- **`PULLMD_LLM_RATE_LIMIT`** (default `30` per hour, `0` = off) and **`PULLMD_MAX_FETCH_BYTES`** (default `52428800`, 50 MB), described above. Both compose files pass them through.
+
+### Fixed
+
+- `/api/history` and `/api/archive` clamp `?limit=` to 1-100 and 1-200. A negative value no longer reaches the database as a negative `LIMIT`, which SQLite treats as no limit; the cache layer clamps `limit` and `offset` as well.
+- OAuth authorization codes are pruned with a cutoff in the same ISO format they are stored in, instead of SQLite's `datetime()` format.
+- `POST /oauth/consent` checks the requested scope the same way `GET /oauth/authorize` does.
+- Dynamically registered OAuth clients that never obtained a token are removed after a day, on the next registration.
+- The MCP `get_share` tool description names the 32-hex share id format instead of 8-hex.
+
+### Changed
+
+- **Dependencies** (#62, #63, #64). npm: `@modelcontextprotocol/sdk` 1.32.1, `zod` 4.6.5, `jose` 6.2.12, `linkedom` 0.18.13, `image-size` 2.0.4, `argon2` 0.45.1, `better-sqlite3` 13 (prebuilt binaries ship inside the package), `archiver` 8 (ESM-only; the skill zip is built with `ZipArchive`), plus `npm audit fix` for transitive advisories. All three sidecars: `fastapi` 0.141.1 and `uvicorn[standard]` 0.54.0. The render sidecar moves from Playwright 1.49 to 1.63 (bundled Chromium 131 to 153); its default User-Agent, used only when the caller sends none, follows to Chrome 153.
+- **The image build no longer installs a compiler toolchain.** `better-sqlite3` 13 and `argon2` ship prebuilt musl binaries for x64 and arm64, so the builder stage drops `python3`, `make` and `g++`, and `npm ci --ignore-scripts` keeps dependencies from running install scripts.
+- **Refreshed User-Agent seed pool**, the fallback when the live UA feed is unreachable or disabled.
+
+## [3.12.1] - 2026-10-08
+
+### Fixed
+
+- **Words no longer run together around inline formatting in list items** (closes #60, reported by [@WinFuture23](https://github.com/WinFuture23)). The Trafilatura sidecar pinned trafilatura 2.0.0, which dropped the space after `<em>` and `<strong>` inside list items and glued the `- ` marker onto the previous line: `<li><em>New!</em> This update` came out as `*New!*This update`, and with `format=text` as `New!This update`. The sidecar now pins trafilatura 2.3.1; the upstream fix landed in 2.2.0. The jump spans three upstream releases with broader extraction changes, so Trafilatura output differs beyond this bug. In a comparison on 45 real pages it also stopped gluing consecutive paragraphs together (`kostete.Der`), extracted considerably more from news front pages, and on one article page additionally kept the sidebar link lists. Because the Readability/Trafilatura choice compares the two outputs, a page can now come out of the other extractor than before; in the comparison that happened on four front pages, all of which switched to Trafilatura. The sidecar has a standalone regression test, `trafilatura-sidecar/test_extract.py`, which runs inside the built image.
+- **`format=text` resolves Markdown backslash escapes.** Both extractors escape literal punctuation in their Markdown (`\[`, `\_`, `\*`), and the plain-text conversion passed those backslashes through or, worse, read an escaped `\*` or `\_` as an emphasis marker: `n \* factorial(n-1) \* 2` became `n \ factorial(n-1) \ 2`, and `\_\_init\_\_` became `\\init\\`. Escapes now resolve to the bare character before the emphasis and link patterns run; code spans and fenced blocks keep their backslashes. trafilatura 2.3 escapes far more than 2.0 did, so without this the fix above would have traded glued words for stray backslashes.
+
+---
+
+## [3.12.0] - 2026-09-21
+
+### Security
+
+- **Share links can no longer be enumerated** (closes #58, reported by [@kta1kri](https://github.com/kta1kri)). Share ids were 32 random bits (8 hex characters) and `/s/:id` had no throttling, so a script guessing ids at a few thousand requests per second could have walked the entire id space in days and discovered every cached conversion on an instance, including on instances that set `DISABLE_PUBLIC_HISTORY=true` precisely to hide them. New ids are 128 bits (32 hex characters). Existing 8-character links keep working, because the column is text and nothing ever checked the length. On top of that, `/s/:id` now throttles lookups of *unknown* ids to 120 per minute and client IP and answers `429` with `Retry-After` beyond that. Only misses count: a valid link is resolved before the limiter is consulted, so a script that walks hundreds of its own share links is never throttled, while an enumeration script, which sees almost nothing but misses, is. The in-process limiter shared with the OAuth routes now also evicts idle keys, since on a public unauthenticated route a client could otherwise grow its bookkeeping without bound by rotating `X-Forwarded-For`.
+- **`/api/stream` validates the URL before the cache lookup.** The SSE endpoint relied on the fetch layer's own SSRF guard, which does block the request, but it consulted the cache first, so a row cached before a host became blocked (say, by tightening `PULLMD_ALLOWED_HOSTS`) could still have been served through this path. It now runs the same up-front check as `/api` and the MCP tools; a rejection surfaces as an SSE `error` event with the `URL not allowed: …` wording, since the response headers are already flushed at that point.
+
+### Added
+
+- **`SECURITY.md`** and GitHub private vulnerability reporting for the repository. The report above had to be filed publicly because neither existed.
+
+---
+
+## [3.11.0] - 2026-09-03
+
+### Added
+
+- **Cache retention is configurable** (closes #55). `PULLMD_CACHE_RETENTION_DAYS` sets how many days a cache row survives without a re-fetch. The default is `90`, the value that was hardcoded before, so nothing changes for existing instances that do not set it. `0` means unlimited: no prune statement is prepared at all, `/s/:id` lookups drop their age condition, and the cache becomes a permanent archive. An unset or empty value falls back silently, because the bundled compose files pass `${PULLMD_CACHE_RETENTION_DAYS:-}` and empty is the normal "not configured" case; anything else malformed (`abc`, `-5`, `1.5`, or anything above the accepted maximum of `36500` days, that is 100 years) warns once at startup and falls back to 90 rather than keeping the server from starting. The footer's "expiring soon" counter follows the setting instead of its own literal - it counts rows within 10 days of being pruned, and reports 0 without running a query when retention is unlimited. `GET /api/storage` reports the effective `retentionDays` and the PWA footer renders "unbegrenzt" / "unlimited" for `0`. Both compose files were enumerating environment variables explicitly, so they now pass the new one through; without that line it would never reach the container. Note that lowering the value on a running instance prunes every row older than the new value on the next cache write (any conversion).
+
+---
+
+## [3.10.1] - 2026-08-27
+
+### Fixed
+
+- **The Playwright sidecar no longer announces itself as an automation browser.** Chromium derives its `Sec-CH-UA` header from its own identity, and `new_context(user_agent=…)` does not touch it, so every rendered request went out claiming `Chrome/147` in the User-Agent and `"HeadlessChrome";v="131"` in the header directly below it. Hosts behind a bot manager read the second one: measured against an Akamai-protected site, holding every other header constant and swapping only that brand token was the entire difference between `403` and `200` — the page then returned 138k characters of article text instead of 283 characters of "Access Denied". The User-Agent pool was never the problem, and neither was the requesting IP. The sidecar now derives the Client-Hints metadata (brand, version, platform, mobile flag) from the User-Agent it actually sends, so the two agree. For a non-Chromium User-Agent — the iPhone profile behind `mobileUa` — it strips the `Sec-CH-UA*` headers instead, because Safari sends no Client Hints and inventing one would be a fresh contradiction. Both paths are best-effort: a failure is logged and the render proceeds. `playwright-stealth` does not cover this, since it patches JavaScript properties rather than request headers.
+
+---
+
+## [3.10.0] - 2026-08-27
+
+### Added
+
+- **`GET /api/status` reports sidecar health for external monitoring.** It probes the `/health` endpoint of every configured extraction sidecar (trafilatura, Playwright, markitdown) in parallel and answers `200` when they all respond, `503` as soon as one is down, so a plain HTTP check catches it without keyword matching. A sidecar that was never configured counts as `not-configured`, not as a failure. Error reasons are a closed vocabulary (`unreachable`, `timeout`, `unhealthy`, `http <code>`, `misconfigured`) because the endpoint is public and must not echo internal hostnames. Results are cached for 5 seconds and concurrent callers share one round of probes. A broken sidecar does not take the service down, it silently degrades extraction quality — this makes that state observable.
+
+- **Site-recipes can now read structured data from embedded JSON state blocks.** Single-page frameworks render state as SSR blobs in `<script>` elements for the initial HTML. The new optional recipe field `append` extracts this data (by script selector and segment path, with optional field projection and row limit), serializes it as JSON, and appends it to the end of the document as a fenced code block. Output size is capped. The feature exists for pages where numerical data is only rendered as a chart and is therefore unreachable by CSS selectors.
+
+### Fixed
+
+- **`playwright-stealth` is now version-pinned** in `playwright-sidecar/requirements.txt`, like every other sidecar dependency. It was the only unpinned one, so any rebuild could have pulled an incompatible release into the image unnoticed.
+
+---
+
+## [3.9.0] - 2026-08-01
+
+### Added
+
+- **Download button in the PWA.** A third action in the result toolbar, beside Copy and Share: it writes the Markdown as currently shown (the frontmatter toggle is respected) to a file and saves it under the name the server suggests. Unlike Share it needs no browser capability check, so it is visible whenever a result is. Three buttons no longer fit a phone header, so the existing 480px breakpoint now collapses all three to icon-only; their accessible names survive as `title` / `aria-label` through the existing translation mechanism, so they stay readable to a screen reader and stay translated.
+- **The server now suggests the download filename** (`X-Suggested-Filename`). The name used to be derived in the browser from the frontmatter title alone, which gave a YouTube video its cryptic id as a name and threw away the original basename of an uploaded image or document. The server knows the extraction source, the URL and the title, so it builds the suggestion instead: YouTube becomes `YT-<title>-<video-id>`, the file-based sources (`image-caption`, `audio-transcript`, `markitdown`, `pdf-ocr`) keep the basename of the source file, and everything else uses the title slug, with a title → URL basename → share id → `pullmd` fallback chain and a final pass that leaves only characters an HTTP header and a filesystem both accept. The header is set on `GET /api` (fresh and cached), `POST /api/html`, `POST /api/file` and `GET /s/:id`; `GET /api/stream` carries the same value as a `suggestedFilename` field on the `result` event, because SSE headers are flushed long before the result exists and the SSE path is what the PWA uses. The new `PULLMD_FILENAME_DATE_PREFIX` prepends a rendered date to every name (tokens `YYYY`, `MM`, `DD`, `HH`, `mm`, `ss`, local time, every other character passes through); it is unset by default, so nothing changes unless you ask for it. The PWA prefers the server suggestion and keeps its own client-side chain as a fallback against an older server.
+
+### Changed
+
+- **`query` is now described by when to use it, not by how it works.** The MCP `read_url` schema, the bundled Claude Code skill, the README and the in-app help page all described the parameter mechanically ("return only the sections relevant to this text", "BM25 over the converted Markdown"), which told an agent what the feature does but never that it should reach for it. In practice the parameter went unused: a model reading the old description had no trigger condition to match against. All four surfaces now lead with the trigger - when you need specific information from a page rather than the whole document, pass the question you are trying to answer, in natural language - name the payoff (typically 70-95% fewer tokens on long pages), and frame the full-page fetch as the case that needs a reason (summarizing, translating, archiving). `max_tokens` additionally states that it has no effect without `query`. Text only: no parameter, default, validation or response shape changed, and nothing changes for an existing integration except how likely an agent is to use the parameter at all.
+- **`read_url`'s description now opens with a precedence rule.** It states up front that this is the preferred way to read any URL and should be used instead of the built-in web fetch tool, not just when that one fails. Previously the description led with a capability list (SPAs, Reddit, Cloudflare, documents), which read as "fallback for hard pages" and left an agent with a native fetch tool no reason to prefer PullMD for ordinary URLs. The capability list and the rest of the text are unchanged; only the order changed. Nothing changes for existing integrations except the likelihood the tool gets chosen.
+- **`PULLMD_LLM_MODEL` now says out loud that it is not a variable.** The shared `PULLMD_LLM_*` fallback covers the API key and the base URL but not the model, because one name cannot be a vision chat model, a speech model and an OCR model at once. That asymmetry was invisible: setting `PULLMD_LLM_MODEL` looked exactly as reasonable as the two variables next to it, was read by nobody, and left every modality on its own default with no hint as to why. The server now warns at startup when it is set and names the three variables that do work (`PULLMD_VISION_MODEL`, `PULLMD_STT_MODEL`, `PULLMD_PDF_OCR_MODEL`); the README and `.env.example` state the limit where the fallback is introduced instead of leaving it to be inferred.
+
+### Fixed
+
+- **The rendered view no longer turns the frontmatter into a giant heading.** `marked` reads `key: value` followed by `---` as a setext heading, so with the frontmatter toggle on, the rendered view opened with a title made of metadata. Only the body goes through `marked` now; the frontmatter is prepended as a plain, quieter code box, filled via `textContent` so a user-controlled title or URL is never parsed as markup.
+- **The result toolbar's actions stay right-aligned when the row wraps.** `space-between` left-aligns a lone wrapped flex item, so on a narrow screen Copy/Share/Download dropped to a second line and sat on the left; they are now pinned to the right edge on every line.
+- **Image captioning worked against no current OpenAI model.** The request sent `max_tokens`, which those models reject outright ("Unsupported parameter ... use `max_completion_tokens` instead"), so every caption failed with a 400 and the conversion degraded quietly to plain extraction: pointing `PULLMD_VISION_MODEL` at anything recent produced no captions at all. Switching unconditionally was not an option either, because many OpenAI-compatible endpoints only understand `max_tokens`. The request therefore still asks the way everything understands and retries once with `max_completion_tokens` when the endpoint says that is what it wants. Deciding from the model name was rejected on purpose: any such list is stale by the next model release.
+- **Reasoning models returned an empty caption.** `max_tokens` caps visible output, `max_completion_tokens` caps visible output plus the reasoning tokens a reasoning model never shows, so reusing the same 500 meant the model spent its whole budget thinking and returned an empty message. Measured against a current small reasoning model, 500 and 1000 both came back `finish_reason=length` with zero characters of text, while the first usable caption needed around 1600 completion tokens, 1472 of them reasoning. The retry path now asks for 4000, which costs nothing when unused because only generated tokens are billed. An empty caption is no longer handed back either: it used to yield a `## Description` heading with nothing under it, still labelled as the image-caption source, where a throw is caught, logged, and falls back to markitdown.
+- **The admin CLI silently did nothing when stdin was already at EOF.** `docker exec` without `-i` hands the process exactly that, and `readline`'s `question()` never settles on it, so `create-user` and `reset-password` printed "New password:" and exited 0 having created or changed nothing - the most natural way to invoke the CLI against a running container was also the one silent failure mode it had. The non-interactive branch now reads the stream directly instead of going through `readline`, which fixes a second case in passing: a piped password without a trailing newline used to be dropped the same silent way, because `readline` does not hand over a final line that never terminates. CRLF is stripped. An empty stdin raises an operator-facing error naming three working invocations and exits 2 without a stack trace. The interactive TTY path is untouched.
+
+### Documentation
+
+- **The help page documents user management.** The admin CLI existed only in the README and the changelog, so an operator looking at their own instance had no way of finding out that accounts are created with `scripts/admin.js`. The authentication section now lists `list-users`, `create-user`, `make-admin` and `reset-password`, states that there is no UI for any of it, and names the invocations that actually deliver a password on stdin.
+- **README, help page and skill bundle audited against this batch.** `X-Suggested-Filename` was missing from the README's response-header list and from the skill's "headers worth checking"; the download button was missing from the README's feature list; the README documented `create-user` / `reset-password` without a word on the stdin requirement. The universal agent prompt, which ships in both the README and the help page, opened with "instead of raw HTML" - a phrasing an agent holding a native browse tool does not match on, which is the same failure the `read_url` description fixed; both copies now name the built-in fetch tool and reject the fallback-only reading.
+
+---
+
+## [3.8.0] - 2026-07-31
+
+### Added
+
+- **`PULLMD_ALLOW_SIGNUP` closes self-registration in `multi-user` mode.** Default is on, so an existing instance behaves exactly as before; only `false`, `0`, `no` or `off` turns it off. When off, the `/signup` routes are not mounted at all, so both GET and POST answer 404 and no account can be created by a crafted request, the login page drops its "create an account" link, and `/api/config` reports `signupOpen: false`. This is for running a public demo instance in `multi-user` mode without collecting stranger accounts. `createAuth` exposes the raw switch as `allowSignup` and the effective value as `signupOpen` (`mode === 'multi-user' && allowSignup`); only the effective value is read anywhere in production code, because a switch that is on while the mode has no signup route at all is not useful information.
+- **`node scripts/admin.js create-user <email>`** with a password prompt, so "registration closed" is not a state an operator cannot get out of. The account is created without admin rights; `make-admin` promotes it as a separate step.
+
+### Changed
+
+- **Cache deletes are now scoped to the caller instead of being rejected** (closes #49). `DELETE /api/cache/:id` and `DELETE /api/cache` used to sit behind an admin-only guard, so a logged-in non-admin got `403 {"error":"Admin required"}` and could never clear anything from their own history, even though the frontend offered them the button. The guard's premise was sound only halfway: `conversions` is deduplicated by URL and therefore shared between all users, so dropping a row does affect everyone - but each user's history is a separate `user_fetches` join table, and unlinking a row there affects nobody else. An admin (and every caller when `PULLMD_AUTH_MODE` is `disabled` or unset) still purges the shared row; a regular user now only unlinks their own history entry, leaving the shared row and its `/s/:id` share link intact. Both responses gained `scope: "user" | "global"`, and delete-all gained `removed`. Existing status codes are unchanged. **For API consumers:** in `single-admin` and `multi-user` modes a non-admin `DELETE /api/cache*` now answers `200` with `scope: "user"` where it previously answered `403`.
+- **The delete button says which of the two it does.** The same `×` now means "remove from my history" or "delete globally" depending on the caller, so the tooltip and the archive's delete-all confirmation name the scope. When the caller's role cannot be determined the label errs toward "global", because claiming a global delete for one that turns out to be scoped costs nothing, while the reverse puts a harmless label on a destructive action.
+
+### Fixed
+
+- **Orphaned history rows inflated the archive's entry count.** `user_fetches.cache_id` has no foreign key to `conversions`, and `pruneOld` - which runs on every conversion and drops entries older than 90 days - never removed the matching history rows. Since `countForUser` counts without the join that `historyPageForUser` uses, the archive reported more entries than it could ever return and paginated toward entries that never arrived, drifting further with every prune. Cleanup is now explicit in the delete paths and after a prune that actually removed something, plus a one-time sweep when the cache opens, so an existing database repairs itself on the next start. A real foreign key with `ON DELETE CASCADE` was deliberately not introduced: better-sqlite3 only enforces foreign keys with `PRAGMA foreign_keys=ON`, and enabling that globally would start enforcing constraints across the OAuth and session tables too.
+- **A failed delete is now visible.** Both entry-delete handlers turned a failed request into a red border and a `title` attribute and never called the page's own error banner, so a rejected delete looked like a dead button; the archive's delete-all had no failure path at all. All three now surface the failure. This also required fixing the banner itself: opening the archive view hides the shared error element with an inline style that outranks the class the banner is shown with, so a message raised from inside the archive would not have rendered.
+- **`reset-password` and `create-user` silently did nothing when the password came from a pipe.** `scripts/admin.js` reads passwords through `node:readline/promises`, whose `question()` returns a promise and ignores a callback, but the non-interactive branch passed one. The promise never settled, the process exited 0, and nothing was written - so a scripted `reset-password` reported success without changing anything, for as long as that command has existed. Interactive use was never affected. A test that drives the real CLI as a child process with piped stdin now guards it.
+- **Read-only admin CLI commands no longer write to the database.** `list-users`, `reset-password` and `make-admin` ran the auth migration on startup. Because the CLI defaults to `multi-user` while the server defaults to `disabled`, on an auth-disabled instance `list-users` either aborted with a stack trace or silently bootstrapped an admin user from whatever credentials were in the environment, claimed every existing conversion for it and backfilled history rows.
+- **The login page no longer links to a page that does not exist.** The "create an account" link was rendered in every auth mode, but `/signup` only exists in `multi-user`, so in `single-admin` the link led to a 404. It is now tied to whether the route is actually reachable.
+
+---
+
+## [3.7.1] - 2026-07-31
+
+### Documentation
+
+- **The in-app help page now documents the service as it ships** (#48). It had drifted to a v3.0 view: the extraction stack was described as "Readability + Turndown" (a dependency replaced by `node-html-markdown`, with Trafilatura and the headless-Chromium stage missing from the list entirely), and `comments` / `comment_depth` were still presented as Reddit-only although Hacker News has honored them since 3.1. New sections cover the endpoints (all 13, including `/api/stream`, archive, storage, stats, config and recipes status), the response headers (including `X-Transcript-Status` and the five `X-Extract-*` headers), query extraction, site recipes, and authentication. That last gap was the practical one: `/help` stays public when `PULLMD_AUTH_MODE` is set, but it never mentioned login, API keys or OAuth, so an instance could reject every API call without telling anyone how to authenticate. "Local HTML files" grew into a "converting files" section covering `/api/html`, `/api/file`, document URLs and images/audio/YouTube; the parameter table gained `render`, `extractor`, `pdf`, `yt_timecodes`, `yt_chunk` and `max_tokens`; and the drop-in agent prompt was synced with the README version plus `query`.
+- **README: SSRF protection documented.** The guard shipped in 3.3.0, but the README never mentioned it, so the default-deny behavior and the `PULLMD_ALLOWED_HOSTS` opt-out were only discoverable from the changelog or `.env.example`. Also adds `PULLMD_ALLOWED_HOSTS` and `PULLMD_SITE_RECIPES` to the configuration table, `/api/config` and `/api/recipes/status` to the endpoint table, `query` / `max_tokens` / `pdf=ocr` to the universal prompt, and a summary of what the 3.x line added after 3.0.
+- **Bundled Claude Code skill:** Hacker News (pipeline entry and `X-Source` value), `query` / `max_tokens` with an example and a usage tip, `X-Transcript-Status`, and the `X-Extract-*` headers.
+
+---
+
+## [3.7.0] - 2026-07-31
+
+### Added
+
+- **Coverage guard — extractions that keep only a sliver of the page now recover the rest** (closes #46). Readability commits to a single best candidate container. On the one-pagers page builders emit, the article is a flat list of sibling blocks whose prose sits several levels deep; Readability's candidate score dilutes with nesting depth, so a shallow paragraph-rich block near the top outscores the far larger content below it, and everything else is dropped. The output is well-formed markdown, so nothing downstream signals the loss — measured on one such page, 10,503 of 336,670 characters, 3.1% coverage. The guard now re-converts the container that holds the body instead, which is an auto-written `select.content` through the same conversion path a recipe takes. It fires only when all of the following hold: no recipe `select.content`, no forced static extractor, a cleaned body of at least 20,000 characters, coverage under 10%, a single container dominating the body text, and a recovered candidate at least 3× larger with at least 5 paragraphs. The dominance condition is what separates one article split across siblings from many separate teasers, and it is what keeps listing pages out. Calibrated against an 85-page live corpus (forum threads, comment-heavy blogs, wikis, long single-document pages, shops, listing homepages, landing pages): it fires on 1 of 85 and on 0 of 12 forum threads, with roughly a factor of 2 between the shipped thresholds and the first false positive. The guard can only grow a result, degrades to previous behavior on any error, and is switched off with the new `PULLMD_COVERAGE_GUARD=off`. Every intervention carries `source: coverage-guard` and records what it acted on in `metadata.extractorReason` — coverage, body size, gain, and the share of the body the recovered container actually holds. A `select.content` recipe still wins outright, so a site that needs finer cleanup can keep one.
+
+---
+
+## [3.6.0] - 2026-07-26
+
+### Added
+
+- **`select.content` — recipes can now name the article body outright.** Until now the recipe engine was purely subtractive (`select.remove`, `preprocess`): a recipe could say what to throw away, but never what the article *is*, leaving the final choice to Readability's candidate scoring. `select.content` takes a list of CSS selectors, joins every match in document order into a single document, and uses that as the body — skipping both the Readability scoring and the Trafilatura auto-pick. Nested matches collapse to the outermost, invalid selectors skip themselves, and `select.remove` still applies first, so the two compose. Output carries `source: recipe-content`. Because a stale `content` selector would otherwise yield an empty article, a selection under 200 characters falls back to the normal pipeline and records the reason in `metadata.extractorReason`. Documented in [`SITE-RECIPES.md`](./SITE-RECIPES.md).
+
+### Fixed
+
+- **Blog posts whose body is split across sibling containers lost everything outside the winning block** (closes #44). Some CMS templates wedge an in-article call-to-action between two separate body containers; Readability scores a single top candidate and keeps only that candidate plus its direct siblings, so the entire lead section was dropped while the output still looked well-formed. A shipped recipe (`claude-blog-split-body`) now names both containers via the new `select.content`. The Trafilatura auto-pick could not catch this on its own: its output carried the full text but no markdown headings, and `pickBest` requires at least one heading before preferring the longer candidate.
+
+---
+
+## [3.5.0] - 2026-07-10
+
+### Added
+
+- **Recipe-defined frontmatter fields.** Site recipes can now inject custom frontmatter fields via a new `frontmatter` block, sourced from a page's embedded JSON-LD (`<script type="application/ld+json">`, selected by schema.org `@type` and resolved with a dot-path) or from CSS selectors. Field names are validated (letter-led, ≤ 64 chars); pipeline-computed names (provenance, share/cache bookkeeping, media/LLM-usage) are reserved and reject the recipe, while metadata-derived names (`title`, `author`, `published`, `modified`, `description`, `language`, `image`, `site`) are overridable and beat the generic scrape on a collision. When `PULLMD_FRONTMATTER_FIELDS` is set as an allowlist, recipe fields it drops are surfaced in the startup log and in the new `filteredFrontmatterFields` array of `GET /api/recipes/status`.
+- **Booking.com hotel-listing recipes** (`booking-hotel-noise`, `booking-hotel-frontmatter`, closes #40). Hotel pages (`/hotel/**`) are rendered via Playwright (the raw response is an AWS-WAF challenge shell), page chrome is stripped (header/footer/searchbox, gallery, breadcrumbs, Genius/promo banners, review-avatar flags, payment-card images, lazy-loading Q&A skeleton), and the Hotel JSON-LD is mapped into frontmatter (`description`, `address`, `rating`, `rating_best`, `review_count`, `price_range`). The body keeps the hotel description, popular facilities, room table (with prices when the URL carries `checkin`/`checkout` dates), house rules and fine print.
+- **Site-recipe contributor guide** ([`SITE-RECIPES.md`](./SITE-RECIPES.md)), documenting the recipe engine end to end — matching and merge semantics, the full schema, rendered-DOM handling, JSON-LD-to-frontmatter, and the testing/PR workflow — with a pointer added from the README.
+
+### Fixed
+
+- Recipe `select.remove` now also applies to the HTML sent to the Trafilatura sidecar — previously it was a silent no-op whenever the quality auto-pick chose Trafilatura, so recipe-removed elements still leaked into the output. Selectors are now applied one by one, so an invalid selector is skipped individually instead of risking whole-page extraction failure.
+
+---
+
+## [3.4.0] - 2026-07-10
+
+### Added
+
+- **Query-scoped extraction** (`?query=`). `GET /api` and the MCP `read_url` tool accept an optional `query` param that returns only the sections of the page relevant to that text - a BM25 ranking over heading-based sections of the converted markdown (paragraph-level fallback for pages with fewer than two headings), with no network calls and no LLM involved. Budget via `max_tokens` (default `600`, range `64`-`20000`). Falls back to the whole page (`confidence: low`) when nothing in the page scores against the query, or when the page is already small enough that extraction wouldn't help. New response headers (`X-Extracted`, `X-Extract-Confidence`, `X-Extract-Sections`, `X-Extract-Original-Tokens`, `X-Extract-Returned-Tokens`), a `format=json` `extract` object, and `?frontmatter=true` fields (`extracted`, `extract_confidence`, `sections_selected`, `original_tokens`, `returned_tokens`) expose the result. Extraction runs on the already-cached full page, so multiple `query` values against one URL cost a single fetch within the normal cache TTL. Omitting `query` (or passing an empty/whitespace-only value) leaves `/api` output byte-identical to pre-3.4 behavior.
+
+---
+
+## [3.3.0] - 2026-07-08
+
+### Security
+
+- **Block Server-Side Request Forgery (SSRF)** (closes #41). The URL-fetch endpoints (`GET /api`, the MCP `read_url` tool, and the Reddit/web/Playwright fetch paths behind them) now resolve the target host and reject any resolved address in the private, loopback, link-local, CGNAT or cloud-metadata ranges - including `169.254.169.254` and `100.100.100.200`, the addresses used by the reported exploit. Each redirect hop is re-checked before it is followed, and the Playwright sidecar path is validated Node-side before dispatch. Requests to a blocked host return HTTP 403.
+- Self-hosters who intentionally need an internal host (e.g. an intranet wiki) can allowlist specific CIDRs and/or exact hostnames via the new `PULLMD_ALLOWED_HOSTS` env var (comma-separated, empty by default = block all internal targets). See `.env.example`.
+- **Known residual:** the guard checks resolved IPs at request time but does not pin the outbound socket to the checked address, so a DNS-rebinding attack (where the name resolves differently between the check and the actual connection) is not fully closed by this fix. When running behind an outbound HTTP proxy, the proxy performs its own name resolution, so its egress filtering - not this guard - is the authoritative layer for traffic it forwards.
+
+---
+
+## [3.2.0] - 2026-06-25
+
+### Added
+
+- **`X-Transcript-Status` response header** (#37, closes #36). YouTube conversions now expose the transcript state (`ok` / `none` / `blocked` / `error`) as a response header, so programmatic consumers can tell a transient block from a genuinely absent transcript without parsing the body.
+- **ScienceDaily lead-image recipe.** A shipped site recipe for `*.sciencedaily.com/releases/**` unwraps the article's `#text` container so the lead image survives extraction. Without it, Readability picks the paragraph-dense inner block as the article and drops the sibling `<figure>` that holds the real lead image. General sites should still rely on the `image` frontmatter field (from `og:image`) for a robust lead-image source.
+
+### Fixed
+
+- **Cache hits now serve complete metadata.** The cached-response path rebuilt a minimal `{title, url, quality}` object, so on a cache hit the frontmatter lost `image` (`og:image`/`twitter:image`), `description`, `author`, `language`, and `site`, and `format=json` returned `metadata: null`. The full metadata persisted at extraction time (in the existing `metadata` column) is now served on cache hits in both the frontmatter and the `format=json` response - no schema change needed. Consumers reading `metadata.ogImage` / `metadata.twitterImage` (e.g. for an article lead image) now get it on cached pages too.
+- **Tracking pixels no longer leak into the Markdown.** 1x1 invisible beacon images (e.g. republish/analytics counters embedded inline in article text) were kept by Readability and rendered as bogus Markdown images. `cleanDom` now drops any `<img>` whose declared width and height are both ≤ 1; genuine wide/tall banners (only one tiny dimension) are spared.
+- **YouTube: transient 429 distinguished from a missing transcript** (#34, closes #33). A per-IP 429 on the timedtext endpoint was mislabeled as a permanent block; it is now classified honestly and not cached, so a later retry can pick up the now-available transcript.
+- **Sidecar: bundle `yt_transcript.py` in the markitdown image** (#35). The YouTube transcript helper was missing from the built image; it is now copied explicitly.
+
+---
+
+## [3.1.0] - 2026-06-15
+
+### Added
+
+- **Dedicated Hacker News pipeline.** Hacker News URLs - item pages, individual comment permalinks, and listings (`/`, `/news`, `/newest`, `/ask`, `/show`, `/jobs`, `/best`) - are now extracted through a purpose-built converter (via the HN API) instead of the generic HTML path. The result is a clean nested comment tree with per-comment permalinks and a `## Comments (N of M)` heading, replacing the layout-table soup the old path produced. Comment depth honors the existing `comment_depth` control, and extraction failures fall back to the generic web pipeline. New `source: hackernews` value and an HN-orange source badge in the PWA.
+- **PWA: share the converted Markdown** (Web Share API). A share button next to Copy hands the current Markdown - exactly what is shown and copied, including the frontmatter block when the toggle is on - to the native OS/app share sheet. It appears only where the browser supports Web Share (e.g. mobile, Safari); on a non-cancel failure it falls back to copying so the content is never lost.
+
+### Changed
+
+- **PWA: the Frontmatter toggle updates the output instantly.** Flipping the Frontmatter switch now adds or removes the YAML block immediately, with no second Pull. The Copy and Share buttons and the character count follow the toggle.
+
+---
+
+## [3.0.0] - 2026-06-10
+
+### Breaking
+
+- **Clean markdown body by default.** The inline source-attribution line (`**domain** · fetched` + url, or `**filename** · fetched` for local files) is no longer emitted in the response body. The same applies to Reddit posts: the inline meta line (`**r/sub** · u/user · N ↑ · age · date` + url) is gone from the body; subreddit, author, upvotes, and publish date move into the frontmatter (`subreddit`, `author`, `upvotes`, `published`). The body now starts with `# Title` and goes straight into content. The source URL, fetch date, and all extraction metadata are unaffected - they remain in the YAML frontmatter as before. Set `PULLMD_SOURCE_HEADER=true` to restore the legacy inline header verbatim. Self-hosters upgrading from v2.x should review `MIGRATION.md`.
+
+### Added
+
+- **`PULLMD_FRONTMATTER_FIELDS` allowlist.** Comma-separated list of frontmatter field names to include in the YAML block (e.g. `title,url,source,llm_tokens`). Unset - all fields are emitted (backward-compatible). Unknown names are silently ignored with a one-time startup warning; if every listed name is unknown, the allowlist is ignored and all fields are emitted as a safe fallback.
+- **Document conversion via the MarkItDown sidecar** (`MARKITDOWN_URL`). New `POST /api/file` endpoint accepts raw document bytes (25 MB cap) for PDF, DOCX, PPTX, XLSX, EPUB, ZIP, CSV, JSON, XML, and more. Non-HTML URLs detected as documents are also routed through the sidecar automatically in `extractWeb`. If `MARKITDOWN_URL` is unset, the document path is disabled and `/api/file` returns `502`. These features were developed incrementally as versions 2.7.0-2.10.0 on the release branch but are first officially released here in 3.0.0.
+- **Opt-in media tier** (`PULLMD_VISION_*` / `PULLMD_STT_*`). Image captioning and audio transcription (Whisper STT) run inside pullmd itself - no markitdown container needed. Per-modality or shared OpenAI-compatible credentials; each modality is enabled when its key is set. The PWA accepts image and audio uploads when the tier is enabled. Off by default; cloud backends cost per call and send content off-host - point `*_BASE_URL` at a local server to keep everything on-host.
+- **Keyless YouTube transcripts** (`MARKITDOWN_YOUTUBE=true`). Routes YouTube URLs through the sidecar for title + description + full transcript. No API key required. Configurable timecodes (`yt_timecodes`: `links`/`plain`/`none`), block chunking (`yt_chunk`), preferred languages, and optional proxy. All options are also overridable per-request via query params on `/api` and the MCP `read_url` tool.
+- **Opt-in high-quality PDF tier** (`PULLMD_PDF_OCR_API_KEY` / `PULLMD_PDF_OCR_BASE_URL` / `PULLMD_PDF_OCR_MODEL`). Route PDFs through a vendor-neutral OCR provider that preserves tables - reference provider is Mistral OCR (`mistral-ocr-latest`, ~$0.002/page). Triggered per request with `?pdf=ocr` (on `/api`, `/api/stream`, `/api/file`, and the MCP `read_url` tool via `pdf_ocr`) or a recipe `fetch.pdf: ocr` default. Default PDF handling is unchanged (free markitdown path). OCR failures fall back to markitdown automatically. New `source: pdf-ocr` value and `pdf_pages` frontmatter field.
+- **LLM-usage and media metadata in frontmatter.** When media or LLM features run, the response frontmatter carries `llm_model`, `llm_tokens`, `llm_prompt_tokens`, `llm_completion_tokens`, `audio_seconds`, `image_size`, and (for YouTube) `duration` and `views`. Media and channel metadata is emitted frontmatter-only - consistent with the v3 clean-body direction.
+
+### Changed
+
+- **Claude Code skill bundle renamed `web-reader` → `pullmd`.** Now served at `GET /pullmd.zip`; the old `/web-reader.zip` URL responds with a permanent redirect. **Existing installs are not replaced by the new zip** - remove the old skill first (`rm -rf ~/.claude/skills/web-reader`) or both will be active side by side. See `MIGRATION.md`.
+- The MCP `read_url` tool description and the skill instructions now cover the v3 capabilities (documents, YouTube transcripts, media captioning/transcription, PDF OCR), and the MCP server reports the real package version.
+- Media conversion results carry per-modality `source` labels (`image-caption` / `audio-transcript`) instead of a generic `markitdown`.
+
+### Fixed
+
+- **Relative image and link URLs are now resolved against the source page** before extraction. Previously, root-relative paths (e.g. `/images/photo.webp`) survived into the markdown verbatim and rendered as broken images on share pages.
+- Document conversions in the markitdown sidecar run in a sandboxed child process with a wall-clock timeout and optional memory cap, so a pathological file can't pin the sidecar (DoS hardening).
+- Media frontmatter (image size, LLM usage, YouTube meta) survives the cache - cached responses now carry the same fields as the first request.
+
+---
+
+## [2.6.0] - 2026-06-08
+
+### Added
+- **Convert local HTML files** ([#28](https://github.com/AeternaLabsHQ/pullmd/issues/28)). New `POST /api/html` endpoint accepts a raw HTML body (max 10 MB) and runs it through the existing Readability + Trafilatura extraction pipeline — `curl --data-binary @page.html -H 'Content-Type: text/html' …/api/html`. Optional `url=` re-enables site recipes and the linked header; the file name can be passed via `?filename=` or the `X-Filename` header (URI-encoded; keeps names out of access logs); `data:`-URI images (SingleFile exports) are replaced by their alt text. Privacy by design: local files are never cached — no history entry, no share link, and telemetry logs a constant placeholder instead of the file name. Playwright is deliberately unavailable for uploaded HTML (user-supplied markup must never run in a server-side browser).
+- **PWA: convert a local `.html` file** - drag-and-drop it onto the page (desktop), or click/tap the dashed hint below the URL field to pick a file. The file picker works on **desktop and mobile**, so a downloaded page can be converted on a phone too. Friendly errors for non-HTML files, oversized files (413), and JavaScript app shells (422).
+
+---
+
+## [2.5.0] - 2026-06-06
+
+### Fixed
+- **Sessions no longer die a hard 7 days after login regardless of activity** ([#26](https://github.com/AeternaLabsHQ/pullmd/issues/26)). The session cookie is now re-issued with a fresh `Max-Age` whenever the DB-side sliding expiry bumps (existing once-per-minute throttle), so browser cookie and DB session finally slide together.
+
+### Changed
+- **Session TTL raised from 7 to 90 days** (sliding). Anyone active at least once every 90 days stays logged in.
+- **Expired session in the PWA now redirects to the login page** instead of showing a bare "Authentication required" error; the requested URL is carried through `/login?next=` and the conversion resumes automatically after login ([#26](https://github.com/AeternaLabsHQ/pullmd/issues/26)).
+- **`GET /share` is now auth-gated.** Share intents from a logged-out device go straight to the login page and return to the shared URL after login — no more lost share-target URLs. Instances with `PULLMD_AUTH_MODE=disabled` are unaffected ([#26](https://github.com/AeternaLabsHQ/pullmd/issues/26)).
+
+---
+
+## [2.4.1] - 2026-05-13
+
+### Fixed
+- Permalink bar hidden by ad-blockers (e.g. uBlock Origin). Renamed all `share-bar` / `share-url` / `share-copy-btn` CSS classes and IDs to `permalink-bar` / `permalink-url` / `permalink-copy-btn` so cosmetic filter lists no longer suppress the element.
+- Service Worker: removed the aggressive forced tab-reload on SW activation that had been introduced as a debugging artifact.
+
+### Changed
+- **`:latest` Docker tag now tracks the most recent release again.** The v1 → v2 migration grace period is over; self-hosters who want to pin v1 should use `:1` or `:1.2`.
+
+---
+
+## [2.4.0] - 2026-05-11
+
+### Added
+- **Rendered Markdown view in the PWA** (closes [#23](https://github.com/AeternaLabsHQ/pullmd/issues/23), thanks @sladg). New `Raw | Rendered` segmented toggle in the result header lets users see the fetched output as actual formatted HTML (headings, lists, links, images, tables, blockquotes, code blocks) instead of the raw source. Raw remains the default; the chosen mode is persisted in `localStorage` (`pullmd-view-mode`).
+  - GFM rendering via self-hosted [marked](https://github.com/markedjs/marked) v12.0.2 (~30 KB).
+  - HTML sanitization via self-hosted [DOMPurify](https://github.com/cure53/DOMPurify) v3.4.2 (~20 KB). Strips scripts, inline styles, event handlers, `javascript:` URLs.
+  - Rendered links open in a new tab with `rel="noopener noreferrer"`.
+  - Lazy first-render: the rendered DOM is only built when the user first switches to Rendered for a given result, so users who only ever copy raw Markdown pay no rendering cost.
+  - Copy button still copies the raw Markdown source regardless of the active view.
+  - Both themes (dark + paper) styled via existing CSS variables — no new tokens.
+- Service Worker precaches the new vendor files (`vendor/marked.min.js`, `vendor/purify.min.js`) so the rendered view also works offline in the installed PWA. `CACHE_NAME` bumped to `pullmd-v20`.
+
+### Notes
+- Out of scope for v2.4: syntax highlighting, math/diagrams, Reddit-style spoiler syntax, side-by-side view, rendered view for `/s/:id` share links (still pure `text/markdown`).
+
+---
+
+## [2.3.0] - 2026-05-11
+
+### Added
+- **OAuth 2.1 Authorization Code flow** with PKCE-S256 for the claude.ai web custom connector, Claude Desktop's custom-connector dialog, and other MCP-spec-compliant clients (closes [#6](https://github.com/AeternaLabsHQ/pullmd/issues/6), [#10](https://github.com/AeternaLabsHQ/pullmd/issues/10) — thanks @WinFuture23 for raising the Claude Desktop auth gap).
+  - Dynamic Client Registration (`POST /oauth/register`, RFC 7591).
+  - Authorization endpoint (`GET /oauth/authorize`) with server-rendered consent screen (DE/EN).
+  - Token endpoint (`POST /oauth/token`) with `authorization_code` and `refresh_token` grants. Refresh tokens are rotated on every refresh; reuse triggers chain-wide invalidation.
+  - Revocation endpoint (`POST /oauth/revoke`, RFC 7009).
+  - Discovery: `/.well-known/oauth-authorization-server` (RFC 8414) and `/.well-known/oauth-protected-resource` (RFC 9728).
+  - Access tokens are HS256 JWTs (`typ: at+jwt`, RFC 9068), audience-bound to `<PUBLIC_URL>/mcp`, 1h TTL. Refresh tokens are opaque, sha256-hashed in storage, 30d TTL.
+  - Hardcoded redirect-URI allowlist: `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`.
+  - `WWW-Authenticate` 401 responses include the `resource_metadata` parameter pointing at the protected-resource metadata document.
+- Rate limiting on `/oauth/token` and `/oauth/authorize` (60 req/min/IP) and `/oauth/register` (10 req/h/IP).
+- CORS on `/oauth/token`, `/oauth/register`, `/oauth/revoke`, `/.well-known/*`, and `/mcp` (wildcard origin, no credentials — Bearer header travels independently).
+
+### Changed
+- `lib/auth.js` middleware accepts a third bearer-token type (OAuth JWT) via an injected verifier. Sessions and API keys (`pmd_*`) continue working unchanged.
+
+### Configuration
+- New env var `OAUTH_JWT_SECRET` enables OAuth. Must be 32+ chars. Generate via `openssl rand -hex 32`.
+- `PUBLIC_URL` is required when OAuth is enabled (used as JWT `iss`/`aud` and in discovery metadata).
+
+### Migration
+- New tables `oauth_clients`, `oauth_auth_codes`, `oauth_refresh_tokens` are created automatically on first boot. No manual SQL.
+- OAuth is **opt-in** — without `OAUTH_JWT_SECRET`, behavior is unchanged from v2.2.x. See `MIGRATION.md` for the full upgrade path.
+
+---
+
+## [2.2.0] - 2026-05-06
+
+### Added
+- **Site Recipe Engine** (closes [#18](https://github.com/AeternaLabsHQ/pullmd/issues/18)). Declarative `site-recipes.json` for per-host preprocess, fetch, select, and extractor rules. Default recipes ship in the repo (`site-recipes.default.json`); self-hosters can mount `data/site-recipes.json` or set `PULLMD_SITE_RECIPES` to point elsewhere. Four recipe categories:
+  - `preprocess` — DOM cleanup actions (`remove-attr`, `remove-class`, `remove-element`, `unwrap`) applied before extraction
+  - `fetch` — render forcing (`render: force|skip`), wait-for selector, mobile UA
+  - `select` — extra remove-selectors added to `cleanDom`
+  - `extractor` — preferred extractor per host (`readability`, `trafilatura`, `playwright`)
+- Public endpoint `GET /api/recipes/status` (no auth) — counts loaded/rejected recipes per source for monitoring.
+- Cache invalidation on recipe change. When recipe content changes between server boots, all cache rows become stale and re-extract on next access (lazy, on-demand).
+- Playwright sidecar accepts new optional fields: `waitFor` (CSS selector), `waitTimeoutMs` (capped at 15 000), `mobileUa` (boolean). Backwards compatible — old fields are silently passed through.
+- Initial default recipes covering Future PLC sites (paywall + recommendation widgets — seeded by @WinFuture23's analysis in [#17](https://github.com/AeternaLabsHQ/pullmd/issues/17)) and GitHub Issues (JS-rendered comments).
+- Playwright sidecar bundles `playwright-stealth` to mitigate `navigator.webdriver`-style headless detection on JS-driven anti-bot pages.
+
+### Known limitations
+- Sites behind cookie-based consent walls (third-party CMP frameworks like TCF v2) are not unlocked by recipes alone in this release. Such sites redirect non-consenting visitors to a JS-rendered consent UI and only return article content once HttpOnly cookies are set after a click. Write a custom recipe with whatever combination of `select.remove`, `extractor`, and `fetch` settings works for your specific source.
+
+---
+
+## [2.1.0] - 2026-05-05
+
+### Added
+- PWA: persist frontmatter toggle, comments toggle and comment depth across reloads via `localStorage` (keys `pullmd-frontmatter`, `pullmd-comments`, `pullmd-comment-depth`). Closes [#20](https://github.com/AeternaLabsHQ/pullmd/issues/20).
+- PWA: scroll to top when selecting a history/archive entry, so the new content is visible after click. Closes [#19](https://github.com/AeternaLabsHQ/pullmd/issues/19).
+
+---
+
+## [2.0.0] - 2026-05-02
+
+> **Breaking:** PullMD now supports an authentication system. Existing installs keep working unchanged (default `PULLMD_AUTH_MODE=disabled`); operators who want auth must follow [`MIGRATION.md`](./MIGRATION.md).
+
+> **Pulling v2.x:** Through 2026-05-13, `:latest` continued pointing at v1.x. Since v2.4.1 the `:latest` tag tracks v2.x again; self-hosters who want to stay on v1 should pin `:1` or `:1.2`.
+
+### Added
+- Three auth modes (`disabled` / `single-admin` / `multi-user`) controlled by `PULLMD_AUTH_MODE`.
+- Web sessions: `POST /login`, `POST /logout`, `GET /signup`, `GET /api/me`, server-rendered HTML for `/login` and `/signup`.
+- Per-user API keys: `pmd_<32-char-base62>` format, sent as `Authorization: Bearer pmd_xxx`. Manage at `/settings`. Stored as SHA-256 hashes.
+- Per-user history: `/api/history` and `/api/archive` are scoped to `req.user` when authenticated.
+- Admin CLI: `node scripts/admin.js {list-users,reset-password,make-admin}`.
+- Schema: `users`, `sessions`, `api_keys`, `user_fetches` tables, plus `conversions.user_id`.
+- Argon2id password hashing.
+
+### Changed
+- `/api`, `/api/stream`, `/mcp`, `/api/history`, `/api/archive`, `/api/cache/:id`, `DELETE /api/cache` require auth when mode != `disabled`.
+- `/s/:id` share links remain public in all modes (design choice).
+- `/api/config` now exposes `authMode`.
+
+### Deprecated
+- `PULLMD_AUTH_TOKEN` (legacy bearer compat) — works only in `single-admin` mode, removed in v3.0.
+
+### Security
+- Internal v2.0 security review (`REVIEW-FINDINGS.md` in the v2.0 release commit) tightened `DELETE /api/cache*` to admin-only in non-`disabled` modes and stopped flashing new API keys through URLs.
+
+### Migration
+See `MIGRATION.md`.
+
+---
+
+## [1.2.0] - 2026-05-02
+
+### Added
+- **User-Agent rotation** from a real-world UA pool with static seed fallback (closes [#14](https://github.com/AeternaLabsHQ/pullmd/issues/14), thanks @WinFuture23). Sites that silently degraded responses to the previous hardcoded Chrome 131 UA now extract cleanly.
+- **Charset detection from HTML meta tags** when `Content-Type` lacks a `charset` directive (closes [#8](https://github.com/AeternaLabsHQ/pullmd/issues/8), thanks @WinFuture23). Eliminates mojibake on legacy ISO-8859-1 pages (e.g. `winfuture.de`).
+- **Share URL embedded in MCP frontmatter responses** so LLMs stop hallucinating `pullmd.com` as the host instead of the operator's actual instance (closes [#1](https://github.com/AeternaLabsHQ/pullmd/issues/1), [#9](https://github.com/AeternaLabsHQ/pullmd/issues/9), thanks @looselyhuman and @WinFuture23).
+- **HTML preprocessing** to recover dropped paragraphs adjacent to inline recommendation widgets, plus per-host extractor override (closes [#17](https://github.com/AeternaLabsHQ/pullmd/issues/17), thanks @WinFuture23 — analysis that later seeded the v2.2 recipe engine).
+- **GHCR mirror** for all three images alongside Docker Hub (closes [#13](https://github.com/AeternaLabsHQ/pullmd/issues/13), thanks @Kampe).
+- `DISABLE_PUBLIC_HISTORY` env var to hide the history/archive views on shared instances (closes [#7](https://github.com/AeternaLabsHQ/pullmd/issues/7)).
+
+### Fixed
+- **Reddit threads with embedded images:** post selftext now renders before the media block, so the header is visible alongside the image and the comment tree is no longer truncated (closes [#12](https://github.com/AeternaLabsHQ/pullmd/issues/12)).
+- **Docker volume mount path:** `/app/data` corrected to `/data` so the documented bind mount actually works (closes [#15](https://github.com/AeternaLabsHQ/pullmd/issues/15), PR [#16](https://github.com/AeternaLabsHQ/pullmd/pull/16) — thanks @andrewthetechie).
+
+---
+
+## [1.1.3] - 2026-04-29
+
+### Fixed
+- **MCP response shape:** `read_url`, `get_share`, `list_recent` no longer return `structuredContent` alongside `content[0].text`. Claude Code and other MCP clients were surfacing the metadata JSON instead of the actual Markdown (closes [#1](https://github.com/AeternaLabsHQ/pullmd/issues/1), originally reported by @looselyhuman; upstream Anthropic bug tracked at `anthropics/claude-code#54450`).
+- **Reddit images:** image renders before selftext to match Reddit's visual order, so the header/title isn't suppressed by the image preview.
+- CI matrix corrected so all three images (pullmd, pullmd-trafilatura, pullmd-playwright) properly publish to Docker Hub at `:1.1.3` / `:1.1` / `:1` / `:latest`, alongside GHCR.
+
+---
+
+## [1.1.2] - 2026-04-27
+
+### Added
+- Delete button in the recents list on the homepage. Each row gets a discreet `×` on hover — same one-click pattern as the archive view. `opacity: 0` by default, fades in on row hover.
+
+### Changed
+- `cache.history()` now includes the row `id` so the PWA can issue `DELETE /api/cache/:id` straight from the recents list.
+- Service Worker cache bumped v17 → v18.
+
+---
+
+## [1.1.1] - 2026-04-27
+
+### Fixed
+- **Readonly `<input>` values surface as `<code>`.** Click-to-copy widgets on CMS-driven sites (API model slugs, embed snippets, share links) used to hide their content in `<input type="text" readonly value="…">`, which `node-html-markdown` silently dropped as form chrome. They now come through as inline code. Only `readonly` text inputs are transformed; real forms are untouched.
+- **Bare-UUID alt-text on images is dropped.** Strapi/Directus/Hygraph etc. leak asset IDs as the `alt` attribute. A strict UUID-v4 regex on the alt — drop the alt only, keep the image link. Descriptive alt text is preserved.
+
+### Verified
+- Diffed against 9 representative URLs (paulgraham.com, hillelwayne.com, 12factor.net, joelonsoftware.com, grugbrain.dev, RFC 2324, Wikipedia, HN frontpage) → byte-identical output. mistral.ai/pricing → expected diff (model slugs now `code`, UUID alts dropped).
+
+---
+
+## [1.1.0] - 2026-04-27
+
+### Added
+- **Playwright fallback for JavaScript-rendered pages.** When Readability + Trafilatura returns body-soup or low-quality output, the pipeline retries via headless Chromium and re-extracts on the rendered DOM. Source label is `playwright`; predicate reason is preserved in `metadata.extractorReason`.
+- **New Python sidecar `pullmd-playwright`** (FastAPI + Chromium, `asyncio.Semaphore` concurrency limit, 20 s hard timeout, soft-fail networkidle wait). Optional — leave `PLAYWRIGHT_URL` unset and the pipeline silently degrades to static extraction.
+- **Live status events for the PWA via Server-Sent Events.** New `GET /api/stream` endpoint emits `fetching → extracting → (rendering) → result`. Other clients (`curl`, Claude, MCP) continue to use `/api` unchanged.
+- `lib/render-decision.js` — predicate over (i) readability fellback + thin, (ii) body-soup signature heading/paragraph ratio, (iii) low-quality safety net.
+- `?render=force` and `?render=skip` manual overrides on both `/api` and `/api/stream`.
+- Frontend status line under the spinner with i18n (DE/EN); EventSource auto-falls-back to plain fetch on transport failure.
+- `client_mode` query-param fallback so PWA-originated SSE requests keep their attribution.
+- Cache-ordering fix from the unreleased v1.0.3 included here: re-fetched URLs bubble to the top of the recents list.
+
+### Operator notes
+- The Playwright sidecar image is ~3.7 GB on disk (pulls Chromium on first build).
+- `/api/stream` and `?render=force` are not rate-limited — recommended to keep PullMD behind an authenticating reverse proxy when exposed to the public internet.
+
+---
+
+## [1.0.2] - 2026-04-27
+
+### Added
+First public release. Self-hosted URL → Markdown service for humans and AI agents — PWA, REST, MCP, and a downloadable Claude Code skill, all from one container.
+
+- **Multi-strategy extraction.** Cloudflare's native Markdown endpoint where available; Readability + Trafilatura running in parallel, picked by quality score elsewhere.
+- **Reddit-aware path.** Auto-detects threads (incl. `redd.it` and `/s/` share links), returns post + nested comment tree with tunable `comment_depth` / `comment_limit`.
+- **Refreshable share IDs.** Every conversion gets an 8-hex permalink; `GET /s/:id` re-fetches if older than 1h, falls back to the last good snapshot if the source dies.
+- **Four interfaces, one codebase.** PWA frontend, REST (`/api`), MCP (`POST /mcp`, Streamable-HTTP), downloadable Claude Code skill bundle.
+- **Multi-arch images** (`linux/amd64`, `linux/arm64`) on Docker Hub.
+
+### Fixed
+- First-boot DB file error on Docker volume mounts (thanks @goran-zdjelar, [#2](https://github.com/AeternaLabsHQ/pullmd/issues/2)).
+
+---
+
+[3.15.1]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.15.1
+[3.15.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.15.0
+[3.14.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.14.0
+[3.13.1]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.13.1
+[3.13.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.13.0
+[3.12.1]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.12.1
+[3.12.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.12.0
+[3.11.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.11.0
+[3.10.1]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.10.1
+[3.10.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.10.0
+[3.9.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.9.0
+[3.8.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.8.0
+[3.7.1]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.7.1
+[3.7.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.7.0
+[3.6.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.6.0
+[3.0.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v3.0.0
+[2.6.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.6.0
+[2.5.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.5.0
+[2.4.1]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.4.1
+[2.4.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.4.0
+[2.3.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.3.0
+[2.2.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.2.0
+[2.1.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.1.0
+[2.0.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v2.0.0
+[1.2.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v1.2.0
+[1.1.3]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v1.1.3
+[1.1.2]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v1.1.2
+[1.1.1]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v1.1.1
+[1.1.0]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v1.1.0
+[1.0.2]: https://github.com/AeternaLabsHQ/pullmd/releases/tag/v1.0.2

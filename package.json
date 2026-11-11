@@ -1,0 +1,34 @@
+{
+  "name": "pullmd",
+  "version": "3.19.0",
+  "type": "module",
+  "main": "server.js",
+  "license": "AGPL-3.0-or-later",
+  "author": "Aeterna Labs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AeternaLabsHQ/pullmd.git"
+  },
+  "scripts": {
+    "start": "node --max-http-header-size=65536 server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@kenjiuno/decompressrtf": "^0.1.4",
+    "@kenjiuno/msgreader": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@mozilla/readability": "^0.6.0",
+    "archiver": "^8.0.0",
+    "argon2": "^0.45.1",
+    "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
+    "image-size": "^2.0.4",
+    "jose": "^6.2.12",
+    "linkedom": "^0.18.13",
+    "node-html-markdown": "^2.0.0",
+    "postal-mime": "^4.2.0",
+    "undici": "^7.30.0",
+    "zod": "^4.6.5"
+  }
+}

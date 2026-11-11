@@ -1,0 +1,3084 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>PullMD</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#FF4500">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="icon" href="favicon.ico" sizes="48x48">
+  <link rel="apple-touch-icon" href="icon-192.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    /* =========================================================
+       Theme tokens
+       ========================================================= */
+    :root,
+    [data-theme="dark"] {
+      --bg:            #0e1016;
+      --bg-elev:       #14171f;
+      --bg-input:      #11141b;
+      --bg-result:     #0a0c12;
+      --border:        #1f2330;
+      --border-strong: #2a3040;
+      --fg:            #e7e9ee;
+      --fg-muted:      #8b91a1;
+      --fg-dim:        #5a6072;
+      --fg-faint:      #353a48;
+      --accent:        #ff5722;
+      --accent-hover:  #ff7043;
+      --accent-fg:     #ffffff;
+      --accent-soft:   rgba(255, 87, 34, 0.12);
+      --link:          #6cc4ff;
+      --good:          #6bff9c;
+      --good-bg:       rgba(107, 255, 156, 0.08);
+      --bad:           #ff7a7a;
+      --bad-bg:        rgba(255, 122, 122, 0.08);
+      --radius:        10px;
+      --radius-lg:     14px;
+      --shadow:        0 1px 0 rgba(255,255,255,0.02) inset, 0 8px 24px rgba(0,0,0,0.35);
+      --gridline:      rgba(255,255,255,0.025);
+    }
+
+    [data-theme="paper"] {
+      --bg:            #f6f3ee;
+      --bg-elev:       #ffffff;
+      --bg-input:      #ffffff;
+      --bg-result:     #fbf9f4;
+      --border:        #e6e0d4;
+      --border-strong: #cdc5b3;
+      --fg:            #1c1a17;
+      --fg-muted:      #6b6557;
+      --fg-dim:        #918a7a;
+      --fg-faint:      #cdc5b3;
+      --accent:        #d84315;
+      --accent-hover:  #bf360c;
+      --accent-fg:     #ffffff;
+      --accent-soft:   rgba(216, 67, 21, 0.10);
+      --link:          #1976d2;
+      --good:          #1b5e20;
+      --good-bg:       rgba(27, 94, 32, 0.08);
+      --bad:           #c62828;
+      --bad-bg:        rgba(198, 40, 40, 0.06);
+      --shadow:        0 1px 2px rgba(60,40,20,0.04), 0 8px 24px rgba(60,40,20,0.06);
+      --gridline:      rgba(60, 40, 20, 0.03);
+    }
+    [data-theme="paper"] .toggle-track::after { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+    [data-theme="paper"] .client-claude { background: rgba(124, 77, 255, 0.10); color: #5e35b1; }
+    [data-theme="paper"] .client-pwa    { background: rgba(27, 94, 32, 0.10); color: #1b5e20; }
+
+    /* =========================================================
+       Theme toggle button
+       ========================================================= */
+    .theme-toggle {
+      width: 28px; height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: var(--fg-muted);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      padding: 0;
+    }
+    .theme-toggle:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .theme-toggle svg { display: block; }
+    [data-theme="dark"]  .theme-toggle .icon-sun  { display: block; }
+    [data-theme="dark"]  .theme-toggle .icon-moon { display: none; }
+    [data-theme="paper"] .theme-toggle .icon-sun  { display: none; }
+    [data-theme="paper"] .theme-toggle .icon-moon { display: block; }
+
+    .lang-toggle {
+      height: 28px;
+      padding: 0 0.5rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: var(--fg-muted);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .lang-toggle:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* =========================================================
+       Reset + base
+       ========================================================= */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+
+    body {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+        'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      min-height: 100vh;
+      min-height: 100dvh;
+      line-height: 1.5;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right)
+        env(safe-area-inset-bottom) env(safe-area-inset-left);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+
+      background-image:
+        linear-gradient(var(--gridline) 1px, transparent 1px),
+        linear-gradient(90deg, var(--gridline) 1px, transparent 1px);
+      background-size: 32px 32px, 32px 32px;
+      background-position: -1px -1px;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 3rem 1.25rem 5rem;
+    }
+
+    /* =========================================================
+       Header
+       ========================================================= */
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2rem;
+    }
+
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.625rem;
+      text-decoration: none;
+      color: var(--fg);
+    }
+    .brand-mark img {
+      height: 1.75rem;
+      width: 1.75rem;
+      border-radius: 6px;
+      display: block;
+    }
+    .brand-mark .wordmark {
+      font-size: 1.375rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      font-feature-settings: "ss01";
+    }
+    .brand-mark .wordmark .accent {
+      color: var(--accent);
+    }
+
+    .brand-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.6875rem;
+      color: var(--fg-dim);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .brand-meta .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--good);
+      box-shadow: 0 0 0 3px var(--good-bg);
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .brand-meta[data-status="offline"] .dot {
+      background: var(--bad);
+      box-shadow: 0 0 0 3px var(--bad-bg);
+    }
+    .brand-meta[data-status="checking"] .dot {
+      background: var(--fg-dim);
+      box-shadow: 0 0 0 3px var(--border);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.5; }
+      50%      { opacity: 1; }
+    }
+
+    .hero { margin-bottom: 1.5rem; }
+    .hero h1 {
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      line-height: 1.1;
+      margin-bottom: 0.5rem;
+    }
+    .hero p {
+      color: var(--fg-muted);
+      font-size: 0.9375rem;
+      max-width: 52ch;
+    }
+    .hero p code {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.85em;
+      padding: 0.075rem 0.375rem;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-radius: 4px;
+    }
+
+    /* =========================================================
+       Input card
+       ========================================================= */
+    .card {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow);
+    }
+
+    .input-group {
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.875rem;
+    }
+
+    .url-row {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .url-row .url-icon {
+      position: absolute;
+      left: 0.875rem;
+      color: var(--fg-dim);
+      pointer-events: none;
+      display: flex;
+    }
+
+    #url-input {
+      width: 100%;
+      padding: 0.9375rem 1rem 0.9375rem 2.625rem;
+      font-size: 0.9375rem;
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      color: var(--fg);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    #url-input::placeholder { color: var(--fg-dim); }
+    #url-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.625rem 1rem;
+    }
+
+    /* Comments, depth and "All" belong together: one group, set off from
+       the other switches by a thin vertical rule. */
+    .control-group {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.625rem 1rem;
+      padding-right: 1rem;
+      border-right: 1px solid var(--border-strong);
+    }
+
+    /* Toggle switch */
+    .toggle-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      white-space: nowrap;
+    }
+    .toggle-label input[type="checkbox"] { display: none; }
+    .toggle-track {
+      position: relative;
+      width: 32px; height: 18px;
+      background: var(--border-strong);
+      border-radius: 9px;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 14px; height: 14px;
+      background: var(--bg);
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-label input:checked + .toggle-track { background: var(--accent); }
+    .toggle-label input:checked + .toggle-track::after {
+      transform: translateX(14px);
+      background: var(--accent-fg);
+    }
+
+    /* depth input */
+    #depth-label { gap: 0.5rem; }
+    #depth-input {
+      width: 3rem;
+      padding: 0.25rem 0.375rem;
+      font-size: 0.8125rem;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      background: var(--bg-input);
+      color: var(--fg);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      text-align: center;
+      -moz-appearance: textfield;
+      outline: none;
+    }
+    #depth-input:focus { border-color: var(--accent); }
+    #depth-input:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Go button */
+    #go-btn {
+      flex-shrink: 0;
+      margin-left: auto;
+      padding: 0.625rem 1.5rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--accent-fg);
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      letter-spacing: 0.01em;
+    }
+    #go-btn:hover { background: var(--accent-hover); }
+    #go-btn:active { transform: scale(0.97); }
+    #go-btn:disabled {
+      background: var(--border-strong);
+      color: var(--fg-dim);
+      cursor: not-allowed;
+      transform: none;
+    }
+    #go-btn .arrow { transition: transform 0.15s; }
+    #go-btn:hover .arrow { transform: translateX(2px); }
+
+    /* =========================================================
+       Loading
+       ========================================================= */
+    .loading {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 2rem;
+      color: var(--fg-muted);
+      font-size: 0.875rem;
+    }
+    .loading.visible { display: flex; }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 2.5px solid var(--border-strong);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* =========================================================
+       Error
+       ========================================================= */
+    .error {
+      display: none;
+      margin-top: 1rem;
+      padding: 0.875rem 1rem;
+      background: var(--bad-bg);
+      border: 1px solid var(--bad);
+      border-radius: var(--radius);
+      color: var(--bad);
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+    .error.visible { display: block; }
+
+    /* =========================================================
+       Result
+       ========================================================= */
+    .result-container {
+      display: none;
+      margin-top: 1.5rem;
+    }
+    .result-container.visible { display: block; }
+
+    .result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.625rem;
+      flex-wrap: wrap;
+    }
+    .result-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      flex-wrap: wrap;
+    }
+    .result-label {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-dim);
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.1875rem 0.5rem;
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-radius: 4px;
+      vertical-align: middle;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    .badge.neutral { background: var(--border); color: var(--fg-muted); }
+
+    #copy-btn, #permalink-copy-btn, #share-btn, #download-btn {
+      padding: 0.4375rem 0.875rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      font-family: inherit;
+      color: var(--fg);
+      background: var(--bg-elev);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+    }
+    #copy-btn:hover, #permalink-copy-btn:hover, #share-btn:hover, #download-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    #copy-btn:active, #permalink-copy-btn:active, #share-btn:active, #download-btn:active { transform: scale(0.97); }
+    #copy-btn.copied, #permalink-copy-btn.copied, #share-btn.copied, #download-btn.copied {
+      background: var(--good-bg);
+      border-color: var(--good);
+      color: var(--good);
+    }
+    /* margin-left:auto keeps the actions pinned right even when flex-wrap
+       moves them to their own line - space-between alone left-aligns a
+       single wrapped item, which breaks the muscle memory for Copy. */
+    .result-actions { display: inline-flex; align-items: center; gap: 0.375rem; margin-left: auto; }
+
+    .permalink-bar {
+      display: none;
+      align-items: center;
+      gap: 0.625rem;
+      margin-bottom: 0.625rem;
+      padding: 0.625rem 0.75rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.8125rem;
+    }
+    .permalink-bar.visible { display: flex; }
+    .permalink-bar-label {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-dim);
+      flex-shrink: 0;
+    }
+    #permalink-url {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--link);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.75rem;
+    }
+
+    .client-label {
+      display: inline-block;
+      padding: 0.0625rem 0.4375rem;
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-radius: 4px;
+      vertical-align: middle;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    .client-browser { background: var(--accent-soft); color: var(--accent); }
+    .client-pwa     { background: rgba(107, 255, 156, 0.12); color: var(--good); }
+    .client-claude  { background: rgba(124, 77, 255, 0.18); color: #a48cff; }
+    .client-api     { background: var(--border); color: var(--fg-muted); }
+
+    /* Result code block */
+    #result {
+      width: 100%;
+      min-height: 240px;
+      padding: 1.125rem 1.125rem 1.125rem 3.5rem;
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8125rem;
+      line-height: 1.7;
+      color: var(--fg);
+      background: var(--bg-result);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      overflow-x: auto;
+      tab-size: 2;
+      counter-reset: line;
+      position: relative;
+    }
+    #result::before {
+      content: '';
+      position: absolute;
+      left: 2.875rem;
+      top: 1rem;
+      bottom: 1rem;
+      width: 1px;
+      background: var(--border);
+      pointer-events: none;
+    }
+    #result .ln {
+      display: block;
+      counter-increment: line;
+      position: relative;
+      min-height: 1.7em;
+    }
+    #result .ln::before {
+      content: counter(line);
+      position: absolute;
+      left: -2.625rem;
+      width: 1.75rem;
+      text-align: right;
+      color: var(--fg-faint);
+      font-size: 0.7rem;
+      font-variant-numeric: tabular-nums;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: none;
+    }
+
+    /* =========================================================
+       View toggle (Raw | Rendered)
+       ========================================================= */
+    .view-toggle {
+      display: inline-flex;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--bg-elev);
+    }
+    .view-toggle button {
+      padding: 0.4375rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      letter-spacing: 0.04em;
+      color: var(--fg-muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .view-toggle button + button {
+      border-left: 1px solid var(--border-strong);
+    }
+    .view-toggle button:hover { color: var(--fg); }
+    .view-toggle button.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .hidden { display: none !important; }
+
+    /* =========================================================
+       Rendered markdown view
+       ========================================================= */
+    #result-rendered {
+      width: 100%;
+      min-height: 240px;
+      padding: 1.5rem 1.625rem;
+      background: var(--bg-result);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      color: var(--fg);
+      font-size: 0.9375rem;
+      line-height: 1.65;
+      overflow-x: auto;
+    }
+    #result-rendered > :first-child { margin-top: 0; }
+    #result-rendered > :last-child  { margin-bottom: 0; }
+
+    #result-rendered h1,
+    #result-rendered h2,
+    #result-rendered h3,
+    #result-rendered h4,
+    #result-rendered h5,
+    #result-rendered h6 {
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      line-height: 1.25;
+      margin: 1.5rem 0 0.625rem;
+      color: var(--fg);
+    }
+    #result-rendered h1 { font-size: 1.625rem; }
+    #result-rendered h2 {
+      font-size: 1.3125rem;
+      padding-bottom: 0.3125rem;
+      border-bottom: 1px solid var(--border);
+    }
+    #result-rendered h3 { font-size: 1.125rem; }
+    #result-rendered h4 { font-size: 1rem; }
+    #result-rendered h5 { font-size: 0.9375rem; color: var(--fg-muted); }
+    #result-rendered h6 {
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    #result-rendered p { margin: 0 0 0.875rem; }
+
+    #result-rendered a {
+      color: var(--link);
+      text-decoration: underline;
+      text-decoration-color: color-mix(in srgb, var(--link) 35%, transparent);
+      text-underline-offset: 2px;
+      word-break: break-word;
+    }
+    #result-rendered a:hover { text-decoration-color: var(--link); }
+
+    #result-rendered img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 6px;
+      margin: 0.5rem 0;
+      display: block;
+    }
+
+    #result-rendered strong { font-weight: 700; color: var(--fg); }
+    #result-rendered em     { font-style: italic; }
+    #result-rendered del    { color: var(--fg-muted); }
+
+    #result-rendered code {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85em;
+      padding: 0.1em 0.375em;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--fg);
+      word-break: break-word;
+    }
+    #result-rendered pre {
+      margin: 0.75rem 0 1rem;
+      padding: 0.875rem 1rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow-x: auto;
+      font-size: 0.8125rem;
+      line-height: 1.55;
+    }
+    #result-rendered pre code {
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      font-size: inherit;
+      color: var(--fg);
+      word-break: normal;
+      white-space: pre;
+    }
+
+    /* Frontmatter box in the rendered view: same code-block tokens, only
+       quieter and tighter, so it reads as metadata above the article. */
+    #result-rendered pre.fm-block {
+      margin: 0 0 1.25rem;
+      font-size: 0.75rem;
+    }
+    #result-rendered pre.fm-block code {
+      color: var(--fg-muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    #result-rendered blockquote {
+      margin: 0.75rem 0;
+      padding: 0.125rem 0 0.125rem 0.875rem;
+      border-left: 3px solid var(--border-strong);
+      color: var(--fg-muted);
+      font-style: normal;
+    }
+    #result-rendered blockquote > :last-child { margin-bottom: 0; }
+
+    #result-rendered ul,
+    #result-rendered ol {
+      margin: 0 0 0.875rem 1.5rem;
+      padding: 0;
+    }
+    #result-rendered li { margin: 0.125rem 0; }
+    #result-rendered li > ul,
+    #result-rendered li > ol { margin-bottom: 0; }
+
+    #result-rendered hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 1.5rem 0;
+    }
+
+    #result-rendered table {
+      width: auto;
+      max-width: 100%;
+      border-collapse: collapse;
+      margin: 0.75rem 0 1rem;
+      font-size: 0.875rem;
+    }
+    #result-rendered th,
+    #result-rendered td {
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+    #result-rendered th {
+      background: var(--bg-input);
+      font-weight: 600;
+    }
+    #result-rendered tbody tr:nth-child(even) td {
+      background: color-mix(in srgb, var(--bg-input) 50%, transparent);
+    }
+
+    #result-rendered details {
+      margin: 0.5rem 0 0.875rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    #result-rendered summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--fg);
+    }
+
+    /* =========================================================
+       Hint
+       ========================================================= */
+    .hint {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.75rem;
+      color: var(--fg-dim);
+    }
+    .hint kbd {
+      padding: 0.125rem 0.4375rem;
+      background: var(--bg-elev);
+      border: 1px solid var(--border-strong);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.6875rem;
+      color: var(--fg-muted);
+    }
+
+    /* =========================================================
+       History
+       ========================================================= */
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 2.5rem 0 0.875rem;
+    }
+    .section-head h2 {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-dim);
+    }
+
+    .archive-back {
+      color: var(--link);
+      text-decoration: none;
+      font-size: 0.8125rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+    .archive-back:hover { text-decoration: underline; }
+
+    .history-card {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .history-card .h-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      transition: background 0.12s;
+    }
+    .history-card .h-row:last-child { border-bottom: none; }
+    .history-card .h-row:hover { background: var(--bg-input); }
+
+    .h-delete-btn {
+      flex-shrink: 0;
+      width: 24px; height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--fg-dim);
+      cursor: pointer;
+      font-size: 0.875rem;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+      margin-left: auto;
+    }
+    .history-card .h-row:hover .h-delete-btn { opacity: 0.6; }
+    .h-delete-btn:hover { opacity: 1 !important; color: var(--bad); border-color: var(--bad); }
+
+    .h-favicon {
+      width: 18px; height: 18px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      background: var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fg-dim);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.625rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      overflow: hidden;
+    }
+    .h-favicon img { width: 100%; height: 100%; object-fit: cover; }
+
+    .h-main { flex: 1; min-width: 0; }
+    .h-title {
+      font-size: 0.875rem;
+      color: var(--fg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 0.125rem;
+    }
+    .h-meta {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.6875rem;
+      color: var(--fg-dim);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .h-meta .sep { color: var(--fg-faint); }
+
+    /* =========================================================
+       Stats grid
+       ========================================================= */
+    .stats {
+      margin-top: 2rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .stat {
+      background: var(--bg-elev);
+      padding: 0.75rem 0.875rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+    .stat-label {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--fg-dim);
+    }
+    .stat-value {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--fg);
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-sub {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.625rem;
+      color: var(--fg-muted);
+    }
+
+    /* =========================================================
+       Archive view
+       ========================================================= */
+    .archive-view { display: none; }
+    .archive-view.visible { display: block; }
+
+    .archive-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+    .archive-count {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.75rem;
+      color: var(--fg-dim);
+    }
+
+    .archive-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.625rem 0.875rem;
+      margin-bottom: 0.375rem;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.875rem;
+      transition: border-color 0.15s;
+    }
+    .archive-item:hover { border-color: var(--accent); }
+    .archive-item-content { flex: 1; min-width: 0; cursor: pointer; }
+    .archive-item-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--fg);
+    }
+    .archive-item-meta {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.6875rem;
+      color: var(--fg-dim);
+      margin-top: 0.125rem;
+    }
+    .archive-delete-btn {
+      flex-shrink: 0;
+      width: 28px; height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--fg-dim);
+      cursor: pointer;
+      font-size: 1rem;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .archive-delete-btn:hover {
+      color: var(--bad);
+      border-color: var(--bad);
+    }
+    .archive-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+    .archive-delete-all {
+      padding: 0.5rem 1rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--bad);
+      background: var(--bad-bg);
+      border: 1px solid var(--bad);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .archive-more {
+      padding: 0.5rem 1rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--fg);
+      background: var(--bg-elev);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      width: 100%;
+      text-align: center;
+    }
+    .archive-more:hover { background: var(--bg-input); }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      .container { padding: 1.5rem 1rem 4rem; }
+      .controls { gap: 0.5rem 0.875rem; }
+      /* On a phone the group gets its own row; the rule would dangle at the line end. */
+      .control-group { gap: 0.5rem 0.875rem; padding-right: 0; border-right: 0; flex-basis: 100%; }
+      #go-btn { width: 100%; margin-left: 0; justify-content: center; }
+      /* Three action buttons plus the badges and the Raw|Rendered toggle do not
+         fit on a phone - collapse the buttons to their icons. The accessible
+         name survives via title/aria-label (set through data-i18n-attr). */
+      #copy-btn .label, #share-btn .label, #download-btn .label { display: none; }
+      #copy-btn, #share-btn, #download-btn { padding: 0.4375rem 0.625rem; }
+    }
+
+    .foot {
+      margin-top: 3rem; padding-top: 1.25rem;
+      border-top: 1px solid var(--border);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.75rem; color: var(--fg-dim);
+      display: flex; justify-content: center; flex-wrap: wrap;
+      gap: 0.5rem 0.75rem; text-align: center;
+    }
+    .foot a { color: var(--link); }
+    .foot .sep { color: var(--fg-dim); opacity: 0.5; }
+
+    /* =========================================================
+       Auth-misconfig banner
+       ========================================================= */
+    .auth-warning {
+      position: sticky; top: 0; z-index: 1000;
+      /* Frosted-glass: strong red wash with backdrop-blur so any scrolling
+         content behind the banner reads as a soft wash, not as text. */
+      background-color: rgba(255, 100, 100, 0.32);
+      backdrop-filter: blur(14px) saturate(1.5);
+      -webkit-backdrop-filter: blur(14px) saturate(1.5);
+      color: var(--fg);
+      border-bottom: 2px solid var(--bad);
+      padding: 0.75rem 1rem;
+      font-size: 0.875rem; line-height: 1.5;
+      text-align: center;
+    }
+    body[data-theme="paper"] .auth-warning {
+      background-color: rgba(198, 40, 40, 0.22);
+    }
+    .auth-warning code {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.8125rem;
+      background: rgba(255,122,122,0.10); color: var(--bad);
+      padding: 0.05rem 0.3rem; border-radius: 3px;
+    }
+    .auth-warning a { color: var(--bad); text-decoration: underline; }
+    .auth-warning[hidden] { display: none; }
+
+    /* =========================================================
+       i18n: hide non-active language anywhere we use the
+       parallel-lang pattern (matches help.html convention)
+       ========================================================= */
+    body[data-lang="de"] .auth-warning [lang="en"] { display: none; }
+    body[data-lang="en"] .auth-warning [lang="de"] { display: none; }
+
+    /* Drag-and-drop overlay (local HTML file conversion, #28) */
+    #drop-overlay {
+      position: fixed; inset: 0; z-index: 300; display: none;
+      align-items: center; justify-content: center;
+      background: rgba(14, 16, 22, 0.7);
+      background: color-mix(in srgb, var(--bg) 80%, transparent);
+    }
+    #drop-overlay.visible { display: flex; }
+    #drop-overlay .drop-box {
+      padding: 2.5rem 3.5rem;
+      border: 2px dashed var(--accent);
+      border-radius: 14px;
+      background: var(--bg-elev);
+      color: var(--fg);
+      font-size: 1.15rem;
+      font-weight: 600;
+      pointer-events: none;
+    }
+    /* Discoverability box: URL hint + clickable/droppable local-HTML affordance (#28) */
+    .hint-box {
+      max-width: 26rem;
+      margin: 1.5rem auto 0;
+      padding: 0.85rem 1.1rem;
+      border: 1.5px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+      transition: border-color 0.15s ease;
+    }
+    .hint-box:hover { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+    .hint-box .hint { margin-top: 0; }
+    .drop-open {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.75rem;
+      color: var(--fg-dim);
+      cursor: pointer;
+      transition: color 0.15s ease;
+    }
+    .drop-open:hover { color: var(--fg); }
+    .drop-open svg { flex: 0 0 auto; opacity: 0.8; }
+    .aff-drag { display: none; }
+    @media (hover: hover) and (pointer: fine) {
+      .aff-drag { display: inline; }
+      .aff-open { display: none; }
+    }
+  </style>
+</head>
+<body data-theme="dark" data-lang="de">
+  <div id="drop-overlay" aria-hidden="true"><div class="drop-box" data-i18n="drop.hint">Datei hier ablegen</div></div>
+  <script>
+    // Inline pre-paint: apply persisted/system theme + lang before first render
+    (function () {
+      try {
+        var stored = localStorage.getItem('pullmd-theme');
+        var t = stored || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'paper' : 'dark');
+        document.body.setAttribute('data-theme', t);
+        var l = localStorage.getItem('pullmd-lang');
+        if (l !== 'de' && l !== 'en') l = (navigator.language || 'en').toLowerCase().indexOf('de') === 0 ? 'de' : 'en';
+        document.body.setAttribute('data-lang', l);
+      } catch (e) {}
+    })();
+  </script>
+
+  <div id="auth-warning-banner" class="auth-warning" hidden>
+    <span lang="de">⚠️ Die Authentifizierung ist derzeit deaktiviert. Dein <code>PULLMD_AUTH_TOKEN</code> schützt diese Instanz in v2 nicht mehr. Setze <code>PULLMD_AUTH_MODE=single-admin</code> und konfiguriere <code>PULLMD_ADMIN_EMAIL</code> + <code>PULLMD_ADMIN_PASSWORD</code>, um die Authentifizierung wiederherzustellen. Siehe <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/MIGRATION.md">MIGRATION.md</a>.</span>
+    <span lang="en">⚠️ Authentication is currently disabled. Your <code>PULLMD_AUTH_TOKEN</code> no longer protects this instance in v2. Set <code>PULLMD_AUTH_MODE=single-admin</code> and configure <code>PULLMD_ADMIN_EMAIL</code> + <code>PULLMD_ADMIN_PASSWORD</code> to restore authentication. See <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/MIGRATION.md">MIGRATION.md</a>.</span>
+  </div>
+
+  <div class="container">
+
+    <header class="brand">
+      <a href="/" class="brand-mark">
+        <img src="icon-192.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{textContent:'M',style:'display:inline-flex;align-items:center;justify-content:center;width:1.75rem;height:1.75rem;border-radius:6px;background:var(--accent);color:var(--accent-fg);font-weight:700;font-size:0.95rem;'}))">
+        <span class="wordmark"><span class="accent">Pull</span>MD</span>
+      </a>
+      <span class="brand-meta" id="status-meta" data-status="checking" data-i18n-attr="title" data-i18n-attr-key="status.title">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="status-label" data-i18n="status.checking">prüfe…</span>
+        <button id="theme-toggle" class="theme-toggle" type="button" data-i18n-attr="title aria-label" data-i18n-attr-key="theme.toggle">
+          <svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+          <svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+        <button id="lang-toggle" class="lang-toggle" type="button" data-i18n-attr="title aria-label" data-i18n-attr-key="lang.toggle">
+          <span id="lang-label">DE</span>
+        </button>
+        <a href="/help" class="theme-toggle" data-i18n-attr="title aria-label" data-i18n-attr-key="help.toggle" style="text-decoration:none;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        </a>
+      </span>
+    </header>
+
+    <section class="hero">
+      <h1 data-i18n="hero.h1">Alles rein, Markdown raus.</h1>
+      <p data-i18n="hero.p">Webseiten, Dokumente, Bilder, Audio und YouTube — sauber konvertiert zu Markdown. Per URL oder Upload, für Menschen und KI-Agenten.</p>
+    </section>
+
+    <div class="card">
+      <div class="input-group">
+        <div class="url-row">
+          <span class="url-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+          </span>
+          <input
+            type="url"
+            id="url-input"
+            placeholder="https://..."
+            autocomplete="url"
+            autocapitalize="none"
+            spellcheck="false"
+            enterkeyhint="go"
+          >
+        </div>
+
+        <div class="controls">
+          <div class="control-group" id="comments-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="comments-toggle" checked>
+            <span class="toggle-track"></span>
+            <span data-i18n="toggle.comments">Kommentare</span>
+          </label>
+          <label class="toggle-label" id="depth-label">
+            <span data-i18n="toggle.depth">Tiefe</span>
+            <input type="number" id="depth-input" value="3" min="1" max="10">
+          </label>
+          <label class="toggle-label" id="all-comments-label" data-i18n-attr="title" data-i18n-attr-key="toggle.allComments.title">
+            <input type="checkbox" id="all-comments-toggle">
+            <span class="toggle-track"></span>
+            <span data-i18n="toggle.allComments">Alle</span>
+          </label>
+          </div>
+          <label class="toggle-label">
+            <input type="checkbox" id="frontmatter-toggle">
+            <span class="toggle-track"></span>
+            <span data-i18n="toggle.frontmatter">Frontmatter</span>
+          </label>
+          <label class="toggle-label" id="ocr-label" style="display:none;">
+            <input type="checkbox" id="ocr-toggle">
+            <span class="toggle-track"></span>
+            <span data-i18n="toggle.ocr">PDF-OCR</span>
+          </label>
+          <button id="go-btn">
+            <span data-i18n="btn.pull">Pull</span>
+            <span class="arrow" aria-hidden="true">→</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <span id="loading-label" data-i18n="loading">Lade Seite…</span>
+      <div id="status-line" style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.75rem; color: var(--fg-dim); margin-top: 0.5rem; min-height: 1em;"></div>
+    </div>
+
+    <div class="error" id="error"></div>
+
+    <div class="result-container" id="result-container">
+      <div class="permalink-bar" id="permalink-bar">
+        <span class="permalink-bar-label" data-i18n="share">Share</span>
+        <span id="permalink-url"></span>
+        <button id="permalink-copy-btn" data-i18n="copy">Kopieren</button>
+      </div>
+      <div class="result-header">
+        <span class="result-meta">
+          <span class="result-label">Markdown</span>
+          <span id="source-badge" class="badge" style="display:none;"></span>
+          <span id="chars-badge" class="badge neutral" style="display:none;"></span>
+          <span id="comments-badge" class="badge neutral" style="display:none;"></span>
+        </span>
+        <div class="view-toggle" id="view-toggle" role="tablist" aria-label="View mode">
+          <button type="button" data-mode="raw" class="active" role="tab" aria-selected="true">Raw</button>
+          <button type="button" data-mode="rendered" role="tab" aria-selected="false">Rendered</button>
+        </div>
+        <div class="result-actions">
+          <button id="copy-btn" data-i18n-attr="title aria-label" data-i18n-attr-key="copy">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span class="label" data-i18n="copy">Kopieren</span>
+          </button>
+          <button id="share-btn" type="button" style="display:none;" data-i18n-attr="title aria-label" data-i18n-attr-key="share.btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+            <span class="label" data-i18n="share.btn">Teilen</span>
+          </button>
+          <button id="download-btn" type="button" data-i18n-attr="title aria-label" data-i18n-attr-key="download.btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span class="label" data-i18n="download.btn">Download</span>
+          </button>
+        </div>
+      </div>
+      <pre id="result"></pre>
+      <div id="result-rendered" class="hidden"></div>
+    </div>
+
+    <div class="hint-box">
+      <p class="hint">
+        <span data-i18n="hint">URL einfügen, dann</span>
+        <kbd>Enter</kbd>
+      </p>
+      <label class="drop-open">
+        <input type="file" id="html-file-input" accept=".html,.htm,text/html,.eml,.msg,.mhtml,.mht,.txt,.md,.markdown,.srt,.vtt,message/rfc822,text/plain,text/markdown" hidden>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>
+        <span class="aff-drag" data-i18n="drop.affordance">Alternativ: Datei hierher ziehen oder auswählen</span>
+        <span class="aff-open" data-i18n="drop.affordanceOpen">Alternativ: Datei auswählen</span>
+      </label>
+    </div>
+
+    <div id="history-section" style="display:none;">
+      <div class="section-head">
+        <h2 data-i18n="section.recent">Letzte Abrufe</h2>
+        <a href="#" id="archive-link" class="archive-back" data-i18n="archive.link">Archiv →</a>
+      </div>
+      <div id="history-list" class="history-card"></div>
+      <div id="stats-footer" class="stats" style="display:none;"></div>
+    </div>
+
+    <div id="archive-view" class="archive-view">
+      <div class="archive-header">
+        <a href="#" id="archive-back" class="archive-back" data-i18n="archive.back">← Zurück</a>
+        <span id="archive-count" class="archive-count"></span>
+      </div>
+      <div id="archive-list"></div>
+      <div class="archive-actions">
+        <button id="archive-more" class="archive-more" style="display:none;" data-i18n="archive.more">Mehr laden</button>
+      </div>
+      <div class="archive-actions">
+        <button id="archive-delete-all" class="archive-delete-all" data-i18n="archive.deleteAll">Alles löschen</button>
+      </div>
+    </div>
+
+    <div class="foot" role="contentinfo">
+      <span>
+        PullMD
+        <a href="https://github.com/AeternaLabsHQ/pullmd/releases/tag/v__PULLMD_VERSION__"
+           target="_blank" rel="noopener">v__PULLMD_VERSION__</a>
+      </span>
+      <span class="sep">·</span>
+      <span>
+        Built by
+        <a href="https://github.com/AeternaLabsHQ" target="_blank" rel="noopener">Aeterna Labs</a>
+      </span>
+      <span class="sep">·</span>
+      <a href="https://github.com/AeternaLabsHQ/pullmd" target="_blank" rel="noopener">GitHub</a>
+      <span class="sep">·</span>
+      <a href="https://github.com/AeternaLabsHQ/pullmd/blob/main/LICENSE"
+         target="_blank" rel="noopener">AGPL-3.0</a>
+    </div>
+  </div>
+
+  <script>window.__PULLMD_DISABLE_HISTORY__ = __PULLMD_DISABLE_HISTORY_FLAG__;</script>
+  <script>
+    // ---- auth bootstrap: detect auth mode + login state before anything else ----
+    (async function authBootstrap() {
+      let cfg = { authMode: 'disabled', authMisconfigured: false };
+      try {
+        const r = await fetch('/api/config');
+        if (r.ok) cfg = await r.json();
+      } catch (_) { /* offline; fall through */ }
+
+      document.documentElement.dataset.authMode = cfg.authMode;
+
+      // Surface the misconfig banner regardless of mode — it is the
+      // disabled+legacy-token combination that is dangerous.
+      if (cfg.authMisconfigured) {
+        var banner = document.getElementById('auth-warning-banner');
+        if (banner) banner.removeAttribute('hidden');
+      }
+
+      if (cfg.authMode === 'disabled') return;
+
+      let me = null;
+      try {
+        const r = await fetch('/api/me');
+        if (r.ok) me = await r.json();
+      } catch (_) { /* not logged in */ }
+
+      const headerActions = document.querySelector('.brand') || document.body;
+      const slot = document.createElement('div');
+      slot.className = 'auth-slot';
+      slot.style.cssText = 'display:inline-flex; gap:0.5rem; align-items:center; font-size:0.875rem;';
+      // Built with createElement/textContent: the email is account data.
+      if (me) {
+        const account = document.createElement('a');
+        account.href = '/settings';
+        account.style.cssText = 'color: var(--fg-muted); text-decoration: none;';
+        account.textContent = me.email || '';
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/logout';
+        form.style.display = 'inline';
+        const button = document.createElement('button');
+        button.type = 'submit';
+        button.style.cssText = 'background:transparent; border:1px solid var(--border-strong); color:var(--fg-muted); padding:0.25rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.75rem;';
+        button.textContent = 'Log out';
+        form.appendChild(button);
+        slot.append(account, form);
+      } else {
+        const signIn = document.createElement('a');
+        signIn.href = '/login';
+        signIn.style.cssText = 'color: var(--accent); text-decoration: none;';
+        signIn.textContent = 'Sign in';
+        slot.appendChild(signIn);
+      }
+      headerActions.appendChild(slot);
+      document.documentElement.dataset.loggedIn = me ? '1' : '0';
+      // Tri-state on purpose. '1' admin, '0' a known non-admin, 'unknown' when
+      // /api/me did not answer. This line runs only after that fetch settles,
+      // so an absent attribute still means "not asked yet", which is a
+      // different situation and keeps its own default in isGlobalDelete().
+      document.documentElement.dataset.isAdmin = me ? (me.is_admin ? '1' : '0') : 'unknown';
+    })();
+
+    // ---- i18n: DE/EN, default from navigator.language, persisted override ----
+    (function () {
+      var KEY = 'pullmd-lang';
+      var I18N = {
+        de: {
+          'hero.h1':           'Alles rein, Markdown raus.',
+          'hero.p':            'Webseiten, Dokumente, Bilder, Audio und YouTube — sauber konvertiert zu Markdown. Per URL oder Upload, für Menschen und KI-Agenten.',
+          'toggle.comments':   'Kommentare',
+          'toggle.frontmatter':'Frontmatter',
+          'toggle.ocr':         'PDF-OCR',
+          'toggle.depth':      'Tiefe',
+          'toggle.allComments': 'Alle',
+          'toggle.allComments.title': 'Alle Kommentare ohne Tiefengrenze. Lädt bei Reddit eingeklappte Kommentare mit zusätzlichen Abrufen nach, das kann bei großen Threads einige Sekunden dauern.',
+          'btn.pull':          'Pull',
+          'loading':           'Lade Seite…',
+          'share':             'Share',
+          'copy':              'Kopieren',
+          'copied':            'Kopiert!',
+          'share.btn':         'Teilen',
+          'shared':            'Geteilt!',
+          'download.btn':      'Download',
+          'hint':              'URL einfügen, dann',
+          'section.recent':    'Letzte Abrufe',
+          'archive.link':      'Archiv →',
+          'archive.back':      '← Zurück',
+          'archive.more':      'Mehr laden',
+          'archive.deleteAll': 'Alles löschen',
+          'archive.confirmDeleteAllMine':   'Alle Einträge aus deiner Historie entfernen?',
+          'archive.confirmDeleteAllGlobal': 'Alle Einträge global löschen? Das betrifft alle Benutzer und macht bestehende Share-Links ungültig.',
+          'archive.deleteMine':   'Aus meiner Historie entfernen',
+          'archive.deleteGlobal': 'Global löschen',
+          'archive.entries':   '{n} Einträge',
+          'stat.entries':      'Einträge',
+          'stat.entries.expiring': '{n} laufen bald ab',
+          'stat.requests7d':   'Abrufe 7d',
+          'stat.cacheHits':    'Cache-Hits {pct}%',
+          'stat.dbSize':       'DB-Größe',
+          'stat.ttl':          'TTL',
+          'stat.days':         '{n} Tage',
+          'stat.unlimited':    'unbegrenzt',
+          'status.fetching':   'Lade Seite …',
+          'status.extracting': 'Extrahiere Inhalt ({source}) …',
+          'status.rendering':  'Seite ist JavaScript-gerendert — versuche es im Browser nochmal …',
+          'status.title':      'API-Status',
+          'status.online':     'online',
+          'status.offline':    'offline',
+          'status.checking':   'prüfe…',
+          'status.apiError':   'API {code}',
+          'theme.toggle':      'Theme wechseln',
+          'lang.toggle':       'Sprache wechseln',
+          'help.toggle':       'Hilfe',
+          'err.unknown':       'Unbekannter Fehler ({code})',
+          'err.empty':         'Leere Antwort vom Server.',
+          'err.network':       'Netzwerkfehler: Server nicht erreichbar.',
+          'err.deleteFailed':  'Löschen fehlgeschlagen.',
+          'upload.sending':    'Datei wird hochgeladen ({pct} %). Bitte App geöffnet lassen.',
+          'upload.processing': 'Hochgeladen, wird verarbeitet. Du kannst die App verlassen und später wiederkommen.',
+          'upload.resumed':    '"{name}" ist noch in Arbeit. Du kannst die App verlassen und später wiederkommen.',
+          'err.uploadInterrupted': 'Upload unterbrochen. Bitte die App während des Uploads geöffnet lassen und erneut versuchen.',
+          'err.jobGone':       'Das Ergebnis ist nicht mehr vorhanden (abgelaufen oder Server neu gestartet). Bitte die Datei erneut hochladen.',
+          'drop.hint':         'Datei hier ablegen',
+          'drop.affordance':   'Alternativ: Datei hierher ziehen oder auswählen',
+          'drop.affordanceOpen': 'Alternativ: Datei auswählen',
+          'drop.hintDoc':          'Datei hier ablegen',
+          'drop.affordanceDoc':    'Alternativ: Datei hierher ziehen oder auswählen',
+          'drop.affordanceOpenDoc': 'Alternativ: Datei auswählen',
+          'err.notHtml':       'Dieses Dateiformat wird nicht unterstützt.',
+          'err.fileTooLarge':  'Datei zu groß (max. 10 MB).',
+          'err.fileTooLargeDoc': 'Datei zu groß (max. 25 MB).',
+          'badge.chars':       '{n} chars',
+          'badge.charsK':      '{n}k chars',
+          'badge.comments':    '{shown}/{total} comments',
+          'locale':            'de-DE',
+        },
+        en: {
+          'hero.h1':           'Anything in, Markdown out.',
+          'hero.p':            'Web pages, documents, images, audio and YouTube — converted to clean Markdown. By URL or upload, for humans and AI agents.',
+          'toggle.comments':   'Comments',
+          'toggle.frontmatter':'Frontmatter',
+          'toggle.ocr':         'PDF OCR',
+          'toggle.depth':      'Depth',
+          'toggle.allComments': 'All',
+          'toggle.allComments.title': 'All comments, no depth limit. Loads comments Reddit collapses with extra requests, which can take a few seconds on large threads.',
+          'btn.pull':          'Pull',
+          'loading':           'Loading page…',
+          'share':             'Share',
+          'copy':              'Copy',
+          'copied':            'Copied!',
+          'share.btn':         'Share',
+          'shared':            'Shared!',
+          'download.btn':      'Download',
+          'hint':              'Paste URL, then',
+          'section.recent':    'Recent fetches',
+          'archive.link':      'Archive →',
+          'archive.back':      '← Back',
+          'archive.more':      'Load more',
+          'archive.deleteAll': 'Delete all',
+          'archive.confirmDeleteAllMine':   'Remove all entries from your history?',
+          'archive.confirmDeleteAllGlobal': 'Delete all entries globally? This affects every user and invalidates existing share links.',
+          'archive.deleteMine':   'Remove from my history',
+          'archive.deleteGlobal': 'Delete globally',
+          'archive.entries':   '{n} entries',
+          'stat.entries':      'Entries',
+          'stat.entries.expiring': '{n} expiring soon',
+          'stat.requests7d':   'Requests 7d',
+          'stat.cacheHits':    'Cache hits {pct}%',
+          'stat.dbSize':       'DB size',
+          'stat.ttl':          'TTL',
+          'stat.days':         '{n} days',
+          'stat.unlimited':    'unlimited',
+          'status.fetching':   'Loading page …',
+          'status.extracting': 'Extracting content ({source}) …',
+          'status.rendering':  'Page is JavaScript-rendered — retrying in browser …',
+          'status.title':      'API status',
+          'status.online':     'online',
+          'status.offline':    'offline',
+          'status.checking':   'checking…',
+          'status.apiError':   'API {code}',
+          'theme.toggle':      'Toggle theme',
+          'lang.toggle':       'Toggle language',
+          'help.toggle':       'Help',
+          'err.unknown':       'Unknown error ({code})',
+          'err.empty':         'Empty response from server.',
+          'err.network':       'Network error: server unreachable.',
+          'err.deleteFailed':  'Delete failed.',
+          'upload.sending':    'Uploading file ({pct}%). Please keep the app open.',
+          'upload.processing': 'Uploaded, processing. You can leave the app and come back later.',
+          'upload.resumed':    '"{name}" is still being processed. You can leave the app and come back later.',
+          'err.uploadInterrupted': 'Upload interrupted. Keep the app open during the upload and try again.',
+          'err.jobGone':       'The result is no longer available (expired or server restarted). Please upload the file again.',
+          'drop.hint':         'Drop file here',
+          'drop.affordance':   'Alternatively: drag a file here or browse',
+          'drop.affordanceOpen': 'Alternatively: choose a file',
+          'drop.hintDoc':          'Drop file here',
+          'drop.affordanceDoc':    'Alternatively: drag a file here or browse',
+          'drop.affordanceOpenDoc': 'Alternatively: choose a file',
+          'err.notHtml':       'This file type is not supported.',
+          'err.fileTooLarge':  'File too large (max 10 MB).',
+          'err.fileTooLargeDoc': 'File too large (max 25 MB).',
+          'badge.chars':       '{n} chars',
+          'badge.charsK':      '{n}k chars',
+          'badge.comments':    '{shown}/{total} comments',
+          'locale':            'en-GB',
+        },
+      };
+
+      function detectLang() {
+        try {
+          var stored = localStorage.getItem(KEY);
+          if (stored === 'de' || stored === 'en') return stored;
+        } catch (e) {}
+        var nav = (navigator.language || 'en').toLowerCase();
+        return nav.indexOf('de') === 0 ? 'de' : 'en';
+      }
+
+      var current = detectLang();
+
+      function format(s, vars) {
+        if (!vars) return s;
+        return s.replace(/\{(\w+)\}/g, function (_, k) {
+          return vars[k] != null ? vars[k] : '{' + k + '}';
+        });
+      }
+      function t(key, vars) {
+        var dict = I18N[current] || I18N.en;
+        var s = dict[key];
+        if (s == null) s = (I18N.en[key] != null ? I18N.en[key] : key);
+        return format(s, vars);
+      }
+
+      function applyLang() {
+        document.documentElement.lang = current;
+        // Mirror onto body so the parallel-lang CSS pattern (used by the
+        // misconfig banner and by help.html) picks up language switches.
+        document.body.setAttribute('data-lang', current);
+        // Static text content
+        document.querySelectorAll('[data-i18n]').forEach(function (el) {
+          el.textContent = t(el.getAttribute('data-i18n'));
+        });
+        // Static attributes (space-separated list of attr names)
+        document.querySelectorAll('[data-i18n-attr]').forEach(function (el) {
+          var key = el.getAttribute('data-i18n-attr-key');
+          if (!key) return;
+          var val = t(key);
+          el.getAttribute('data-i18n-attr').split(/\s+/).forEach(function (a) {
+            if (a) el.setAttribute(a, val);
+          });
+        });
+        // Lang toggle label always shows the *target* language
+        var label = document.getElementById('lang-label');
+        if (label) label.textContent = current === 'de' ? 'EN' : 'DE';
+        // Notify listeners that lang changed (re-render dynamic UI)
+        window.dispatchEvent(new CustomEvent('langchange', { detail: { lang: current } }));
+      }
+
+      function setLang(lang) {
+        if (lang !== 'de' && lang !== 'en') return;
+        current = lang;
+        try { localStorage.setItem(KEY, lang); } catch (e) {}
+        applyLang();
+      }
+
+      // Expose globally for the main app script
+      window.PullMD = window.PullMD || {};
+      window.PullMD.t = t;
+      window.PullMD.getLang = function () { return current; };
+      window.PullMD.setLang = setLang;
+
+      document.addEventListener('DOMContentLoaded', function () {
+        applyLang();
+        var btn = document.getElementById('lang-toggle');
+        if (btn) btn.addEventListener('click', function () {
+          setLang(current === 'de' ? 'en' : 'de');
+        });
+      });
+    })();
+  </script>
+
+  <script>
+    // ---- Theme toggle + follow-system when user hasn't picked one ----
+    (function () {
+      var KEY = 'pullmd-theme';
+      var mql = window.matchMedia('(prefers-color-scheme: light)');
+      function apply(t) {
+        document.body.setAttribute('data-theme', t);
+        document.querySelector('meta[name="theme-color"]')
+          .setAttribute('content', t === 'paper' ? '#f6f3ee' : '#0e1016');
+      }
+      // sync theme-color meta to whatever the inline pre-paint set
+      apply(document.body.getAttribute('data-theme') || 'dark');
+
+      mql.addEventListener && mql.addEventListener('change', function () {
+        var s = null;
+        try { s = localStorage.getItem(KEY); } catch (e) {}
+        if (!s) apply(mql.matches ? 'paper' : 'dark');
+      });
+
+      var btn = document.getElementById('theme-toggle');
+      if (btn) {
+        btn.addEventListener('click', function () {
+          var current = document.body.getAttribute('data-theme');
+          var next = current === 'paper' ? 'dark' : 'paper';
+          apply(next);
+          try { localStorage.setItem(KEY, next); } catch (e) {}
+        });
+      }
+    })();
+  </script>
+
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var t = function (k, v) { return (window.PullMD && window.PullMD.t) ? window.PullMD.t(k, v) : k; };
+      var getLang = function () { return (window.PullMD && window.PullMD.getLang) ? window.PullMD.getLang() : 'de'; };
+
+      // Detect installed PWA / standalone mode (Android, Desktop, iOS)
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true;
+      const clientMode = isStandalone ? 'pwa' : 'browser';
+      let activeEventSource = null;
+
+      const urlInput = document.getElementById('url-input');
+      const commentsToggle = document.getElementById('comments-toggle');
+      const frontmatterToggle = document.getElementById('frontmatter-toggle');
+      const ocrToggle = document.getElementById('ocr-toggle');
+      const depthInput = document.getElementById('depth-input');
+      const depthLabel = document.getElementById('depth-label');
+      const allCommentsToggle = document.getElementById('all-comments-toggle');
+      const allCommentsLabel = document.getElementById('all-comments-label');
+      const goBtn = document.getElementById('go-btn');
+      const loadingEl = document.getElementById('loading');
+      const errorEl = document.getElementById('error');
+      const resultContainer = document.getElementById('result-container');
+      const resultEl = document.getElementById('result');
+      const resultRenderedEl = document.getElementById('result-rendered');
+      const viewToggleEl = document.getElementById('view-toggle');
+      const copyBtn = document.getElementById('copy-btn');
+      const shareBtn = document.getElementById('share-btn');
+      const downloadBtn = document.getElementById('download-btn');
+      const permalinkBar = document.getElementById('permalink-bar');
+      const permalinkUrlEl = document.getElementById('permalink-url');
+      const permalinkCopyBtn = document.getElementById('permalink-copy-btn');
+
+      var PERMALINK_BASE = window.location.origin + '/s/';
+      var rawMarkdown = '';
+      var rawBody = '';
+      var rawFrontmatter = '';
+      // Share id of the currently shown result, if the server minted one.
+      // Used as the download filename fallback when there is no title.
+      var currentShareId = '';
+      // X-Suggested-Filename from the server, when the response carried one.
+      // Empty on the SSE path and against older servers - the client-side
+      // fallback chain in downloadFilename() covers those.
+      var currentSuggestedName = '';
+
+      var VIEW_MODE_KEY = 'pullmd-view-mode';
+      var viewMode = 'raw';
+      try {
+        var stored = localStorage.getItem(VIEW_MODE_KEY);
+        if (stored === 'rendered') viewMode = 'rendered';
+      } catch (e) {}
+      var renderedStale = true;
+
+      var PURIFY_CONFIG = {
+        ALLOWED_TAGS: [
+          'h1','h2','h3','h4','h5','h6','p','br','hr',
+          'strong','em','del','code','pre','blockquote',
+          'ul','ol','li',
+          'a','img',
+          'table','thead','tbody','tr','th','td',
+          'details','summary',
+          'span','div',
+        ],
+        ALLOWED_ATTR: ['href','src','alt','title','class','colspan','rowspan','align','target','rel'],
+        FORBID_ATTR: ['style'],
+        ADD_ATTR: ['target','rel'],
+      };
+
+      if (window.marked && typeof window.marked.setOptions === 'function') {
+        window.marked.setOptions({ gfm: true, breaks: false, pedantic: false });
+      }
+
+      // `---\nkey: value\n---\n\n` -> `key: value`. Inside a code box the fences
+      // are just markdown delimiters with nothing left to delimit, so they go.
+      function frontmatterInner(fm) {
+        var m = /^---\n([\s\S]*?)\n---/.exec(fm);
+        return (m ? m[1] : fm).replace(/\s+$/, '');
+      }
+
+      // Frontmatter is YAML, not markdown: parsed by marked, `key: value`
+      // followed by `---` becomes a setext heading and the whole block turns
+      // into one giant title. So only the body goes through marked, and the
+      // block is prepended as a plain code box when the toggle asks for it.
+      function renderRenderedView() {
+        if (!window.marked || !window.DOMPurify) {
+          resultRenderedEl.textContent = rawMarkdown;
+          renderedStale = false;
+          return;
+        }
+        var html = window.marked.parse(rawBody || '');
+        var clean = window.DOMPurify.sanitize(html, PURIFY_CONFIG);
+        resultRenderedEl.innerHTML = clean;
+        if (frontmatterToggle.checked && rawFrontmatter) {
+          var pre = document.createElement('pre');
+          pre.className = 'fm-block';
+          var code = document.createElement('code');
+          // textContent, never innerHTML: the block carries user-controlled
+          // page titles and URLs and must never be parsed as markup.
+          code.textContent = frontmatterInner(rawFrontmatter);
+          pre.appendChild(code);
+          resultRenderedEl.insertBefore(pre, resultRenderedEl.firstChild);
+        }
+        var links = resultRenderedEl.querySelectorAll('a');
+        for (var i = 0; i < links.length; i++) {
+          links[i].setAttribute('target', '_blank');
+          links[i].setAttribute('rel', 'noopener noreferrer');
+        }
+        var imgs = resultRenderedEl.querySelectorAll('img');
+        for (var j = 0; j < imgs.length; j++) {
+          imgs[j].setAttribute('loading', 'lazy');
+        }
+        renderedStale = false;
+      }
+
+      function applyViewMode() {
+        var buttons = viewToggleEl ? viewToggleEl.querySelectorAll('button[data-mode]') : [];
+        for (var i = 0; i < buttons.length; i++) {
+          var isActive = buttons[i].dataset.mode === viewMode;
+          buttons[i].classList.toggle('active', isActive);
+          buttons[i].setAttribute('aria-selected', isActive ? 'true' : 'false');
+        }
+        if (viewMode === 'rendered') {
+          if (renderedStale) renderRenderedView();
+          resultEl.classList.add('hidden');
+          resultRenderedEl.classList.remove('hidden');
+        } else {
+          resultRenderedEl.classList.add('hidden');
+          resultEl.classList.remove('hidden');
+        }
+      }
+
+      if (viewToggleEl) {
+        viewToggleEl.addEventListener('click', function (e) {
+          var btn = e.target.closest('button[data-mode]');
+          if (!btn) return;
+          var mode = btn.dataset.mode === 'rendered' ? 'rendered' : 'raw';
+          if (mode === viewMode) return;
+          viewMode = mode;
+          try { localStorage.setItem(VIEW_MODE_KEY, viewMode); } catch (err) {}
+          applyViewMode();
+        });
+      }
+      applyViewMode();
+
+      function pushOpenState() {
+        if (history.state && history.state.pullmd === 'open') return;
+        history.pushState({ pullmd: 'open' }, '', window.location.href);
+      }
+
+      // The loading label is set programmatically during document uploads.
+      // Keep key + vars so a language switch re-renders the current text
+      // (same pattern as lastStatus for the status LED).
+      var loadingLabel = document.getElementById('loading-label');
+      var lastLoading = { key: 'loading', vars: null };
+      function setLoadingLabel(key, vars) {
+        lastLoading = { key: key, vars: vars || null };
+        // textContent only: vars can carry the user-controlled file name.
+        loadingLabel.textContent = t(key, vars);
+      }
+      window.addEventListener('langchange', function () {
+        loadingLabel.textContent = t(lastLoading.key, lastLoading.vars);
+      });
+
+      function showLoading() {
+        setLoadingLabel('loading');
+        loadingEl.classList.add('visible');
+        errorEl.classList.remove('visible');
+        resultContainer.classList.remove('visible');
+        permalinkBar.style.display = 'none';
+        goBtn.disabled = true;
+      }
+      function hideLoading() {
+        loadingEl.classList.remove('visible');
+        goBtn.disabled = false;
+      }
+      // Mirrors isGlobalScope on the server: no auth configured or auth
+      // disabled means every caller deletes globally, otherwise only an admin
+      // does. dataset.authMode is set before the bootstrap's early return for
+      // disabled mode, and defaults to 'disabled' when /api/config is
+      // unreachable.
+      // 'unknown' means /api/me answered nothing, so the role is undecidable:
+      // overwarn. Claiming "global" for a delete that turns out to be scoped
+      // costs nothing, while the reverse puts a harmless label on a
+      // destructive action. An absent attribute is the different case of
+      // "bootstrap still running" and keeps the scoped default.
+      function isGlobalDelete() {
+        var root = document.documentElement;
+        return root.dataset.authMode === 'disabled'
+          || root.dataset.isAdmin === '1'
+          || root.dataset.isAdmin === 'unknown';
+      }
+      function showError(msg) {
+        hideLoading();
+        errorEl.textContent = msg;
+        errorEl.classList.add('visible');
+        // showArchive() hides the shared views with an inline display:none, and an
+        // inline style outranks the .error.visible class rule. Clear it, or a
+        // delete that fails inside the archive view would show nothing at all.
+        errorEl.style.display = '';
+        // Only collapse a shown conversion result on the main view. From the
+        // archive this would silently drop the user's result for when they
+        // navigate back, since hideArchive() restores display but not classes.
+        if (!archiveView || !archiveView.classList.contains('visible')) {
+          resultContainer.classList.remove('visible');
+        }
+      }
+
+      var sourceBadge = document.getElementById('source-badge');
+      var charsBadge = document.getElementById('chars-badge');
+      var commentsBadge = document.getElementById('comments-badge');
+      var sourceColors = {
+        reddit:      { bg: '#FF4500', color: '#fff' },
+        hackernews:  { bg: '#FF6600', color: '#fff' },
+        cloudflare:  { bg: '#F6821F', color: '#fff' },
+        readability: { bg: '#2a6a3a', color: '#6bff6b' },
+      };
+
+      function renderMarkdownWithImages(container, text) {
+        container.innerHTML = '';
+        var lines = text.split('\n');
+        var imgPattern = /!\[([^\]]*)\]\(([^)]+)\)/g;
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          var lineSpan = document.createElement('span');
+          lineSpan.className = 'ln';
+          var lastIndex = 0;
+          var match;
+          imgPattern.lastIndex = 0;
+          while ((match = imgPattern.exec(line)) !== null) {
+            if (match.index > lastIndex) {
+              lineSpan.appendChild(document.createTextNode(line.slice(lastIndex, match.index)));
+            }
+            var img = document.createElement('img');
+            img.src = match[2];
+            img.alt = match[1];
+            img.style.cssText = 'max-width:100%; height:auto; border-radius:6px; margin:0.5rem 0; display:block;';
+            img.loading = 'lazy';
+            lineSpan.appendChild(img);
+            lastIndex = imgPattern.lastIndex;
+          }
+          if (lastIndex < line.length) {
+            lineSpan.appendChild(document.createTextNode(line.slice(lastIndex)));
+          }
+          container.appendChild(lineSpan);
+        }
+      }
+
+      // Frontmatter is a pure leading YAML block; the body after it is identical
+      // whether or not frontmatter was requested. The PWA always fetches WITH it,
+      // keeps body + block apart, and lets the toggle swap the view client-side —
+      // no re-pull. Mirrors the server's own block regex (lib/frontmatter.js).
+      function splitFrontmatter(md) {
+        var m = /^---\n([\s\S]*?)\n---\n+/.exec(md);
+        // Require the first inner line to look like a YAML key, so a body that
+        // merely opens with a `---` rule is never mis-detected as frontmatter.
+        if (m && /^[A-Za-z_][\w-]*\s*:/.test(m[1])) {
+          return { frontmatter: m[0], body: md.slice(m[0].length) };
+        }
+        return { frontmatter: '', body: md };
+      }
+
+      function setCharsBadge(len) {
+        charsBadge.textContent = len >= 1000
+          ? t('badge.charsK', { n: (len / 1000).toFixed(1) })
+          : t('badge.chars', { n: len });
+        charsBadge.style.display = 'inline-block';
+      }
+
+      // Recompute the visible output from the stored body + frontmatter for the
+      // current toggle state. Runs on initial render and on every toggle flip.
+      function applyFrontmatterView() {
+        rawMarkdown = (frontmatterToggle.checked && rawFrontmatter)
+          ? rawFrontmatter + rawBody
+          : rawBody;
+        renderMarkdownWithImages(resultEl, rawMarkdown);
+        renderedStale = true;
+        applyViewMode();
+        setCharsBadge(rawMarkdown.length);
+      }
+
+      function showResult(text, source, shareId, suggestedName) {
+        hideLoading();
+        errorEl.classList.remove('visible');
+        var parts = splitFrontmatter(text);
+        rawFrontmatter = parts.frontmatter;
+        rawBody = parts.body;
+        currentShareId = shareId || '';
+        currentSuggestedName = suggestedName || '';
+        applyFrontmatterView();
+        resultContainer.classList.add('visible');
+        // Bring the result into view when triggered from a list entry deeper
+        // down the page (history / archive). No-op when already scrolled top.
+        if (window.scrollY > 0) {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        copyBtn.querySelector('.label').textContent = t('copy');
+        copyBtn.classList.remove('copied');
+        shareBtn.querySelector('.label').textContent = t('share.btn');
+        shareBtn.classList.remove('copied');
+        downloadBtn.querySelector('.label').textContent = t('download.btn');
+        if (source) {
+          var sc = sourceColors[source] || { bg: 'var(--border)', color: 'var(--fg-muted)' };
+          sourceBadge.textContent = source;
+          sourceBadge.style.background = sc.bg;
+          sourceBadge.style.color = sc.color;
+          sourceBadge.style.display = 'inline-block';
+        } else {
+          sourceBadge.style.display = 'none';
+        }
+
+        var commentsMatch = rawBody.match(/## (?:Kommentare|Comments) \((\d+) (?:von|of) (\d+)\)/);
+        if (commentsMatch) {
+          commentsBadge.textContent = t('badge.comments', { shown: commentsMatch[1], total: commentsMatch[2] });
+          commentsBadge.style.display = 'inline-block';
+        } else {
+          commentsBadge.style.display = 'none';
+        }
+
+        if (shareId) {
+          var shareUrl = PERMALINK_BASE + shareId;
+          permalinkUrlEl.textContent = shareUrl;
+          permalinkBar.style.display = 'flex';
+          permalinkCopyBtn.textContent = t('copy');
+          permalinkCopyBtn.classList.remove('copied');
+        } else {
+          permalinkBar.style.display = 'none';
+        }
+      }
+
+      (function restorePwaControls() {
+        try {
+          var v = localStorage.getItem('pullmd-comments');
+          if (v !== null) commentsToggle.checked = v === 'true';
+          v = localStorage.getItem('pullmd-frontmatter');
+          if (v !== null) frontmatterToggle.checked = v === 'true';
+          v = localStorage.getItem('pullmd-pdf-ocr');
+          if (v !== null) ocrToggle.checked = v === 'true';
+          v = localStorage.getItem('pullmd-comment-depth');
+          if (v !== null) {
+            var n = parseInt(v, 10);
+            if (n >= 1 && n <= 10) depthInput.value = String(n);
+          }
+          v = localStorage.getItem('pullmd-comments-all');
+          if (v !== null) allCommentsToggle.checked = v === 'true';
+        } catch (e) {}
+      })();
+      commentsToggle.addEventListener('change', function () {
+        try { localStorage.setItem('pullmd-comments', String(commentsToggle.checked)); } catch (e) {}
+      });
+      frontmatterToggle.addEventListener('change', function () {
+        try { localStorage.setItem('pullmd-frontmatter', String(frontmatterToggle.checked)); } catch (e) {}
+        // Instantly re-render an already-shown result with/without frontmatter —
+        // no re-pull needed (body + block are already in memory). Skip when no
+        // result is shown, or when there's no frontmatter block to add/remove
+        // (toggling would be a byte-identical no-op). Preference still persists.
+        if (rawFrontmatter && resultContainer.classList.contains('visible')) applyFrontmatterView();
+      });
+      ocrToggle.addEventListener('change', function () {
+        try { localStorage.setItem('pullmd-pdf-ocr', String(ocrToggle.checked)); } catch (e) {}
+      });
+      depthInput.addEventListener('change', function () {
+        const n = parseInt(depthInput.value, 10);
+        if (!(n >= 1)) depthInput.value = '3';
+        else if (n > 10) depthInput.value = '10';
+        try { localStorage.setItem('pullmd-comment-depth', depthInput.value); } catch (e) {}
+      });
+
+      allCommentsToggle.addEventListener('change', function () {
+        try { localStorage.setItem('pullmd-comments-all', String(allCommentsToggle.checked)); } catch (e) {}
+        updateDepthVisibility();
+      });
+
+      function updateDepthVisibility() {
+        const display = commentsToggle.checked ? '' : 'none';
+        depthLabel.style.display = display;
+        allCommentsLabel.style.display = display;
+        depthInput.disabled = allCommentsToggle.checked;
+      }
+      commentsToggle.addEventListener('change', updateDepthVisibility);
+      updateDepthVisibility();
+
+      async function fetchPost(url, withComments) {
+        const params = new URLSearchParams({ url });
+        if (!withComments) params.set('comments', 'false');
+        const depth = parseInt(depthInput.value, 10);
+        if (withComments && allCommentsToggle.checked) params.set('comment_depth', 'all');
+        else if (withComments && depth && depth !== 3) params.set('comment_depth', String(depth));
+        // Always fetch WITH frontmatter; the toggle only controls client-side
+        // display (applyFrontmatterView), so flipping it needs no re-pull.
+        params.set('frontmatter', 'true');
+        if (ocrToggle.checked) params.set('pdf', 'ocr');
+        params.set('lang', getLang());
+        if (clientMode) params.set('client_mode', clientMode);
+
+        abandonFileJob();
+        pushOpenState();
+        showLoading();
+
+        const statusLine = document.getElementById('status-line');
+        if (statusLine) statusLine.textContent = '';
+
+        // Try SSE first; fall back to plain fetch on any failure.
+        if (typeof EventSource !== 'undefined') {
+          try {
+            await fetchPostSSE(url, params, statusLine);
+            return;
+          } catch (err) {
+            console.warn('SSE path failed, falling back to /api:', err);
+          }
+        }
+        await fetchPostPlain(url, params);
+      }
+
+      function fetchPostSSE(url, params, statusLine) {
+        return new Promise((resolve, reject) => {
+          const es = new EventSource('/api/stream?' + params.toString());
+          activeEventSource = es;
+          const cleanup = () => {
+            if (activeEventSource === es) activeEventSource = null;
+          };
+          let gotResult = false;
+          es.addEventListener('status', function (e) {
+            try {
+              var d = JSON.parse(e.data);
+              if (statusLine) {
+                if (d.stage === 'fetching')        statusLine.textContent = t('status.fetching');
+                else if (d.stage === 'rendering')  statusLine.textContent = t('status.rendering');
+                else if (d.stage === 'extracting') statusLine.textContent = t('status.extracting', { source: d.source || '' });
+              }
+            } catch (_) {}
+          });
+          es.addEventListener('result', function (e) {
+            try {
+              var d = JSON.parse(e.data);
+              gotResult = true;
+              es.close();
+              cleanup();
+              if (statusLine) statusLine.textContent = '';
+              if (!d.markdown || !d.markdown.trim()) {
+                showError(t('err.empty'));
+                resolve();
+                return;
+              }
+              showResult(d.markdown, d.source || '', d.shareId || '', d.suggestedFilename || '');
+              resolve();
+            } catch (err) { es.close(); cleanup(); reject(err); }
+          });
+          es.addEventListener('error', function (e) {
+            // Server-emitted error event carries data; transport errors don't.
+            try {
+              var d = e.data ? JSON.parse(e.data) : null;
+              if (d && d.message) {
+                es.close();
+                cleanup();
+                showError(d.message);
+                if (statusLine) statusLine.textContent = '';
+                gotResult = true;
+                resolve();
+                return;
+              }
+            } catch (_) {}
+            // Network/transport error: only reject if we haven't already produced a result.
+            // EventSource fires 'error' at end-of-stream too, hence the gotResult guard.
+            if (!gotResult) {
+              es.close();
+              cleanup();
+              if (statusLine) statusLine.textContent = '';
+              reject(new Error('SSE connection failed'));
+            }
+          });
+        });
+      }
+
+      async function fetchPostPlain(url, params) {
+        try {
+          const res = await fetch('/api?' + params.toString(), {
+            headers: { 'X-Client-Mode': clientMode },
+          });
+          if (!res.ok) {
+            if (res.status === 401) {
+              // Session expired (or never logged in): bounce through /login and
+              // carry the URL in `next` so the conversion auto-resumes after
+              // login via checkHash(). Also the landing path for mobile share
+              // intents whose session died.
+              location.href = '/login?next=' + encodeURIComponent('/#url=' + encodeURIComponent(url));
+              return;
+            }
+            let msg = t('err.unknown', { code: res.status });
+            try {
+              const body = await res.json();
+              if (body.error) msg = body.error;
+            } catch (_) {}
+            showError(msg);
+            return;
+          }
+          var source = res.headers.get('X-Source') || '';
+          var shareId = res.headers.get('X-Share-Id') || '';
+          var suggestedName = res.headers.get('X-Suggested-Filename') || '';
+          const text = await res.text();
+          if (!text.trim()) {
+            showError(t('err.empty'));
+            return;
+          }
+          showResult(text, source, shareId, suggestedName);
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+          showError(t('err.network'));
+        }
+      }
+
+      function handleGo() {
+        const url = urlInput.value.trim();
+        if (!url) { urlInput.focus(); return; }
+        fetchPost(url, commentsToggle.checked);
+      }
+
+      goBtn.addEventListener('click', handleGo);
+      urlInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); handleGo(); }
+      });
+
+      // --- Drag-and-drop: convert a local HTML file (hidden desktop feature, #28) ---
+      var dropOverlay = document.getElementById('drop-overlay');
+      var dragDepth = 0;
+
+      // Documents markitdown handles from bytes. Gated on /api/config.
+      var DOC_EXT_RE = /\.(pdf|docx|pptx|xlsx?|epub|zip)$/i;
+      var MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|mp3|wav|m4a|ogg|flac|aac)$/i;
+      var markitdownEnabled = false;
+      var markitdownMediaEnabled = false;
+      fetch('/api/config').then(function (r) { return r.json(); })
+        .then(function (c) {
+          markitdownEnabled = !!c.markitdown;
+          markitdownMediaEnabled = !!(c.vision || c.stt);
+          if (c.pdfOcr) {
+            var ocrLabel = document.getElementById('ocr-label');
+            if (ocrLabel) ocrLabel.style.display = '';
+          }
+          if (markitdownEnabled) {
+            var hint = document.querySelector('#drop-overlay .drop-box');
+            if (hint) hint.setAttribute('data-i18n', 'drop.hintDoc');
+            var affDrag = document.querySelector('.aff-drag');
+            if (affDrag) affDrag.setAttribute('data-i18n', 'drop.affordanceDoc');
+            var affOpen = document.querySelector('.aff-open');
+            if (affOpen) affOpen.setAttribute('data-i18n', 'drop.affordanceOpenDoc');
+            window.PullMD.setLang(window.PullMD.getLang());
+            var picker = document.getElementById('html-file-input');
+            if (picker) picker.accept = '.html,.htm,text/html,' + LOCAL_ACCEPT + ',.pdf,.docx,.pptx,.xls,.xlsx,.epub,.zip,application/pdf';
+          }
+          if (markitdownMediaEnabled) {
+            var mpicker = document.getElementById('html-file-input');
+            if (mpicker) mpicker.accept += ',.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.m4a,.ogg,.flac,image/*,audio/*';
+          }
+        })
+        .catch(function () {});
+
+      function dragHasFiles(e) {
+        var types = e.dataTransfer && e.dataTransfer.types;
+        if (!types) return false;
+        return Array.prototype.indexOf.call(types, 'Files') !== -1;
+      }
+
+      function isHtmlFile(file) {
+        if (file.type === 'text/html' || file.type === 'application/xhtml+xml') return true;
+        return /\.html?$/i.test(file.name || '');
+      }
+
+      // Formats pullmd reads itself - always available, no sidecar. Mirrors
+      // the dispatch in lib/web.js extractFile().
+      var LOCAL_EXTS = [
+        'eml', 'msg', 'mhtml', 'mht', 'txt', 'md', 'markdown', 'srt', 'vtt',
+        'odt', 'ods', 'odp', 'rtf', 'ics', 'ical', 'vcf', 'vcard', 'ipynb',
+        'csv', 'tsv', 'tab', 'json', 'jsonl', 'ndjson', 'geojson', 'xml', 'rss', 'atom',
+        'rst', 'adoc', 'asciidoc', 'org', 'textile', 'wiki', 'nfo',
+        'py', 'pyw', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'java', 'kt', 'kts', 'scala',
+        'groovy', 'gradle', 'c', 'h', 'cpp', 'cc', 'cxx', 'hpp', 'hh', 'cs', 'go', 'rs',
+        'rb', 'php', 'swift', 'm', 'mm', 'dart', 'lua', 'pl', 'pm', 'r', 'jl', 'sh',
+        'bash', 'zsh', 'fish', 'ps1', 'psm1', 'bat', 'cmd', 'vb', 'vbs', 'sql', 'css',
+        'scss', 'sass', 'less', 'vue', 'svelte', 'astro', 'yaml', 'yml', 'toml', 'ini',
+        'cfg', 'conf', 'properties', 'tf', 'hcl', 'nix', 'graphql', 'gql', 'proto',
+        'diff', 'patch', 'dockerfile', 'makefile', 'mk', 'cmake', 'tex', 'bib', 'log'
+      ];
+      var LOCAL_EXT_RE = new RegExp('\\.(' + LOCAL_EXTS.join('|') + ')$', 'i');
+      var LOCAL_NAME_RE = /^(dockerfile|containerfile|gnumakefile|makefile|jenkinsfile|vagrantfile|gemfile|rakefile)$/i;
+      var LOCAL_TYPE_RE = /^(message\/rfc822|text\/(plain|markdown|vtt|calendar|vcard|x-vcard|csv|tab-separated-values|xml|rtf)|application\/(rtf|json|xml|vnd\.oasis\.opendocument\.(text|spreadsheet|presentation)))$/i;
+      var LOCAL_ACCEPT = LOCAL_EXTS.map(function (e) { return '.' + e; }).join(',') + ',message/rfc822,text/plain,text/markdown';
+      function isLocalFormatFile(file) {
+        var name = file.name || '';
+        if (LOCAL_EXT_RE.test(name) || LOCAL_NAME_RE.test(name)) return true;
+        return LOCAL_TYPE_RE.test(file.type || '');
+      }
+      (function () {
+        var picker = document.getElementById('html-file-input');
+        if (picker) picker.accept = '.html,.htm,text/html,' + LOCAL_ACCEPT;
+      })();
+
+      function isDocFile(file) {
+        if (isLocalFormatFile(file)) return true;
+        if (markitdownEnabled && DOC_EXT_RE.test(file.name || '')) return true;
+        if (markitdownMediaEnabled && MEDIA_EXT_RE.test(file.name || '')) return true;
+        return false;
+      }
+
+      window.addEventListener('dragenter', function (e) {
+        if (!dragHasFiles(e)) return;
+        e.preventDefault();
+        dragDepth++;
+        dropOverlay.classList.add('visible');
+      });
+      window.addEventListener('dragover', function (e) {
+        if (dragHasFiles(e)) e.preventDefault();
+      });
+      window.addEventListener('dragleave', function (e) {
+        if (!dragHasFiles(e)) return;
+        dragDepth = e.relatedTarget ? Math.max(0, dragDepth - 1) : 0;
+        if (dragDepth === 0) dropOverlay.classList.remove('visible');
+      });
+      window.addEventListener('drop', function (e) {
+        dragDepth = 0;
+        dropOverlay.classList.remove('visible');
+        if (!dragHasFiles(e)) return;   // let native text/URL drops (e.g. into the url input) proceed
+        e.preventDefault();
+        if (!e.dataTransfer.files || !e.dataTransfer.files.length) return;
+        var file = e.dataTransfer.files[0];
+        if (isHtmlFile(file)) {
+          if (file.size > 10 * 1024 * 1024) { showError(t('err.fileTooLarge')); return; }
+          convertHtmlFile(file);
+        } else if (isDocFile(file)) {
+          if (file.size > 25 * 1024 * 1024) { showError(t('err.fileTooLargeDoc')); return; }
+          convertBinaryFile(file);
+        } else {
+          showError(t('err.notHtml'));
+        }
+      });
+
+      function convertHtmlFile(file) {
+        if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+        abandonFileJob();
+        pushOpenState();
+        showLoading();
+        var reader = new FileReader();
+        reader.onerror = function () { showError(t('err.network')); };
+        reader.onload = async function () {
+          try {
+            var params = new URLSearchParams({ format: 'json' });
+            // Always fetch WITH frontmatter; the toggle swaps the view client-side.
+            params.set('frontmatter', 'true');
+            var res = await fetch('/api/html?' + params.toString(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/html', 'X-Client-Mode': clientMode, 'X-Filename': encodeURIComponent(file.name) },
+              body: reader.result,
+            });
+            if (!res.ok) {
+              if (res.status === 401) {
+                // A dropped file can't survive a login round-trip - bounce to
+                // login; the user re-drops afterwards.
+                location.href = '/login?next=' + encodeURIComponent('/');
+                return;
+              }
+              var msg = t('err.unknown', { code: res.status });
+              try {
+                var body = await res.json();
+                if (body.error) msg = body.error;
+              } catch (_) {}
+              showError(msg);
+              return;
+            }
+            var d = await res.json();
+            if (!d.markdown || !d.markdown.trim()) { showError(t('err.empty')); return; }
+            showResult(d.markdown, d.source || '', '', res.headers.get('X-Suggested-Filename') || '');
+          } catch (err) {
+            showError(t('err.network'));
+          }
+        };
+        reader.readAsText(file);
+      }
+
+      // ---- Async document conversions ----
+      // A long conversion (audio transcription, OCR) outlives the app being in
+      // the foreground: on a phone the OS cuts an open request as soon as the
+      // user switches apps. So documents go out with async=1, the server
+      // answers 202 + job id, and the PWA picks the result up by polling,
+      // also after a reload. One tracked job at a time; the in-memory copy is
+      // authoritative, localStorage only carries it across reloads.
+      var FILE_JOB_KEY = 'pullmd-file-job';
+      var FILE_JOB_POLL_MS = 2000;
+      // A status request frozen by the OS while the app was in the background
+      // must not block the next check for long.
+      var FILE_JOB_FETCH_TIMEOUT_MS = 10000;
+      var uploadXhr = null;        // upload in flight, so a newer conversion can drop it
+      var fileJobTimer = null;
+      var fileJobChecking = false;
+      var fileJobCheckCtrl = null;   // AbortController of the status request in flight
+      var fileJob = readStoredFileJob();
+
+      function readStoredFileJob() {
+        try {
+          var job = JSON.parse(localStorage.getItem(FILE_JOB_KEY) || 'null');
+          return job && typeof job.id === 'string' ? { id: job.id, name: String(job.name || '') } : null;
+        } catch (e) { return null; }
+      }
+      function trackFileJob(job) {
+        fileJob = job;
+        try { localStorage.setItem(FILE_JOB_KEY, JSON.stringify(job)); } catch (e) {}
+      }
+      function forgetFileJob() {
+        fileJob = null;
+        try { localStorage.removeItem(FILE_JOB_KEY); } catch (e) {}
+      }
+      function deleteFileJob(id) {
+        fetch('/api/file/jobs/' + encodeURIComponent(id), { method: 'DELETE' }).catch(function () {});
+      }
+      function stopFileJobPolling() {
+        if (fileJobTimer) { clearInterval(fileJobTimer); fileJobTimer = null; }
+      }
+      // Idempotent: a second call never creates a second timer.
+      function startFileJobPolling() {
+        if (!fileJobTimer) fileJobTimer = setInterval(checkFileJob, FILE_JOB_POLL_MS);
+        checkFileJob();
+      }
+      // Starting any other conversion drops the tracked job and any upload
+      // still in flight.
+      function abandonFileJob() {
+        stopFileJobPolling();
+        abortFileJobCheck();
+        if (uploadXhr) { var xhr = uploadXhr; uploadXhr = null; xhr.abort(); }
+        if (fileJob) { deleteFileJob(fileJob.id); forgetFileJob(); }
+      }
+
+      // Drops the status request in flight; its result is then ignored.
+      function abortFileJobCheck() {
+        if (!fileJobCheckCtrl) return;
+        var stale = fileJobCheckCtrl;
+        fileJobCheckCtrl = null;
+        fileJobChecking = false;
+        stale.abort();
+      }
+
+      async function checkFileJob() {
+        if (!fileJob) { stopFileJobPolling(); return; }
+        if (fileJobChecking || document.visibilityState !== 'visible') return;
+        var job = fileJob;
+        var ctrl = new AbortController();
+        var timeout = setTimeout(function () { ctrl.abort(); }, FILE_JOB_FETCH_TIMEOUT_MS);
+        fileJobCheckCtrl = ctrl;
+        fileJobChecking = true;
+        try {
+          var res = await fetch('/api/file/jobs/' + encodeURIComponent(job.id), { cache: 'no-store', signal: ctrl.signal });
+          var d = res.ok ? await res.json() : null;
+          // Superseded by a fresh check, or the job was dropped or replaced
+          // meanwhile by another conversion: not ours to show.
+          if (fileJobCheckCtrl !== ctrl || fileJob !== job) return;
+          if (res.status === 401) {
+            // Keep the job: it is picked up again after login.
+            stopFileJobPolling();
+            location.href = '/login?next=' + encodeURIComponent('/');
+            return;
+          }
+          if (res.status === 404) {
+            stopFileJobPolling();
+            forgetFileJob();
+            // The result may arrive after the user went back: open a history
+            // entry again, so Back leaves the result instead of the app.
+            pushOpenState();
+            showError(t('err.jobGone'));
+            return;
+          }
+          if (!d) return;   // 429 or any other status: try again on the next tick
+          if (d.status !== 'done' && d.status !== 'error') return;   // pending: the loading view and its label stay as they are
+          pushOpenState();
+          if (d.status === 'done') {
+            if (!d.markdown || !d.markdown.trim()) showError(t('err.empty'));
+            else showResult(d.markdown, d.source || '', '', d.suggestedFilename || '');
+          } else {
+            showError(d.error || t('err.unknown', { code: d.httpStatus }));
+          }
+          stopFileJobPolling();
+          deleteFileJob(job.id);
+          forgetFileJob();
+        } catch (err) {
+          // Network failure, timeout or abort: stay quiet, the next tick tries again.
+        } finally {
+          clearTimeout(timeout);
+          // A superseded check leaves the flag to the check that replaced it.
+          if (fileJobCheckCtrl === ctrl) { fileJobCheckCtrl = null; fileJobChecking = false; }
+        }
+      }
+
+      // Timers are throttled or frozen while the app is in the background,
+      // so check at once when it comes back. A request still in flight may be
+      // one the OS froze: abort it and start a fresh one.
+      function recheckFileJob() {
+        if (!fileJobTimer || document.visibilityState !== 'visible') return;
+        abortFileJobCheck();
+        checkFileJob();
+      }
+      document.addEventListener('visibilitychange', recheckFileJob);
+      window.addEventListener('pageshow', recheckFileJob);
+
+      function convertBinaryFile(file) {
+        if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+        abandonFileJob();
+        pushOpenState();
+        showLoading();
+        setLoadingLabel('upload.sending', { pct: 0 });
+        var params = new URLSearchParams({ format: 'json' });
+        // Always fetch WITH frontmatter; the toggle swaps the view client-side.
+        params.set('frontmatter', 'true');
+        if (ocrToggle.checked && /\.pdf$/i.test(file.name || '')) params.set('pdf', 'ocr');
+        params.set('lang', window.PullMD.getLang());
+        // 202 + job id, or a plain 200 with the full result when the server
+        // runs the conversion synchronously after all.
+        params.set('async', '1');
+        // XHR rather than fetch: only XHR reports upload progress.
+        var xhr = new XMLHttpRequest();
+        uploadXhr = xhr;
+        xhr.open('POST', '/api/file?' + params.toString());
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        xhr.setRequestHeader('X-Client-Mode', clientMode);
+        xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
+        xhr.upload.onprogress = function (e) {
+          if (uploadXhr !== xhr || !e.lengthComputable) return;
+          setLoadingLabel('upload.sending', { pct: Math.floor(e.loaded / e.total * 100) });
+        };
+        xhr.onload = function () {
+          if (uploadXhr !== xhr) return;
+          uploadXhr = null;
+          var d = null;
+          try { d = JSON.parse(xhr.responseText); } catch (_) {}
+          if (xhr.status === 202) {
+            if (!d || typeof d.jobId !== 'string') { pushOpenState(); showError(t('err.unknown', { code: xhr.status })); return; }
+            trackFileJob({ id: d.jobId, name: file.name || '' });
+            setLoadingLabel('upload.processing');
+            startFileJobPolling();
+            return;
+          }
+          if (xhr.status === 401) { location.href = '/login?next=' + encodeURIComponent('/'); return; }
+          // The answer may arrive after the user went back: open a history
+          // entry again, so Back leaves the result instead of the app.
+          pushOpenState();
+          if (xhr.status >= 200 && xhr.status < 300) {
+            if (!d) { showError(t('err.network')); return; }
+            if (!d.markdown || !d.markdown.trim()) { showError(t('err.empty')); return; }
+            showResult(d.markdown, d.source || '', '', xhr.getResponseHeader('X-Suggested-Filename') || '');
+            return;
+          }
+          showError((d && d.error) || t('err.unknown', { code: xhr.status }));
+        };
+        xhr.onerror = xhr.onabort = function () {
+          if (uploadXhr !== xhr) return;
+          uploadXhr = null;
+          pushOpenState();
+          showError(t('err.uploadInterrupted'));
+        };
+        xhr.send(file);
+      }
+
+      // --- File picker: same conversion path as drop, works on mobile + desktop (#28) ---
+      var htmlFileInput = document.getElementById('html-file-input');
+      if (htmlFileInput) {
+        htmlFileInput.addEventListener('change', function () {
+          var file = htmlFileInput.files && htmlFileInput.files[0];
+          htmlFileInput.value = '';   // reset so re-picking the same file fires change
+          if (!file) return;
+          if (isHtmlFile(file)) {
+            if (file.size > 10 * 1024 * 1024) { showError(t('err.fileTooLarge')); return; }
+            convertHtmlFile(file);
+          } else if (isDocFile(file)) {
+            if (file.size > 25 * 1024 * 1024) { showError(t('err.fileTooLargeDoc')); return; }
+            convertBinaryFile(file);
+          } else {
+            showError(t('err.notHtml'));
+          }
+        });
+      }
+
+      copyBtn.addEventListener('click', function () {
+        if (!rawMarkdown) return;
+        navigator.clipboard.writeText(rawMarkdown).then(function () {
+          copyBtn.querySelector('.label').textContent = t('copied');
+          copyBtn.classList.add('copied');
+          setTimeout(function () {
+            copyBtn.querySelector('.label').textContent = t('copy');
+            copyBtn.classList.remove('copied');
+          }, 2000);
+        }).catch(function () {
+          const range = document.createRange();
+          range.selectNodeContents(resultEl);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        });
+      });
+
+      // Web Share API: reveal + wire the share button only where supported
+      // (e.g. mobile, Safari, Chrome on Win/ChromeOS). Elsewhere (Firefox
+      // desktop) it stays hidden; the copy button beside it remains.
+      if (navigator.share) {
+        shareBtn.style.display = '';
+        var flashShare = function (doneKey) {
+          shareBtn.querySelector('.label').textContent = t(doneKey);
+          shareBtn.classList.add('copied');
+          setTimeout(function () {
+            shareBtn.querySelector('.label').textContent = t('share.btn');
+            shareBtn.classList.remove('copied');
+          }, 2000);
+        };
+        shareBtn.addEventListener('click', function () {
+          if (!rawMarkdown) return;
+          navigator.share({ text: rawMarkdown }).then(function () {
+            flashShare('shared');
+          }).catch(function (err) {
+            // AbortError = user dismissed the share sheet → nothing to do.
+            // Any other rejection (blocked by permissions policy, payload
+            // refused, OS failure) → fall back to clipboard so the content
+            // is never silently lost.
+            if (err && err.name === 'AbortError') return;
+            navigator.clipboard.writeText(rawMarkdown)
+              .then(function () { flashShare('copied'); })
+              .catch(function () {});
+          });
+        });
+      }
+
+      // Download: same payload the copy button hands out (rawMarkdown already
+      // reflects the frontmatter toggle). Unlike share this needs no browser
+      // capability check - Blob + <a download> works everywhere the PWA runs.
+      function slugifyFilename(s) {
+        return String(s)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/-{2,}/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 60)
+          .replace(/-+$/, '');
+      }
+
+      function downloadFilename() {
+        // The server knows the extraction source and the original URL, so its
+        // suggestion wins whenever there is one (see lib/filename.js).
+        if (currentSuggestedName) return currentSuggestedName;
+        var title = '';
+        var m = /^title:[ \t]*(.+)$/m.exec(rawFrontmatter);
+        // Frontmatter values may be quoted (lib/frontmatter.js quotes when the
+        // value needs escaping) - strip one surrounding pair.
+        if (m) title = m[1].trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+        var base = slugifyFilename(title) || slugifyFilename(currentShareId) || 'pullmd';
+        return base + '.md';
+      }
+
+      downloadBtn.addEventListener('click', function () {
+        if (!rawMarkdown) return;
+        var blob = new Blob([rawMarkdown], { type: 'text/markdown;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = downloadFilename();
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Revoke only after the click has been handed to the browser, else
+        // Safari cancels the download.
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      });
+
+      permalinkCopyBtn.addEventListener('click', function () {
+        var url = permalinkUrlEl.textContent;
+        if (!url) return;
+        navigator.clipboard.writeText(url).then(function () {
+          permalinkCopyBtn.textContent = t('copied');
+          permalinkCopyBtn.classList.add('copied');
+          setTimeout(function () {
+            permalinkCopyBtn.textContent = t('copy');
+            permalinkCopyBtn.classList.remove('copied');
+          }, 2000);
+        });
+      });
+
+      function checkHash() {
+        const hash = window.location.hash;
+        if (!hash) return;
+        const match = hash.match(/^#url=(.+)$/);
+        if (match) {
+          const url = decodeURIComponent(match[1]);
+          urlInput.value = url;
+          history.replaceState(null, '', window.location.pathname);
+          fetchPost(url, commentsToggle.checked);
+        }
+      }
+
+      // ---- History ----
+      const historySection = document.getElementById('history-section');
+      const historyList = document.getElementById('history-list');
+
+      function faviconUrl(u) {
+        try {
+          var host = new URL(u).hostname;
+          return 'https://www.google.com/s2/favicons?sz=64&domain=' + encodeURIComponent(host);
+        } catch (e) { return ''; }
+      }
+
+      async function loadHistory() {
+        if (document.documentElement.dataset.authMode &&
+            document.documentElement.dataset.authMode !== 'disabled' &&
+            document.documentElement.dataset.loggedIn !== '1') {
+          var hs = document.getElementById('history-section');
+          if (hs) hs.style.display = 'none';
+          return; // signed-out: don't call /api/history (it returns 401)
+        }
+        try {
+          const res = await fetch('/api/history?limit=10');
+          if (!res.ok) return;
+          const items = await res.json();
+          if (!items.length) return;
+
+          var clientLabels = { browser: 'Browser', pwa: 'PWA', claude: 'Claude', api: 'API' };
+          var clientClasses = { browser: 'client-browser', pwa: 'client-pwa', claude: 'client-claude', api: 'client-api' };
+
+          while (historyList.firstChild) historyList.removeChild(historyList.firstChild);
+          for (const item of items) {
+            const el = document.createElement('a');
+            el.href = '#';
+            el.className = 'h-row';
+
+            var fav = document.createElement('div');
+            fav.className = 'h-favicon';
+            try {
+              var domain = new URL(item.url).hostname.replace(/^www\./, '');
+              var favImg = document.createElement('img');
+              favImg.src = faviconUrl(item.url);
+              favImg.alt = '';
+              favImg.onerror = function() {
+                fav.removeChild(favImg);
+                fav.textContent = (domain[0] || '?').toUpperCase();
+              };
+              fav.appendChild(favImg);
+            } catch(e) {
+              fav.textContent = '?';
+            }
+
+            var main = document.createElement('div');
+            main.className = 'h-main';
+
+            var titleDiv = document.createElement('div');
+            titleDiv.className = 'h-title';
+            titleDiv.textContent = item.title || item.url;
+
+            var metaDiv = document.createElement('div');
+            metaDiv.className = 'h-meta';
+
+            var domain2 = '';
+            try { domain2 = new URL(item.url).hostname.replace(/^www\./, ''); } catch(e) {}
+            var domainSpan = document.createElement('span');
+            domainSpan.textContent = domain2;
+            metaDiv.appendChild(domainSpan);
+
+            if (item.source) {
+              var sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '·';
+              metaDiv.appendChild(sep);
+              var src = document.createElement('span'); src.textContent = item.source;
+              metaDiv.appendChild(src);
+            }
+
+            if (item.created_at) {
+              var d = new Date(item.created_at + 'Z');
+              var sep2 = document.createElement('span'); sep2.className = 'sep'; sep2.textContent = '·';
+              metaDiv.appendChild(sep2);
+              var ts = document.createElement('span');
+              var loc = t('locale');
+              ts.textContent = d.toLocaleDateString(loc, { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
+              metaDiv.appendChild(ts);
+            }
+
+            if (item.client) {
+              var badge = document.createElement('span');
+              badge.textContent = clientLabels[item.client] || item.client;
+              badge.className = 'client-label ' + (clientClasses[item.client] || 'client-api');
+              metaDiv.appendChild(badge);
+            }
+
+            main.appendChild(titleDiv);
+            main.appendChild(metaDiv);
+
+            el.appendChild(fav);
+            el.appendChild(main);
+
+            if (item.id) {
+              var delBtn = document.createElement('button');
+              delBtn.type = 'button';
+              delBtn.className = 'h-delete-btn';
+              delBtn.textContent = '×';
+              delBtn.title = isGlobalDelete() ? t('archive.deleteGlobal') : t('archive.deleteMine');
+              delBtn.addEventListener('click', (function(itm, row, btn) {
+                return function(e) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (btn.disabled) return;
+                  btn.disabled = true;
+                  fetch('/api/cache/' + itm.id, { method: 'DELETE' })
+                    .then(function(res) {
+                      if (res.ok) {
+                        row.remove();
+                        return;
+                      }
+                      btn.disabled = false;
+                      row.style.borderColor = 'var(--bad)';
+                      btn.title = 'Delete failed (HTTP ' + res.status + ')';
+                      showError(t('err.deleteFailed'));
+                      console.warn('History delete failed:', res.status, itm.id, itm.url);
+                    })
+                    .catch(function(err) {
+                      btn.disabled = false;
+                      row.style.borderColor = 'var(--bad)';
+                      btn.title = 'Delete failed: ' + err.message;
+                      showError(t('err.deleteFailed'));
+                      console.warn('History delete error:', err, itm.id, itm.url);
+                    });
+                };
+              })(item, el, delBtn));
+              el.appendChild(delBtn);
+            }
+
+            el.addEventListener('click', function(itm) {
+              return function(e) {
+                e.preventDefault();
+                urlInput.value = itm.url;
+                fetchPost(itm.url, commentsToggle.checked);
+              };
+            }(item));
+            historyList.appendChild(el);
+          }
+          historySection.style.display = 'block';
+        } catch (e) {}
+      }
+
+      if (!window.__PULLMD_DISABLE_HISTORY__) {
+        loadHistory();
+        window.addEventListener('langchange', loadHistory);
+      }
+
+      // ---- Storage stats ----
+      async function loadStorageStats() {
+        try {
+          const res = await fetch('/api/storage');
+          if (!res.ok) return;
+          const s = await res.json();
+          if (!s.total) return;
+          const footer = document.getElementById('stats-footer');
+          if (!footer) return;
+          const sizeMb = s.dbSizeBytes ? (s.dbSizeBytes / 1024 / 1024).toFixed(1) : '0';
+          const hitRate = s.requests7d > 0 ? Math.round((s.cacheHits7d / s.requests7d) * 100) : 0;
+
+          footer.innerHTML = '';
+          function stat(label, value, sub) {
+            var box = document.createElement('div');
+            box.className = 'stat';
+            var l = document.createElement('div'); l.className = 'stat-label'; l.textContent = label;
+            var v = document.createElement('div'); v.className = 'stat-value'; v.textContent = value;
+            box.appendChild(l); box.appendChild(v);
+            if (sub) {
+              var sb = document.createElement('div'); sb.className = 'stat-sub'; sb.textContent = sub;
+              box.appendChild(sb);
+            }
+            footer.appendChild(box);
+          }
+          var loc = t('locale');
+          stat(
+            t('stat.entries'),
+            s.total.toLocaleString(loc),
+            s.expiringSoon > 0 ? t('stat.entries.expiring', { n: s.expiringSoon }) : ''
+          );
+          stat(t('stat.requests7d'), String(s.requests7d), t('stat.cacheHits', { pct: hitRate }));
+          stat(t('stat.dbSize'), sizeMb + ' MB');
+          // retentionDays 0 (or missing) means the server never prunes.
+          stat(t('stat.ttl'), s.retentionDays > 0 ? t('stat.days', { n: s.retentionDays }) : t('stat.unlimited'));
+          footer.style.display = '';
+        } catch (e) {}
+      }
+      loadStorageStats();
+      window.addEventListener('langchange', loadStorageStats);
+
+      // ---- API health LED ----
+      var statusMeta = document.getElementById('status-meta');
+      var statusLabel = document.getElementById('status-label');
+      var lastStatus = { state: 'checking', key: 'status.checking', vars: null };
+      function setStatus(state, key, vars) {
+        if (!statusMeta) return;
+        lastStatus = { state: state, key: key, vars: vars || null };
+        statusMeta.setAttribute('data-status', state);
+        if (statusLabel) statusLabel.textContent = t(key, vars);
+      }
+      async function pingHealth() {
+        if (!navigator.onLine) { setStatus('offline', 'status.offline'); return; }
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(function () { ctrl.abort(); }, 4000);
+          const res = await fetch('/api/storage', { signal: ctrl.signal, cache: 'no-store' });
+          clearTimeout(timer);
+          if (res.ok) setStatus('online', 'status.online');
+          else        setStatus('offline', 'status.apiError', { code: res.status });
+        } catch (e) {
+          setStatus('offline', 'status.offline');
+        }
+      }
+      pingHealth();
+      setInterval(pingHealth, 30000);
+      window.addEventListener('online',  pingHealth);
+      window.addEventListener('offline', function () { setStatus('offline', 'status.offline'); });
+      window.addEventListener('focus',   pingHealth);
+      window.addEventListener('langchange', function () {
+        if (statusLabel) statusLabel.textContent = t(lastStatus.key, lastStatus.vars);
+      });
+
+      // ---- Archive ----
+      var mainView = document.querySelector('.card');
+      var heroView = document.querySelector('.hero');
+      var resultViews = [loadingEl, errorEl, resultContainer, document.querySelector('.hint-box'), historySection];
+      var archiveView = document.getElementById('archive-view');
+      var archiveList = document.getElementById('archive-list');
+      var archiveCount = document.getElementById('archive-count');
+      var archiveMoreBtn = document.getElementById('archive-more');
+      var archiveDeleteAllBtn = document.getElementById('archive-delete-all');
+      var archiveLink = document.getElementById('archive-link');
+      var archiveBackBtn = document.getElementById('archive-back');
+      var archiveOffset = 0;
+      var archiveTotal = 0;
+      var PAGE_SIZE = 50;
+
+      function showArchive() {
+        pushOpenState();
+        if (mainView) mainView.style.display = 'none';
+        if (heroView) heroView.style.display = 'none';
+        resultViews.forEach(function(el) { if (el) el.style.display = 'none'; });
+        archiveView.classList.add('visible');
+        archiveOffset = 0;
+        while (archiveList.firstChild) archiveList.removeChild(archiveList.firstChild);
+        loadArchivePage();
+      }
+      function hideArchive() {
+        archiveView.classList.remove('visible');
+        if (mainView) mainView.style.display = '';
+        if (heroView) heroView.style.display = '';
+        resultViews.forEach(function(el) { if (el) el.style.display = ''; });
+        errorEl.classList.remove('visible');
+        loadHistory();
+      }
+      function formatDate(dateStr) {
+        if (!dateStr) return '';
+        var d = new Date(dateStr + 'Z');
+        var loc = t('locale');
+        return d.toLocaleDateString(loc, { day: '2-digit', month: '2-digit', year: 'numeric' })
+          + ' ' + d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
+      }
+      function createArchiveItem(item) {
+        var row = document.createElement('div');
+        row.className = 'archive-item';
+        var content = document.createElement('div');
+        content.className = 'archive-item-content';
+        content.addEventListener('click', function() {
+          hideArchive();
+          urlInput.value = item.url;
+          fetchPost(item.url, commentsToggle.checked);
+        });
+        var title = document.createElement('div');
+        title.className = 'archive-item-title';
+        title.textContent = item.title || item.url;
+        var meta = document.createElement('div');
+        meta.className = 'archive-item-meta';
+        var domain = '';
+        try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch(e) {}
+        meta.textContent = domain + ' · ' + (item.source || '') + ' · ' + formatDate(item.created_at);
+        content.appendChild(title);
+        content.appendChild(meta);
+        var delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'archive-delete-btn';
+        delBtn.textContent = '×';
+        delBtn.title = isGlobalDelete() ? t('archive.deleteGlobal') : t('archive.deleteMine');
+        delBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (delBtn.disabled) return;
+          delBtn.disabled = true;
+          fetch('/api/cache/' + item.id, { method: 'DELETE' })
+            .then(function(res) {
+              if (res.ok) {
+                row.remove();
+                archiveTotal--;
+                archiveCount.textContent = t('archive.entries', { n: archiveTotal });
+                return;
+              }
+              delBtn.disabled = false;
+              row.style.borderColor = 'var(--bad)';
+              delBtn.title = 'Delete failed (HTTP ' + res.status + ')';
+              showError(t('err.deleteFailed'));
+              console.warn('Archive delete failed:', res.status, item.id, item.url);
+            })
+            .catch(function(err) {
+              delBtn.disabled = false;
+              row.style.borderColor = 'var(--bad)';
+              delBtn.title = 'Delete failed: ' + err.message;
+              showError(t('err.deleteFailed'));
+              console.warn('Archive delete error:', err, item.id, item.url);
+            });
+        });
+        row.appendChild(content);
+        row.appendChild(delBtn);
+        return row;
+      }
+      function loadArchivePage() {
+        fetch('/api/archive?limit=' + PAGE_SIZE + '&offset=' + archiveOffset)
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            archiveTotal = data.total;
+            archiveCount.textContent = t('archive.entries', { n: data.total });
+            data.items.forEach(function(item) {
+              archiveList.appendChild(createArchiveItem(item));
+            });
+            archiveOffset += data.items.length;
+            archiveMoreBtn.style.display = archiveOffset < data.total ? '' : 'none';
+          });
+      }
+
+      if (!window.__PULLMD_DISABLE_HISTORY__) {
+        archiveLink.addEventListener('click', function(e) { e.preventDefault(); showArchive(); });
+      }
+      archiveBackBtn.addEventListener('click', function(e) { e.preventDefault(); hideArchive(); });
+      archiveMoreBtn.addEventListener('click', loadArchivePage);
+      archiveDeleteAllBtn.addEventListener('click', function() {
+        if (!confirm(isGlobalDelete() ? t('archive.confirmDeleteAllGlobal') : t('archive.confirmDeleteAllMine'))) return;
+        fetch('/api/cache', { method: 'DELETE' }).then(function(res) {
+          if (res.ok) {
+            while (archiveList.firstChild) archiveList.removeChild(archiveList.firstChild);
+            archiveTotal = 0;
+            archiveCount.textContent = t('archive.entries', { n: 0 });
+            archiveMoreBtn.style.display = 'none';
+            return;
+          }
+          showError(t('err.deleteFailed'));
+          console.warn('Archive delete-all failed:', res.status);
+        }).catch(function(err) {
+          showError(t('err.deleteFailed'));
+          console.warn('Archive delete-all error:', err);
+        });
+      });
+
+      function goHome() {
+        if (activeEventSource) {
+          activeEventSource.close();
+          activeEventSource = null;
+        }
+        if (archiveView.classList.contains('visible')) hideArchive();
+        resultContainer.classList.remove('visible');
+        errorEl.classList.remove('visible');
+        permalinkBar.style.display = 'none';
+        hideLoading();
+      }
+      window.addEventListener('popstate', function() { goHome(); });
+
+      // Resume a document conversion that was still running when the app was
+      // left or reloaded. Before checkHash(): a shared URL then supersedes it.
+      // A finished job shows its markdown at once, with nothing in between.
+      if (fileJob) {
+        pushOpenState();
+        showLoading();
+        setLoadingLabel('upload.resumed', { name: fileJob.name });
+        startFileJobPolling();
+      }
+
+      checkHash();
+      window.addEventListener('hashchange', checkHash);
+
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(function () {});
+      }
+    })();
+  </script>
+</body>
+</html>
