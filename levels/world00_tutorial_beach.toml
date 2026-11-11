@@ -1,0 +1,341 @@
+id = 0
+name = "Tutorial Beach"
+blurb = "Wash ashore, meet Ferris, and say your first words in Rust."
+
+[[level]]
+id = "0.1"
+title = "Hello, Ferris!"
+kind = "fix"
+book = ["1.2"]
+xp = 20
+goal = "Make the program print exactly: Hello, Ferris!"
+lesson = '''
+Welcome to the Forge! Every Rust program starts running at `fn main()`, just like `int main()` in C.
+
+To print, Rust uses **`println!`**. The `!` matters: it means `println!` is a **macro**, a bit of code that writes more code for you at compile time. That's how Rust can check your format string while it compiles.
+
+Statements end with a semicolon `;`, like in C.
+
+Press **Run** (or Ctrl+Enter) to compile. The compiler's message is your friend. Read it from the top!
+'''
+c_compare = '''
+```c
+#include <stdio.h>
+int main(void) {
+    printf("Hello, Ferris!\n");
+    return 0;
+}
+```
+Rust needs no `#include` for printing, and `println!` adds the newline for you.
+'''
+py_compare = '''
+```python
+print("Hello, Ferris!")
+```
+In Rust, `print` is a macro, so the `!` is required: `println!(...)`.
+'''
+check = "output"
+expected_output = "Hello, Ferris!"
+starter = '''
+fn main() {
+    println("Hello, Ferris!");
+}
+'''
+solution = '''
+fn main() {
+    println!("Hello, Ferris!");
+}
+'''
+hints = [
+    "The compiler says it expected a *function* but found something else. What's special about how Rust prints?",
+    "`println` is a **macro**, and macros are called with a `!` right after the name.",
+    "Change line 2 to `println!(\"Hello, Ferris!\");`",
+]
+
+[[level]]
+id = "0.2"
+title = "Filling in the blanks"
+kind = "fill"
+book = ["1.2"]
+xp = 25
+goal = '''Print two lines using the variables:
+Hello, Ferris!
+Ferris is 9 years old.'''
+lesson = '''
+`println!` can insert values with **`{}`** placeholders, one per value, in order:
+
+```rust
+let food = "kelp";
+println!("I love {}!", food);   // I love kelp!
+```
+
+You can also put the variable name inside the braces: `println!("I love {food}!")`.
+
+`let` creates a variable. Rust usually works out the type for you.
+'''
+c_compare = '''
+Like `printf("%s is %d years old\n", name, age);`, except Rust's `{}` works for any printable type. You don't pick `%d` or `%s`, and a mismatch is a **compile** error, not a crash.
+'''
+py_compare = '''
+Very close to Python's `print(f"{name} is {age} years old.")`, or `"{} is {}".format(name, age)`.
+'''
+check = "output"
+expected_output = '''
+Hello, Ferris!
+Ferris is 9 years old.
+'''
+starter = '''
+fn main() {
+    let name = "Ferris";
+    let age = 9;
+
+    // TODO: print "Hello, Ferris!" using the `name` variable
+    // TODO: print "Ferris is 9 years old." using `name` and `age`
+}
+'''
+solution = '''
+fn main() {
+    let name = "Ferris";
+    let age = 9;
+
+    println!("Hello, {}!", name);
+    println!("{} is {} years old.", name, age);
+}
+'''
+hints = [
+    "You'll need two `println!` lines. How do you put a variable *inside* the text?",
+    "Use `{}` as a placeholder and pass the variable after the text, separated by commas.",
+    "`println!(\"Hello, {}!\", name);` and then `println!(\"{} is {} years old.\", name, age);`",
+]
+
+[[level]]
+id = "0.comments"
+title = "Notes in the sand"
+kind = "fill"
+book = ["3.4"]
+xp = 20
+goal = "Write a // comment on the line right above fn area, saying what the function does."
+lesson = '''
+Comments are notes for humans. The compiler skips them.
+
+```rust
+// This is a comment. It explains WHY the code exists.
+let speed = 3; // comments can also go at the end of a line
+```
+
+Good comments explain the **why**, not the what. `// add 1` above `x + 1` doesn't help anyone!
+
+Rust also has `///` **doc comments** that become documentation. You'll meet them on Cargo Docks.
+'''
+c_compare = '''
+Same `//` and `/* ... */` as C. Rust programmers mostly use `//`.
+'''
+py_compare = '''
+Python uses `#`. In Rust it's `//`.
+'''
+check = "tests"
+starter = '''
+fn area(width: u32, height: u32) -> u32 {
+    width * height
+}
+
+fn main() {
+    println!("A 3 by 4 garden has area {}", area(3, 4));
+}
+'''
+solution = '''
+// The area of a rectangle: how many square tiles fit inside it.
+fn area(width: u32, height: u32) -> u32 {
+    width * height
+}
+
+fn main() {
+    println!("A 3 by 4 garden has area {}", area(3, 4));
+}
+'''
+tests = '''
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn area_has_a_comment_above_it() {
+        let src = include_str!("main.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let i = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("fn area("))
+            .expect("keep the area function");
+        assert!(
+            i > 0 && lines[i - 1].trim_start().starts_with("//"),
+            "put a // comment on the line right above fn area"
+        );
+    }
+
+    #[test]
+    fn area_still_works() {
+        assert_eq!(super::area(3, 4), 12);
+    }
+}
+'''
+hints = [
+    "A comment starts with two slashes. Where does this one need to go?",
+    "Add a new line just above `fn area(...)` that starts with `//`.",
+    "`// The area of a rectangle: width times height.` on the line above `fn area`.",
+]
+
+[[level]]
+id = "0.3"
+title = "Crystal ball"
+kind = "predict"
+book = ["1.2"]
+xp = 15
+goal = "Read the code. What does it print?"
+lesson = '''
+**Predict** levels train you to read Rust in your head. Look closely, choose an answer, and then you can run the code to check.
+'''
+starter = '''
+fn main() {
+    let a = 2;
+    let b = 3;
+    println!("{} + {} = {}", a, b, a + b);
+}
+'''
+choices = [
+    "{} + {} = {}",
+    "2 + 3 = 5",
+    "a + b = 5",
+    "It doesn't compile: you can't do math inside println!",
+]
+answer = 1
+expected_output = "2 + 3 = 5"
+explanation = "Each `{}` is replaced by the next value: `a`, then `b`, then the result of `a + b`. Any expression can go in the value list."
+
+[[level]]
+id = "0.rustup"
+title = "Unpacking the toolbox"
+kind = "quiz"
+book = ["1.1"]
+xp = 15
+goal = "Which tool installs Rust and keeps it up to date?"
+lesson = '''
+Rust comes with a small toolbox:
+
+| Tool | What it does |
+|---|---|
+| `rustup` | installs Rust and updates it (`rustup update`) |
+| `rustc` | the compiler: turns `.rs` files into programs |
+| `cargo` | builds projects, runs them, fetches libraries |
+
+You install `rustup` once, and it gives you the other two. `rustc --version` tells you which Rust you have.
+'''
+c_compare = '''
+`rustc` is like `gcc` or `clang`. `rustup` is like a package manager just for the compiler, so you never fight with system packages.
+'''
+py_compare = '''
+`rustup` is a bit like `pyenv` (it manages versions), and `cargo` is like `pip` plus a project tool rolled into one.
+'''
+choices = [
+    "rustc",
+    "cargo",
+    "rustup",
+    "rustfmt",
+]
+answer = 2
+explanation = "`rustup` installs and updates the whole toolchain. `rustc` compiles, `cargo` manages projects, and `rustfmt` formats code."
+
+[[level]]
+id = "0.cargo"
+title = "Cargo, the trusty cart"
+kind = "quiz"
+book = ["1.3"]
+xp = 15
+goal = "What does `cargo run` do?"
+lesson = '''
+Real Rust projects use **Cargo**:
+
+```text
+$ cargo new hello_cargo     # makes a project folder
+$ cd hello_cargo
+$ cargo run                 # build, then run
+```
+
+A new project has:
+- `Cargo.toml`: the project's name, version and dependencies
+- `src/main.rs`: your code
+
+Other handy commands:
+- `cargo build` compiles into `target/debug/`
+- `cargo check` only checks that it compiles (fast!)
+- `cargo build --release` makes a fast, optimized build
+
+In this game, the real compiler runs behind the scenes, so you just press ▶ Run.
+'''
+c_compare = '''
+Cargo replaces your Makefile *and* your package manager. No more hand-written build scripts.
+'''
+py_compare = '''
+Like `python main.py`, but Cargo compiles first. Think of `Cargo.toml` as `pyproject.toml`.
+'''
+starter = '''
+$ cargo new hello_cargo
+$ cd hello_cargo
+$ cargo run
+'''
+choices = [
+    "It only compiles the program",
+    "It compiles the program if needed, then runs it",
+    "It creates a new project",
+    "It uploads the project to crates.io",
+]
+answer = 1
+explanation = "`cargo run` builds (only if something changed) and then runs the program. `cargo build` only compiles, and `cargo new` creates a project."
+
+[[level]]
+id = "0.4"
+title = "Reading the compiler"
+kind = "fix"
+book = ["1.2"]
+xp = 25
+goal = '''Fix every error so it prints:
+Washed up on Tutorial Beach.
+Next stop: Variable Village!'''
+lesson = '''
+Rust's compiler is famous for **helpful error messages**. Each one has:
+
+- `error[E0xxx]`: a code you can look up (the Codex 📖 collects them for you)
+- `-->`: the file, **line** and column
+- often a `help:` line that **suggests the fix**
+
+There are two different mistakes in this code. Fix the first error, run again, and repeat. That's the normal Rust rhythm.
+'''
+c_compare = '''
+A C compiler might accept a misspelled function name and only fail at *link* time, with a confusing message. Rust checks names before it builds anything.
+'''
+py_compare = '''
+Python finds a typo like `printn` only when that line *runs*. Rust finds it before the program ever starts.
+'''
+check = "output"
+expected_output = '''
+Washed up on Tutorial Beach.
+Next stop: Variable Village!
+'''
+starter = '''
+fn main() {
+    let place = "Tutorial Beach";
+    printn!("Washed up on {}.", place);
+    println!("Next stop: Variable Village!")
+    let done = true;
+}
+'''
+solution = '''
+fn main() {
+    let place = "Tutorial Beach";
+    println!("Washed up on {}.", place);
+    println!("Next stop: Variable Village!");
+    let _done = true;
+}
+'''
+hints = [
+    "Read the `help:` lines in the compiler output. Rust often suggests the fix itself!",
+    "One macro name is misspelled, and one line is missing something at the end.",
+    "Line 3 should use `println!`, and line 4 needs a `;` at the end.",
+]
