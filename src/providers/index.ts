@@ -1,0 +1,45 @@
+import type { Provider } from "../types.js";
+import { apify } from "./apify.js";
+import { bright } from "./bright.js";
+import { browserbase } from "./browserbase.js";
+import { contextDev } from "./context_dev.js";
+import { decodo } from "./decodo.js";
+import { firecrawl } from "./firecrawl.js";
+import { massive } from "./massive.js";
+import { nimble } from "./nimble.js";
+import { oxylabs } from "./oxylabs.js";
+import { scrapedo } from "./scrapedo.js";
+import { scraperapi } from "./scraperapi.js";
+import { scrapfly } from "./scrapfly.js";
+import { scrapingant } from "./scrapingant.js";
+import { scrapingbeeProvider } from "./scrapingbee.js";
+import { scrapingdog } from "./scrapingdog.js";
+import { string } from "./string.js";
+import { zenrows } from "./zenrows.js";
+import { zyte } from "./zyte.js";
+
+/** Every benchmarkable provider. The CLI runs whichever ones have their env keys set. */
+export const PROVIDERS: Provider[] = [
+  apify,
+  bright,
+  browserbase,
+  contextDev,
+  decodo,
+  firecrawl,
+  massive,
+  nimble,
+  oxylabs,
+  scrapedo,
+  scraperapi,
+  scrapfly,
+  scrapingant,
+  scrapingbeeProvider,
+  scrapingdog,
+  string,
+  zenrows,
+  zyte
+];
+
+export function getProvider(name: string): Provider | undefined {
+  return PROVIDERS.find((p) => p.name.toLowerCase() === name.toLowerCase());
+}
