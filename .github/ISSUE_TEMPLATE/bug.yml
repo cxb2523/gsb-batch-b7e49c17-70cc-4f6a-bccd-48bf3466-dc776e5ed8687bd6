@@ -1,0 +1,23 @@
+name: Bug report
+description: Something draws wrong, presses wrong or sounds wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: A minimal figure (a StackBlitz or a few lines of JSX) helps most.
+      render: tsx
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: react-isokit version, placeholder: "0.1.0" }
+    validations: { required: true }
+  - type: input
+    id: env
+    attributes: { label: Browser, framework and React version, placeholder: "Safari 19, Next.js 16, React 19" }

@@ -1,0 +1,32 @@
+.fig-quiz-buzzers .qb-token { transition: opacity 0ms linear var(--t, calc(var(--i, 0) * var(--ik-stagger))); }
+.fig-quiz-buzzers .qb-token[data-on="false"] { opacity: 0; }
+.fig-quiz-buzzers .qb-window { fill: var(--ik-screen); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: stroke var(--ik-t-state) var(--ik-ease); }
+.fig-quiz-buzzers .qb-window[data-live="true"] { stroke: var(--ik-live); transition: stroke 0ms linear var(--land); }
+.fig-quiz-buzzers .qb-roll-in { animation: qb-roll-in var(--ik-t-state) var(--ik-ease-out) var(--t) both; }
+.fig-quiz-buzzers .qb-roll-out { animation: qb-roll-out var(--ik-t-state) var(--ik-ease-out) var(--t) both; }
+.fig-quiz-buzzers .qb-card-out { animation: qb-card-out var(--ik-t-state) var(--ik-ease-move) var(--land) forwards; }
+.fig-quiz-buzzers .qb-card-in { animation: qb-card-in var(--ik-t-state) var(--ik-ease-out) calc(var(--land) + 2 * var(--ik-stagger)) both; }
+.fig-quiz-buzzers .qb-card[data-live="true"] .ik-face { stroke: var(--ik-live); }
+.fig-quiz-buzzers .qb-buzzer[data-lit="true"] .ik-face { stroke: var(--ik-live); }
+.fig-quiz-buzzers .qb-buzzer[data-lit="true"] .qb-dome .ik-top { fill: var(--ik-live); }
+.fig-quiz-buzzers .qb-armature { transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-quiz-buzzers .qb-armature[data-pulled="true"] { transform: rotate(-14deg); }
+.fig-quiz-buzzers .qb-lamp { fill: var(--ik-ink-hi); }
+.fig-quiz-buzzers .qb-lamp-on { animation: qb-on var(--ik-t-glow-on) var(--ik-ease-out) var(--relay) both; }
+.fig-quiz-buzzers .qb-lamp-off { animation: qb-off var(--ik-t-glow-off) var(--ik-ease-out) forwards; }
+.fig-quiz-buzzers .qb-bulb { fill: var(--ik-detail); }
+.fig-quiz-buzzers .qb-bulb-lit { fill: var(--ik-ink-hi); }
+.fig-quiz-buzzers .qb-bulb-on { animation: qb-on var(--ik-t-glow-on) var(--ik-ease-out) calc(var(--land) + var(--i) * var(--ik-stagger)) both; }
+.fig-quiz-buzzers .qb-bulb-off { animation: qb-off var(--ik-t-glow-off) var(--ik-ease-out) calc(var(--i) * var(--ik-stagger)) forwards; }
+.fig-quiz-buzzers .qb-letter { font-size: 7px; }
+.fig-quiz-buzzers .qb-team { font-size: 5.6px; }
+.fig-quiz-buzzers .qb-key { font-size: 6.4px; }
+.fig-quiz-buzzers .qb-q { font-size: 7.4px; }
+.fig-quiz-buzzers .qb-mark { fill: none; stroke: var(--ik-ink); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes qb-roll-in { from { transform: translateY(22px); } }
+@keyframes qb-roll-out { to { transform: translateY(-22px); } }
+@keyframes qb-card-out { to { opacity: 0; transform: translate(-10px, -6px); } }
+@keyframes qb-card-in { from { opacity: 0; transform: translate(8px, -10px); } }
+@keyframes qb-on { from { opacity: 0; } }
+@keyframes qb-off { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .fig-quiz-buzzers .qb-roll-out { display: none; } }

@@ -1,0 +1,64 @@
+:where(.ik-plate) {
+  --lab-copper: oklch(0.71 0.1 62);
+  --lab-light: oklch(0.7 0.14 222);
+  --lab-light-hot: color-mix(in oklab, var(--lab-light), white 70%);
+  --lab-bloom-strength: 0.34;
+  --lab-gap: 26;
+  --lab-light-at: 0ms;
+  --lab-seat-ms: var(--ik-t-move);
+  --lab-seat-stagger: calc(var(--ik-stagger) * 3);
+  --lab-lift-ms: var(--ik-t-state);
+  --lab-lift-stagger: var(--ik-stagger);
+}
+:where(.dark, [data-theme="dark"]) :where(.ik-plate:not([data-theme="light"])) {
+  --lab-copper: oklch(0.62 0.095 56);
+  --lab-light: oklch(0.85 0.13 210);
+  --lab-bloom-strength: 0.95;
+}
+@media (prefers-color-scheme: dark) {
+  :where(.ik-plate[data-theme="system"]) { --lab-copper: oklch(0.62 0.095 56); --lab-light: oklch(0.85 0.13 210); --lab-bloom-strength: 0.95; }
+}
+:where(.ik-plate[data-look], [data-look] .ik-plate) {
+  --lab-copper: color-mix(in oklab, var(--ik-accent) 40%, var(--ik-front));
+  --lab-light: var(--ik-glow);
+}
+
+:where(.lab-bore) { fill: var(--ik-side); }
+:where(.lab-floor) { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+
+:where(.lab-seat-ring) { fill: none; stroke: var(--ik-detail); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+:where(.lab-hole) { fill: var(--ik-well); stroke: var(--ik-line); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; }
+:where(.lab-bolt) { fill: var(--ik-side); stroke: var(--ik-line); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+
+:where(.lab-copper) { fill: var(--lab-copper); stroke: var(--ik-line); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+:where(.lab-copper-wall) { fill: color-mix(in oklab, var(--lab-copper), black 14%); }
+:where(.lab-copper-bore) { fill: color-mix(in oklab, var(--lab-copper), black 32%); stroke: none; }
+:where(.lab-winding) { fill: none; stroke: color-mix(in oklab, var(--lab-copper), black 38%); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; stroke-linecap: round; }
+
+:where(.lab-light, .lab-bloom-source, .lab-light-glow) { --lab-at: calc(var(--lab-light-at) + var(--i, 0) * var(--ik-stagger)); }
+:where(.lab-light-glow) { --ik-glow: var(--lab-light); --ik-glow-delay: var(--lab-at); }
+:where(.lab-light) { opacity: 0; stroke: none; transition: opacity var(--ik-t-glow-off) var(--ik-ease-out); }
+:where([data-lit="true"]) :where(.lab-light) { opacity: 1; transition: opacity var(--ik-t-glow-on) var(--ik-ease-out) var(--lab-at); }
+
+:where(.lab-window) { fill: var(--ik-well); stroke: var(--ik-line); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+:where(.lab-window-light) { fill: var(--lab-light); }
+:where(.lab-reflector) { fill: var(--ik-well); }
+:where(.lab-reflector-light) { fill: color-mix(in oklab, var(--lab-light) 82%, var(--lab-light-hot)); }
+
+:where(.lab-slot) { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+:where(.lab-slot-light) { fill: var(--lab-light); }
+
+:where(.lab-bezel) { fill: none; stroke: var(--ik-line); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+:where(.lab-glass) { fill: var(--ik-screen); stroke: var(--ik-line); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; }
+:where(.lab-glass-light) { fill: var(--lab-light-hot); }
+:where(.lab-glass-ring) { fill: none; stroke: var(--ik-detail); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+
+:where(.lab-bloom) { pointer-events: none; }
+:where(.lab-bloom-source) { opacity: 0; transform-box: fill-box; transform-origin: center; transform: scale(var(--lab-bloom-reach, 1)); transition: opacity var(--ik-t-glow-off) var(--ik-ease-out); }
+:where(.lab-bloom[data-on="true"]) :where(.lab-bloom-source) { opacity: calc(var(--lab-bloom-strength) * var(--lab-bloom-gain, 1) * var(--w, 1)); transition: opacity calc(var(--ik-t-glow-off) * 2) var(--ik-ease-out) var(--lab-at); }
+:where(.lab-bloom-hot) { stop-color: var(--lab-light-hot); }
+:where(.lab-bloom-stop) { stop-color: var(--lab-light); }
+:where(.dark, [data-theme="dark"]) :where(.lab-bloom-source) { mix-blend-mode: screen; }
+
+:where(.lab-exploded) .lab-lift { transform: translateY(calc(var(--lab-gap) * var(--span, 1) * -1px)); transition: transform var(--lab-lift-ms) var(--ik-ease-move) calc((var(--lab-joints) - 1 - var(--joint)) * var(--lab-lift-stagger)); }
+:where(.lab-exploded[data-assembled="true"]) .lab-lift { transform: none; transition: transform var(--lab-seat-ms) var(--ik-ease-move) calc(var(--joint) * var(--lab-seat-stagger)); }

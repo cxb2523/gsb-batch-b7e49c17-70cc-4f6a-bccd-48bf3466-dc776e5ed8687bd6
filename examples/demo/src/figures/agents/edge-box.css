@@ -1,0 +1,16 @@
+.edge .folder > g { transition: transform var(--ik-t-move) var(--ik-ease) calc(var(--d) * var(--ik-stagger)); }
+.edge .folder[data-down="true"]:not([data-on="true"]) > g { transform: translateY(-6px); transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.edge .folder[data-on="true"] > g { transform: translateY(-20px); }
+.edge .folder[data-on="true"] .ik-face { stroke: var(--ik-live); }
+.edge .folder[data-on="true"] .tab-dot { fill: var(--ik-live); }
+.edge .folder .strip { fill: var(--ik-side); }
+.edge svg:has(.folder[data-on="true"]) .folder:not([data-on="true"]) > g { transform: translateY(calc((2 - var(--d)) * -3px)); }
+.edge .hub { fill: var(--ik-top); stroke: var(--ik-detail); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+.edge .fan { transform-origin: 0 0; }
+.edge svg[data-reading="true"] .fan { animation: edge-spin var(--read) var(--ik-ease-move); }
+@keyframes edge-spin { to { transform: rotate(720deg); } }
+.edge .light { fill: var(--ik-detail); transition: fill var(--ik-t-glow-off) var(--ik-ease-out); }
+.edge svg[data-reading="true"] .light { fill: var(--ik-live); transition-duration: var(--ik-t-glow-on); animation: ik-pulse 240ms steps(2) infinite; }
+.edge .sweep { fill: var(--ik-screen-ink); animation: edge-sweep var(--read) var(--ik-ease-move) both; }
+@keyframes edge-sweep { to { transform: translateX(52px); } }
+@media (prefers-reduced-motion: reduce) { .edge .sweep { animation: none; } }

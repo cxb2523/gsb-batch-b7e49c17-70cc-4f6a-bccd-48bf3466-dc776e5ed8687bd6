@@ -1,0 +1,17 @@
+.fig-scooter-dock .sd-deck { fill: none; stroke: var(--ik-detail); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linecap: round; transition: stroke var(--ik-t-state) var(--ik-ease) var(--arrive); }
+.fig-scooter-dock svg[data-phase="unlocked"] .sd-deck { stroke: var(--ik-live); transition-delay: var(--lit); }
+.fig-scooter-dock .sd-deck-glow { --ik-glow-delay: var(--lit); --ik-glow-fade-delay: var(--arrive); }
+.fig-scooter-dock .sd-dash-glow { --ik-glow-delay: var(--arrive); --ik-glow-fade-delay: var(--arrive); }
+.fig-scooter-dock svg[data-phase="locked"] .sd-unlock .sd-button { animation: sd-hot var(--ik-t-state) var(--ik-ease) var(--arrive) both; }
+.fig-scooter-dock .sd-unlock[data-down="true"] .sd-button, .fig-scooter-dock svg[data-demo="press"] .sd-unlock[data-hot="true"] .sd-button { fill: var(--ik-well); transition-duration: 0ms; }
+.fig-scooter-dock .sd-lock-line { fill: none; stroke: var(--ik-screen-ink); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-scooter-dock .sd-lock-body { fill: var(--ik-screen-ink); stroke: none; opacity: .75; }
+.fig-scooter-dock .sd-dash-shut, .fig-scooter-dock .sd-dash-open { transition: opacity 0ms linear var(--arrive); }
+.fig-scooter-dock .sd-dash-open, .fig-scooter-dock svg[data-phase="unlocked"] .sd-dash-shut { opacity: 0; }
+.fig-scooter-dock svg[data-phase="unlocked"] .sd-dash-open { opacity: 1; }
+.fig-scooter-dock .sd-pin { transition: transform var(--bolt) var(--ik-ease-out) var(--arrive); }
+.fig-scooter-dock svg[data-phase="unlocked"] .sd-pin { transform: translate(var(--pin-x), var(--pin-y)); }
+.fig-scooter-dock .sd-key { font-size: 5.6px; letter-spacing: .04em; }
+.fig-scooter-dock .sd-bay { font-size: 9px; }
+.fig-scooter-dock .sd-dock { font-size: 4.6px; }
+@keyframes sd-hot { from { stroke: var(--ik-line); } to { stroke: var(--ik-live); } }

@@ -1,0 +1,4 @@
+.fig-abacus .ab-slide { transition: transform var(--slide) var(--ik-ease-move) var(--delay, 0ms); }
+.fig-abacus .ab-dark .ik-face { fill: var(--ik-well); }
+.fig-abacus .ab-dark .ik-top { fill: var(--ik-side); }
+.fig-abacus .ab-sum { letter-spacing: 0.06em; }

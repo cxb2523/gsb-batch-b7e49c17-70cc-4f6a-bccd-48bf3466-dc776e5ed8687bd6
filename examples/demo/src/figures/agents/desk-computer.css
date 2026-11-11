@@ -1,0 +1,33 @@
+.desk { --glass: var(--ik-screen); --crt: var(--ik-live); --phosphor: var(--ik-top); aspect-ratio: 16 / 10.6; height: auto; padding: 18px 22px; }
+:is(.dark, [data-theme="dark"]) .desk { --glass: var(--ik-well); --crt: var(--ik-screen); --phosphor: var(--ik-live); }
+.desk .mat > .ik-face, .desk .mat .ik-top { fill: var(--ik-panel); }
+.desk .pc:hover .ik-top { stroke: var(--ik-line); }
+
+.desk .key { cursor: pointer; }
+.desk .key > g { transition: transform var(--ik-t-state) var(--ik-ease-out); }
+.desk .key[data-down="true"] > g { transform: translateY(1.8px); transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.desk .key[data-down="true"] .ik-face { stroke: var(--ik-live); transition-duration: 0ms; }
+
+.desk .glass { fill: var(--glass); stroke: var(--ik-detail); vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease); }
+.desk svg[data-on="true"] .glass { fill: var(--crt); transition-delay: var(--relay); }
+.desk .crt { opacity: 0; transform: scale(1, 0.02); transform-box: fill-box; transform-origin: center; transition: transform var(--ik-t-state) var(--ik-ease-fall), opacity var(--ik-t-hover) var(--ik-ease) var(--ik-t-hover); }
+.desk svg[data-on="true"] .crt { opacity: 1; transform: none; transition: transform var(--ik-t-move) var(--ik-ease) var(--relay), opacity var(--ik-t-state) var(--ik-ease) var(--relay); }
+.desk .crt-glow { --ik-glow: var(--phosphor); }
+.desk .scanline { stroke: var(--phosphor); stroke-opacity: 0.05; vector-effect: non-scaling-stroke; }
+.desk .phosphor path { fill: var(--phosphor); }
+.desk .screen-text { fill: var(--phosphor); font: 6.2px var(--ik-mono); white-space: pre; }
+.desk .screen-text.dim { fill-opacity: 0.45; }
+.desk .cursor { animation: desk-blink 1.06s steps(1) infinite; }
+.desk .led { fill: var(--ik-detail); transition: fill var(--ik-t-glow-off) var(--ik-ease-out); }
+.desk svg[data-on="true"] .led { fill: var(--ik-live); transition: fill var(--ik-t-glow-on) var(--ik-ease-out) var(--relay); }
+.desk .power { --ik-glow-delay: var(--relay); }
+.desk .drive-led { fill: var(--ik-detail); transition: fill var(--ik-t-glow-off) var(--ik-ease-out); }
+.desk .ik-glow[data-on="true"] > .drive-led { fill: var(--ik-live); transition-duration: var(--ik-t-glow-on); }
+.desk .lever { transform: rotate(25deg); transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.desk svg[data-on="true"] .lever { transform: rotate(155deg); }
+.desk .lever-mark { font-size: 4.4px; }
+.desk { --ik-drafting-size: 8.5px; }
+.desk .knob { fill: var(--ik-top); stroke: var(--ik-line); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+@keyframes desk-blink { 50% { opacity: 0; } }
+
+@media (max-width: 600px) { .desk { padding: 12px 14px; } }

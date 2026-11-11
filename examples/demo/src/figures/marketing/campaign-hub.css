@@ -1,0 +1,18 @@
+.fig-campaign-hub .ch-name { font-size: 5px; }
+.fig-campaign-hub .ch-key { font-size: 6.4px; }
+.fig-campaign-hub .ch-arrive { animation-delay: var(--arrive); }
+.fig-campaign-hub .ch-wire .solid { opacity: 0; transition: opacity var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-campaign-hub .ch-wire .draft { transition: opacity var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-campaign-hub svg[data-live="true"] .ch-wire .solid { opacity: 1; transition-delay: var(--arrive), 0ms; }
+.fig-campaign-hub svg[data-live="true"] .ch-wire .draft { opacity: 0; transition-delay: var(--arrive), 0ms; }
+.fig-campaign-hub .ch-wire[data-focus="true"] :is(.solid, .draft) { stroke: var(--ik-live); }
+.fig-campaign-hub .ch-dot { fill: var(--ik-screen-ink); opacity: .16; transition: opacity var(--ik-t-state) var(--ik-ease); }
+.fig-campaign-hub .ch-dot[data-on="true"] { opacity: .9; transition-delay: var(--arrive); }
+.fig-campaign-hub .ch-dot-glow { --ik-glow-delay: var(--arrive); }
+.fig-campaign-hub .ch-dial { transform: rotate(var(--turn)); transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-campaign-hub .ch-arm { transform: rotate(18deg); transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-campaign-hub svg[data-live="true"] .ch-arm { transform: none; }
+.fig-campaign-hub .ch-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-campaign-hub .ch-lamp[data-on="true"] { fill: var(--ik-line); stroke: var(--ik-line); transition-delay: var(--lamp); }
+.fig-campaign-hub svg[data-lamp="true"] .ch-lamp[data-on="true"] { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-campaign-hub .ch-lamp-glow { --ik-glow-delay: var(--lamp); }

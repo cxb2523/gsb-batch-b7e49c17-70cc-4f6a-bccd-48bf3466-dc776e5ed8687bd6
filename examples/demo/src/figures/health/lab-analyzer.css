@@ -1,0 +1,51 @@
+.fig-lab-analyzer .tube { transition: opacity 0ms linear var(--t); }
+.fig-lab-analyzer .tube.leaving { transition-delay: calc(var(--j) * var(--ik-stagger)); }
+.fig-lab-analyzer .tube[data-on="false"] { opacity: 0; }
+.fig-lab-analyzer .drop { animation: la-drop var(--fall) var(--ik-ease-fall) calc(var(--i) * var(--stagger)) both; }
+.fig-lab-analyzer .lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease) var(--t), stroke var(--ik-t-state) var(--ik-ease) var(--t); }
+.fig-lab-analyzer .lamp[data-state="ok"] { fill: var(--ik-line); stroke: var(--ik-line); }
+.fig-lab-analyzer .lamp[data-state="flag"] { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-lab-analyzer .lamp-glow { --ik-glow-delay: var(--t); }
+.fig-lab-analyzer .busy { fill: var(--ik-detail); transition: fill var(--ik-t-state) var(--ik-ease); }
+.fig-lab-analyzer .busy[data-on="true"] { fill: var(--ik-line); }
+.fig-lab-analyzer .passing { opacity: 0; animation: la-off 1ms linear var(--off) both; }
+.fig-lab-analyzer .head.go { transform: translate(var(--x2), var(--y2)); animation: la-move var(--step) both; }
+.fig-lab-analyzer .gripper.go { animation: la-grip var(--step) both; }
+.fig-lab-analyzer .head.back { transform: translate(var(--x2), var(--y2)); animation: la-back var(--back) var(--ik-ease-move) both; }
+.fig-lab-analyzer .head.parked { transform: translate(var(--x2), var(--y2)); }
+.fig-lab-analyzer .pulley { transform-origin: 0 0; }
+.fig-lab-analyzer .pulley.go { transform: rotate(var(--a2)); animation: la-spin var(--step) both; }
+.fig-lab-analyzer .pulley.back { transform: rotate(var(--a2)); animation: la-unspin var(--back) var(--ik-ease-move) both; }
+.fig-lab-analyzer .pulley.parked { transform: rotate(var(--a2)); }
+.fig-lab-analyzer .catch { transform: translate(var(--catch-x), var(--catch-y)); }
+.fig-lab-analyzer .catch.seated { transform: none; animation: la-seat var(--ik-t-state) var(--ik-ease-out) var(--seat) both; }
+.fig-lab-analyzer .armature { transform-origin: 0 0; }
+.fig-lab-analyzer .armature.go { transform: rotate(-12deg); animation: la-close var(--ik-t-press) var(--ik-ease-out) var(--land) both; }
+.fig-lab-analyzer .armature.held { transform: rotate(-12deg); }
+.fig-lab-analyzer .key { font-size: 7px; }
+.fig-lab-analyzer .tag { font-size: 5.4px; }
+.fig-lab-analyzer .ik-press[data-hot="true"] .glyph { stroke: var(--ik-live); }
+.fig-lab-analyzer .flag { fill: var(--ik-screen-ink); stroke: var(--ik-screen-ink); stroke-width: .6; stroke-linejoin: round; }
+@keyframes la-drop { 0% { opacity: 0; transform: translateY(-18px); } 15% { opacity: 1; } 100% { opacity: 1; transform: none; } }
+@keyframes la-off { from { opacity: 1; } to { opacity: 0; } }
+@keyframes la-move {
+  0% { transform: translate(var(--x0), var(--y0)); animation-timing-function: var(--ik-ease-move); }
+  30%, 40% { transform: translate(var(--x1), var(--y1)); animation-timing-function: var(--ik-ease-move); }
+  82%, 100% { transform: translate(var(--x2), var(--y2)); }
+}
+@keyframes la-spin {
+  0% { transform: rotate(var(--a0)); animation-timing-function: var(--ik-ease-move); }
+  30%, 40% { transform: rotate(var(--a1)); animation-timing-function: var(--ik-ease-move); }
+  82%, 100% { transform: rotate(var(--a2)); }
+}
+@keyframes la-grip {
+  0%, 30% { transform: translateY(0); animation-timing-function: var(--ik-ease-out); }
+  35% { transform: translateY(4px); animation-timing-function: cubic-bezier(.3, .6, .5, 1); }
+  61% { transform: translateY(-8px); animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
+  82% { transform: translateY(2px); animation-timing-function: var(--ik-ease-out); }
+  90%, 100% { transform: translateY(0); }
+}
+@keyframes la-back { from { transform: translate(var(--x0), var(--y0)); } to { transform: translate(var(--x2), var(--y2)); } }
+@keyframes la-unspin { from { transform: rotate(var(--a0)); } to { transform: rotate(var(--a2)); } }
+@keyframes la-seat { from { transform: translate(var(--catch-x), var(--catch-y)); } to { transform: none; } }
+@keyframes la-close { from { transform: none; } to { transform: rotate(-12deg); } }

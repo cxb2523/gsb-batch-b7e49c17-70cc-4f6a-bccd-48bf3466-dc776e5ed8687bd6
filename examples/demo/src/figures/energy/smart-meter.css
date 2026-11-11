@@ -1,0 +1,15 @@
+.fig-smart-meter .sm-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-smart-meter .sm-lamp[data-on="true"] { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-smart-meter .sm-bar { fill: var(--ik-screen-ink); opacity: .7; }
+.fig-smart-meter .sm-band { fill: none; stroke: var(--ik-screen-ink); stroke-opacity: .45; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-smart-meter .sm-night { fill: var(--ik-screen-ink); opacity: .2; }
+.fig-smart-meter .sm-now { fill: none; stroke: var(--ik-screen-ink); stroke-width: 1.2; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-smart-meter .sm-roll-in { animation: sm-roll-in var(--ik-t-state) var(--ik-ease) var(--roll-at) both; }
+.fig-smart-meter .sm-roll-out { animation: sm-roll-out var(--ik-t-state) var(--ik-ease) var(--roll-at) both; }
+.fig-smart-meter .sm-tag { font-size: 5.4px; }
+.fig-smart-meter .sm-small { font-size: 5px; }
+.fig-smart-meter .sm-key { font-size: 6.4px; }
+.fig-smart-meter svg[data-page="0"] .sm-cycle { stroke: var(--ik-live); }
+@keyframes sm-roll-in { from { transform: translateY(12px); } }
+@keyframes sm-roll-out { to { transform: translateY(-12px); } }
+@media (prefers-reduced-motion: reduce) { .fig-smart-meter .sm-roll-out { display: none; } }

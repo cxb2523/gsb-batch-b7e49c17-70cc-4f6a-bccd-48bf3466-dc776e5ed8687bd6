@@ -1,0 +1,4 @@
+.fig-badge-reader .br-leaf { transition: transform var(--ik-t-move) var(--ik-ease) 160ms; }
+.fig-badge-reader .br-led { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-badge-reader svg[data-open="true"] .br-led { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-badge-reader .br-sign { font-size: 5.6px; }

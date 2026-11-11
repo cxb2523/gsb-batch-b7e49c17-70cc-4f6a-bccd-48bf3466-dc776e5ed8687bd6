@@ -1,0 +1,21 @@
+.fig-cryo-stack .stage { transform: translateY(var(--lift)); transition: transform var(--settle) var(--ik-ease) calc(var(--j) * var(--step)); }
+.fig-cryo-stack svg[data-cold="true"] .stage { transform: translateY(0); transition-delay: calc(var(--i) * var(--step)); }
+.fig-cryo-stack svg[data-cold="true"] .ik-float { animation: none; }
+.fig-cryo-stack svg[data-cold="true"] .ring { animation: cryo-seat var(--ik-t-move) var(--ik-ease-out) calc(var(--i) * var(--step) + var(--land)); }
+.fig-cryo-stack .shown { animation: cryo-on 1ms linear var(--on) both; }
+.fig-cryo-stack .shown.passing { animation: cryo-on 1ms linear var(--on) both, cryo-off 1ms linear var(--off) forwards; }
+.fig-cryo-stack .light { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-cryo-stack svg[data-cold="true"] .light { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--stable); }
+.fig-cryo-stack svg[data-cold="true"] .light-glow { --ik-glow-delay: var(--stable); }
+.fig-cryo-stack .rotor { transform-origin: 0 0; }
+.fig-cryo-stack svg[data-cold="true"] .rotor { animation: cryo-spin var(--stable) var(--ik-ease-move) both; }
+.fig-cryo-stack .needle { transform: rotate(var(--turn)); transform-origin: 0 0; transition: transform var(--ik-t-move) var(--ik-ease-out); }
+.fig-cryo-stack svg[data-cold="true"] .needle { transition: transform var(--ik-t-spring) var(--ik-spring) calc(var(--stable) - var(--ik-t-spring)); }
+.fig-cryo-stack svg[data-cold="true"] .stack-dim :is(.ik-dimension-run, .ik-dimension-end, .ik-dimension-label) { transition-delay: calc(5 * var(--step)); }
+.fig-cryo-stack .key { font-size: 7px; }
+.fig-cryo-stack svg[data-cold="false"] .flake { stroke: var(--ik-live); }
+@keyframes cryo-seat { 15%, 45% { stroke: var(--ik-live); } }
+@keyframes cryo-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cryo-off { to { opacity: 0; } }
+@keyframes cryo-spin { to { transform: rotate(1080deg); } }
+@media (prefers-reduced-motion: reduce) { .fig-cryo-stack .shown.passing { display: none; } }

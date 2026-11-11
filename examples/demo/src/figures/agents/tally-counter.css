@@ -1,0 +1,5 @@
+.fig-tally-counter .wheel-in { animation: tally-roll-in var(--ik-t-state) var(--ik-ease) calc(var(--i) * var(--roll-stagger)) both; }
+.fig-tally-counter .wheel-out { animation: tally-roll-out var(--ik-t-state) var(--ik-ease) calc(var(--i) * var(--roll-stagger)) both; }
+@keyframes tally-roll-in { from { transform: translateY(14px); } }
+@keyframes tally-roll-out { to { transform: translateY(-14px); } }
+@media (prefers-reduced-motion: reduce) { .fig-tally-counter .wheel-out { opacity: 0; } }

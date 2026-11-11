@@ -1,0 +1,17 @@
+.fig-bunsen-burner .flame { transform-origin: 0 0; transform: scale(0.2, 0); opacity: 0; transition: transform var(--ik-t-state) var(--ik-ease), opacity var(--ik-t-glow-off) var(--ik-ease); }
+.fig-bunsen-burner svg[data-lit="true"] .flame { transform: none; opacity: 1; transition: transform var(--ik-t-spring) var(--ik-spring), opacity var(--ik-t-glow-on) var(--ik-ease-out); }
+.fig-bunsen-burner .flicker { transform-origin: 0 0; }
+.fig-bunsen-burner svg[data-lit="true"] .flicker { animation: bb-flicker calc(var(--ik-t-move) / 2) var(--ik-ease) infinite alternate; }
+.fig-bunsen-burner .flame-glow { --ik-glow: var(--tx-sun); }
+.fig-bunsen-burner .flame-outer { fill: color-mix(in oklab, var(--tx-sun), var(--ik-panel) 10%); stroke: color-mix(in oklab, var(--tx-sun), var(--ik-live) 40%); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.fig-bunsen-burner .flame-core { fill: color-mix(in oklab, var(--tx-sky), var(--ik-panel) 10%); }
+.fig-bunsen-burner .liquid { fill: color-mix(in oklab, var(--ik-top), var(--tx-sky) 40%); transition: fill calc(var(--ik-t-move) * 2) var(--ik-ease); }
+.fig-bunsen-burner svg[data-lit="true"] .liquid { fill: color-mix(in oklab, var(--ik-top), var(--tx-bloom) 48%); transition-duration: var(--heat); }
+.fig-bunsen-burner .tx-stipple { --tx-speck: var(--tx-foam); }
+.fig-bunsen-burner svg[data-lit="true"] .tx-stipple { --tx-stipple-delay: var(--heat); }
+.fig-bunsen-burner svg[data-lit="true"] .tx-speck { animation: bb-boil var(--ik-t-move) var(--ik-ease-out) calc(var(--heat) + var(--i) * var(--ik-stagger)) infinite; }
+.fig-bunsen-burner svg[data-lit="true"] .rim { stroke: var(--ik-live); transition: stroke var(--ik-t-state) var(--ik-ease) var(--heat); }
+.fig-bunsen-burner svg[data-lit="false"] .arrow { stroke: var(--ik-live); }
+.fig-bunsen-burner .key { font-size: 6.4px; }
+@keyframes bb-flicker { to { transform: scale(0.94, 1.08); } }
+@keyframes bb-boil { 0% { transform: scale(0.4); opacity: 0; } 40% { opacity: 1; } 100% { transform: scale(1.25); opacity: 0; } }

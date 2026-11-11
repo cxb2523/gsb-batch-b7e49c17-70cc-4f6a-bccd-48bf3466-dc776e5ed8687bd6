@@ -1,0 +1,22 @@
+.fig-stamping-press .sp-plate { font-size: 6px; }
+.fig-stamping-press .sp-tag { font-size: 5.4px; }
+.fig-stamping-press .sp-stroke { animation: stamping-press-stroke var(--stroke-ms) both; }
+.fig-stamping-press .sp-struck { opacity: 0; animation: stamping-press-held 1ms linear var(--strike-ms) backwards; }
+.fig-stamping-press .sp-fed.sp-struck { animation: stamping-press-held 1ms linear var(--strike-ms) backwards, stamping-press-feed var(--ik-t-state) var(--ik-ease-out) backwards; }
+.fig-stamping-press .sp-made { animation: stamping-press-show 1ms linear var(--strike-ms) both; }
+.fig-stamping-press .sp-made .ik-face { stroke: var(--ik-live); }
+.fig-stamping-press .sp-eject { opacity: 0; animation: stamping-press-eject var(--ik-t-state) var(--ik-ease) backwards; }
+.fig-stamping-press .sp-roll-in { animation: stamping-press-roll-in var(--ik-t-state) var(--ik-ease) calc(var(--strike-ms) + var(--roll-at)) both; }
+.fig-stamping-press .sp-roll-out { animation: stamping-press-roll-out var(--ik-t-state) var(--ik-ease) calc(var(--strike-ms) + var(--roll-at)) both; }
+@keyframes stamping-press-stroke {
+  0%, 22% { transform: translateY(0); animation-timing-function: var(--ik-ease-fall); }
+  40%, 47% { transform: translateY(24px); animation-timing-function: var(--ik-ease); }
+  100% { transform: translateY(0); }
+}
+@keyframes stamping-press-held { from, to { opacity: 1; } }
+@keyframes stamping-press-feed { from { opacity: 0; transform: translate(-10.39px, -6px); } to { opacity: 1; transform: translate(0, 0); } }
+@keyframes stamping-press-show { from { opacity: 0; } }
+@keyframes stamping-press-eject { from { opacity: 1; transform: translate(0, 0); } to { opacity: 0; transform: translate(15.59px, 9px); } }
+@keyframes stamping-press-roll-in { from { transform: translateY(7px); } }
+@keyframes stamping-press-roll-out { to { transform: translateY(-7px); } }
+@media (prefers-reduced-motion: reduce) { .fig-stamping-press .sp-roll-out { display: none; } }

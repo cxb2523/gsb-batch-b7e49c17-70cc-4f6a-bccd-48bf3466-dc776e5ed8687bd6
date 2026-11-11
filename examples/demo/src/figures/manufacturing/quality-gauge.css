@@ -1,0 +1,32 @@
+.fig-quality-gauge .qg-bin-name { font-size: 5.6px; }
+.fig-quality-gauge .qg-mark { font-size: 4.6px; }
+.fig-quality-gauge .qg-key { font-size: 6.6px; }
+.fig-quality-gauge .qg-lamp { opacity: 0; transition: opacity var(--ik-t-glow-off) var(--ik-ease-out); }
+.fig-quality-gauge .qg-lamp[data-on="true"] { opacity: 1; transition: opacity var(--ik-t-glow-on) var(--ik-ease-out) var(--land); }
+.fig-quality-gauge .qg-lamp-glow { --ik-glow-delay: var(--land); }
+.fig-quality-gauge .qg-needle { transform: rotate(var(--turn)); transform-origin: 0 0; }
+.fig-quality-gauge .qg-measure { animation: quality-gauge-rest var(--ik-t-state) var(--ik-ease-out) both, quality-gauge-swing var(--swing) var(--ik-spring) calc(var(--land) - var(--swing)) forwards; }
+.fig-quality-gauge .qg-go { transform: translate(var(--mx), var(--my)); animation: quality-gauge-go var(--land) backwards; }
+.fig-quality-gauge .qg-reject { transform: translate(var(--ex), var(--ey)); animation: quality-gauge-reject var(--land) backwards; }
+.fig-quality-gauge .qg-fall { transform: translateY(var(--drop)); animation: quality-gauge-fall var(--land) backwards; }
+.fig-quality-gauge .qg-jab { animation: quality-gauge-jab calc(var(--land) * .36) var(--ik-ease-out) calc(var(--land) * .14) both; }
+.fig-quality-gauge .qg-old { opacity: 0; animation: quality-gauge-old var(--ik-t-state) var(--ik-ease) backwards; }
+.fig-quality-gauge .ik-press[data-hot="true"] .qg-tick { stroke: var(--ik-live); }
+@keyframes quality-gauge-go {
+  0%, 20% { transform: translate(0, 0); animation-timing-function: var(--ik-ease-move); }
+  76%, 100% { transform: translate(var(--mx), var(--my)); }
+}
+@keyframes quality-gauge-reject {
+  0%, 20% { transform: translate(0, 0); animation-timing-function: cubic-bezier(.4, 0, .9, .9); }
+  76% { transform: translate(var(--mx), var(--my)); animation-timing-function: cubic-bezier(.2, .6, .4, 1); }
+  100% { transform: translate(var(--ex), var(--ey)); }
+}
+@keyframes quality-gauge-fall {
+  0% { transform: translateY(var(--rise)); animation-timing-function: var(--ik-ease-fall); }
+  16%, 76% { transform: translateY(0); animation-timing-function: var(--ik-ease-fall); }
+  100% { transform: translateY(var(--drop)); }
+}
+@keyframes quality-gauge-rest { from { transform: rotate(var(--from)); } to { transform: rotate(var(--stop)); } }
+@keyframes quality-gauge-swing { from { transform: rotate(var(--stop)); } to { transform: rotate(var(--turn)); } }
+@keyframes quality-gauge-jab { 45% { transform: translate(5.2px, 3px); } }
+@keyframes quality-gauge-old { from { opacity: 1; } to { opacity: 0; } }

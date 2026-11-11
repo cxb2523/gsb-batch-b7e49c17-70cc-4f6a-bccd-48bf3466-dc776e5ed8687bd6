@@ -1,0 +1,13 @@
+.fig-ev-charger .ev-plug { transition: transform var(--seat) var(--ik-ease-move); }
+.fig-ev-charger svg[data-charging="true"] .ev-plug { transform: translate(var(--seat-x), var(--seat-y)); }
+.fig-ev-charger .ev-catch { transform: translate(var(--lift-x), var(--lift-y)); transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-ev-charger svg[data-charging="true"] .ev-catch { transform: none; transition: transform var(--ik-t-press) var(--ik-ease-fall) var(--seat); }
+.fig-ev-charger .ev-cell { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-ev-charger svg[data-charging="true"] .ev-cell[data-on="true"] { fill: var(--ik-line); stroke: var(--ik-line); transition-delay: calc(var(--arrive) + var(--k) * var(--ik-stagger)); }
+.fig-ev-charger svg[data-charging="true"] .ev-cell[data-head="true"] { fill: var(--ik-live); stroke: var(--ik-live); animation: ik-pulse 1.6s ease-in-out calc(var(--arrive) + var(--k) * var(--ik-stagger) + 400ms) infinite; }
+.fig-ev-charger svg[data-charging="true"] .ev-lit { --ik-glow-delay: calc(var(--arrive) + var(--k, 0) * var(--ik-stagger)); }
+.fig-ev-charger .ev-strip { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease); }
+.fig-ev-charger svg[data-charging="true"] .ev-strip { fill: var(--ik-line); transition-delay: var(--arrive); }
+.fig-ev-charger .ev-linking { opacity: 0; animation: ev-linking var(--arrive) steps(1, end) both; }
+.fig-ev-charger .ev-tag { font-size: 5.4px; }
+@keyframes ev-linking { from { opacity: 1; } to { opacity: 0; } }

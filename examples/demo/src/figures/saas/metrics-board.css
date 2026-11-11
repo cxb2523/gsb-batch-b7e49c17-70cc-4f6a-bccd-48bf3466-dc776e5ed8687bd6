@@ -1,0 +1,13 @@
+.fig-metrics-board .slab { transition: opacity 0ms linear calc(var(--col) * var(--ik-stagger) + var(--slab) * var(--ik-stagger) * .6); }
+.fig-metrics-board .slab[data-on="false"] { opacity: 0; }
+.fig-metrics-board .range[data-on="true"]:not([data-down="true"]) > g { transform: translateY(1.5px); }
+.fig-metrics-board .led { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-metrics-board .range[data-on="true"] .led { fill: var(--ik-line); stroke: var(--ik-line); }
+.fig-metrics-board svg[data-chosen="true"] .range[data-on="true"] .led { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-metrics-board .mb-roll-in { animation: mb-roll-in var(--ik-t-state) var(--ik-ease) calc(var(--i) * var(--carry)) both; }
+.fig-metrics-board .mb-roll-out { animation: mb-roll-out var(--ik-t-state) var(--ik-ease) calc(var(--i) * var(--carry)) both; }
+.fig-metrics-board .key { font-size: 7px; }
+.fig-metrics-board .range-label { font-size: 6px; }
+@keyframes mb-roll-in { from { transform: translateY(18px); } }
+@keyframes mb-roll-out { to { transform: translateY(-18px); } }
+@media (prefers-reduced-motion: reduce) { .fig-metrics-board .mb-roll-out { display: none; } }

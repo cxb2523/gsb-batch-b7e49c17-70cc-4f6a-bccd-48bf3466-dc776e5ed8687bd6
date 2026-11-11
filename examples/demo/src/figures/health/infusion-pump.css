@@ -1,0 +1,16 @@
+.fig-infusion-pump .lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-infusion-pump svg[data-run="true"] .lamp { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--arrive); }
+.fig-infusion-pump .lamp-glow { --ik-glow-delay: var(--arrive); }
+.fig-infusion-pump .drop { stroke-dasharray: 2.4 130; stroke-width: 2.8; }
+.fig-infusion-pump .drip { opacity: 0; }
+.fig-infusion-pump svg[data-run="true"] .drip { animation: ip-drip 1400ms var(--ik-ease-fall) var(--arrive) infinite; }
+.fig-infusion-pump .drop-dot { fill: var(--ik-line); }
+.fig-infusion-pump .priming { opacity: 0; animation: ip-priming var(--arrive) steps(1, end) both; }
+.fig-infusion-pump .arrive { animation-delay: var(--arrive); }
+.fig-infusion-pump .rotor { transform-origin: 0 0; }
+.fig-infusion-pump svg[data-run="true"] .rotor { animation: ip-prime var(--arrive) var(--ik-ease-move) both; }
+.fig-infusion-pump .key { font-size: 6.4px; }
+.fig-infusion-pump svg[data-run="false"] .play { stroke: var(--ik-live); }
+@keyframes ip-drip { 0% { opacity: 0; transform: translateY(0); } 12% { opacity: 1; transform: translateY(0); } 55% { opacity: 1; transform: translateY(6.6px); } 60%, 100% { opacity: 0; transform: translateY(6.6px); } }
+@keyframes ip-priming { from { opacity: 1; } to { opacity: 0; } }
+@keyframes ip-prime { to { transform: rotate(720deg); } }

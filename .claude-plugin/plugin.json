@@ -1,0 +1,20 @@
+{
+  "name": "isokit",
+  "version": "0.2.0",
+  "description": "Draw interactive isometric figures in React: rounded boxes, faces you can draw on, keys you can press, optional sound. Checks its own work in a browser.",
+  "author": {
+    "name": "Aadil Ghani",
+    "url": "https://github.com/aadilghani1"
+  },
+  "homepage": "https://aadilghani1.github.io/isokit/",
+  "repository": "https://github.com/aadilghani1/isokit",
+  "license": "MIT",
+  "keywords": [
+    "isometric",
+    "svg",
+    "react",
+    "illustration",
+    "figure",
+    "design"
+  ]
+}

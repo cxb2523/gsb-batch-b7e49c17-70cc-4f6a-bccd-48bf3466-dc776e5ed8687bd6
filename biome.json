@@ -1,0 +1,41 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+	"files": {
+		"includes": [
+			"**",
+			"!**/dist",
+			"!**/node_modules",
+			"!**/*.md",
+			"!.changeset/*.json"
+		]
+	},
+	"formatter": { "enabled": false },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"style": {
+				"noNonNullAssertion": "off",
+				"noDescendingSpecificity": "off"
+			},
+			"suspicious": {
+				"noArrayIndexKey": "off",
+				"noEmptyBlockStatements": "off",
+				"noAssignInExpressions": "off"
+			},
+			"a11y": {
+				"noSvgWithoutTitle": "off",
+				"noNoninteractiveTabindex": "off",
+				"useSemanticElements": "off",
+				"noStaticElementInteractions": "off",
+				"useKeyWithClickEvents": "off",
+				"noNoninteractiveElementToInteractiveRole": "off",
+				"noAriaHiddenOnFocusable": "off"
+			},
+			"complexity": { "noForEach": "off", "noImportantStyles": "off" },
+			"correctness": { "useExhaustiveDependencies": "warn" }
+		}
+	},
+	"assist": { "enabled": true }
+}

@@ -1,0 +1,22 @@
+.fig-vision-mixer .vm-ink { fill: var(--ik-screen-ink); opacity: .78; }
+.fig-vision-mixer .vm-soft { fill: var(--ik-screen-ink); opacity: .2; }
+.fig-vision-mixer .vm-bar { fill: var(--ik-screen-ink); }
+.fig-vision-mixer .vm-show { animation: vm-show var(--ik-t-state) var(--ik-ease) var(--t) both; }
+.fig-vision-mixer .vm-was { animation: vm-gone 1ms linear var(--t) forwards; }
+.fig-vision-mixer .vm-fade { animation: vm-gone var(--fade) var(--ik-ease) forwards; }
+.fig-vision-mixer .vm-tally, .fig-vision-mixer .vm-sel { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease) var(--lamp), stroke var(--ik-t-state) var(--ik-ease) var(--lamp); }
+.fig-vision-mixer .vm-tally[data-on="true"], .fig-vision-mixer .vm-sel[data-on="true"] { fill: var(--ik-line); stroke: var(--ik-line); }
+.fig-vision-mixer .vm-tally[data-live="true"] { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-vision-mixer .vm-lamp { --ik-glow-delay: var(--lamp); --ik-glow-fade-delay: var(--lamp); }
+.fig-vision-mixer .vm-armature { transform: rotate(var(--turn)); transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out) var(--relay-at); }
+.fig-vision-mixer .vm-needle { transform: rotate(var(--turn)); transform-origin: 0 0; transition: transform var(--needle) var(--ik-spring) var(--fly); }
+.fig-vision-mixer svg[data-last="black"] .vm-needle { transition: transform var(--fade) var(--ik-ease); }
+.fig-vision-mixer .vm-needle-line { fill: none; stroke: var(--ik-screen-ink); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-vision-mixer .vm-scale { fill: none; stroke: var(--ik-screen-ink); stroke-opacity: .5; stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-vision-mixer .vm-vu { font-size: 3.2px; }
+.fig-vision-mixer .vm-key { font-size: 8px; }
+.fig-vision-mixer .vm-cut { font-size: 8px; }
+.fig-vision-mixer .vm-ftb { font-size: 6.4px; }
+.fig-vision-mixer .vm-tag { font-size: 4.8px; }
+@keyframes vm-show { from { opacity: 0; } }
+@keyframes vm-gone { to { opacity: 0; } }

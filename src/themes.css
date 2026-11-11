@@ -1,0 +1,48 @@
+:where([data-look="blueprint"]) {
+  --ik-paper-light: #f3f6fb; --ik-pen-light: #2d5fa8; --ik-live-light: #123e86; --ik-glow-light: #2d5fa8; --ik-accent-light: #123e86; --ik-strength-light: 0;
+  --ik-paper-dark: #1b4785; --ik-pen-dark: #d6e5ff; --ik-live-dark: #ffffff; --ik-glow-dark: #bcd6ff; --ik-accent-dark: #ffffff; --ik-strength-dark: .8;
+  --ik-drafting: inline;
+}
+:where(.ik-plate[data-look="blueprint"], [data-look="blueprint"] .ik-plate) { overflow: hidden; }
+:where([data-look="paper"]) {
+  --ik-paper-light: #f3ecdd; --ik-pen-light: #8a7a5c; --ik-live-light: #2e2418; --ik-glow-light: #d4462a; --ik-accent-light: #d4462a; --ik-strength-light: 0;
+  --ik-paper-dark: #24211c; --ik-pen-dark: #a08f72; --ik-live-dark: #f3e9d4; --ik-glow-dark: #ffd2a1; --ik-accent-dark: #ff7a5c; --ik-strength-dark: .7;
+}
+:where([data-look="phosphor"]) {
+  --ik-paper-light: #0d0a05; --ik-pen-light: #9a6614; --ik-live-light: #ffb000; --ik-glow-light: #ffb000; --ik-accent-light: #ffb000; --ik-strength-light: 1;
+  --ik-paper-dark: #070c08; --ik-pen-dark: #33874a; --ik-live-dark: #7dff9a; --ik-glow-dark: #39ff6a; --ik-accent-dark: #7dff9a; --ik-strength-dark: 1;
+}
+
+:where(.ik-plate[data-look], [data-look] .ik-plate) {
+  --ik-paper: color-mix(in oklab, var(--ik-paper-light), var(--ik-paper-light)); --ik-pen: color-mix(in oklab, var(--ik-pen-light), var(--ik-pen-light)); --ik-live: color-mix(in oklab, var(--ik-live-light), var(--ik-live-light)); --ik-glow: color-mix(in oklab, var(--ik-glow-light), var(--ik-glow-light)); --ik-accent: color-mix(in oklab, var(--ik-accent-light), var(--ik-accent-light)); --ik-glow-strength: var(--ik-strength-light);
+}
+:where(.dark, [data-theme="dark"]) :where(.ik-plate[data-look]:not([data-theme="light"]):not([data-theme="system"]), [data-look] .ik-plate:not([data-theme="light"]):not([data-theme="system"])), :where(.ik-plate[data-look][data-theme="dark"], [data-look] .ik-plate[data-theme="dark"]) {
+  --ik-paper: color-mix(in oklab, var(--ik-paper-dark), var(--ik-paper-dark)); --ik-pen: color-mix(in oklab, var(--ik-pen-dark), var(--ik-pen-dark)); --ik-live: color-mix(in oklab, var(--ik-live-dark), var(--ik-live-dark)); --ik-glow: color-mix(in oklab, var(--ik-glow-dark), var(--ik-glow-dark)); --ik-accent: color-mix(in oklab, var(--ik-accent-dark), var(--ik-accent-dark)); --ik-glow-strength: var(--ik-strength-dark);
+}
+@media (prefers-color-scheme: dark) {
+  :where(.ik-plate[data-look][data-theme="system"], [data-look] .ik-plate[data-theme="system"]) {
+    --ik-paper: color-mix(in oklab, var(--ik-paper-dark), var(--ik-paper-dark)); --ik-pen: color-mix(in oklab, var(--ik-pen-dark), var(--ik-pen-dark)); --ik-live: color-mix(in oklab, var(--ik-live-dark), var(--ik-live-dark)); --ik-glow: color-mix(in oklab, var(--ik-glow-dark), var(--ik-glow-dark)); --ik-accent: color-mix(in oklab, var(--ik-accent-dark), var(--ik-accent-dark)); --ik-glow-strength: var(--ik-strength-dark);
+  }
+}
+:where(.ik-plate[data-look], [data-look] .ik-plate) {
+  --ik-panel: var(--ik-paper);
+  --ik-top: color-mix(in oklab, var(--ik-paper), white 6%);
+  --ik-front: color-mix(in oklab, var(--ik-paper), white 3%);
+  --ik-side: color-mix(in oklab, var(--ik-paper), black 7%);
+  --ik-well: color-mix(in oklab, var(--ik-paper), black 11%);
+  --ik-line: var(--ik-pen);
+  --ik-detail: color-mix(in oklab, var(--ik-pen) 45%, var(--ik-paper));
+  --ik-ink: color-mix(in oklab, var(--ik-pen), var(--ik-live) 30%);
+  --ik-ink-hi: var(--ik-live);
+  --ik-screen: color-mix(in oklab, var(--ik-paper), black 16%);
+  --ik-screen-ink: var(--ik-live);
+  --ik-border: color-mix(in oklab, var(--ik-paper), var(--ik-pen) 16%);
+  --ik-grid: color-mix(in oklab, var(--ik-pen) 22%, transparent);
+}
+:where(.ik-plate[data-look="phosphor"], [data-look="phosphor"] .ik-plate) { background-image: repeating-linear-gradient(transparent 0 2px, color-mix(in oklab, var(--ik-live) 5%, transparent) 2px 3px); }
+:where(.ik-plate[data-look="phosphor"], [data-look="phosphor"] .ik-plate) > svg { filter: drop-shadow(0 0 1.2px color-mix(in oklab, var(--ik-glow) 60%, transparent)); }
+
+:where(.ik-dimension-line, .ik-dimension-witness) { fill: none; stroke: var(--ik-line); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+:where(.ik-dimension-text) { fill: var(--ik-line); font: 500 var(--ik-drafting-size, 5.5px)/1 var(--ik-mono); letter-spacing: .04em; }
+:where(.ik-callout-dot) { fill: var(--ik-line); }
+:where(.ik-dimension-run, .ik-dimension-end, .ik-dimension-label) { transition: transform var(--ik-t-move) var(--ik-ease); }

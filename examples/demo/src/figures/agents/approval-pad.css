@@ -1,0 +1,12 @@
+.approval .pip { fill: var(--ik-screen-ink); opacity: 0.14; transition: opacity var(--ik-t-state) var(--ik-ease); }
+.approval .pip[data-on="true"] { opacity: 0.85; }
+.approval .light { fill: var(--ik-detail); transition: fill var(--ik-t-state) var(--ik-ease); }
+.approval svg[data-phase="waiting"] .light { fill: var(--ik-live); animation: ik-pulse 1.8s ease-in-out infinite; }
+.approval .armature { transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.approval svg:is([data-phase="allowed"], [data-phase="denied"]) .armature { transform: rotate(8deg); }
+.approval .tip-lamp { fill: var(--ik-detail); transition: fill var(--ik-t-glow-off) var(--ik-ease-out); }
+.approval svg:is([data-phase="allowed"], [data-phase="denied"]) .tip-lamp { fill: var(--ik-live); transition: fill var(--ik-t-glow-on) var(--ik-ease-out) var(--relay); }
+.approval .tx { --ik-glow-delay: var(--relay); }
+.approval .ping path { opacity: 0; animation: approval-ping 900ms var(--ik-ease) calc(var(--relay) + var(--i) * 120ms) 2; }
+@keyframes approval-ping { 30% { opacity: 1; } to { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .approval .ping path { animation: none; } }

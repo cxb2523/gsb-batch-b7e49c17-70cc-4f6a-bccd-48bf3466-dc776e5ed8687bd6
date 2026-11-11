@@ -1,0 +1,17 @@
+.fig-shelf-label svg { --sl-half: calc(var(--ik-t-state) / 2); --sl-lit: var(--ik-t-state); }
+.fig-shelf-label .sl-key { font-size: 6.2px; }
+.fig-shelf-label svg[data-synced="false"] .sl-glyph { stroke: var(--ik-live); }
+.fig-shelf-label .sl-flip-out { transform-box: fill-box; transform-origin: center; animation: sl-flip-out var(--sl-half) var(--ik-ease-move) var(--flip-at) forwards; }
+.fig-shelf-label .sl-flip-in { transform-box: fill-box; transform-origin: center; animation: sl-flip-in var(--ik-t-state) var(--ik-ease) calc(var(--flip-at) + var(--sl-half)) both; }
+.fig-shelf-label .sl-later { animation-delay: var(--sl-lit); }
+.fig-shelf-label .sl-strike { text-decoration: line-through; }
+.fig-shelf-label .sl-flash { fill: var(--ik-screen-ink); opacity: 0; pointer-events: none; animation: sl-flash var(--ik-t-state) var(--ik-ease-out); }
+.fig-shelf-label .sl-lens { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-shelf-label .sl-led { fill: var(--ik-live); stroke: var(--ik-live); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0; }
+.fig-shelf-label .sl-led[data-on="true"] { opacity: 1; animation: sl-led-on var(--ik-t-state) var(--ik-ease) var(--sl-lit) both, ik-pulse 240ms steps(2) calc(var(--sl-lit) + var(--ik-t-state)) 3; }
+.fig-shelf-label .sl-led-glow { --ik-glow-delay: var(--sl-lit); }
+@keyframes sl-flip-out { to { transform: scaleY(0); } }
+@keyframes sl-flip-in { from { transform: scaleY(0); } }
+@keyframes sl-flash { 35% { opacity: .7; } }
+@keyframes sl-led-on { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .fig-shelf-label .sl-flip-out { display: none; } }

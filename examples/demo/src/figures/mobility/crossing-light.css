@@ -1,0 +1,11 @@
+.fig-crossing-light .cl-solid { fill: var(--ik-detail); stroke: none; transition: fill var(--ik-t-state) var(--ik-ease) var(--lamp); }
+.fig-crossing-light .cl-limb { fill: none; stroke: var(--ik-detail); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; transition: stroke var(--ik-t-state) var(--ik-ease) var(--lamp); }
+.fig-crossing-light .cl-torso { stroke-width: 2.6; }
+.fig-crossing-light svg[data-walk="false"] .cl-stand .cl-solid { fill: var(--ik-line); }
+.fig-crossing-light svg[data-walk="true"] .cl-walk .cl-solid { fill: var(--ik-live); }
+.fig-crossing-light svg[data-walk="true"] .cl-walk .cl-limb { stroke: var(--ik-live); }
+.fig-crossing-light .cl-glow { --ik-glow-delay: var(--lamp); --ik-glow-fade-delay: var(--lamp); }
+.fig-crossing-light .cl-armature { transform: rotate(14deg); transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-crossing-light svg[data-walk="true"] .cl-armature { transform: none; }
+.fig-crossing-light .cl-wait { font-size: 4.4px; }
+.fig-crossing-light .cl-push[data-down="true"] > g, .fig-crossing-light svg[data-demo="press"] .cl-push[data-hot="true"] > g { transform: translate(1.732px, -1px); transition: transform var(--ik-t-press) var(--ik-ease-out); }

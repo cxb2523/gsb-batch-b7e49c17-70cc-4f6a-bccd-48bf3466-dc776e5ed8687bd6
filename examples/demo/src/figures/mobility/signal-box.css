@@ -1,0 +1,24 @@
+.fig-signal-box .sb-slide { transition: transform var(--pull) var(--ik-ease-move); }
+.fig-signal-box .sb-tappet { transition: transform var(--ik-t-state) var(--ik-ease-out) var(--pull); }
+.fig-signal-box svg[data-points="reverse"] .sb-tappet { transform: translateX(9px); }
+.fig-signal-box .sb-platform { fill: none; stroke: var(--ik-screen-ink); stroke-opacity: .4; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-signal-box .sb-leg-normal, .fig-signal-box .sb-leg-reverse { transition: opacity var(--ik-t-state) var(--ik-ease); }
+.fig-signal-box svg:not([data-route="normal"]) .sb-leg-normal, .fig-signal-box svg:not([data-route="reverse"]) .sb-leg-reverse { opacity: .2; }
+.fig-signal-box .sb-blade { transform-origin: 0 0; transition: transform var(--points) var(--ik-ease-move) var(--pull); }
+.fig-signal-box svg[data-points="reverse"] .sb-blade { transform: rotate(45deg); }
+.fig-signal-box .sb-aspect-off { fill: var(--ik-screen); stroke: var(--ik-screen-ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-signal-box .sb-aspect { fill: var(--ik-screen-ink); opacity: 0; transition: opacity 0ms linear; }
+.fig-signal-box svg[data-signal="off"] .sb-aspect { opacity: 1; transition-delay: var(--pull); }
+.fig-signal-box .sb-aspect-glow { --ik-glow-delay: var(--pull); }
+.fig-signal-box .sb-tag { fill: var(--ik-screen); stroke: var(--ik-screen-ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-signal-box svg:is([data-stage="running"], [data-stage="arrived"]) .sb-train-2 .sb-tag { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-signal-box svg:is([data-stage="running"], [data-stage="arrived"]) .sb-train-2 .sb-tag-text { fill: var(--ik-screen); }
+.fig-signal-box svg[data-stage="running"] .sb-leg { animation-name: sb-leg; animation-fill-mode: both; }
+.fig-signal-box .sb-needle { transform: rotate(-42deg); transform-origin: 0 0; transition: transform var(--ik-t-spring) var(--ik-spring); }
+.fig-signal-box svg[data-stage="running"] .sb-needle { transform: rotate(42deg); transition-delay: var(--depart); }
+.fig-signal-box .sb-hand { fill: none; stroke: var(--ik-line); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-signal-box .sb-name { font-size: 5.6px; }
+.fig-signal-box .sb-plate { font-size: 5px; }
+.fig-signal-box .sb-dial { font-size: 3.6px; }
+@keyframes sb-leg { from { transform: none; } to { transform: translate(var(--dx), var(--dy)); } }
+@media (prefers-reduced-motion: reduce) { .fig-signal-box svg[data-stage="running"] .sb-leg { transform: translate(var(--dx), var(--dy)); } }

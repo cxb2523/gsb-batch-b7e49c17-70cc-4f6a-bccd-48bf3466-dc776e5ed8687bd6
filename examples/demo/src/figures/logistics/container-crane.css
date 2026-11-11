@@ -1,0 +1,33 @@
+.fig-container-crane { --ik-drafting-size: 6.5px; }
+.fig-container-crane .cc-key { font-size: 4px; }
+.fig-container-crane .ik-press[data-hot="true"] .cc-icon { stroke: var(--ik-live); }
+.fig-container-crane .cc-wheel { fill: var(--ik-well); }
+.fig-container-crane .cc-pip { fill: var(--ik-screen-ink); opacity: .16; }
+.fig-container-crane .cc-pip[data-on="true"] { opacity: .85; }
+.fig-container-crane .cc-stowed, .fig-container-crane .cc-delivered { transition: opacity 0ms linear var(--t); }
+.fig-container-crane .cc-stowed[data-on="false"], .fig-container-crane .cc-delivered[data-on="false"] { opacity: 0; }
+.fig-container-crane .cc-trolley { transform: translate(var(--x1), var(--y1)); }
+.fig-container-crane .cc-trolley.cc-move { animation: cc-travel var(--return-ms) var(--ik-ease-move) both; }
+.fig-container-crane .cc-trolley.cc-carry { animation: cc-carry var(--fly-ms) var(--ik-ease-move) both; }
+.fig-container-crane .cc-spreader.cc-hoist { animation: cc-lower var(--lower-ms) var(--ik-ease-move) var(--lower-at) both, cc-lift var(--lift-ms) var(--ik-ease-move) var(--lift-at) forwards; }
+.fig-container-crane .cc-spreader.cc-carry { animation: cc-hide 1ms linear both, cc-show 1ms linear var(--land-at) forwards, cc-rise var(--rise-ms) var(--ik-ease-move) var(--rise-at) both; }
+.fig-container-crane .cc-held { animation: cc-show 1ms linear var(--grab-at) both; }
+.fig-container-crane .cc-hoist .cc-spreader-frame .ik-face { animation: cc-flash var(--ik-t-move) var(--ik-ease-out) var(--grab-at); }
+.fig-container-crane .cc-twist { transform-origin: 0 0; }
+.fig-container-crane .cc-twist[data-lock="locked"] { transform: rotate(90deg); }
+.fig-container-crane .cc-twist[data-lock="turn"] { animation: cc-twist var(--ik-t-state) var(--ik-ease-out) var(--grab-at) both; }
+.fig-container-crane .cc-twist[data-lock="release"] { animation: cc-untwist var(--ik-t-state) var(--ik-ease-out) var(--land-at) both; }
+.fig-container-crane .cc-truck-arrive { animation: cc-arrive var(--ik-t-move) var(--ik-ease-out) var(--ik-t-state) both; }
+.fig-container-crane .cc-truck-leave { opacity: 0; animation: cc-leave var(--ik-t-move) var(--ik-ease-move) both; }
+@keyframes cc-travel { from { transform: translate(var(--x0), var(--y0)); } to { transform: translate(var(--x1), var(--y1)); } }
+@keyframes cc-carry { 0% { transform: translate(var(--x0), var(--y0)); } 97%, 100% { transform: translate(var(--x1), var(--y1)); } }
+@keyframes cc-lower { from { transform: translateY(0); } to { transform: translateY(var(--drop)); } }
+@keyframes cc-lift { from { transform: translateY(var(--drop)); } to { transform: translateY(0); } }
+@keyframes cc-rise { from { transform: translateY(var(--drop)); } to { transform: translateY(0); } }
+@keyframes cc-hide { from, to { opacity: 0; } }
+@keyframes cc-show { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cc-flash { 0%, 45% { stroke: var(--ik-live); } }
+@keyframes cc-twist { from { transform: none; } to { transform: rotate(90deg); } }
+@keyframes cc-untwist { from { transform: rotate(90deg); } to { transform: none; } }
+@keyframes cc-arrive { from { opacity: 0; transform: translate(var(--enter-x), var(--enter-y)); } to { opacity: 1; transform: translate(0, 0); } }
+@keyframes cc-leave { from { opacity: 1; transform: translate(0, 0); } to { opacity: 0; transform: translate(var(--leave-x), var(--leave-y)); } }

@@ -1,0 +1,17 @@
+.fig-deploy-pipeline .dp-light { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-deploy-pipeline .dp-stage[data-s="ok"] .dp-light { fill: var(--ik-line); stroke: var(--ik-line); }
+.fig-deploy-pipeline .dp-stage:is([data-s="run"], [data-s="on"]) .dp-light { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-deploy-pipeline .dp-stage[data-s="on"] .dp-light { transition-delay: var(--lamp); }
+.fig-deploy-pipeline .dp-stage[data-s="on"] .dp-glow { --ik-glow-delay: var(--lamp); }
+.fig-deploy-pipeline .dp-stage[data-s="run"] .dp-light { animation: ik-pulse 240ms steps(2) infinite; }
+.fig-deploy-pipeline .dp-stage:is([data-s="run"], [data-s="on"]) .ik-face { stroke: var(--ik-live); }
+.fig-deploy-pipeline .dp-fan { transform-origin: 0 0; }
+.fig-deploy-pipeline .dp-stage[data-s="run"] .dp-fan { animation: dp-spin 180ms linear infinite; }
+.fig-deploy-pipeline .dp-arm { transform: rotate(16deg); transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-deploy-pipeline .dp-stage[data-s="on"] .dp-arm { transform: none; }
+.fig-deploy-pipeline .dp-pip { fill: var(--ik-screen-ink); opacity: .2; animation: dp-busy 360ms steps(2) infinite; }
+.fig-deploy-pipeline .dp-name { font-size: 5.6px; }
+.fig-deploy-pipeline .dp-key { font-size: 8px; }
+.fig-deploy-pipeline .dp-key-small { font-size: 6px; }
+@keyframes dp-busy { 50% { opacity: .9; } }
+@keyframes dp-spin { to { transform: rotate(360deg); } }

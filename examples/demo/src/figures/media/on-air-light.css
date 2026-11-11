@@ -1,0 +1,14 @@
+.fig-on-air-light svg { --lit: calc(var(--relay) + var(--ik-t-press)); }
+.fig-on-air-light .oal-panel { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-glow-off) var(--ik-ease-out) var(--lit), stroke var(--ik-t-glow-off) var(--ik-ease-out) var(--lit); }
+.fig-on-air-light .oal-word { font-size: 8.6px; transition: fill var(--ik-t-glow-off) var(--ik-ease-out) var(--lit); }
+.fig-on-air-light svg[data-on="true"] .oal-panel { fill: var(--ik-live); stroke: var(--ik-live); transition-duration: var(--ik-t-glow-on); }
+.fig-on-air-light svg[data-on="true"] .oal-word { fill: var(--ik-panel); transition-duration: var(--ik-t-glow-on); }
+.fig-on-air-light svg[data-on="true"] .oal-lit { animation: oal-strike 420ms linear var(--lit); }
+.fig-on-air-light .oal-glow { --ik-glow-delay: var(--lit); --ik-glow-fade-delay: var(--lit); }
+.fig-on-air-light .oal-clock { animation: oal-show 1ms linear var(--lit) both; }
+.fig-on-air-light .oal-roll { animation-name: oal-roll; animation-iteration-count: infinite; animation-delay: var(--lit); }
+.fig-on-air-light .oal-armature { transform: rotate(-18deg); transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out) var(--relay); }
+.fig-on-air-light .oal-armature[data-on="true"] { transform: none; }
+@keyframes oal-strike { 0% { opacity: .2; } 18% { opacity: 1; } 30% { opacity: .35; } 46%, 100% { opacity: 1; } }
+@keyframes oal-show { from { opacity: 0; } }
+@keyframes oal-roll { to { transform: translateY(var(--shift)); } }

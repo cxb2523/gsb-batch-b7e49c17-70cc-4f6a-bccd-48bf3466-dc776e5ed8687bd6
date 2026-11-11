@@ -1,0 +1,11 @@
+.fig-ground-station .sat-light { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-ground-station svg[data-link="true"] .sat-light { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--arrive); }
+.fig-ground-station svg[data-link="true"] .sat-glow { --ik-glow-delay: var(--arrive); }
+.fig-ground-station .arrive { fill: none; stroke: var(--ik-live); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0; transform-box: fill-box; transform-origin: center; animation: gs-arrive var(--ik-t-move) var(--ik-ease-out) var(--arrive); }
+.fig-ground-station .acquire { animation: gs-acquire var(--arrive) steps(1, end) both; }
+.fig-ground-station .needle { transform: rotate(var(--turn)); transform-origin: 0 0; transition: transform var(--ik-t-move) var(--ik-ease-out); }
+.fig-ground-station svg[data-link="true"] .needle { transition: transform var(--ik-t-spring) var(--ik-spring) var(--arrive); }
+.fig-ground-station .key { font-size: 7.4px; }
+.fig-ground-station svg[data-link="false"] .wave { stroke: var(--ik-live); }
+@keyframes gs-arrive { from { opacity: .9; transform: scale(.6); } to { opacity: 0; transform: scale(3); } }
+@keyframes gs-acquire { from { opacity: 1; } to { opacity: 0; } }

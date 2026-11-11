@@ -1,0 +1,17 @@
+.fig-api-key-vault .card { transition: opacity 0ms linear var(--t); }
+.fig-api-key-vault .card[data-on="false"] { opacity: 0; }
+.fig-api-key-vault .card[data-live="true"] .ik-face { stroke: var(--ik-live); transition: stroke var(--ik-t-state) var(--ik-ease) var(--t), fill var(--ik-t-state) var(--ik-ease); }
+.fig-api-key-vault .gone { animation: akv-gone var(--out) var(--ik-ease-fall) both; }
+.fig-api-key-vault .dial { transform: rotate(calc(var(--step) * 30deg)); transition: transform var(--dial) steps(3, end); }
+.fig-api-key-vault .catch { animation: akv-catch-open var(--ik-t-state) var(--ik-ease-out) both, akv-catch-seat var(--seat) var(--ik-ease-out) var(--land) forwards; }
+.fig-api-key-vault .pip { fill: var(--ik-screen-ink); opacity: .14; }
+.fig-api-key-vault .pip[data-on="true"] { opacity: .85; }
+.fig-api-key-vault .old-pip { animation: akv-revoke var(--ik-t-glow-off) var(--ik-ease-out) var(--revoke) both; }
+.fig-api-key-vault .key { font-size: 7px; }
+.fig-api-key-vault .suffix { font-size: 6px; }
+.fig-api-key-vault .card-tag { font-size: 4.6px; }
+.fig-api-key-vault svg[data-fresh="true"] .spin { stroke: var(--ik-live); }
+@keyframes akv-gone { 35% { opacity: 1; } to { opacity: 0; } }
+@keyframes akv-revoke { to { opacity: 0; } }
+@keyframes akv-catch-open { to { transform: translate(var(--open-x), var(--open-y)); } }
+@keyframes akv-catch-seat { from { transform: translate(var(--open-x), var(--open-y)); } to { transform: none; } }

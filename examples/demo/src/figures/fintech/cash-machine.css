@@ -1,0 +1,13 @@
+.fig-cash-machine .cm-hood { font-size: 7px; letter-spacing: .3em; }
+.fig-cash-machine .cm-key { font-size: 5.4px; }
+.fig-cash-machine .cm-note-value { font-size: 6px; }
+.fig-cash-machine .cm-note { animation: cm-dispense var(--feed) var(--ik-ease-out) var(--t) both; }
+.fig-cash-machine .cm-lead { stroke: var(--ik-live); animation: cm-lit 1ms linear var(--lit) both; }
+.fig-cash-machine .cm-wheel[data-turn="true"] { animation: cm-turn var(--ik-t-move) var(--ik-ease-move) var(--t) both; }
+.fig-cash-machine .cm-shown { animation: cm-on 1ms linear var(--on) both; }
+.fig-cash-machine .cm-shown.cm-passing { animation: cm-on 1ms linear var(--on) both, cm-off 1ms linear var(--off) forwards; }
+@keyframes cm-dispense { from { transform: translateY(var(--in)); } }
+@keyframes cm-lit { from { stroke: var(--ik-line); } }
+@keyframes cm-turn { to { transform: rotate(120deg); } }
+@keyframes cm-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cm-off { to { opacity: 0; } }

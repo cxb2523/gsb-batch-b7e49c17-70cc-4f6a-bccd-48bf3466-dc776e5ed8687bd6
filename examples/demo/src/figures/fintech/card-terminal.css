@@ -1,0 +1,7 @@
+.fig-card-terminal .ct-digit { font-size: 6px; }
+.fig-card-terminal .ct-ok { font-size: 5.6px; }
+.fig-card-terminal .ct-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-card-terminal svg[data-approved="true"] .ct-lamp { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-card-terminal .ik-screen-text { letter-spacing: 0.04em; }
+.fig-card-terminal .ct-rule { stroke-dasharray: 1.2 1.6; }
+.fig-card-terminal svg[data-approved="true"] .ct-receipt { transform: translateY(var(--rise)); transition: transform var(--feed) var(--ik-ease-move); }

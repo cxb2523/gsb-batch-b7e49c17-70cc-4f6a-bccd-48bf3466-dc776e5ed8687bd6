@@ -1,0 +1,16 @@
+.fig-battery-stack .key { font-size: 6.4px; }
+.fig-battery-stack .tag, .fig-battery-stack .spec { font-size: 5.5px; }
+.fig-battery-stack svg[data-charged="false"] .bolt { stroke: var(--ik-live); }
+.fig-battery-stack .seg { fill: var(--ik-screen-ink); opacity: .12; transition: opacity var(--ik-t-state) var(--ik-ease) var(--t); }
+.fig-battery-stack .seg[data-on="true"] { opacity: .85; }
+.fig-battery-stack .seg-glow { --ik-glow-size: 3; }
+.fig-battery-stack .seg-glow { --ik-glow-delay: var(--t); --ik-glow-fade-delay: var(--t); }
+.fig-battery-stack .plug { transition: transform var(--seat) var(--ik-ease-move); }
+.fig-battery-stack svg[data-charged="true"] .plug { transform: translate(var(--seat-x), var(--seat-y)); }
+.fig-battery-stack svg[data-charged="true"] .bus .ik-face { stroke: var(--ik-live); transition-delay: var(--bus-at); }
+.fig-battery-stack .roll-in { animation: battery-stack-roll-in var(--ik-t-state) var(--ik-ease) calc(var(--settle) + var(--i) * var(--roll-step)) both; }
+.fig-battery-stack .roll-out { animation: battery-stack-roll-out var(--ik-t-state) var(--ik-ease) calc(var(--settle) + var(--i) * var(--roll-step)) both; }
+.fig-battery-stack .gauge-dim :is(.ik-dimension-run, .ik-dimension-end, .ik-dimension-label) { transition-delay: var(--gauge-at); }
+@keyframes battery-stack-roll-in { from { transform: translateY(12px); } }
+@keyframes battery-stack-roll-out { to { transform: translateY(-12px); } }
+@media (prefers-reduced-motion: reduce) { .fig-battery-stack .roll-out { display: none; } }

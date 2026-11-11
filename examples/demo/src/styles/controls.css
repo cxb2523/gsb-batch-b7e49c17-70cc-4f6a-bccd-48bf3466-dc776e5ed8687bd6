@@ -1,0 +1,58 @@
+:where(a, button, summary, select, [tabindex]):focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+:where(button, .button) { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.pill { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--control-height); padding: 0 14px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--bg); color: var(--muted); font: inherit; font-size: var(--text-small); cursor: pointer; }
+.commands { display: flex; flex-wrap: wrap; gap: 10px; }
+.command { display: inline-flex; align-items: center; gap: 10px; min-height: var(--control-height); max-width: 100%; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--card); color: var(--fg); font: var(--text-small)/1 var(--font-mono); cursor: pointer; transition: transform var(--press-duration) var(--ease-out), background var(--motion-fast) ease; }
+.command code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command > span:first-child, .copied { color: var(--muted); }
+.copied { font-size: 11px; min-width: 6ch; text-align: right; }
+.cta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: var(--control-height); padding: 0 var(--space-4); border: 1px solid var(--fg); border-radius: var(--radius-control); background: var(--fg); color: var(--bg); font-size: 14px; font-weight: 500; text-decoration: none; transition: transform var(--press-duration) var(--ease-out), background var(--motion-fast) ease, opacity var(--motion-fast) ease; }
+.button-secondary { border-color: var(--line); background: var(--bg); color: var(--fg); }
+:where(.button, .command, .pill):active:not(:focus-visible) { transform: scale(0.98); }
+:is(.button, .command, .pill):focus-visible { transition: none; }
+.pill { transition: transform var(--press-duration) var(--ease-out), background var(--motion-fast) ease; }
+:where(.command, .button-secondary) { box-shadow: var(--control-shadow); }
+.surface { border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--card); box-shadow: var(--bezel); }
+.button:disabled, .pill:disabled { cursor: not-allowed; opacity: 0.45; transform: none; }
+.button { font-family: inherit; cursor: pointer; white-space: nowrap; }
+.navigation-picker { anchor-scope: --picker; }
+.picker-trigger { anchor-name: --picker; display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 52px; padding: var(--space-3) var(--space-4); border: 1px solid var(--selected-line); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--control-shadow); color: var(--fg); font: 500 var(--text-small)/1.5 var(--font); cursor: pointer; transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease; }
+.picker-label { color: var(--muted); font-weight: 400; }
+.picker-value { margin-left: auto; }
+.picker-chevron { width: 6px; height: 6px; margin-left: var(--space-2); margin-top: -3px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); transition: transform var(--motion-fast) var(--ease-out); }
+.navigation-picker:has(:popover-open) .picker-chevron { transform: translateY(3px) rotate(225deg); }
+.navigation-picker:has(:popover-open) .picker-trigger { border-color: var(--fg); }
+.picker-menu { position: fixed; inset: auto var(--page-gutter) calc(var(--space-6) + env(safe-area-inset-bottom, 0px)); width: auto; max-height: min(480px, 56svh); margin: 0; padding: var(--space-2); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid var(--selected-line); border-radius: var(--radius-card); background: var(--surface); box-shadow: var(--bezel); color: var(--fg); opacity: 0; transform: translateY(-4px); transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-enter) var(--ease-out), display var(--motion-enter) allow-discrete, overlay var(--motion-enter) allow-discrete; }
+.picker-menu:popover-open { display: grid; gap: var(--space-3); opacity: 1; transform: translateY(0); }
+.picker-group p { margin: var(--space-2) var(--space-3) var(--space-1); color: var(--muted); font-size: var(--text-caption); }
+.picker-menu a { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: var(--control-height); padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: 6px; color: var(--fg); font-size: 14px; text-decoration: none; }
+.picker-menu a[aria-current="page"] { border-color: var(--line); background: var(--card); font-weight: 500; }
+.picker-menu a:focus-visible { outline-offset: -2px; }
+.picker-check { width: 6px; height: 10px; margin-right: var(--space-1); border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); visibility: hidden; }
+.picker-menu a[aria-current="page"] .picker-check { visibility: visible; }
+.picker-trigger:focus-visible, .navigation-picker:has(.picker-trigger:focus-visible) .picker-menu, .picker-trigger:focus-visible .picker-chevron { transition: none; }
+@supports (position-anchor: --picker) {
+  .picker-menu { position-anchor: --picker; inset: calc(anchor(bottom) + var(--space-2)) auto auto anchor(left); width: anchor-size(width); position-try-fallbacks: flip-block; }
+}
+@starting-style {
+  .picker-menu:popover-open { opacity: 0; transform: translateY(-4px); }
+}
+@media (hover: hover) and (pointer: fine) {
+  .picker-menu a:hover { background: var(--card); }
+  .picker-trigger:hover { border-color: var(--fg); }
+  .button:disabled:hover, .pill:disabled:hover { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .picker-trigger, .picker-menu, .picker-chevron { transition: none; }
+  .picker-menu { transform: none; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .button:not(:disabled):hover { opacity: 0.86; }
+  .button-secondary:not(:disabled):hover, .command:hover { background: var(--line); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.button, .command, .pill) { transition: none; }
+  :is(.button, .command, .pill):active { transform: none; }
+}

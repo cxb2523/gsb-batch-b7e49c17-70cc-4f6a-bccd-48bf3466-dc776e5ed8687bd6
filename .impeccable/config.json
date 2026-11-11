@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "bounce-easing",
+        "value": "cubic-bezier(.34, 1.56, .64, 1)",
+        "createdAt": "2026-10-06T16:34:12.303Z",
+        "reason": "Agent: existing HEAD src/styles.css uses this easing for physical key release; skills/isokit/SKILL.md explicitly specifies presses spring back on --ik-spring. Preserve the intentional mechanical demo motion."
+      }
+    ]
+  }
+}

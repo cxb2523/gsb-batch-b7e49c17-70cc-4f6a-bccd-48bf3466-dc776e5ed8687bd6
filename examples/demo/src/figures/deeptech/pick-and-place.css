@@ -1,0 +1,33 @@
+.fig-pick-and-place .chip { transition: opacity 0ms linear var(--t); }
+.fig-pick-and-place .chip[data-on="false"] { opacity: 0; }
+.fig-pick-and-place .placed[data-last="true"] .ik-face { stroke: var(--ik-live); transition-delay: var(--t); }
+.fig-pick-and-place .pip { fill: var(--ik-screen-ink); opacity: .16; transition: opacity 0ms linear var(--t); }
+.fig-pick-and-place .pip[data-on="true"] { opacity: .85; }
+.fig-pick-and-place .pip-glow { --ik-glow-size: 3; }
+.fig-pick-and-place .pip-glow { --ik-glow-delay: var(--t); --ik-glow-fade-delay: var(--t); }
+.fig-pick-and-place .was { animation: pnp-was 1ms linear forwards; }
+.fig-pick-and-place .roll-in { animation: pnp-roll-in var(--ik-t-state) var(--ik-ease) var(--count-at) both; }
+.fig-pick-and-place .roll-out { animation: pnp-roll-out var(--ik-t-state) var(--ik-ease) var(--count-at) both; }
+@keyframes pnp-was { to { opacity: 0; } }
+@keyframes pnp-roll-in { from { transform: translateY(8px); } }
+@keyframes pnp-roll-out { to { transform: translateY(-8px); } }
+.fig-pick-and-place .key { font-size: 7px; }
+.fig-pick-and-place .ik-press[data-hot="true"] .arrow { stroke: var(--ik-live); }
+.fig-pick-and-place .bridge.go, .fig-pick-and-place .head.go { animation: pnp-move var(--move) both; }
+.fig-pick-and-place .nozzle.go { animation: pnp-nozzle var(--move) both; }
+.fig-pick-and-place .bridge.back, .fig-pick-and-place .head.back { animation: pnp-back var(--return) var(--ik-ease-move) both; }
+@keyframes pnp-move {
+  0% { transform: translate(var(--x0), var(--y0)); animation-timing-function: var(--ik-ease-move); }
+  35%, 47.5% { transform: translate(var(--x1), var(--y1)); animation-timing-function: var(--ik-ease-move); }
+  67.5% { transform: translate(calc((var(--x1) + var(--x2)) / 2), calc((var(--y1) + var(--y2)) / 2)); animation-timing-function: var(--ik-ease-move); }
+  86.3%, 100% { transform: translate(var(--x2), var(--y2)); }
+}
+@keyframes pnp-nozzle {
+  0%, 35% { transform: translateY(0); animation-timing-function: var(--ik-ease-out); }
+  42.5%, 47.5% { transform: translateY(5px); animation-timing-function: var(--ik-ease-move); }
+  67.5% { transform: translateY(-5px); animation-timing-function: var(--ik-ease-move); }
+  86.3% { transform: translateY(5px); animation-timing-function: var(--ik-ease-out); }
+  100% { transform: translateY(0); }
+}
+@keyframes pnp-back { from { transform: translate(var(--x0), var(--y0)); } to { transform: translate(var(--x2), var(--y2)); } }
+@media (prefers-reduced-motion: reduce) { .fig-pick-and-place .roll-out { display: none; } }

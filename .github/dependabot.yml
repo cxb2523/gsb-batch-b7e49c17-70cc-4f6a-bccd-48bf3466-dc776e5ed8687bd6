@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        update-types: [minor, patch]
+      zod:
+        patterns: [zod]
+    ignore:
+      # TypeScript 7 is the native compiler; declaration tooling still needs the TS 6 JS API.
+      - dependency-name: typescript
+        versions: [">=7"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions:
+        patterns: ["*"]

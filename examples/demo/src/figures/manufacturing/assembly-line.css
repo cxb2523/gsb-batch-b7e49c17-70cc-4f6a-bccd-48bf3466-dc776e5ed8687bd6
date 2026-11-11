@@ -1,0 +1,53 @@
+.fig-assembly-line .al-key { font-size: 7px; }
+.fig-assembly-line .al-tag { font-size: 5px; }
+.fig-assembly-line .ik-press[data-hot="true"] .al-play { stroke: var(--ik-live); }
+.fig-assembly-line .al-ride { --hx: 32.909px; --hy: 19px; transform: translate(calc(var(--hx) * 4), calc(var(--hy) * 4)); animation: assembly-line-ride var(--run) backwards, assembly-line-arrive var(--feed) var(--ik-ease-out) both; }
+.fig-assembly-line .al-mounted { animation: assembly-line-show 1ms linear var(--t) both; }
+.fig-assembly-line .al-held { opacity: 0; animation: assembly-line-hold 1ms linear var(--t) backwards, assembly-line-reload var(--ik-t-state) var(--ik-ease) backwards; }
+.fig-assembly-line .al-dip { animation: assembly-line-dip var(--work) var(--t) both; }
+.fig-assembly-line .al-exit { opacity: 0; animation: assembly-line-exit var(--ik-t-state) var(--ik-ease) backwards; }
+.fig-assembly-line .al-spin { transform-origin: 0 0; }
+.fig-assembly-line .al-roller { --spin: 540deg; }
+.fig-assembly-line .al-fan { --spin: 360deg; }
+.fig-assembly-line .al-indexing .al-spin { animation: assembly-line-index var(--run) both; }
+.fig-assembly-line .al-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; }
+.fig-assembly-line .al-lamp[data-run="true"] { animation: assembly-line-flash var(--work) linear var(--t) both; }
+.fig-assembly-line .al-beacon { fill: var(--ik-detail); }
+.fig-assembly-line .al-beacon[data-on="true"] { fill: var(--ik-live); animation: assembly-line-beacon var(--ik-t-glow-on) var(--ik-ease-out) var(--t) both; }
+.fig-assembly-line .al-beacon-glow { --ik-glow-delay: var(--t); }
+.fig-assembly-line .al-pip { fill: var(--ik-screen-ink); opacity: .16; }
+.fig-assembly-line .al-pip[data-on="true"] { opacity: .85; animation: assembly-line-pip var(--ik-t-glow-on) var(--ik-ease-out) var(--t) both; }
+.fig-assembly-line .al-shown { animation: assembly-line-show 1ms linear var(--on) both; }
+.fig-assembly-line .al-window { opacity: 0; animation: assembly-line-hold var(--span) linear var(--on); }
+.fig-assembly-line .al-roll-in { animation: assembly-line-roll-in var(--ik-t-state) var(--ik-ease) calc(var(--run) + var(--roll-at)) both; }
+.fig-assembly-line .al-roll-out { animation: assembly-line-roll-out var(--ik-t-state) var(--ik-ease) calc(var(--run) + var(--roll-at)) both; }
+@keyframes assembly-line-ride {
+  0%, 7.634% { transform: translate(0, 0); animation-timing-function: var(--ik-ease-move); }
+  19.847%, 34.351% { transform: translate(var(--hx), var(--hy)); animation-timing-function: var(--ik-ease-move); }
+  46.565%, 61.069% { transform: translate(calc(var(--hx) * 2), calc(var(--hy) * 2)); animation-timing-function: var(--ik-ease-move); }
+  73.282%, 87.786% { transform: translate(calc(var(--hx) * 3), calc(var(--hy) * 3)); animation-timing-function: var(--ik-ease-move); }
+  100% { transform: translate(calc(var(--hx) * 4), calc(var(--hy) * 4)); }
+}
+@keyframes assembly-line-index {
+  0%, 7.634% { transform: rotate(0deg); animation-timing-function: var(--ik-ease-move); }
+  19.847%, 34.351% { transform: rotate(var(--spin)); animation-timing-function: var(--ik-ease-move); }
+  46.565%, 61.069% { transform: rotate(calc(var(--spin) * 2)); animation-timing-function: var(--ik-ease-move); }
+  73.282%, 87.786% { transform: rotate(calc(var(--spin) * 3)); animation-timing-function: var(--ik-ease-move); }
+  100% { transform: rotate(calc(var(--spin) * 4)); }
+}
+@keyframes assembly-line-dip {
+  0% { transform: translateY(0); animation-timing-function: var(--ik-ease-fall); }
+  36.842%, 52.632% { transform: translateY(22px); animation-timing-function: var(--ik-ease); }
+  100% { transform: translateY(0); }
+}
+@keyframes assembly-line-arrive { from { opacity: 0; } }
+@keyframes assembly-line-show { from { opacity: 0; } }
+@keyframes assembly-line-hold { from, to { opacity: 1; } }
+@keyframes assembly-line-reload { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes assembly-line-exit { from { opacity: 1; transform: translate(0, 0); } to { opacity: 0; transform: translate(6.928px, 4px); } }
+@keyframes assembly-line-flash { 20%, 70% { fill: var(--ik-live); stroke: var(--ik-live); } }
+@keyframes assembly-line-beacon { from { fill: var(--ik-detail); } }
+@keyframes assembly-line-pip { from { opacity: .16; } }
+@keyframes assembly-line-roll-in { from { transform: translateY(7px); } }
+@keyframes assembly-line-roll-out { to { transform: translateY(-7px); } }
+@media (prefers-reduced-motion: reduce) { .fig-assembly-line .al-roll-out { display: none; } }

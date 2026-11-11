@@ -1,0 +1,32 @@
+.fig-conveyor-sorter .cs-tag { font-size: 5px; }
+.fig-conveyor-sorter .cs-bin { font-size: 4.4px; }
+.fig-conveyor-sorter .cs-key { font-size: 5.6px; }
+.fig-conveyor-sorter .ik-press[data-hot="true"] .cs-arrow { stroke: var(--ik-live); }
+.fig-conveyor-sorter .cs-paddle { fill: var(--ik-front); stroke: var(--ik-line); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.fig-conveyor-sorter .cs-arm { transform-origin: 0 0; transform: scaleX(-1); }
+.fig-conveyor-sorter .cs-arm.run { animation: cs-arm-open var(--swing-ms) linear var(--open) both, cs-arm-shut var(--swing-ms) linear var(--shut) forwards; }
+.fig-conveyor-sorter .cs-belt { transform: translate(var(--bx), var(--by)); animation: cs-belt var(--run) linear var(--start) both; }
+.fig-conveyor-sorter .cs-peel { transform: translate(var(--x2), var(--y2)); animation: cs-peel var(--peel-ms) var(--contact) both; }
+.fig-conveyor-sorter .cs-parcel .ik-face { animation: cs-live 1ms linear var(--on) forwards, cs-calm 1ms linear var(--off) forwards; }
+.fig-conveyor-sorter .cs-parcel.cs-last .ik-face { animation: cs-live 1ms linear var(--on) forwards; }
+.fig-conveyor-sorter .cs-leaving { opacity: 0; animation: cs-leave var(--ik-t-state) var(--ik-ease) both; }
+.fig-conveyor-sorter .cs-shown { animation: cs-on 1ms linear var(--on) both; }
+.fig-conveyor-sorter .cs-shown.cs-passing { opacity: 0; animation: cs-on 1ms linear var(--on) both, cs-off 1ms linear var(--off) forwards; }
+.fig-conveyor-sorter .cs-pulley { transform-origin: 0 0; }
+.fig-conveyor-sorter .cs-pulley.run { animation: cs-spin var(--belt-ms) linear both; }
+.fig-conveyor-sorter .cs-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-conveyor-sorter .cs-lamp[data-on="true"] { fill: var(--ik-line); stroke: var(--ik-line); }
+@keyframes cs-belt { from { transform: translate(0, 0); } }
+@keyframes cs-peel {
+  0% { transform: translate(0, 0); animation-timing-function: linear; }
+  35% { transform: translate(var(--x1), var(--y1)); animation-timing-function: var(--ik-ease-fall); }
+  100% { transform: translate(var(--x2), var(--y2)); }
+}
+@keyframes cs-spin { to { transform: rotate(var(--turn)); } }
+@keyframes cs-live { to { stroke: var(--ik-live); } }
+@keyframes cs-calm { to { stroke: var(--ik-line); } }
+@keyframes cs-leave { from { opacity: 1; } to { opacity: 0; } }
+@keyframes cs-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cs-off { to { opacity: 0; } }
+@keyframes cs-arm-open { 0% { transform: scaleX(-1) skewY(0deg); } 16.7% { transform: scaleX(-1.0483) skewY(2.84deg); } 33.3% { transform: scaleX(-1.2391) skewY(15.57deg); } 50% { transform: scaleX(-1.3824) skewY(28.46deg); } 66.7% { transform: scaleX(-1.4104) skewY(33.17deg); } 83.3% { transform: scaleX(-1.4141) skewY(34.85deg); } 100% { transform: scaleX(-1.4142) skewY(35.26deg); } }
+@keyframes cs-arm-shut { 0% { transform: scaleX(-1.4142) skewY(35.26deg); } 16.7% { transform: scaleX(-1.4125) skewY(33.87deg); } 33.3% { transform: scaleX(-1.3582) skewY(25.74deg); } 50% { transform: scaleX(-1.1885) skewY(11.91deg); } 66.7% { transform: scaleX(-1.0703) skewY(4.18deg); } 83.3% { transform: scaleX(-1.015) skewY(0.86deg); } 100% { transform: scaleX(-1) skewY(0deg); } }

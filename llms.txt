@@ -1,0 +1,44 @@
+# isokit
+
+> Interactive isometric line figures for React (npm: react-isokit). Rounded boxes, faces you draw on in flat coordinates, parts that press like real keys, optional synthesized interaction sound and zod-validated input. One dependency (zod, loaded only in development), SSR-safe, 3.1 kB core.
+
+Install: `npm i react-isokit`, then `import "react-isokit/styles.css"` once. Add `import "react-isokit/themes.css"` after it for the blueprint, paper and phosphor looks.
+
+World space: +x down-right, +y down-left, +z up (true isometric, no perspective). A box is { x, y, z, w, d, h }. Paint back to front: lower z first, smaller x + y first.
+
+Core API:
+- `<Plate label fit aspect fig name hint readout theme look>`: the plate and its svg; `fit` frames boxes and points; `look` picks blueprint, paper or phosphor.
+- `<Box x y z w d h r top front side>`: a rounded box; `top`/`front`/`side` children are drawn on that face in flat local coordinates.
+- `<Press label onPress material>`: wraps one `<g>` of boxes; sinks on press, acts on release; pointer, Enter, Space. Its click follows its material, size and position.
+- `<Glow on>`: a soft halo for things that are switched on (LEDs, screen text, signals).
+- `configureSound({ defaultOn })`, `playSound(name, options)`, `<SoundToggle />`: twenty synthesized sounds, including the mechanical `tick latch relay motor charge roll beep`; sound is off until a page opts in.
+- `react-isokit/drafting`: `<Dimension from to offset label>` and `<Callout at label>`, shown in the blueprint look.
+- Motion tokens: `--ik-ease`, `--ik-ease-out`, `--ik-ease-move`, `--ik-ease-fall`, `--ik-spring` (a `linear()` spring) and `--ik-t-press/hover/state/move/spring`, `--ik-stagger`.
+- `frame`, `project`, `top`, `front`, `side`, `path`, `curve`, `outline`: the geometry.
+- `useDemoTap(onTap, { delay })`, `<Cursor at phase>`, `<Ripple x y z w d r>`, `<Signal points>`, `<Flight from to>`: guided motion. The figure presses its hot part once on first view, a ripple marks where to press, signals and flights carry the effect from cause to result.
+- `react-isokit/schema`: zod schemas for every input (`box3Schema`, `fitSchema`, `soundConfigSchema`, …) and `describe(error)`; types are inferred from them. Development builds warn about bad input; production skips the checks.
+
+## Docs
+- [README](https://github.com/aadilghani1/isokit#readme): full API, styling, performance and accessibility.
+- [Components](https://aadilghani1.github.io/isokit/#/components): a page per export with a live example, props and notes.
+- [Figures](https://aadilghani1.github.io/isokit/#/figures): figures across fourteen industries, each in every look, light and dark.
+- [Sound](https://aadilghani1.github.io/isokit/#/sound): the twenty sounds, when to use each, and the figures that do.
+- [Agent API reference](https://github.com/aadilghani1/isokit/blob/main/skills/isokit/references/api.md): the API in one page.
+- [Rules](https://github.com/aadilghani1/isokit/blob/main/skills/isokit/references/rules.md): what a finished figure holds to.
+- [Levels](https://github.com/aadilghani1/isokit/blob/main/skills/isokit/references/levels.md): four levels of complication, from one tap to a small system, with ideas by industry.
+- [AGENTS.md](https://github.com/aadilghani1/isokit/blob/main/AGENTS.md): how to work in the repo, the code rules and the reasons behind them.
+- [Recipes](https://github.com/aadilghani1/isokit/blob/main/skills/isokit/references/recipes.md): screens, keys, cables, antennas, exploded layers, folders.
+- [Complications](https://github.com/aadilghani1/isokit/blob/main/skills/isokit/references/complications.md): rolling digits, settling needles, detents, relays, latches, motors, gear trains and dimensions that follow the part.
+
+## Examples
+- [Desk computer](https://github.com/aadilghani1/isokit/blob/main/examples/demo/src/figures/agents/desk-computer.tsx): type on it, click it to switch.
+- [Approval pad](https://github.com/aadilghani1/isokit/blob/main/examples/demo/src/figures/agents/approval-pad.tsx): allow or deny an agent.
+- [Page press](https://github.com/aadilghani1/isokit/blob/main/examples/demo/src/figures/agents/page-press.tsx): blocks drop into place.
+- [Edge box](https://github.com/aadilghani1/isokit/blob/main/examples/demo/src/figures/agents/edge-box.tsx): pick a folder, read it offline.
+
+## Maker
+- isokit is made by Aadil Ghani, maker of [Pushary](https://pushary.com): human-in-the-loop approvals that unblock Claude Code, Codex, Cursor and other agents from your phone.
+- The [agent relay](https://aadilghani1.github.io/isokit/#/figures/agent-relay) figure shows Pushary end to end: coding agents ask one question up front on the Mac's notch, and on the phone when you step away.
+
+## Skill
+- `npx skills add aadilghani1/isokit`, then `/isokit <object>` in Claude Code, Codex, Cursor or any agent that reads skills.

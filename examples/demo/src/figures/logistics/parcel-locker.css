@@ -1,0 +1,25 @@
+.fig-parcel-locker .ik-screen-text { letter-spacing: 0.04em; }
+.fig-parcel-locker .pl-number { font-size: 4.2px; }
+.fig-parcel-locker .pl-tag { font-size: 3.6px; }
+.fig-parcel-locker .pl-sign { font-size: 4.6px; }
+.fig-parcel-locker .pl-key { font-size: 4.6px; }
+.fig-parcel-locker .door { --open-ms: 900ms; --open-flip: calc(var(--ik-t-press) + var(--open-ms) * .162); --shut-flip: calc(var(--shut-ms) * .406); transform-origin: 0 0; }
+.fig-parcel-locker .door[data-state="open"] { transform: scaleX(-1) skewY(45deg); animation: pl-swing-open var(--open-ms) linear var(--ik-t-press) both; }
+.fig-parcel-locker .door[data-state="shut"] { animation: pl-swing-shut var(--shut-ms) linear both; }
+.fig-parcel-locker .leaf { fill: var(--ik-front); stroke: none; }
+.fig-parcel-locker .inside { fill: var(--ik-side); stroke: none; opacity: 0; transition: opacity 0ms linear var(--shut-flip); }
+.fig-parcel-locker .outline { fill: none; stroke: var(--ik-line); stroke-width: var(--ik-weight-crease); vector-effect: non-scaling-stroke; stroke-linejoin: round; transition: stroke var(--ik-t-state) var(--ik-ease); }
+.fig-parcel-locker .door[data-state="open"] .inside { opacity: 1; transition-delay: var(--open-flip); }
+.fig-parcel-locker .door[data-state="open"] .outline { stroke: var(--ik-live); }
+.fig-parcel-locker .mark { transition: opacity 0ms linear var(--shut-flip); }
+.fig-parcel-locker .door[data-state="open"] .mark { opacity: 0; transition-delay: var(--open-flip); }
+.fig-parcel-locker .pl-bolt-bar { fill: var(--ik-top); stroke: var(--ik-line); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; }
+.fig-parcel-locker .pl-bolt { transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-parcel-locker .door[data-state="open"] .pl-bolt { transform: translateX(var(--bolt-travel)); }
+.fig-parcel-locker .door[data-state="shut"] .pl-bolt { animation: pl-bolt-seat var(--ik-t-press) var(--ik-ease-out) var(--shut-ms) both; }
+.fig-parcel-locker .pl-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: var(--ik-weight-fine); vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-parcel-locker .pl-lamp[data-on="true"] { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--ik-t-press); }
+.fig-parcel-locker .pl-light { --ik-glow-delay: var(--ik-t-press); }
+@keyframes pl-bolt-seat { from { transform: translateX(var(--bolt-travel)); } to { transform: none; } }
+@keyframes pl-swing-open { 0% { transform: scaleX(1) skewY(0deg); } 6.25% { transform: scaleX(0.614) skewY(18.25deg); } 12.5% { transform: scaleX(0.21) skewY(30.72deg); } 18.75% { transform: scaleX(-0.132) skewY(37.6deg); } 25% { transform: scaleX(-0.386) skewY(41.14deg); } 31.25% { transform: scaleX(-0.567) skewY(42.96deg); } 37.5% { transform: scaleX(-0.694) skewY(43.92deg); } 43.75% { transform: scaleX(-0.784) skewY(44.44deg); } 50% { transform: scaleX(-0.849) skewY(44.71deg); } 56.25% { transform: scaleX(-0.896) skewY(44.86deg); } 62.5% { transform: scaleX(-0.931) skewY(44.94deg); } 68.75% { transform: scaleX(-0.956) skewY(44.97deg); } 75% { transform: scaleX(-0.974) skewY(44.99deg); } 81.25% { transform: scaleX(-0.986) skewY(45deg); } 87.5% { transform: scaleX(-0.994) skewY(45deg); } 93.75% { transform: scaleX(-0.999) skewY(45deg); } 100% { transform: scaleX(-1) skewY(45deg); } }
+@keyframes pl-swing-shut { 0% { transform: scaleX(-1) skewY(45deg); } 8.33% { transform: scaleX(-0.979) skewY(44.99deg); } 16.67% { transform: scaleX(-0.9) skewY(44.87deg); } 25% { transform: scaleX(-0.72) skewY(44.09deg); } 33.33% { transform: scaleX(-0.384) skewY(41.1deg); } 41.67% { transform: scaleX(0.054) skewY(34.2deg); } 50% { transform: scaleX(0.422) skewY(24.88deg); } 58.33% { transform: scaleX(0.667) skewY(16.18deg); } 66.67% { transform: scaleX(0.819) skewY(9.49deg); } 75% { transform: scaleX(0.911) skewY(4.87deg); } 83.33% { transform: scaleX(0.965) skewY(1.98deg); } 91.67% { transform: scaleX(0.992) skewY(0.46deg); } 100% { transform: scaleX(1) skewY(0deg); } }

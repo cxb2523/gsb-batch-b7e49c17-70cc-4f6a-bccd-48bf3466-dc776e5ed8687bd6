@@ -1,0 +1,25 @@
+.fig-desk-globe .dg-sphere { fill: var(--ik-top); }
+.fig-desk-globe .dg-meridian { transform: scaleX(var(--s0)); }
+.fig-desk-globe .dg-spin .dg-meridian { animation: dg-turn calc(var(--spin) * .14) linear 0ms 3, dg-turn calc(var(--spin) * .22) linear calc(var(--spin) * .42) 1, dg-turn calc(var(--spin) * .36) var(--ik-ease-out) calc(var(--spin) * .64) 1; }
+.fig-desk-globe .dg-land { fill: var(--ik-well); stroke: var(--ik-line); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.fig-desk-globe .dg-city { fill: var(--ik-detail); }
+.fig-desk-globe .dg-city[data-lit="true"] { animation: dg-lit var(--ik-t-state) var(--ik-ease) var(--arrive) both; }
+.fig-desk-globe .dg-leave { animation: dg-leave var(--ik-t-state) var(--ik-ease-move) both; }
+.fig-desk-globe .dg-arrive { animation: dg-arrive var(--settle) var(--ik-ease-out) calc(var(--spin) - var(--settle)) both; }
+.fig-desk-globe .dg-ping { fill: none; stroke: var(--ik-live); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0; transform-box: fill-box; transform-origin: center; animation: dg-ping var(--ik-t-move) var(--ik-ease-out) var(--arrive) forwards; }
+.fig-desk-globe .dg-turning { animation: dg-turning var(--arrive) steps(1, end) both; }
+.fig-desk-globe .dg-named { animation-delay: var(--arrive); }
+.fig-desk-globe .dg-cone { animation: dg-on var(--ik-t-state) var(--ik-ease) var(--arrive) both; }
+.fig-desk-globe .dg-mouth { stroke: var(--ik-ink-hi); }
+.fig-desk-globe .dg-lamp-on { animation: dg-on var(--ik-t-glow-on) var(--ik-ease-out) var(--spin) both; }
+.fig-desk-globe .dg-lamp-off { animation: dg-off var(--ik-t-glow-off) var(--ik-ease-out) forwards; }
+.fig-desk-globe .dg-key { font-size: 7.5px; }
+.fig-desk-globe svg[data-marked="false"] .dg-arrow { stroke: var(--ik-live); }
+@keyframes dg-turn { from { transform: scaleX(var(--s0)); } to { transform: scaleX(var(--s1)); } }
+@keyframes dg-lit { from { fill: var(--ik-detail); } to { fill: var(--ik-live); } }
+@keyframes dg-leave { to { opacity: 0; transform: translateX(10px); } }
+@keyframes dg-arrive { from { opacity: 0; transform: translateX(-10px); } }
+@keyframes dg-ping { from { opacity: .9; transform: scale(.6); } to { opacity: 0; transform: scale(3); } }
+@keyframes dg-turning { from { opacity: 1; } to { opacity: 0; } }
+@keyframes dg-on { from { opacity: 0; } }
+@keyframes dg-off { to { opacity: 0; } }

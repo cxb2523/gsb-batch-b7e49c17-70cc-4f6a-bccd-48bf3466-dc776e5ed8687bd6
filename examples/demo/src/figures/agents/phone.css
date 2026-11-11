@@ -1,0 +1,14 @@
+.phone { --card: var(--ik-top); --app: var(--ik-live); }
+.phone .card { fill: var(--card); stroke: var(--ik-detail); vector-effect: non-scaling-stroke; }
+.phone .app { fill: var(--app); }
+.phone .clock { font-weight: 300; }
+.phone .button { fill: var(--ik-screen); stroke: var(--ik-line); vector-effect: non-scaling-stroke; transition: fill var(--ik-t-hover) var(--ik-ease-out), stroke var(--ik-t-hover) var(--ik-ease-out); }
+.phone .button.primary { fill: var(--ik-live); stroke: var(--ik-live); }
+.phone .approve { fill: var(--ik-panel); }
+.phone .tap { cursor: pointer; }
+.phone .tap[data-down="true"] .button { fill: var(--ik-detail); }
+.phone .tap:focus-visible .button { stroke: var(--ik-live); stroke-width: 1.6; }
+.phone .app-name { letter-spacing: 0.08em; }
+.phone .title { font-weight: 600; }
+.phone svg:is([data-phase="approved"], [data-phase="denied"]) .handset { animation: phone-buzz calc(var(--buzz) / 3) linear 3; }
+@keyframes phone-buzz { 25% { transform: translateX(-0.7px); } 75% { transform: translateX(0.7px); } }

@@ -1,0 +1,42 @@
+.fig-vault-door .vd-rim { fill: var(--ik-side); stroke: var(--ik-line); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.fig-vault-door .vd-room { fill: var(--ik-front); stroke: var(--ik-line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-vault-door .vd-sign { font-size: 6.4px; letter-spacing: .24em; }
+.fig-vault-door .vd-door { transform: matrix(.866, .5, 0, 1, 0, 0); }
+.fig-vault-door svg[data-open="true"] .vd-door { transform: matrix(.866, -.5, 0, 1, 0, 0); }
+.fig-vault-door .vd-edge { transform: translate(4px, -4px); }
+.fig-vault-door svg[data-open="true"] .vd-edge { transform: translate(-12px, -12px); }
+.fig-vault-door .vd-mid { transform: translate(2px, -2px); }
+.fig-vault-door svg[data-open="true"] .vd-mid { transform: translate(-6px, -6px); }
+.fig-vault-door .vd-proud { transform: translate(2.4px, -2.4px); }
+.fig-vault-door svg[data-open="true"] .vd-proud { transform: translate(-2.4px, -2.4px); }
+.fig-vault-door .vd-proud[data-swing="open"] { animation: vd-proud-open var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-proud[data-swing="shut"] { animation: vd-proud-shut var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-door[data-swing="open"] { animation: vd-open var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-door[data-swing="shut"] { animation: vd-shut var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-edge[data-swing="open"] { animation: vd-edge-open var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-edge[data-swing="shut"] { animation: vd-edge-shut var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-mid[data-swing="open"] { animation: vd-mid-open var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-mid[data-swing="shut"] { animation: vd-mid-shut var(--swing-ms) linear var(--swing-at) both; }
+.fig-vault-door .vd-wheel[data-swing="open"] { animation: vd-turn-open var(--wheel-ms) var(--ik-ease-out) both; }
+.fig-vault-door .vd-wheel[data-swing="shut"] { animation: vd-turn-shut var(--wheel-ms) var(--ik-ease-out) both; }
+.fig-vault-door .vd-bolt { transition: transform var(--bolt-ms) var(--ik-ease) calc(var(--throw-at) + var(--back)); }
+.fig-vault-door svg[data-open="true"] .vd-bolt { transform: translateX(var(--travel)); transition-delay: var(--draw); }
+.fig-vault-door .vd-pip { fill: var(--ik-screen-ink); opacity: .85; transition: opacity var(--ik-t-state) var(--ik-ease) calc(var(--thrown-at) + var(--back)); }
+.fig-vault-door svg[data-open="true"] .vd-pip { opacity: .14; transition-delay: var(--drawn); }
+.fig-vault-door .vd-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-vault-door svg[data-open="true"] .vd-lamp { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--lit); }
+.fig-vault-door svg[data-open="true"] .vd-lamp-glow { --ik-glow-delay: var(--lit); }
+.fig-vault-door .vd-shown { animation: vd-on 1ms linear var(--on) both; }
+.fig-vault-door .vd-shown.vd-passing { animation: vd-on 1ms linear var(--on) both, vd-off 1ms linear var(--off) forwards; }
+@keyframes vd-open { 0% { transform: matrix(.866, .5, 0, 1, 0, 0); } 20% { transform: matrix(.986, .42, 0, 1, 0, 0); } 35% { transform: matrix(1.148, .247, 0, 1, 0, 0); } 50% { transform: matrix(1.225, 0, 0, 1, 0, 0); } 65% { transform: matrix(1.148, -.247, 0, 1, 0, 0); } 80% { transform: matrix(.986, -.42, 0, 1, 0, 0); } 100% { transform: matrix(.866, -.5, 0, 1, 0, 0); } }
+@keyframes vd-shut { 0% { transform: matrix(.866, -.5, 0, 1, 0, 0); } 20% { transform: matrix(.986, -.42, 0, 1, 0, 0); } 35% { transform: matrix(1.148, -.247, 0, 1, 0, 0); } 50% { transform: matrix(1.225, 0, 0, 1, 0, 0); } 65% { transform: matrix(1.148, .247, 0, 1, 0, 0); } 80% { transform: matrix(.986, .42, 0, 1, 0, 0); } 100% { transform: matrix(.866, .5, 0, 1, 0, 0); } }
+@keyframes vd-edge-open { 0% { transform: translate(4px, -4px); } 20% { transform: translate(5.485px, -6.535px); } 35% { transform: translate(4.47px, -9.055px); } 50% { transform: translate(0, -8.485px); } 65% { transform: translate(-4.47px, -9.055px); } 80% { transform: translate(-8.849px, -10.543px); } 100% { transform: translate(-12px, -12px); } }
+@keyframes vd-edge-shut { 0% { transform: translate(-12px, -12px); } 20% { transform: translate(-8.849px, -10.543px); } 35% { transform: translate(-4.47px, -9.055px); } 50% { transform: translate(0, -8.485px); } 65% { transform: translate(4.47px, -9.055px); } 80% { transform: translate(5.485px, -6.535px); } 100% { transform: translate(4px, -4px); } }
+@keyframes vd-mid-open { 0% { transform: translate(2px, -2px); } 20% { transform: translate(2.743px, -3.267px); } 35% { transform: translate(2.235px, -4.527px); } 50% { transform: translate(0, -4.242px); } 65% { transform: translate(-2.235px, -4.527px); } 80% { transform: translate(-4.424px, -5.271px); } 100% { transform: translate(-6px, -6px); } }
+@keyframes vd-mid-shut { 0% { transform: translate(-6px, -6px); } 20% { transform: translate(-4.424px, -5.271px); } 35% { transform: translate(-2.235px, -4.527px); } 50% { transform: translate(0, -4.242px); } 65% { transform: translate(2.235px, -4.527px); } 80% { transform: translate(2.743px, -3.267px); } 100% { transform: translate(2px, -2px); } }
+@keyframes vd-proud-open { 0% { transform: translate(2.4px, -2.4px); } 20% { transform: translate(1.77px, -2.109px); } 35% { transform: translate(.894px, -1.811px); } 50% { transform: translate(0, -1.697px); } 65% { transform: translate(-.894px, -1.811px); } 80% { transform: translate(-1.77px, -2.109px); } 100% { transform: translate(-2.4px, -2.4px); } }
+@keyframes vd-proud-shut { 0% { transform: translate(-2.4px, -2.4px); } 20% { transform: translate(-1.77px, -2.109px); } 35% { transform: translate(-.894px, -1.811px); } 50% { transform: translate(0, -1.697px); } 65% { transform: translate(.894px, -1.811px); } 80% { transform: translate(1.77px, -2.109px); } 100% { transform: translate(2.4px, -2.4px); } }
+@keyframes vd-turn-open { 33.333% { transform: rotate(-30deg); } 66.667% { transform: rotate(-60deg); } to { transform: rotate(-90deg); } }
+@keyframes vd-turn-shut { 33.333% { transform: rotate(30deg); } 66.667% { transform: rotate(60deg); } to { transform: rotate(90deg); } }
+@keyframes vd-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vd-off { to { opacity: 0; } }

@@ -1,0 +1,15 @@
+.fig-checkout-till .ct-key { font-size: 5.2px; }
+.fig-checkout-till .ct-total { font-size: 5.6px; }
+.fig-checkout-till .ct-tag { font-size: 4.4px; }
+.fig-checkout-till svg[data-printed="false"] .ct-equals { stroke: var(--ik-live); }
+.fig-checkout-till .ct-led { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-checkout-till .ct-led-lit { fill: var(--ik-live); stroke: var(--ik-live); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0; }
+.fig-checkout-till .ct-led-lit[data-on="true"] { opacity: 1; animation: ct-led-on var(--ik-t-state) var(--ik-ease) var(--arrive) both; }
+.fig-checkout-till .ct-led-glow { --ik-glow-delay: var(--arrive); }
+.fig-checkout-till .ct-roll { transform-origin: 0 0; animation: ct-spin var(--feed) var(--ik-ease-move) var(--arrive) both; }
+.fig-checkout-till .ct-receipt { transition: transform var(--ik-t-state) var(--ik-ease), opacity var(--ik-t-state) var(--ik-ease); }
+.fig-checkout-till .ct-receipt[data-state="gone"] { opacity: 0; transform: translateY(-16px); }
+.fig-checkout-till .ct-feed { animation: ct-feed var(--feed) var(--ik-ease-move) var(--arrive) both; }
+@keyframes ct-feed { from { transform: translateY(var(--rh)); } }
+@keyframes ct-led-on { from { opacity: 0; } }
+@keyframes ct-spin { to { transform: rotate(-360deg); } }

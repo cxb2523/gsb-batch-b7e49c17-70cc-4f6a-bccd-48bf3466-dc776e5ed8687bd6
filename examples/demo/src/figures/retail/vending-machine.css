@@ -1,0 +1,33 @@
+.fig-vending-machine .vm-brand { font-size: 6px; }
+.fig-vending-machine .vm-key { font-size: 4.4px; }
+.fig-vending-machine .vm-tag { font-size: 4px; }
+.fig-vending-machine .vm-axis { font-size: 6px; }
+.fig-vending-machine .vm-tray { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-vending-machine .vm-tray-lit { fill: var(--ik-live); stroke: var(--ik-live); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0; }
+.fig-vending-machine .vm-tray-lit[data-on="true"] { opacity: 1; animation: vm-on var(--ik-t-state) var(--ik-ease) var(--lit) both; }
+.fig-vending-machine .vm-tray-glow { --ik-glow-delay: var(--lit); }
+.fig-vending-machine .vm-pip { fill: var(--ik-screen-ink); opacity: .18; }
+.fig-vending-machine .vm-pip[data-on="true"] { opacity: .9; animation: vm-pip var(--ik-t-state) var(--ik-ease) var(--t) both; }
+.fig-vending-machine .vm-pip-glow { --ik-glow-delay: var(--t); }
+.fig-vending-machine .vm-shown { animation: vm-on 1ms linear var(--on) both; }
+.fig-vending-machine .vm-passing { opacity: 0; }
+.fig-vending-machine .vm-shown.vm-passing { animation: vm-on 1ms linear var(--on) both, vm-off 1ms linear var(--off) forwards; }
+.fig-vending-machine .vm-frame { opacity: 0; animation: vm-flash var(--f) step-end var(--at); }
+.fig-vending-machine .vm-turning { animation: vm-gone var(--f) step-end var(--at); }
+.fig-vending-machine .vm-advance { animation: vm-advance var(--turn) var(--ik-ease-move) calc(var(--i) * var(--ik-stagger)) both; }
+.fig-vending-machine .vm-load { animation: vm-load var(--ik-t-move) var(--ik-ease) calc(var(--i) * var(--ik-stagger)) both; }
+.fig-vending-machine .vm-drop { transform: translate(var(--ex), var(--fy)); animation: vm-drop var(--d) linear both; }
+@keyframes vm-pip { from { opacity: .18; } }
+@keyframes vm-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vm-off { to { opacity: 0; } }
+@keyframes vm-flash { from, to { opacity: 1; } }
+@keyframes vm-gone { from, to { opacity: 0; } }
+@keyframes vm-advance { from { transform: translate(var(--px), var(--py)); } }
+@keyframes vm-load { from { opacity: 0; transform: translate(var(--px), var(--py)); } }
+@keyframes vm-drop {
+  from { transform: none; animation-timing-function: var(--ik-ease-move); }
+  58% { transform: translate(var(--ex), var(--ey)); animation-timing-function: var(--ik-ease-fall); }
+  92% { transform: translate(var(--ex), var(--fy)); animation-timing-function: ease-out; }
+  96% { transform: translate(var(--ex), var(--by)); animation-timing-function: ease-in; }
+  to { transform: translate(var(--ex), var(--fy)); }
+}

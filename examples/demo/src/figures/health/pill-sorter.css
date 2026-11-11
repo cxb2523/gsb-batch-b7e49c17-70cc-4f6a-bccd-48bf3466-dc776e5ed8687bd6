@@ -1,0 +1,25 @@
+.fig-pill-sorter .dose { opacity: 0; transform: translateY(-6px); transition: opacity var(--ik-t-state) var(--ik-ease) calc(var(--j) * var(--ik-stagger)), transform var(--ik-t-state) var(--ik-ease) calc(var(--j) * var(--ik-stagger)); }
+.fig-pill-sorter svg[data-filled="true"] .dose { opacity: 1; transform: none; transition: none; animation: ps-fall var(--fall) calc(var(--i) * var(--stagger)) both; }
+.fig-pill-sorter svg[data-filled="true"] .cell { animation: ps-seat var(--ik-t-move) var(--ik-ease-out) calc(var(--i) * var(--stagger) + var(--fall)); }
+.fig-pill-sorter .pip { fill: var(--ik-screen-ink); opacity: .16; transition: opacity 0ms linear calc(var(--j) * var(--ik-stagger)); }
+.fig-pill-sorter .pip[data-on="true"] { opacity: .85; transition-delay: var(--t); }
+.fig-pill-sorter .pip-glow { --ik-glow-delay: var(--t); }
+.fig-pill-sorter .shown { animation: ps-on 1ms linear var(--on) both; }
+.fig-pill-sorter .passing { opacity: 0; }
+.fig-pill-sorter .shown.passing { animation: ps-on 1ms linear var(--on) both, ps-off 1ms linear var(--off) forwards; }
+.fig-pill-sorter .lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-pill-sorter svg[data-filled="true"] .lamp { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--lit); }
+.fig-pill-sorter .lamp-glow { --ik-glow-delay: var(--lit); }
+.fig-pill-sorter .gear { transform-origin: 0 0; }
+.fig-pill-sorter svg[data-filled="true"] .gear { animation: ps-drive var(--filled) var(--ik-ease-move) both; }
+.fig-pill-sorter .armature { transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-pill-sorter svg[data-filled="true"] .armature { transform: rotate(-12deg); transition-delay: var(--filled); }
+.fig-pill-sorter .day { font-size: 7px; }
+.fig-pill-sorter .key { font-size: 7px; }
+.fig-pill-sorter .tag { font-size: 5.6px; }
+.fig-pill-sorter svg[data-filled="false"] .arrow { stroke: var(--ik-live); }
+@keyframes ps-fall { 0% { opacity: 0; transform: translateY(-26px); } 8% { opacity: 1; transform: translateY(-26px); animation-timing-function: var(--ik-ease-fall); } 100% { opacity: 1; transform: none; } }
+@keyframes ps-seat { 15%, 45% { stroke: var(--ik-live); } }
+@keyframes ps-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ps-off { to { opacity: 0; } }
+@keyframes ps-drive { to { transform: rotate(var(--turn)); } }

@@ -1,0 +1,13 @@
+.fig-arc-reactor .spin { transform-origin: 0 0; }
+.fig-arc-reactor svg[data-assembled="true"] .spin { animation: ar-spool var(--ar-spool) cubic-bezier(0.333, 0, 0.667, 0.333) var(--ar-online) both, ar-spin var(--ar-spin) linear calc(var(--ar-online) + var(--ar-spool)) infinite; }
+.fig-arc-reactor svg[data-assembled="true"] .lab-glass-light { transition: opacity var(--ar-charge) var(--ik-ease-fall) var(--ar-charge-at); }
+.fig-arc-reactor .labels { transition: opacity var(--ik-t-state) var(--ik-ease); }
+.fig-arc-reactor svg[data-assembled="true"] .labels { opacity: 0; }
+.fig-arc-reactor .key { font-size: 5.6px; fill: var(--ik-ink-hi); }
+.fig-arc-reactor .shown { animation: ar-on 1ms linear var(--on) both; }
+.fig-arc-reactor .passing { opacity: 0; }
+.fig-arc-reactor .shown.passing { animation: ar-on 1ms linear var(--on) both, ar-off 1ms linear var(--off) forwards; }
+@keyframes ar-spool { from { transform: none; } to { transform: rotate(var(--ar-spool-turn)); } }
+@keyframes ar-spin { from { transform: rotate(var(--ar-spool-turn)); } to { transform: rotate(calc(var(--ar-spool-turn) + 360deg)); } }
+@keyframes ar-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ar-off { to { opacity: 0; } }

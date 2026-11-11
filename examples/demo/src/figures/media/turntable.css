@@ -1,0 +1,18 @@
+.fig-turntable .tt-spin { transform: rotate(var(--from)); transform-origin: 0 0; }
+.fig-turntable svg[data-playing="true"] .tt-spin { animation: tt-spin-up var(--spin-up) cubic-bezier(.333, 0, .667, .333) var(--wait) both, tt-turn var(--turn) linear calc(var(--wait) + var(--spin-up)) infinite; }
+.fig-turntable svg[data-playing="false"] .tt-spin { animation: tt-coast var(--coast-ms) cubic-bezier(.333, .667, .667, 1) both; }
+.fig-turntable .tt-swing { transform-origin: 0 0; transition: transform var(--ik-t-move) var(--ik-ease-move) var(--ik-t-state); }
+.fig-turntable svg[data-playing="true"] .tt-swing { transition-duration: var(--swing); transition-delay: 0ms; }
+.fig-turntable .tt-cue { transition: transform var(--ik-t-state) var(--ik-ease-out); }
+.fig-turntable svg[data-playing="true"] .tt-cue { transform: translateY(3px); transition: transform var(--drop) var(--ik-ease-fall) var(--swing); }
+.fig-turntable .tt-track { animation: tt-land var(--ik-t-state) var(--ik-ease) var(--land) both; }
+.fig-turntable .tt-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-turntable .tt-lamp[data-on="true"] { fill: var(--ik-ink-hi); stroke: var(--ik-ink-hi); }
+.fig-turntable .tt-groove { opacity: .55; }
+.fig-turntable .tt-small { font-size: 4.6px; }
+.fig-turntable .tt-side { font-size: 7px; }
+.fig-turntable .tt-key { font-size: 6px; }
+@keyframes tt-spin-up { from { transform: rotate(var(--from)); } to { transform: rotate(calc(var(--from) + 180deg)); } }
+@keyframes tt-turn { from { transform: rotate(calc(var(--from) + 180deg)); } to { transform: rotate(calc(var(--from) + 540deg)); } }
+@keyframes tt-coast { from { transform: rotate(var(--from)); } to { transform: rotate(calc(var(--from) + var(--coast))); } }
+@keyframes tt-land { from { opacity: 0; } }

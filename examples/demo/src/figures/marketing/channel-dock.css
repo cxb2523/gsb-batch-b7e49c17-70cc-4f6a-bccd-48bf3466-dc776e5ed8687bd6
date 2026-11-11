@@ -1,0 +1,17 @@
+.fig-channel-dock .cd-card { transition: transform var(--ik-t-move) var(--ik-ease); }
+.fig-channel-dock .cd-seat[data-on="true"] .cd-card { transform: translateY(var(--drop)); transition: transform var(--seat) var(--ik-ease-fall); }
+.fig-channel-dock .cd-seat:not([data-on="true"]) .cd-bob { animation: ik-float 3.6s ease-in-out infinite; }
+.fig-channel-dock .cd-catch { transition: transform var(--ik-t-state) var(--ik-ease-out); }
+.fig-channel-dock .cd-catch[data-on="true"] { transform: var(--catch); transition-delay: var(--seat); }
+.fig-channel-dock .cd-guide { transition: opacity var(--ik-t-state) var(--ik-ease); }
+.fig-channel-dock .cd-guide[data-on="true"] { opacity: 0; }
+.fig-channel-dock .cd-light { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-channel-dock .cd-light[data-on="true"] { fill: var(--ik-line); stroke: var(--ik-line); transition-delay: var(--seat); }
+.fig-channel-dock .cd-light[data-on="true"][data-last="true"] { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-channel-dock .cd-light-glow { --ik-glow-delay: var(--seat); }
+.fig-channel-dock .cd-text[data-seated="true"] { animation-delay: var(--arrive); }
+.fig-channel-dock .cd-name { font-size: 5.6px; }
+.fig-channel-dock .cd-glyph { transition: stroke var(--ik-t-state) var(--ik-ease); }
+.fig-channel-dock .cd-seat[data-hot="true"] .cd-glyph { stroke: var(--ik-live); }
+.fig-channel-dock .cd-contact { transition: fill var(--ik-t-state) var(--ik-ease); }
+.fig-channel-dock .cd-seat[data-on="true"] .cd-contact { fill: var(--ik-line); transition-delay: var(--seat); }

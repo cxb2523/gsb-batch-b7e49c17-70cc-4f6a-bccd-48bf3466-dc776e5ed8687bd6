@@ -1,0 +1,15 @@
+.fig-usage-meter .um-scale { fill: none; stroke: var(--ik-screen-ink); stroke-opacity: .45; stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-usage-meter .um-zone { fill: none; stroke: var(--ik-screen-ink); stroke-opacity: .6; stroke-width: 1; stroke-dasharray: 1 2.5; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-usage-meter .um-limit { fill: none; stroke: var(--ik-screen-ink); stroke-opacity: .75; stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.fig-usage-meter .um-needle { transition: transform var(--ik-t-move) var(--ik-ease); }
+.fig-usage-meter .um-hand { fill: none; stroke: var(--ik-line); stroke-width: 1.8; vector-effect: non-scaling-stroke; stroke-linecap: round; transition: stroke var(--ik-t-state) var(--ik-ease); }
+.fig-usage-meter svg[data-used="true"][data-warn="false"] .um-hand { stroke: var(--ik-live); }
+.fig-usage-meter .um-warn { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease); }
+.fig-usage-meter svg[data-warn="true"] .um-warn { fill: var(--ik-live); stroke: var(--ik-live); animation: ik-pulse 1.2s ease-in-out infinite; }
+.fig-usage-meter .um-roll-in { animation: um-roll-in var(--ik-t-state) var(--ik-ease) calc(var(--i) * var(--carry)) both; }
+.fig-usage-meter .um-roll-out { animation: um-roll-out var(--ik-t-state) var(--ik-ease) calc(var(--i) * var(--carry)) both; }
+.fig-usage-meter .um-small { font-size: 5.6px; }
+.fig-usage-meter .um-key { font-size: 10px; }
+@keyframes um-roll-in { from { transform: translateY(13px); } }
+@keyframes um-roll-out { to { transform: translateY(-13px); } }
+@media (prefers-reduced-motion: reduce) { .fig-usage-meter .um-roll-out { display: none; } }

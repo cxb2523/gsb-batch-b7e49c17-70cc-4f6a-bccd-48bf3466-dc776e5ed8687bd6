@@ -1,0 +1,17 @@
+.fig-firewall-rack .fw-key { font-size: 7px; }
+.fig-firewall-rack .fw-tag { font-size: 5px; }
+.fig-firewall-rack .fw-lamp { fill: var(--ik-line); }
+.fig-firewall-rack .fw-lamp[data-threat="true"] { animation: ik-pulse 1.2s ease-in-out infinite; }
+.fig-firewall-rack svg[data-blocked="true"] .fw-lamp { animation: firewall-rack-scan 420ms ease-out var(--t) both; }
+.fig-firewall-rack svg[data-blocked="true"] .fw-lamp[data-threat="true"] { fill: var(--ik-well); transition: fill 0ms linear var(--seat); }
+.fig-firewall-rack .fw-shutter { transform: translateY(-9px); transition: transform 320ms var(--ik-ease) var(--u); }
+.fig-firewall-rack svg[data-blocked="true"] .fw-shutter { transform: none; transition: transform 420ms var(--ik-spring) var(--t); }
+.fig-firewall-rack svg[data-blocked="true"] .fw-shutter .ik-face { animation: firewall-rack-seat 520ms ease-out var(--seat); }
+.fig-firewall-rack .fw-status { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-firewall-rack svg[data-blocked="true"] .fw-status { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--done); }
+.fig-firewall-rack .fw-shown { animation: firewall-rack-on 1ms linear var(--on) both; }
+.fig-firewall-rack .fw-shown.fw-passing { animation: firewall-rack-on 1ms linear var(--on) both, firewall-rack-off 1ms linear var(--off) forwards; }
+@keyframes firewall-rack-scan { 25%, 55% { fill: var(--ik-live); } }
+@keyframes firewall-rack-seat { 10%, 45% { stroke: var(--ik-live); } }
+@keyframes firewall-rack-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes firewall-rack-off { to { opacity: 0; } }

@@ -1,0 +1,14 @@
+name: Idea
+description: A part, a sound or a helper that would make figures easier.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: figure
+    attributes:
+      label: What are you trying to draw?
+      description: The figure you were building when you wished for this.
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?

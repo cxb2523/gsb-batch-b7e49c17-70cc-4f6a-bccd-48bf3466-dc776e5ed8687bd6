@@ -1,0 +1,24 @@
+.fig-webhook-relay .span { animation: whr-in var(--ik-t-state) var(--ik-ease) var(--in) both, whr-out var(--ik-t-state) var(--ik-ease) var(--out) forwards; }
+.fig-webhook-relay .from { animation: whr-in var(--ik-t-state) var(--ik-ease) var(--in) both; }
+.fig-webhook-relay .lamp, .fig-webhook-relay .ack { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.fig-webhook-relay .lamp[data-state="ok"] { animation: whr-flash 900ms var(--ik-ease-out) var(--in) both; }
+.fig-webhook-relay .lamp[data-state="retry"] { animation: whr-fail 600ms var(--ik-ease-out) var(--in) both, whr-flash 900ms var(--ik-ease-out) var(--retry) forwards; }
+.fig-webhook-relay .lamp-glow { --ik-glow-delay: var(--lamp-at); }
+.fig-webhook-relay .ack[data-on="true"] { animation: whr-ack var(--ik-t-state) var(--ik-ease) var(--t) both; }
+.fig-webhook-relay .ack-glow { --ik-glow-delay: var(--t); }
+.fig-webhook-relay .arm { transform: rotate(18deg); }
+.fig-webhook-relay .arm[data-closing="true"] { animation: whr-arm var(--ik-t-press) var(--ik-ease-out) var(--lit) both; }
+.fig-webhook-relay .dial { transform: rotate(calc(var(--step) * 45deg)); transition: transform var(--ik-t-press) var(--ik-ease-out) var(--retry-at); }
+.fig-webhook-relay .refill { animation: whr-refill var(--ik-t-state) var(--ik-ease-fall) calc(var(--refill) + var(--ik-t-state)) both; }
+.fig-webhook-relay svg[data-fresh="true"] .plane { stroke: var(--ik-live); }
+.fig-webhook-relay .key { font-size: 7px; }
+.fig-webhook-relay .hook { font-size: 6.2px; }
+.fig-webhook-relay .outbox { font-size: 5.6px; }
+.fig-webhook-relay .ack-label { font-size: 4.8px; }
+@keyframes whr-in { from { opacity: 0; transform: translateY(2px); } }
+@keyframes whr-out { to { opacity: 0; } }
+@keyframes whr-flash { 0% { fill: var(--ik-well); stroke: var(--ik-detail); } 1%, 45% { fill: var(--ik-live); stroke: var(--ik-live); } 100% { fill: var(--ik-line); stroke: var(--ik-line); } }
+@keyframes whr-fail { 0% { fill: var(--ik-well); stroke: var(--ik-detail); } 1%, 55% { fill: var(--ik-live); stroke: var(--ik-live); } 100% { fill: var(--ik-well); stroke: var(--ik-detail); } }
+@keyframes whr-ack { from { fill: var(--ik-well); stroke: var(--ik-detail); } to { fill: var(--ik-live); stroke: var(--ik-live); } }
+@keyframes whr-arm { from { transform: rotate(18deg); } to { transform: none; } }
+@keyframes whr-refill { from { opacity: 0; transform: translateY(-10px); } }

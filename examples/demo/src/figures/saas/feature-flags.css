@@ -1,0 +1,14 @@
+.fig-feature-flags svg { --lamp: calc(var(--relay) + var(--ik-t-press)); }
+.fig-feature-flags .ff-slide { transition: transform var(--ik-t-move) var(--ik-ease); }
+.fig-feature-flags .ff-arm { transform: rotate(16deg); transition: transform var(--ik-t-press) var(--ik-ease-out) var(--relay); }
+.fig-feature-flags .ff-arm[data-on="true"] { transform: none; }
+.fig-feature-flags .ff-light { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease) var(--lamp), stroke var(--ik-t-state) var(--ik-ease) var(--lamp); }
+.fig-feature-flags .ff-light[data-on="true"] { fill: var(--ik-line); stroke: var(--ik-line); }
+.fig-feature-flags .ff-light[data-on="true"][data-last="true"] { fill: var(--ik-live); stroke: var(--ik-live); }
+.fig-feature-flags .ff-lamp { --ik-glow-delay: var(--lamp); --ik-glow-fade-delay: var(--lamp); }
+.fig-feature-flags .ff-user { fill: var(--ik-screen-ink); opacity: .14; transition: opacity var(--ik-t-state) var(--ik-ease) calc(var(--lamp) + var(--i) * var(--ik-stagger)); }
+.fig-feature-flags .ff-user[data-on="true"] { opacity: .9; }
+.fig-feature-flags .ff-power { fill: var(--ik-detail); }
+.fig-feature-flags .ff-name { font-size: 6.4px; }
+.fig-feature-flags .ff-pct { font-size: 5.6px; }
+.fig-feature-flags .ff-tag { font-size: 5.6px; }

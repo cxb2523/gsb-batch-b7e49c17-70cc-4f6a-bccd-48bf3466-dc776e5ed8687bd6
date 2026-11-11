@@ -1,0 +1,31 @@
+.fig-wind-turbine .wt-spin { transform-origin: 0 0; animation: wt-spin 500ms linear infinite; animation-play-state: paused; }
+.fig-wind-turbine svg[data-run="true"] .wt-spin { animation-play-state: running; }
+.fig-wind-turbine .wt-turn { transform-origin: 0 0; }
+.fig-wind-turbine .wt-turn[data-move="start"] { animation: wt-start 1500ms both; }
+.fig-wind-turbine .wt-turn[data-move="stop"] { animation: wt-stop 1000ms cubic-bezier(.333, .667, .667, 1) both; }
+.fig-wind-turbine .wt-blade { --feather: .36; transform-origin: 0 0; transform: scaleX(var(--feather)); }
+.fig-wind-turbine svg[data-run="true"] .wt-blade { transform: none; }
+.fig-wind-turbine .wt-turn[data-move="start"] .wt-blade { animation: wt-pitch-in var(--pitch) var(--ik-ease-move) both; }
+.fig-wind-turbine .wt-turn[data-move="stop"] .wt-blade { animation: wt-pitch-out var(--pitch) var(--ik-ease-move) both; }
+.fig-wind-turbine .wt-caliper { transition: transform var(--ik-t-state) var(--ik-ease); }
+.fig-wind-turbine svg[data-run="true"] .wt-caliper { transform: translateY(-3px); }
+.fig-wind-turbine .wt-seg { fill: var(--ik-screen-ink); opacity: .12; transition: opacity var(--ik-t-state) var(--ik-ease) calc(var(--leave) * var(--ik-stagger)); }
+.fig-wind-turbine svg[data-run="true"] .wt-seg { opacity: .85; transition-delay: var(--on); }
+.fig-wind-turbine .wt-shown { animation: wt-on 1ms linear var(--on) both; }
+.fig-wind-turbine .wt-passing { opacity: 0; }
+.fig-wind-turbine .wt-shown.wt-passing { animation: wt-on 1ms linear var(--on) both, wt-off 1ms linear var(--off) forwards; }
+.fig-wind-turbine .wt-armature { transform: rotate(-26deg); transform-origin: 0 0; transition: transform var(--ik-t-press) var(--ik-ease-out); }
+.fig-wind-turbine svg[data-run="true"] .wt-armature { transform: none; transition-delay: var(--grid); }
+.fig-wind-turbine .wt-lamp { fill: var(--ik-well); stroke: var(--ik-detail); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill var(--ik-t-state) var(--ik-ease), stroke var(--ik-t-state) var(--ik-ease); }
+.fig-wind-turbine svg[data-run="true"] .wt-lamp { fill: var(--ik-live); stroke: var(--ik-live); transition-delay: var(--lamp); }
+.fig-wind-turbine svg[data-run="true"] .wt-lit { --ik-glow-delay: var(--lamp); }
+.fig-wind-turbine svg[data-run="false"] .wt-play { stroke: var(--ik-live); }
+.fig-wind-turbine .wt-key { font-size: 6.6px; }
+.fig-wind-turbine .wt-tag { font-size: 5.4px; }
+@keyframes wt-spin { to { transform: rotate(120deg); } }
+@keyframes wt-start { from { transform: rotate(0deg); animation-timing-function: linear; } 33.333% { transform: rotate(-120deg); animation-timing-function: cubic-bezier(.333, .667, .667, 1); } to { transform: rotate(-240deg); } }
+@keyframes wt-stop { from { transform: rotate(0deg); } to { transform: rotate(120deg); } }
+@keyframes wt-pitch-in { from { transform: scaleX(var(--feather)); } to { transform: none; } }
+@keyframes wt-pitch-out { from { transform: none; } to { transform: scaleX(var(--feather)); } }
+@keyframes wt-on { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wt-off { to { opacity: 0; } }
