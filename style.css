@@ -1,0 +1,66 @@
+@font-face {
+  font-family: Lato;
+  src: url("/fonts/Lato-Regular.ttf");
+}
+
+html, body, #app {
+  margin: 0px;
+  width: 100%;
+  height: 100%;
+  font-family: Lato, sans-serif;
+  background-color: #151515;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  margin: auto;
+}
+
+ncrs-ui {
+  max-width: 1000px;
+  max-height: 670px;
+}
+
+ncrs-ui-mobile {
+  max-width: 375px;
+  max-height: 620px;
+}
+
+ncrs-ui-mobile.fullscreen {
+  max-width: 100vw;
+  max-height: 100vh;
+}
+
+@media screen and (min-height: 700px) {
+  ncrs-ui-mobile.platform-ios.fullscreen {
+    padding-bottom: 2rem;
+    background-color: rgb(31, 32, 37);
+  }
+}
+
+ncrs-ui.fullscreen {
+  position: absolute;
+  top:0;
+  left:0;
+  overflow-y: hidden;
+  max-width: 100vw;
+  max-height: 100vh;
+  width: 100vw;
+  height: 100vh;
+  z-index: 100;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+* {
+  -webkit-tap-highlight-color: #0000;
+}
+
+p {
+  margin: 0px;
+  color: white;
+  max-width: 1000px;
+}

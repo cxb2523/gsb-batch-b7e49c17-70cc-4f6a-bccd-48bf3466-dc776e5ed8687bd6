@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="600"
+   height="700.00006"
+   viewBox="0 0 158.74999 185.20835"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.2.2 (732a01da63, 2022-12-09)"
+   sodipodi:docname="remove.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#4f4f4f"
+     bordercolor="#ffffff"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="1"
+     inkscape:deskcolor="#4f4f4f"
+     inkscape:document-units="px"
+     inkscape:zoom="1.048875"
+     inkscape:cx="75.795495"
+     inkscape:cy="215.46895"
+     inkscape:window-width="1920"
+     inkscape:window-height="1137"
+     inkscape:window-x="1592"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1"
+     showgrid="false" />
+  <defs
+     id="defs1" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-131.89479,-97.895828)">
+    <path
+       id="rect1568"
+       style="stroke-width:48.2437;paint-order:stroke fill markers"
+       d="M 145.12396 164.04166 C 145.12396 173.45832 145.12397 232.06265 145.12396 266.07315 C 145.12396 275.50826 152.71987 283.10416 162.15496 283.10416 L 260.38462 283.10416 C 269.81972 283.10416 277.41562 275.50826 277.41562 266.07315 L 277.41562 164.04166 L 145.12396 164.04166 z " />
+    <path
+       id="rect1933"
+       style="stroke-width:22.8839;paint-order:stroke fill markers"
+       d="m 143.66562,113.77083 h 135.20835 c 6.52103,0 11.77082,5.24979 11.77082,11.77082 v 0.27085 c 0,6.52104 -5.24979,11.77083 -11.77082,11.77083 H 143.66562 c -6.52104,0 -11.77083,-5.24979 -11.77083,-11.77083 v -0.27085 c 0,-6.52103 5.24979,-11.77082 11.77083,-11.77082 z" />
+    <path
+       id="rect1935"
+       style="stroke-width:60.7218;paint-order:stroke fill markers"
+       d="m 196.94362,97.895828 h 28.65232 c 6.72122,0 12.13217,5.410952 12.13217,12.132172 v 14.55445 c 0,6.72123 -5.41095,12.13218 -12.13217,12.13218 h -28.65232 c -6.72122,0 -12.13217,-5.41095 -12.13217,-12.13218 V 110.028 c 0,-6.72122 5.41095,-12.132172 12.13217,-12.132172 z" />
+  </g>
+</svg>

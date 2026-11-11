@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="300"
+   height="300"
+   viewBox="0 0 79.374998 79.375"
+   version="1.1"
+   id="svg505"
+   inkscape:version="1.2.2 (732a01da63, 2022-12-09)"
+   sodipodi:docname="jitter.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview507"
+     pagecolor="#505050"
+     bordercolor="#ffffff"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="1"
+     inkscape:deskcolor="#505050"
+     inkscape:document-units="px"
+     showgrid="false"
+     inkscape:zoom="1.1893044"
+     inkscape:cx="69.368279"
+     inkscape:cy="56.335451"
+     inkscape:window-width="1920"
+     inkscape:window-height="1137"
+     inkscape:window-x="1592"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs502" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <rect
+       style="stroke-width:26.4583;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+       id="rect678"
+       width="26.458334"
+       height="26.458334"
+       x="0"
+       y="3.5527137e-15"
+       ry="5.2916665" />
+    <rect
+       style="stroke-width:26.4583;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+       id="rect1234"
+       width="26.458334"
+       height="26.458334"
+       x="26.458332"
+       y="52.916664"
+       ry="5.2916665" />
+    <rect
+       style="stroke-width:26.4583;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+       id="rect1234-4"
+       width="26.458334"
+       height="26.458334"
+       x="52.916664"
+       y="26.458332"
+       ry="5.2916665" />
+    <path
+       id="rect1280"
+       style="stroke-width:26.4583;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+       d="M 52.916666 39.687499 L 52.916666 47.624999 C 52.916666 50.556577 50.556577 52.916666 47.624999 52.916666 L 39.687499 52.916666 L 39.687499 66.145832 L 52.916666 66.145832 L 52.916666 58.208333 C 52.916666 55.276752 55.276752 52.916666 58.208333 52.916666 L 66.145832 52.916666 L 66.145832 39.687499 L 52.916666 39.687499 z " />
+  </g>
+</svg>

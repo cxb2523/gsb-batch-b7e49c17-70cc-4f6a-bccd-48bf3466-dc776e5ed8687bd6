@@ -1,0 +1,10 @@
+const GALLERY_URL = "https://needcoolershoes.com/gallery/skins";
+const SKIN_LOOKUP_URL = "https://needcoolershoes.com/api/skin";
+const IMAGE_WIDTH = 64;
+const IMAGE_HEIGHT = 64;
+const IMAGE_LEGACY_HEIGHT = 32;
+
+const IMAGE_THUMBNAIL_WIDTH = 180;
+const IMAGE_THUMBNAIL_HEIGHT = 160;
+
+export {GALLERY_URL, SKIN_LOOKUP_URL, IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_LEGACY_HEIGHT, IMAGE_THUMBNAIL_WIDTH, IMAGE_THUMBNAIL_HEIGHT};

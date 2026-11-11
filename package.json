@@ -1,0 +1,30 @@
+{
+  "name": "ncrs-editor",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/ncrs-editor.js",
+  "scripts": {
+    "install": "vite build --config vite-lib.config.js",
+    "dev": "vite",
+    "dev-host": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@m3e/core": "^1.1.2",
+    "@m3e/tooltip": "^1.1.2",
+    "@simonwep/pickr": "^1.9.1",
+    "ajv": "^8.17.1",
+    "color": "^4.2.3",
+    "context-filter-polyfill": "^0.3.23",
+    "idb-keyval": "^6.2.1",
+    "interactjs": "^1.10.27",
+    "lit": "^3.2.0",
+    "panzoom": "^9.4.3",
+    "sortablejs": "^1.15.6",
+    "three": "^0.184.0",
+    "uuid": "^11.1.0",
+    "vite": "^5.4.1"
+  }
+}

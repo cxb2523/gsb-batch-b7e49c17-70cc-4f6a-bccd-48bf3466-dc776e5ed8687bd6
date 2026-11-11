@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="70mm"
+   height="119mm"
+   viewBox="0 0 70 119"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.2.2 (732a01da63, 2022-12-09)"
+   sodipodi:docname="blow_up_model.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#505050"
+     bordercolor="#ffffff"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="1"
+     inkscape:deskcolor="#505050"
+     inkscape:document-units="mm"
+     showgrid="false"
+     inkscape:zoom="1.1893044"
+     inkscape:cx="-87.866487"
+     inkscape:cy="228.70512"
+     inkscape:window-width="1920"
+     inkscape:window-height="1137"
+     inkscape:window-x="1592"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs2" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-70,-71.5)">
+    <g
+       id="g448"
+       transform="translate(85,106.5)">
+      <rect
+         style="stroke-width:29.3821;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         id="rect234-1"
+         width="30"
+         height="40"
+         x="5"
+         y="0"
+         ry="7.5" />
+      <rect
+         style="stroke-width:29.3821;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         id="rect413"
+         width="15"
+         height="40"
+         x="2.5"
+         y="44"
+         ry="7.5" />
+      <rect
+         style="stroke-width:29.3821;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         id="rect437"
+         width="15"
+         height="40"
+         x="22.5"
+         y="44"
+         ry="7.5" />
+      <rect
+         style="stroke-width:29.3821;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         id="rect439"
+         width="15"
+         height="40"
+         x="40"
+         y="0"
+         ry="7.5" />
+      <rect
+         style="stroke-width:29.3821;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         id="rect441"
+         width="15"
+         height="40"
+         x="-15"
+         y="0"
+         ry="7.5" />
+    </g>
+    <circle
+       style="stroke-width:27.7241;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+       id="path502"
+       cx="105"
+       cy="86.5"
+       r="15" />
+  </g>
+</svg>
