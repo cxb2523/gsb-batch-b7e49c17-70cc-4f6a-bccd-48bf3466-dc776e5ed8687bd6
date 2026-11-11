@@ -1,0 +1,57 @@
+on:
+  workflow_dispatch:
+    inputs:
+      repoOrg:
+        description: "Owner of the repository your token can access"
+        required: true
+      repoName:
+        description: "Repository whose stargazers you want to render"
+        required: true
+      starCount:
+        description: "Star Count"
+        required: true
+        default: "100"
+      duration:
+        description: "Duration (seconds)"
+        required: false
+        default: "15"
+name: Render video
+jobs:
+  render:
+    name: Render video
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check GitHub authentication
+        env:
+          REMOTION_GITHUB_TOKEN: ${{ secrets.REMOTION_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$REMOTION_GITHUB_TOKEN" ]; then
+            echo "::error::Add a repository Actions secret named REMOTION_GITHUB_TOKEN containing a token with access to the repository whose stargazers you want to render. Your account must be an admin or collaborator of that repository. See the Authentication section in README.md."
+            exit 1
+          fi
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+      - name: Install Fallback fonts (fonts)
+        run: |
+          sudo apt-get update -yqq
+          sudo apt-get install -yq --no-install-recommends \
+            fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji fonts-noto-mono
+      - name: Install dependencies (node modules)
+        run: npm i
+      - name: Define input props
+        run: echo $WORKFLOW_INPUT | tee input-props.json | jq -C '.' # Inject to file, inspect to logs
+        env:
+          WORKFLOW_INPUT: ${{ toJson(github.event.inputs) }}
+      - name: Render video
+        run: npx remotion render --props="./input-props.json"
+        env:
+          REMOTION_GITHUB_TOKEN: ${{ secrets.REMOTION_GITHUB_TOKEN }}
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: out.mp4
+          path: out/main.mp4
