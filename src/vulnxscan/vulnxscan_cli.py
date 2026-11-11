@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2023 Technology Innovation Institute (TII)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Scan nix artifact or CycloneDX SBOM for vulnerabilities with various
+open-source vulnerability scanners.
+"""
+
+import argparse
+import logging
+import pathlib
+
+from common.cli_args import add_verbose_argument, add_version_argument
+from common.errors import InvalidSbomError, SbomnixError
+from common.log import LOG, set_log_verbosity
+from common.proc import exit_unless_command_exists
+from sbomnix.cli_utils import generate_temp_sbom, resolve_nix_target
+from vulnxscan.utils import _is_json
+from vulnxscan.vulnscan import VulnScan
+
+###############################################################################
+
+
+def getargs(args=None):
+    """Parse command line arguments"""
+    desc = (
+        "Scan nix artifact or CycloneDX SBOM for vulnerabilities with "
+        "various open-source vulnerability scanners."
+    )
+    epil = "Example: ./vulnxscan.py /path/to/nix/out/or/drv/or/flakeref"
+    parser = argparse.ArgumentParser(description=desc, epilog=epil)
+    helps = (
+        "Target nix store path (e.g. derivation file or nix output path) or flakeref"
+    )
+    parser.add_argument("TARGET", help=helps, type=str)
+    add_verbose_argument(parser)
+    helps = "Path to output file (default: ./vulns.csv or ./vulns.sarif)"
+    parser.add_argument("-o", "--out", nargs="?", help=helps)
+    helps = "Output format (default: csv)"
+    parser.add_argument("--format", choices=("csv", "sarif"), default="csv", help=helps)
+    helps = (
+        "Repository-relative file genuinely responsible for the scanned closure. "
+        "Adds a file-level SARIF location without inventing a line number."
+    )
+    parser.add_argument("--sarif-location", type=pathlib.PurePosixPath, help=helps)
+    helps = (
+        "Scan target buildtime instead of runtime dependencies. This option "
+        "has no impact if the scan target is SBOM (ref: --sbom)."
+    )
+    parser.add_argument("--buildtime", help=helps, action="store_true")
+    helps = "Run Nix commands with --impure when resolving the target flake"
+    parser.add_argument("--impure", help=helps, action="store_true")
+    helps = "Fail if the generated SBOM's CPE dictionary cannot be loaded"
+    parser.add_argument(
+        "--require-cpe-dictionary", help=helps, action="store_true", default=False
+    )
+    helps = (
+        "Indicate that TARGET is a cdx SBOM instead of path to nix artifact. "
+        "This allows running vulnxscan using input SBOMs from any tool "
+        "capable of generating cdx SBOM. This option makes it possible to run "
+        "vulnxscan postmortem against any (potentially earlier) release of "
+        "the TARGET. "
+        "Moreover, this option allows using vulnxscan against non-nix targets "
+        "as long as SBOM includes valid CPE identifiers and purls. "
+        "If this option is specified, vulnix scan will not run, since vulnix "
+        "is nix-only and requires components' nix store paths. "
+        "Also, if this option is specified, option '--buildtime' will be "
+        "ignored since target packages will be read from the given SBOM."
+    )
+    parser.add_argument("--sbom", help=helps, action="store_true")
+    helps = (
+        "Path to whitelist file. Vulnerabilities that match any whitelisted "
+        "entries will not be included to the console output and are annotated "
+        "accordingly in CSV output. SARIF output omits them. See more details "
+        "in the vulnxscan README.md."
+    )
+    parser.add_argument("--whitelist", help=helps, type=pathlib.Path)
+    helps = (
+        "Path to optional component-evidence JSON output. When omitted, "
+        "only the selected report files are written."
+    )
+    parser.add_argument("--evidence-out", help=helps, type=pathlib.Path)
+    helps = (
+        "Add more information to vulnxscan output by querying "
+        "repology.org for available package versions in nix-unstable and "
+        "package upstream. This option is intended to help manual analysis. "
+        "Classification is disabled and the 'classify' column is left empty "
+        "(https://github.com/tiiuae/sbomnix/issues/350). "
+        "Output is written to a separate OUT file with 'triage' infix, "
+        "by default: 'vulns.triage.csv'."
+    )
+    parser.add_argument("--triage", help=helps, action="store_true")
+    helps = (
+        "Skip OSV API queries. This permits offline scans with locally "
+        "available scanner data unless --triage requests Repology lookups."
+    )
+    parser.add_argument("--skip-osv", help=helps, action="store_true")
+    triagegr = parser.add_argument_group("Other arguments")
+    helps = (
+        "Search nixpkgs github for PRs that might include more information "
+        "concerning possible nixpkgs fixes, searching by vulnerability ID only. "
+        "This option adds URLs to (at most five) PRs that appear valid "
+        "for each vulnerability based on heuristic. "
+        "The PR search takes significant "
+        "time due to github API rate limits, which is why this feature is "
+        "not enabled by default. This option has no impact unless '--triage' "
+        "is also specified."
+    )
+    triagegr.add_argument("--nixprs", help=helps, action="store_true")
+    add_version_argument(parser)
+    parsed = parser.parse_args(args)
+    if parsed.out is None:
+        parsed.out = "vulns.sarif" if parsed.format == "sarif" else "vulns.csv"
+    if parsed.sarif_location is not None:
+        if parsed.format != "sarif":
+            parser.error("--sarif-location requires --format sarif")
+        if (
+            parsed.sarif_location == pathlib.PurePosixPath(".")
+            or parsed.sarif_location.is_absolute()
+            or ".." in parsed.sarif_location.parts
+        ):
+            parser.error("--sarif-location must be repository-relative")
+    return parsed
+
+
+################################################################################
+
+
+def main():
+    """main entry point"""
+    args = getargs()
+    set_log_verbosity(args.verbose)
+    try:
+        _run(args)
+    except SbomnixError as error:
+        LOG.fatal("%s", error)
+        raise SystemExit(1) from error
+
+
+def _run(args):
+
+    # Fail early if following commands are not in path
+    exit_unless_command_exists("grype")
+    exit_unless_command_exists("vulnix")
+
+    scanner = VulnScan()
+    sbom_artifact = None
+    if args.sbom:
+        target_path = pathlib.Path(args.TARGET).resolve().as_posix()
+        if not _is_json(target_path):
+            raise InvalidSbomError(args.TARGET)
+        sbom_cdx_path = target_path
+        sbom_csv_path = None
+    else:
+        target = resolve_nix_target(
+            args.TARGET,
+            buildtime=args.buildtime,
+            impure=args.impure,
+        )
+        target_path = target.path
+        sbom_artifact = generate_temp_sbom(
+            target_path,
+            args.buildtime,
+            prefix="vulnxscan_",
+            cdx_suffix=".json",
+            include_csv=True,
+            require_cpe_dictionary=args.require_cpe_dictionary,
+        )
+        sbom_cdx_path = sbom_artifact.cdx_path
+        sbom_csv_path = sbom_artifact.csv_path
+        LOG.debug("Using cdx SBOM '%s'", sbom_cdx_path)
+        LOG.debug("Using csv SBOM '%s'", sbom_csv_path)
+    try:
+        if not args.sbom:
+            scanner.scan_vulnix(target_path, args.buildtime)
+        scanner.scan_grype(sbom_cdx_path)
+        if not args.skip_osv:
+            scanner.scan_osv(sbom_cdx_path)
+        scanner.report(args, sbom_csv_path)
+    finally:
+        if (
+            not args.sbom
+            and not LOG.isEnabledFor(logging.DEBUG)
+            and sbom_artifact is not None
+        ):
+            # Remove generated temp files unless verbosity is DEBUG or more verbose
+            sbom_artifact.cleanup()
+
+
+if __name__ == "__main__":
+    main()
+
+################################################################################

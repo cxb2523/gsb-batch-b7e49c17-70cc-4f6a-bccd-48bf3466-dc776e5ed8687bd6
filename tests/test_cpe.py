@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Technology Innovation Institute (TII)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Focused tests for CPE generation."""
+
+import pandas as pd
+import pytest
+from requests import HTTPError
+
+from common.errors import CsvLoadError
+from sbomnix import cpe
+
+
+class FakeCache:
+    def __init__(self, df):
+        self.df = df
+
+    def get(self, _url):
+        return self.df
+
+    def set(self, *_args, **_kwargs):
+        raise AssertionError("cache set should not be called for populated data")
+
+
+def test_cpe_download_uses_retries_before_fallback(monkeypatch):
+    class FailingResponse:
+        def raise_for_status(self):
+            raise HTTPError("503 Server Error")
+
+    class FailingSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, timeout):
+            assert (url, timeout) == (cpe._CPE_CSV_URL, 30)
+            return FailingResponse()
+
+    session = FailingSession()
+    mounted = []
+    monkeypatch.setattr(cpe, "LockedDfCache", lambda: FakeCache(None))
+    monkeypatch.setattr(cpe, "Session", lambda: session)
+    monkeypatch.setattr(
+        cpe,
+        "mount_retries",
+        lambda candidate: mounted.append(candidate) or candidate,
+    )
+
+    generated = cpe.CPE().generate("openssl", "3.0.0")
+
+    assert mounted == [session]
+    assert generated == "cpe:2.3:a:openssl:openssl:3.0.0:*:*:*:*:*:*:*"
+
+
+def test_cpe_required_dictionary_fails_after_download_retries(monkeypatch):
+    class FailingResponse:
+        def raise_for_status(self):
+            raise HTTPError("503 Server Error")
+
+    class FailingSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url, timeout):
+            assert timeout == 30
+            return FailingResponse()
+
+    monkeypatch.setattr(cpe, "LockedDfCache", lambda: FakeCache(None))
+    monkeypatch.setattr(cpe, "Session", FailingSession)
+    monkeypatch.setattr(cpe, "mount_retries", lambda session: session)
+
+    with pytest.raises(CsvLoadError, match="503 Server Error"):
+        cpe.CPE(require_dictionary=True)
+
+
+def test_cpe_uses_indexed_unique_product_vendor(monkeypatch):
+    monkeypatch.setattr(
+        cpe,
+        "LockedDfCache",
+        lambda: FakeCache(
+            pd.DataFrame(
+                {
+                    "product": ["openssl", "curl"],
+                    "vendor": ["openssl_project", "curl_project"],
+                }
+            )
+        ),
+    )
+
+    generated = cpe.CPE().generate("openssl", "3.0.0")
+
+    assert generated == "cpe:2.3:a:openssl_project:openssl:3.0.0:*:*:*:*:*:*:*"
+
+
+def test_cpe_ambiguous_product_falls_back_to_product_name(monkeypatch):
+    monkeypatch.setattr(
+        cpe,
+        "LockedDfCache",
+        lambda: FakeCache(
+            pd.DataFrame(
+                {
+                    "product": ["openssl", "openssl"],
+                    "vendor": ["first_vendor", "second_vendor"],
+                }
+            )
+        ),
+    )
+
+    generated = cpe.CPE().generate("openssl", "3.0.0")
+
+    assert generated == "cpe:2.3:a:openssl:openssl:3.0.0:*:*:*:*:*:*:*"
+
+
+def test_cpe_looks_up_quoted_product_in_dictionary(monkeypatch):
+    monkeypatch.setattr(
+        cpe,
+        "LockedDfCache",
+        lambda: FakeCache(pd.DataFrame({"product": ["gtk\\+"], "vendor": ["gtk"]})),
+    )
+
+    generated = cpe.CPE().generate("gtk+", "2.24.33")
+
+    assert generated == r"cpe:2.3:a:gtk:gtk\+:2.24.33:*:*:*:*:*:*:*"
+
+
+def test_cpe_quotes_special_characters_in_product_and_version(monkeypatch):
+    monkeypatch.setattr(
+        cpe,
+        "LockedDfCache",
+        lambda: FakeCache(pd.DataFrame({"product": ["openssl"], "vendor": ["x"]})),
+    )
+
+    generated = cpe.CPE().generate("libsigc++", "3.8.1+git")
+
+    assert generated == (r"cpe:2.3:a:libsigc\+\+:libsigc\+\+:3.8.1\+git:*:*:*:*:*:*:*")
+
+
+@pytest.mark.parametrize("version", ["", "  "])
+def test_cpe_without_version_returns_empty_string(monkeypatch, version):
+    monkeypatch.setattr(
+        cpe,
+        "LockedDfCache",
+        lambda: FakeCache(pd.DataFrame({"product": ["openssl"], "vendor": ["x"]})),
+    )
+
+    assert cpe.CPE().generate("CVE-2024-6655.patch", version) == ""
+
+
+def test_cpe_disabled_returns_empty_string():
+    generated = cpe.CPE(include_cpe=False).generate("openssl", "3.0.0")
+
+    assert generated == ""
+
+
+def test_cpe_uses_canonical_product_identifiers(monkeypatch):
+    monkeypatch.setattr(
+        cpe,
+        "LockedDfCache",
+        lambda: FakeCache(pd.DataFrame({"product": ["openssl"], "vendor": [""]})),
+    )
+
+    generator = cpe.CPE()
+    # Each identity is restated independently of _CPE_OVERRIDES on purpose:
+    # every entry was established by checking which identity the vulnerability
+    # databases actually carry data for, so an edit to the table has to fail
+    # here rather than be mirrored into the expectation. Do not derive this
+    # mapping from the table.
+    identities = {
+        "brave": "a:brave:browser",
+        "brave-browser": "a:brave:browser",
+        "cairo": "a:cairographics:cairo",
+        "cjson": "a:davegamble:cjson",
+        "curl": "a:haxx:curl",
+        "dhcpcd": "a:dhcpcd_project:dhcpcd",
+        "firefox-bin": "a:mozilla:firefox",
+        "firefox-esr": "a:mozilla:firefox_esr",
+        "gawk": "a:fossies:gawk",
+        "gcc": "a:gnu:gcc",
+        "glibc": "a:gnu:glibc",
+        "google-chrome": "a:google:chrome",
+        "google-chrome-beta": "a:google:chrome",
+        "google-chrome-dev": "a:google:chrome",
+        "gzip": "a:gnu:gzip",
+        "jq": "a:jqlang:jq",
+        "libcap": "a:libcap_project:libcap",
+        "libsndfile": "a:libsndfile_project:libsndfile",
+        "linux": "o:linux:linux_kernel",
+        "microsoft-edge": "a:microsoft:edge_chromium",
+        "patch": "a:gnu:patch",
+        "python3": "a:python:python",
+        "tor-browser": "a:torproject:tor_browser",
+        "unbound": "a:nlnetlabs:unbound",
+        "unzip": "a:unzip_project:unzip",
+        "wget": "a:gnu:wget",
+        "xdg-utils": "a:freedesktop:xdg-utils",
+        "xwayland": "a:x.org:xwayland",
+    }
+
+    assert identities.keys() == cpe._CPE_OVERRIDES.keys()
+    assert {name: generator.generate(name, "1.2.3") for name in identities} == {
+        name: f"cpe:2.3:{identity}:1.2.3:*:*:*:*:*:*:*"
+        for name, identity in identities.items()
+    }

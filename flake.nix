@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2023 Technology Innovation Institute (TII)
+#
+# SPDX-License-Identifier: Apache-2.0
+{
+  description = "Flakes file for sbomnix";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    flake-root.url = "github:srid/flake-root";
+    vulnix = {
+      url = "github:nix-community/vulnix/master";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        flake-compat.follows = "flake-compat";
+        flake-parts.follows = "flake-parts";
+        flake-root.follows = "flake-root";
+      };
+    };
+    # For preserving compatibility with non-Flake users
+    flake-compat = {
+      url = "github:nix-community/flake-compat";
+      flake = false;
+    };
+    # pre-commit hooks
+    git-hooks-nix = {
+      url = "github:cachix/git-hooks.nix";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        flake-compat.follows = "flake-compat";
+      };
+    };
+  };
+
+  outputs =
+    inputs@{ flake-parts, ... }:
+    flake-parts.lib.mkFlake
+      {
+        inherit inputs;
+      }
+      {
+        systems = [
+          "x86_64-linux"
+          "aarch64-linux"
+          "aarch64-darwin"
+        ];
+
+        imports = [
+          ./nix
+        ];
+      };
+}

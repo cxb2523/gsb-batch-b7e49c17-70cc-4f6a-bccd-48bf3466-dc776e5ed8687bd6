@@ -1,0 +1,591 @@
+<!--
+SPDX-FileCopyrightText: 2023 Technology Innovation Institute (TII)
+
+SPDX-License-Identifier: CC-BY-SA-4.0
+-->
+
+# vulnxscan
+
+[`vulnxscan`](../src/vulnxscan/vulnxscan_cli.py) is a command line utility that demonstrates running vulnerability scans using SBOM as input. It mainly targets nix packages, however, it can be used with any other targets too as long as the target is expressed as valid CycloneDX SBOM.
+
+Table of Contents
+=================
+* [Getting Started](#getting-started)
+* [Example Target](#example-target)
+* [End-to-End Data Flow](#end-to-end-data-flow)
+* [Supported Scanners](#supported-scanners)
+   * [Nix and OSV Vulnerability Database](#nix-and-osv-vulnerability-database)
+   * [Nix and Grype](#nix-and-grype)
+   * [Vulnix](#vulnix)
+* [Vulnxscan Usage Examples](#vulnxscan-usage-examples)
+   * [Find Vulnerabilities Impacting Runtime Dependencies](#find-vulnerabilities-impacting-runtime-dependencies)
+   * [Whitelisting Vulnerabilities](#whitelisting-vulnerabilities)
+   * [Find Vulnerabilities Given SBOM as Input](#find-vulnerabilities-given-sbom-as-input)
+   * [Find Vulnerabilities Impacting Buildtime and Runtime Dependencies](#find-vulnerabilities-impacting-buildtime-and-runtime-dependencies)
+   * [Using Whitelist to Record Manual Analysis Results](#using-whitelist-to-record-manual-analysis-results)
+   * [Triage to Help Manual Analysis](#triage-to-help-manual-analysis)
+   * [SARIF Output](#sarif-output)
+   * [Component Patch Evidence](#component-patch-evidence)
+* [Footnotes and Future Work](#footnotes-and-future-work)
+
+## Getting Started
+To get started, follow the [Getting Started](../README.md#getting-started) section from the main [README](../README.md).
+
+As an example, to run the `vulnxscan` from your local clone of the `tiiuae/sbomnix` repository:
+```bash
+# '--' signifies the end of argument list for `nix`.
+# '--help' is the first argument to `vulnxscan`
+$ nix run .#vulnxscan -- --help
+```
+
+## Example Target
+In the below examples, we use `git` as an example target for `vulnxscan`, referred to by flakeref `github:NixOS/nixpkgs/nixos-unstable#git`.
+
+Pass `--impure` to forward that option to Nix when resolving a flake target that
+requires impure evaluation. The option has no effect when the target is an
+existing store path or when `--sbom` is used.
+
+## End-to-End Data Flow
+
+`vulnxscan` combines three independent scanner paths rather than passing data
+through the scanners in sequence. The shared SBOM and normalized pandas frames
+are where those paths meet.
+
+```mermaid
+flowchart TB
+    subgraph upstream["Public vulnerability and package data"]
+        nvd["NIST NVD<br/>CVEs and CPE dictionary"]
+        osvdb["OSV.dev database and API"]
+        distro["Distribution advisories<br/>Alpine, Debian, Ubuntu, Red Hat, ..."]
+        ghsa["GitHub Security Advisories"]
+        auxiliary["CISA KEV and FIRST EPSS"]
+        nixpkgs["Nixpkgs package metadata"]
+    end
+
+    subgraph published["GitHub-hosted aggregation pipelines"]
+        nvdmirror["fkie-cad/nvd-json-data-feeds"]
+        cpedict["tiiuae/cpedict<br/>data/cpes.csv"]
+        vunnel["anchore/vunnel<br/>normalized provider data"]
+        grypedb["anchore/grype-db<br/>published vulnerability DB"]
+    end
+
+    nvd --> nvdmirror --> cpedict
+    nvd --> cpedict
+    nvd --> vunnel
+    distro --> vunnel
+    ghsa --> vunnel
+    auxiliary --> vunnel
+    vunnel --> grypedb
+
+    target["Nix flake or store path"] --> sbomnix["sbomnix"]
+    nixpkgs -->|metadata and exact CPEs| sbomnix
+    cpedict -->|fallback CPE lookup| sbomnix
+    sbomnix --> cdx["CycloneDX SBOM"]
+    sbomnix --> sbomcsv["SBOM CSV<br/>component and patch metadata"]
+
+    cdx --> grype["Grype scan"]
+    grypedb --> grype
+    cdx --> osvclient["vulnxscan OSV client"]
+    osvdb --> osvclient
+    target --> vulnix["Vulnix scan"]
+    nvd -->|local NVD cache| vulnix
+
+    grype --> frames["Normalized pandas DataFrames"]
+    osvclient --> frames
+    vulnix --> frames
+    frames --> matching["Cross-scanner aggregation<br/>and component/patch matching"]
+    sbomcsv --> matching
+
+    dismiss["dismiss.csv<br/>manual-analysis / --whitelist rules"] --> filtering["Whitelist annotation and suppression"]
+    matching --> filtering
+    matching --> evidence["evidence.json<br/>optional audit trail"]
+    filtering -->|all findings plus annotations| csv["vulns.csv"]
+    filtering -->|active findings only| sarif["vulns.sarif"]
+
+    repology["Repology version lookup"] -. optional .-> triage["Version hints<br/>classification disabled"]
+    nixprs["GitHub Nixpkgs PR search<br/>vulnerability ID only"] -. optional .-> triage
+    filtering -.-> triage
+    triage -.-> triagecsv["vulns.triage.csv"]
+    triage -. enriches .-> sarif
+```
+
+The external stages are documented by [cpedict](https://github.com/tiiuae/cpedict),
+[Anchore's Grype data sources](https://oss.anchore.com/docs/reference/grype/data-sources/)
+and [Grype DB architecture](https://oss.anchore.com/docs/architecture/grype-db/),
+[OSV](https://osv.dev/), and [Vulnix](https://github.com/nix-community/vulnix).
+
+## Supported Scanners
+### Nix and OSV Vulnerability Database
+[OSV](https://osv.dev/) is a vulnerability database for open-source projects [initiated by Google](https://security.googleblog.com/2021/02/launching-osv-better-vulnerability.html).
+
+[OSV database](https://osv.dev/list?ecosystem=) currently [does not support Nix ecosystem](https://ossf.github.io/osv-schema/#affectedpackage-field), so queries that specify Nix as ecosystem would not return any matches. For this reason `vulnxscan` currently does not use Google's official [OSV-Scanner](https://security.googleblog.com/2022/12/announcing-osv-scanner-vulnerability.html) front-end, but implements its own OSV client demo in [osv.py](../src/vulnxscan/osv.py).
+
+`osv.py` sends queries to [OSV API](https://osv.dev/docs/) without specifying the ecosystem, only the target package name and version. At the time of writing, such queries to OSV API return vulnerabilities that match the given package and version across all ecosystems. As a result, the OSV vulnerabilities for Nix ecosystem will include false positives.
+
+Pass `--skip-osv` to omit OSV API queries. This allows `vulnxscan` to run
+without network access when the Grype database and any Vulnix data are already
+available locally and `--triage` is not requesting Repology lookups. Reports
+omit the `osv` scanner column when OSV was not run. For a fully air-gapped
+scan, pre-populate the other scanner data and disable Grype database updates
+with `GRYPE_DB_AUTO_UPDATE=false`.
+
+Also, it is worth mentioning that OSV queries without ecosystem are undocumented in the [API specification](https://osv.dev/docs/#tag/api/operation/OSV_QueryAffected) currently.
+
+### Nix and Grype
+[Grype](https://github.com/anchore/grype) is a vulnerability scanner targeted for container images. It uses the vulnerability data from [a variety of publicly available data sources](https://github.com/anchore/grype#grypes-database). Grype also [supports input from CycloneDX SBOM](https://github.com/anchore/grype#supported-sources) which makes it possible to use Grype with SBOM input from `sbomnix`, thus, allowing Grype scans against Nix targets.
+
+When the CPE dictionary cannot be loaded, `sbomnix` and `vulnxscan` warn and fall back to less accurate CPE identifiers. Pass `--require-cpe-dictionary` to either command to fail instead when generating an SBOM for vulnerability scanning. This option has no effect when `vulnxscan --sbom` uses an existing SBOM.
+
+### Vulnix
+[Vulnix](https://github.com/nix-community/vulnix) is a vulnerability scanner intended for Nix targets. It uses [NIST NVD](https://nvd.nist.gov/vuln) vulnerability database.
+
+Vulnix matches vulnerabilities based on [heuristic](https://github.com/nix-community/vulnix/blob/f56f3ac857626171b95e51d98cb6874278f789d3/src/vulnix/derivation.py#L104), which might result more false positives compared to direct match. False positives due to rough heuristic are an [intended feature](https://github.com/nix-community/vulnix#whitelisting) in vulnix. On the other hand, vulnix accounts [CVE patches](https://github.com/nix-community/vulnix#cve-patch-auto-detection) applied on Nix packages when matching vulnerabilities, something currently not directly supported by other scanners.
+
+## Vulnxscan Usage Examples
+
+### Find Vulnerabilities Impacting Runtime Dependencies
+This example shows how to use `vulnxscan` to summarize vulnerabilities impacting the given target or any of its runtime dependencies. The captured output is illustrative; exact versions and findings will differ depending on the package versions resolved at run time.
+
+```bash
+# Target can be specified as a flakeref or a nix store path, e.g.:
+# vulnxscan .
+# vulnxscan github:tiiuae/sbomnix
+# vulnxscan nixpkgs#git
+# vulnxscan /nix/store/...
+# Ref: https://nixos.org/manual/nix/stable/command-ref/new-cli/nix3-flake.html#flake-references
+$ vulnxscan github:NixOS/nixpkgs/nixos-unstable#git
+
+INFO     Generating SBOM for target '/nix/store/...-git-<version>'
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     Console report
+
+Potential vulnerabilities impacting version_local:
+
+| vuln_id          | url                                               | package   | version | severity | grype | osv | vulnix | sum |
+|------------------+---------------------------------------------------+-----------+---------+----------+-------+-----+--------+-----|
+| CVE-2023-3817    | https://nvd.nist.gov/vuln/detail/CVE-2023-3817    | openssl   | 3.0.9   | 5.3      |   1   |  0  |   1    |  2  |
+| CVE-2022-38663   | https://nvd.nist.gov/vuln/detail/CVE-2022-38663   | git       | 2.41.0  | 6.5      |   0   |  0  |   1    |  1  |
+| CVE-2022-36884   | https://nvd.nist.gov/vuln/detail/CVE-2022-36884   | git       | 2.41.0  | 5.3      |   0   |  0  |   1    |  1  |
+| CVE-2022-36883   | https://nvd.nist.gov/vuln/detail/CVE-2022-36883   | git       | 2.41.0  | 7.5      |   0   |  0  |   1    |  1  |
+| CVE-2022-36882   | https://nvd.nist.gov/vuln/detail/CVE-2022-36882   | git       | 2.41.0  | 8.8      |   0   |  0  |   1    |  1  |
+| CVE-2022-30949   | https://nvd.nist.gov/vuln/detail/CVE-2022-30949   | git       | 2.41.0  | 5.3      |   0   |  0  |   1    |  1  |
+| CVE-2022-30948   | https://nvd.nist.gov/vuln/detail/CVE-2022-30948   | git       | 2.41.0  | 7.5      |   0   |  0  |   1    |  1  |
+| CVE-2022-30947   | https://nvd.nist.gov/vuln/detail/CVE-2022-30947   | git       | 2.41.0  | 7.5      |   0   |  0  |   1    |  1  |
+| MAL-2022-4301    | https://osv.dev/MAL-2022-4301                     | libidn2   | 2.3.4   |          |   0   |  1  |   0    |  1  |
+| CVE-2021-21684   | https://nvd.nist.gov/vuln/detail/CVE-2021-21684   | git       | 2.41.0  | 6.1      |   0   |  0  |   1    |  1  |
+| CVE-2020-2136    | https://nvd.nist.gov/vuln/detail/CVE-2020-2136    | git       | 2.41.0  | 5.4      |   0   |  0  |   1    |  1  |
+| CVE-2019-1003010 | https://nvd.nist.gov/vuln/detail/CVE-2019-1003010 | git       | 2.41.0  | 4.3      |   0   |  0  |   1    |  1  |
+| CVE-2018-1000182 | https://nvd.nist.gov/vuln/detail/CVE-2018-1000182 | git       | 2.41.0  | 6.4      |   0   |  0  |   1    |  1  |
+| CVE-2018-1000110 | https://nvd.nist.gov/vuln/detail/CVE-2018-1000110 | git       | 2.41.0  | 5.3      |   0   |  0  |   1    |  1  |
+| CVE-2016-2781    | https://nvd.nist.gov/vuln/detail/CVE-2016-2781    | coreutils | 9.3     | 6.5      |   1   |  0  |   0    |  1  |
+
+INFO     Wrote: vulns.csv
+```
+
+`vulnxscan` first creates an SBOM, then feeds the SBOM (or target path) as input to different vulnerability scanners: [vulnix](https://github.com/nix-community/vulnix), [grype](https://github.com/anchore/grype), and [osv.py](../src/vulnxscan/osv.py) and creates a summary report. The summary report lists the newest vulnerabilities on top, with the `sum` column indicating how many scanners agreed with the exact same finding. In addition to the console output, `vulnxscan` writes the report to csv-file `vulns.csv` to allow easier post-processing of the output.
+
+It is worth mentioning that `vulnxscan` filters out vulnerabilities that it detects are patched, as printed out in the console output on lines like '`CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']`'.
+This patch auto-detection works in the similar way as the [patch auto-detection on vulnix](https://github.com/nix-community/vulnix#cve-patch-auto-detection), that is, it is based on detecting vulnerability identifiers from the patch filenames.
+
+A finding is filtered out only when *every* derivation it resolves to carries such a patch. When a closure contains several derivations with the same package name and version but different patch metadata, the finding stays in the report and its patch evidence is summarized in the output columns described in [Component Patch Evidence](#component-patch-evidence).
+
+
+### Whitelisting Vulnerabilities
+`vulnxscan` supports whitelisting vulnerabilities to exclude false positives, unfixable issues, or vulnerabilities known to be addressed. Whitelist is a csv file that contains rules for the vulnerabilities to be excluded from the vulnxscan console report. Consider the following example whitelist:
+
+```
+$ csvlook whitelist.csv
+
+| vuln_id        | package   | version_local | version_local_regex | comment                                                                 |
+| -------------- | --------- | ------------- | ------------------- | ----------------------------------------------------------------------- |
+| MAL-2022-4301  |           |               |                     | Incorrect package: Issue refers npm libidn2, not libidn2.               |
+| CVE-2016-2781  | coreutils | 9.5           |                     | NVD data issue: CPE entry does not correctly state the version numbers. |
+| CVE-20.*       | git       |               |                     | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2025-.*    | go        |               | .*-linux-amd64-bootstrap | Build-time bootstrap Go artifact.                                       |
+```
+
+`vuln_id` and `comment` are mandatory columns. Empty optional match
+columns do not restrict the rule.
+
+| column                | required | behavior                                                                                  |
+| --------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `vuln_id`             | yes      | Regular expression full match against the finding `vuln_id`.                              |
+| `comment`             | yes      | Copied to the finding `whitelist_comment` field.                                          |
+| `package`             | no       | Exact match against the finding `package` when non-empty.                                 |
+| `version_local`       | no       | Exact match against the finding local version when non-empty.                             |
+| `version_local_regex` | no       | Regular expression full match against the finding local version when non-empty.           |
+| `whitelist`           | no       | Defaults to `True`; `False` or `0` annotates matching rows without suppressing them.      |
+
+When both `version_local` and `version_local_regex` are set, both
+filters must match.
+
+In case many rules match a vulnerability, rules on top of the whitelist are given higher priority.
+
+To be able to verify which vulnerabilities are whitelisted, `vulnxscan` csv output `vulns.csv` includes both whitelisted and non-whitelisted vulnerabilities implied with boolean column `whitelist`. `vulns.csv` also includes the `comment` section from the whitelist to be able to verify the reason for whitelisting each vulnerability. Below example shows applying the above example whitelist against the `git` vulnxscan output from the earlier example.
+
+```bash
+# Given the whitelist.csv contents:
+$ cat whitelist.csv
+"vuln_id","package","version_local","version_local_regex","comment"
+"MAL-2022-4301",,,,"Incorrect package: Issue refers npm libidn2, not libidn2."
+"CVE-2016-2781","coreutils","9.5",,"NVD data issue: CPE entry does not correctly state the version numbers."
+"CVE-20.*","git",,,"Incorrect package: Impacts Jenkins git plugin, not git."
+"CVE-2025-.*","go",,".*-linux-amd64-bootstrap","Build-time bootstrap Go artifact."
+
+# Apply the whitelist to git vulnxscan output
+$ vulnxscan github:NixOS/nixpkgs/nixos-unstable#git --whitelist=whitelist.csv
+
+INFO     Generating SBOM for target '/nix/store/...-git-<version>'
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     Console report
+
+Potential vulnerabilities impacting version_local:
+
+# Note: the console output now includes only non-whitelisted entries:
+
+| vuln_id       | url                                            | package   | version | severity | grype | osv | vulnix | sum |
+|---------------+------------------------------------------------+-----------+---------+----------+-------+-----+--------+-----|
+| CVE-2023-3817 | https://nvd.nist.gov/vuln/detail/CVE-2023-3817 | openssl   | 3.0.9   |   5.3    |   1   |  0  |   1    |  2  |
+
+INFO     Wrote: vulns.csv
+
+# In addition to the console report, vulnxscan writes a detailed report in a csv file,
+# by default 'vulns.csv', which includes the full details also from the whitelisted vulnerabilities:
+$ csvlook vulns.csv
+
+| vuln_id          | url                                               | package   | version | severity | grype |   osv | vulnix | sum | sortcol         | whitelist | whitelist_comment                                                       |
+| ---------------- | ------------------------------------------------- | --------- | ------- | -------- | ----- | ----- | ------ | --- | --------------- | --------- | ----------------------------------------------------------------------- |
+| CVE-2023-3817    | https://nvd.nist.gov/vuln/detail/CVE-2023-3817    | openssl   | 3.0.9   |      5.3 |  True | False |   True |   2 | 2023A0000003817 |     False |                                                                         |
+| CVE-2022-38663   | https://nvd.nist.gov/vuln/detail/CVE-2022-38663   | git       | 2.41.0  |      6.5 | False | False |   True |   1 | 2022A0000038663 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2022-36884   | https://nvd.nist.gov/vuln/detail/CVE-2022-36884   | git       | 2.41.0  |      5.3 | False | False |   True |   1 | 2022A0000036884 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2022-36883   | https://nvd.nist.gov/vuln/detail/CVE-2022-36883   | git       | 2.41.0  |      7.5 | False | False |   True |   1 | 2022A0000036883 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2022-36882   | https://nvd.nist.gov/vuln/detail/CVE-2022-36882   | git       | 2.41.0  |      8.8 | False | False |   True |   1 | 2022A0000036882 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2022-30949   | https://nvd.nist.gov/vuln/detail/CVE-2022-30949   | git       | 2.41.0  |      5.3 | False | False |   True |   1 | 2022A0000030949 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2022-30948   | https://nvd.nist.gov/vuln/detail/CVE-2022-30948   | git       | 2.41.0  |      7.5 | False | False |   True |   1 | 2022A0000030948 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2022-30947   | https://nvd.nist.gov/vuln/detail/CVE-2022-30947   | git       | 2.41.0  |      7.5 | False | False |   True |   1 | 2022A0000030947 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| MAL-2022-4301    | https://osv.dev/MAL-2022-4301                     | libidn2   | 2.3.4   |          | False |  True |  False |   1 | 2022A0000004301 |      True | Incorrect package: Issue refers npm libidn2, not libidn2.               |
+| CVE-2021-21684   | https://nvd.nist.gov/vuln/detail/CVE-2021-21684   | git       | 2.41.0  |      6.1 | False | False |   True |   1 | 2021A0000021684 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2020-2136    | https://nvd.nist.gov/vuln/detail/CVE-2020-2136    | git       | 2.41.0  |      5.4 | False | False |   True |   1 | 2020A0000002136 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2019-1003010 | https://nvd.nist.gov/vuln/detail/CVE-2019-1003010 | git       | 2.41.0  |      4.3 | False | False |   True |   1 | 2019A0001003010 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2018-1000182 | https://nvd.nist.gov/vuln/detail/CVE-2018-1000182 | git       | 2.41.0  |      6.4 | False | False |   True |   1 | 2018A0001000182 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2018-1000110 | https://nvd.nist.gov/vuln/detail/CVE-2018-1000110 | git       | 2.41.0  |      5.3 | False | False |   True |   1 | 2018A0001000110 |      True | Incorrect package: Impacts Jenkins git plugin, not git.                 |
+| CVE-2016-2781    | https://nvd.nist.gov/vuln/detail/CVE-2016-2781    | coreutils | 9.3     |      6.5 |  True | False |  False |   1 | 2016A0000002781 |      True | NVD data issue: CPE entry does not correctly state the version numbers. |
+```
+
+See flakevuln's [manual_analysis.csv](https://github.com/tiiuae/flakevuln/blob/main/.github/flakevuln/manual_analysis.csv) for a more complete example and usage of the vulnxscan whitelisting feature.
+
+### Find Vulnerabilities Given SBOM as Input
+This example shows how to use `vulnxscan` to summarize vulnerabilities impacting components in the given CycloneDX SBOM.
+
+First, we use `sbomnix` to generate SBOM for the example target:
+```bash
+$ nix run .#sbomnix -- github:NixOS/nixpkgs/nixos-unstable#git
+..
+INFO     Wrote: sbom.cdx.json
+```
+
+Then, give the generated SBOM as input to `vulnxscan`:
+```bash
+$ vulnxscan --sbom sbom.cdx.json
+
+INFO     Console report
+
+Potential vulnerabilities impacting version_local:
+
+| vuln_id       | url                                            | package   | version | severity | grype | osv | sum |
+|---------------+------------------------------------------------+-----------+---------+----------+-------+-----+-----|
+| CVE-2023-3817 | https://nvd.nist.gov/vuln/detail/CVE-2023-3817 | openssl   | 3.0.9   | 5.3      |   1   |  0  |  1  |
+| CVE-2023-2975 | https://nvd.nist.gov/vuln/detail/CVE-2023-2975 | openssl   | 3.0.9   | 5.3      |   1   |  0  |  1  |
+| MAL-2022-4301 | https://osv.dev/MAL-2022-4301                  | libidn2   | 2.3.4   |          |   0   |  1  |  1  |
+| CVE-2016-2781 | https://nvd.nist.gov/vuln/detail/CVE-2016-2781 | coreutils | 9.3     | 6.5      |   1   |  0  |  1  |
+
+INFO     Wrote: vulns.csv
+```
+Notice that `vulnxscan` drops the vulnix scan when the input is SBOM. This is due to the vulnix not supporting SBOM input at the time of writing.
+
+Also notice that `vulnxscan` drops the patch auto-detection if the input is SBOM. Reason is that `vulnxscan` reads the patch information from nix derivations. Therefore, the patch information is only available when the given input is Nix store path (e.g. derivation or out-path), not SBOM.
+
+
+### Find Vulnerabilities Impacting Buildtime and Runtime Dependencies
+By default, `vulnxscan` scans the given target for vulnerabilities that impact its runtime-only dependencies. This example shows how to use `vulnxscan` to include also buildtime dependencies to the scan.
+
+```bash
+$ vulnxscan ./result --buildtime
+
+# ... output not included in this snippet ...
+```
+
+### Using Whitelist to Record Manual Analysis Results
+`vulnxscan` supports using whitelist csv file as a more generic record of manual analysis results, by allowing non-whitelisting rules. That is, the whitelist csv file can include a boolean `whitelist` column to indicate if the matching vulnerabilities should be whitelisted or not. The default value for `whitelist` is True, that is, if the `whitelist` column is missing or the value is empty, `vulnxscan` interprets the rule as if the `whitelist` column value would evaluate to True.
+
+As an example, consider the following manual analysis record (i.e. 'whitelist'):
+
+```
+csvlook manual_analysis.csv
+
+| vuln_id        | whitelist | package   | comment                                                            |
+| -------------- | --------- | --------- | ------------------------------------------------------------------ |
+| CVE-2022-0856  |     False | libcaca   | Not fixed upstream: https://github.com/cacalabs/libcaca/issues/65. |
+| CVE-2021-32490 |     False | djvulibre | Pending merge: https://github.com/NixOS/nixpkgs/pull/246773.       |
+```
+
+The above example `manual_analysis.csv` includes two rules: one for `CVE-2022-0856` and one for `CVE-2021-32490`. For both, the `whitelist` column value is '`False`', indicating the rule is a non-whitelisting rule. This means, for both cases, we want to record the manual analysis results as detailed in the `comment` column, but we don't want to whitelist the matching vulnerabilities. Specifically, in the case of `CVE-2022-0856` we don't want to whitelist the issue since it's not fixed upstream, but we still want to record the link to the upstream PR to make it easier to follow the upstream progress. In the case of `CVE-2021-32490` we don't want to whitelist the issue since the nixpkgs PR is pending merge. In this case too, we still want to record the nixpkgs PR to allow following the progress.
+
+See flakevuln's [manual_analysis.csv](https://github.com/tiiuae/flakevuln/blob/main/.github/flakevuln/manual_analysis.csv) for a more complete example and usage of non-whitelisting rules to help manual analysis.
+
+### Triage to Help Manual Analysis
+
+`vulnxscan` can help manual analysis with the `--triage` and `--nixprs`
+command line options.
+
+With `--triage`, `vulnxscan` still queries repology.org for nix-unstable and
+package upstream version hints in `version_nixpkgs` and `version_upstream`.
+Classification is disabled because Repology CVE data cannot reliably establish
+whether a package is affected. No Repology CVE requests are made, and the
+`classify` column is retained but left empty for every row. Repology also
+blocks non-browser clients, so version lookups may fail. See
+[issue #350](https://github.com/tiiuae/sbomnix/issues/350).
+
+Whenever triage runs on findings, `--evidence-out` records
+`"triage_status": "unavailable"`, even if version lookups succeed. A scan with
+no findings returns before triage and does not include `triage_status`.
+
+If Repology cannot be reached, the scan still writes its main CSV or SARIF and
+a supplemental triage CSV. The fallback triage rows retain whitelist and
+component-evidence fields, while `package_repology`, `version_nixpkgs`,
+`version_upstream`, and `classify` are empty.
+
+The abbreviated example below uses [ghaf](https://github.com/tiiuae/ghaf) as
+the target and illustrates successful version lookups with historical values.
+
+```bash
+# Run vulnxscan:
+#  --buildtime: Scan buildtime dependencies. Scanning buildtime dependencies does not
+#               require building the target, which allows relatively quick scan also for
+#               targets not built earlier. Notice: nix 'buildtime' dependencies are a
+#               superset of runtime dependencies.
+#  --whitelist: Use 'manual_analysis.csv' as a whitelist file.
+#  --triage   : Help manual analysis by querying version info from repology.org.
+$ vulnxscan github:tiiuae/ghaf?ref=main#packages.x86_64-linux.generic-x86_64-release --buildtime --whitelist=manual_analysis.csv --triage
+INFO     Generating SBOM for target '/nix/store/...-nixos-disk-image.drv'
+INFO     CVE-2023-27371 for 'libmicrohttpd' is patched with: ['/nix/store/l53sq07v6hghm7cchcjbrwyvjyjag06r-CVE-2023-27371.patch']
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/7gz0nj14469r9dlh8p0j5w5wjj3b6hw4-CVE-2023-2975.patch']
+INFO     CVE-2023-2617 for 'opencv' is patched with: ['/nix/store/vw29nr5nrfs10vv5p3m7rpkqscwrh4sp-CVE-2023-2617.patch']
+...
+
+Potential vulnerabilities impacting version_local:
+
+| vuln_id        | package | severity | version_local | version_nixpkgs | version_upstream | classify |
+|----------------+---------+----------+---------------+-----------------+------------------+----------|
+| CVE-2023-40360 | qemu    | 5.5      | 8.0.2         | 8.1.0           | 8.1.0            |          |
+| CVE-2023-40359 | xterm   | 9.8      | 379           | 384             | 384              |          |
+| CVE-2023-39742 | giflib  | 5.5      | 5.2.1         | 5.2.1           | 5.2.1            |          |
+| CVE-2023-37769 | pixman  | 6.5      | 0.42.2        | 0.42.2          | 0.42.2           |          |
+
+... (output truncated) ...
+
+INFO     Wrote: /home/hrosten/projects/sbomnix-fork/vulns.csv
+INFO     Wrote: /home/hrosten/projects/sbomnix-fork/vulns.triage.csv
+```
+
+For example, the table reports `qemu` 8.0.2 as potentially vulnerable to
+CVE-2023-40360 and shows 8.1.0 as the nix-unstable and upstream version hints.
+Those hints do not establish whether a newer version fixes the vulnerability.
+The same applies when no newer version is listed, as with `giflib` and
+`pixman`. Manual analysis is still required.
+
+##### Nixpkgs PR Search
+
+With `--triage --nixprs`, `vulnxscan` queries GitHub for nixpkgs PRs by
+vulnerability ID only. Each non-whitelisted row gets two searches, one for
+open unmerged PRs and one for merged PRs. The `nixpkgs_pr` column lists at most
+five matching PR URLs per row to help manual analysis. The PR search takes
+significant time due to GitHub API rate limits and is not enabled by default.
+
+The following abbreviated example uses the same Ghaf target and historical
+version hints and PR links:
+
+```bash
+# Run vulnscan with --triage and --nixprs
+$ vulnxscan github:tiiuae/ghaf?ref=main#packages.x86_64-linux.generic-x86_64-release --buildtime --whitelist=manual_analysis.csv --triage --nixprs
+INFO     Generating SBOM for target '/nix/store/...-nixos-disk-image.drv'
+...
+Potential vulnerabilities impacting version_local:
+
+
+| vuln_id        | package | severity | version_local | version_nixpkgs | version_upstream | classify | nixpkgs_pr                                   |
+|----------------+---------+----------+---------------+-----------------+------------------+----------+----------------------------------------------|
+| CVE-2023-40360 | qemu    | 5.5      | 8.0.2         | 8.1.0           | 8.1.0            |          | https://github.com/NixOS/nixpkgs/pull/251154 |
+| CVE-2023-40359 | xterm   | 9.8      | 379           | 384             | 384              |          | https://github.com/NixOS/nixpkgs/pull/244141 |
+| CVE-2023-39742 | giflib  | 5.5      | 5.2.1         | 5.2.1           | 5.2.1            |          |                                              |
+```
+
+`--nixprs` has no effect without `--triage`. PR links are candidates for
+manual review and do not establish that a vulnerability is fixed.
+
+### SARIF Output
+
+Use `--format sarif` to write the final normalized findings as SARIF 2.1.0. The default output name for this format is `vulns.sarif`; `--out` selects another path.
+
+```bash
+$ vulnxscan nixpkgs#git --format sarif --out vulnxscan.sarif
+```
+
+SARIF is a vulnerability-result interchange format. It does not replace the CycloneDX or SPDX SBOM that describes the scanned components.
+
+Each SARIF rule is a vulnerability identifier such as a CVE, GHSA, or OSV identifier. Each result is one active normalized `(vulnerability ID, package, version)` finding after the existing cross-scanner aggregation, patch filtering, and whitelist suppression. Multiple scanners are recorded in the result's sorted `sources` property instead of producing duplicate results.
+
+Rule help contains explicit triage links. Canonical CVE rules link to both NVD and the Nixpkgs Security Tracker's stable `by-cve` route, GHSA rules link to the GitHub Advisory Database and OSV, and other identifiers retain their available vulnerability-record link. These links are constructed offline and do not assert that the tracker has classified the exact package or overlay. A tracker URL is only a candidate link and may return 404 when no suggestion exists.
+
+Grype descriptions become rule `fullDescription` text and are repeated in rule help because GitHub ingests `fullDescription` without rendering it on the alert page. No extra advisory requests are made for SARIF output.
+
+Original severity is retained in `properties.severity`, and a numeric value is also retained as `properties.cvssScore`. SARIF levels are mapped as follows:
+
+| vulnxscan severity | SARIF level |
+| --- | --- |
+| `critical`, `high`, or numeric score 7.0-10.0 | `error` |
+| `medium`, `moderate`, unknown/missing, or numeric score 4.0-6.9 | `warning` |
+| `low`, `none`, or numeric score 0.0-3.9 | `note` |
+
+Numeric scores are preserved in `cvssScore`, including `0.0`. For scores above `0.0`, the rule also carries GitHub's supported `security-severity` property so Code Scanning displays its critical/high/medium/low security classification instead of only the generic SARIF level. `vulnxscan` does not emit a `precision` value because its scanners do not provide one and inventing confidence would be misleading.
+
+Grype fix state and fixed versions, scanner provenance, selected severity, Nix patch-evidence state, and resolved derivation paths are included in each result message so GitHub displays them. The same values remain in result properties for generic SARIF consumers. Vulnix currently provides CVSS data but no description or fix versions; the OSV batch endpoint used by `vulnxscan` currently returns identifiers and modification dates rather than full advisory details.
+
+Each result has a SHA-256 partial fingerprint over the canonical `(vulnerability ID, package, version)` tuple. Including the package version keeps concurrent vulnerable versions distinct. Derivation paths, output paths, Nix store hashes, scanner database state, timestamps, and result order are excluded so rebuilds retain alert identity. Nix paths remain available as result metadata when component evidence provides them.
+
+A second partial fingerprint, `vulnxscan/package-v1`, covers the version-independent `(vulnerability ID, package)` pair. It is a grouping key rather than an identity — one pair commonly carries several affected versions — and lets consumers such as `vulnxscan-diff` recognize a finding that persists across a package version update.
+
+#### Diffing SARIF Documents
+
+`vulnxscan-diff` renders a markdown vulnerability diff between a current and a previous SARIF document, for example as a pull-request comment:
+
+```bash
+$ vulnxscan-diff --current vulns.sarif --previous previous.sarif --markdown diff.md
+```
+
+Exact matches pair on `primaryLocationLineHash`. Findings that persist across a package version update pair on the `vulnxscan/package-v1` group fingerprint and are reported as carried rather than as resolved plus added; within one group both sides pair one-to-one in version order and any remainder falls back to added or resolved. Detail changes (severity, scanners, fix state) compare the documented semantic properties — package, version, severity, cvssScore, sources, evidenceScope, patchState, fixStates, fixVersions — so a producer-side property addition does not mark all persisted findings as changed against an older baseline; Nix store paths and `github/*` metadata take no part, and for carried findings the version is excluded from the comparison since it changed by construction. Omitting `--previous` or pointing it at a missing file renders a no-baseline report, matching a first run without a cached baseline.
+
+The diff expects raw producer documents and rejects results without `properties`: GitHub's code-scanning analyses API strips every `partialFingerprints` key except `primaryLocationLineHash` and all producer `properties` from accepted analyses, so a SARIF downloaded from GitHub cannot serve as the baseline and is refused instead of producing a plausible incorrect diff; keep the raw file in CI cache or as an artifact instead. Output is unbounded by default; callers bound it for their medium with `--max-chars`, which omits excess entries with a note (a GitHub PR comment caps at 65536 characters).
+
+#### Locations and GitHub Code Scanning
+
+A Nix closure vulnerability does not inherently identify a source line. By default, `vulnxscan` therefore emits no SARIF location rather than pointing every result at a fabricated line such as `flake.lock:1`.
+
+GitHub Code Scanning currently requires every displayed result to have a physical artifact location. If the repository has a file that genuinely defines or introduces the scanned closure, pass its repository-relative path with `--sarif-location`. This creates a file-level location and deliberately omits a line region.
+
+```yaml
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+steps:
+...
+- name: Scan Nix closure
+  env:
+    GRYPE_DB_REQUIRE_UPDATE_CHECK: "true"
+  run: |
+    vulnxscan ./result \
+      --require-cpe-dictionary \
+      --format sarif --out vulnxscan.sarif \
+      --sarif-location flake.nix
+
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v4
+  with:
+    sarif_file: vulnxscan.sarif
+    category: vulnxscan
+```
+
+Replace `flake.nix` with a more precise repository-relative provenance file when available. If no truthful file exists, omit `--sarif-location`; the result remains valid generic SARIF, but GitHub Code Scanning will not display its location-free results. Upload and authentication remain the CI platform's responsibility; `vulnxscan` performs no GitHub API calls and requires no GitHub environment variables.
+
+When `--triage` is combined with SARIF, the main output is SARIF and the
+supplemental triage report remains CSV at `<stem>.triage.csv`. Version hints
+remain available when lookups succeed, but `classify` is always empty. When
+triage runs, the evidence document records `"triage_status": "unavailable"`.
+With `--nixprs`, Nixpkgs pull requests found by vulnerability ID also appear
+as package-specific work-item links on each result and as labeled links in
+GitHub's rule-help panel.
+
+### Component Patch Evidence
+
+Patch filtering answers "is this vulnerability patched?" with a single yes or no. That answer is ambiguous when a Nix closure contains several derivations that share a package name and version but differ in patch metadata: one may carry a patch naming the vulnerability while another does not. Component patch evidence records which derivations a finding resolved to, and what the patch metadata of each one says.
+
+Every report row therefore carries these columns, in both the normal and the `--triage` CSV:
+
+| Column | Meaning |
+| --- | --- |
+| `finding_id` | Stable `sha256:` digest of the canonical `(vuln_id, package, version)` tuple. |
+| `evidence_scope` | How the finding was resolved to components: `component_exact`, `component_expanded`, `component_mixed`, or `package_version_only`. |
+| `patch_state` | Aggregate verdict: `all_components_match`, `mixed_component_evidence`, `no_component_match`, `metadata_unavailable`, or `package_version_only`. |
+| `resolved_component_count` | Number of components the finding resolved to. |
+| `vuln_id_patch_name_match_count` | How many of those carry a patch whose file name names the vulnerability. |
+| `no_vuln_id_patch_name_match_count` | How many carry no such patch. |
+| `metadata_unavailable_count` | How many have missing or unusable patch metadata, including components inferred without derivation metadata. |
+| `package_version_only_count` | `1` when no derivation could be resolved at all, otherwise `0`. |
+
+A matching patch file name is evidence that a fix was applied, not proof; equally, an absent patch name is not proof of exposure. Only `all_components_match` suppresses a finding from the report.
+
+#### Writing the evidence report
+
+Option `--evidence-out PATH` writes the full per-component evidence as JSON. Omitting it leaves the existing CSV behavior untouched.
+
+```bash
+# Scan buildtime dependencies and record component evidence next to the CSVs
+$ vulnxscan github:NixOS/nixpkgs/nixos-unstable#git --buildtime --triage \
+    --out=vulns.csv --evidence-out=evidence.json
+...
+INFO     CVE-2023-2975 for 'openssl' is patched with: ['/nix/store/...-CVE-2023-2975.patch']
+INFO     Wrote: vulns.csv
+INFO     Wrote: vulns.triage.csv
+INFO     Wrote: evidence.json
+```
+
+The document is written atomically and validated first, so a partial or internally inconsistent file is never left behind. A successful scan with no findings still writes a valid document with empty arrays, so an empty file can never be confused with a scan that did not run. The top-level shape is:
+
+```json
+{
+  "schema_version": 1,
+  "observations": [],
+  "findings": [],
+  "components": []
+}
+```
+
+Whenever `--triage` runs on findings, the document additionally contains the
+top-level field `"triage_status": "unavailable"` because classification is
+disabled ([issue #350](https://github.com/tiiuae/sbomnix/issues/350)). This is
+set even when version lookups succeed. Scans with no findings return before
+triage and omit this field.
+
+- `observations` holds one entry per normalized scanner observation, before cross-scanner aggregation: `observation_id`, `finding_id`, `scanner`, `vuln_id`, `package`, `version`, the scanner's own `severity`, `component_ref`, and `resolution` (`exact`, `expanded`, or `unresolved`). Optional `description`, `fix_state`, and `fix_versions` fields retain scanner metadata when available. Every raw per-scanner severity is retained here, even though the aggregate finding reports only the highest.
+- `findings` holds one entry per `(vuln_id, package, version)`, with the aggregate `severity`, sorted unique `scanners`, `url`, `sortcol`, the evidence columns listed above, and `suppressed_by_patch_evidence`.
+- `components` holds one entry per resolved component: `finding_id`, `component_id`, sorted `identity_sources` (`scanner_component_ref`, `sbom_package_version_join`, or `unresolved`), `drv_path`, `output_paths`, `pname`, `version`, `patches`, `patch_evidence_state` (`vuln_id_patch_name_match`, `no_vuln_id_patch_name_match`, `metadata_unavailable`, or `package_version_only`), `matching_patch_paths`, and `suppressed_by_patch_evidence`. `drv_path` is the derivation path when metadata is available and the representative runtime output path for an inferred component.
+
+Unlike the CSV reports, the evidence document also contains the findings that patch filtering suppressed, marked `suppressed_by_patch_evidence: true`, so a suppression can be audited rather than silently trusted.
+
+A complete example document is kept as a contract fixture in [tests/resources/vulnxscan_evidence_v1.json](../tests/resources/vulnxscan_evidence_v1.json) and asserted by the test suite.
+
+All counts are non-negative integers, suppression fields are JSON booleans, path and scanner collections are arrays of strings, and unavailable scalars are empty strings rather than `null`.
+
+When the input is an SBOM (`--sbom`) rather than a Nix target, there is no Nix component table to resolve against, so findings are reported as `package_version_only`.
+
+#### Schema evolution
+
+Readers must ignore unknown object fields. The fields listed above are required in schema version 1 except for the optional scanner metadata. Adding an optional field keeps version 1. Removing or renaming a required field, changing a field type, changing identity or count semantics, or adding or changing the meaning of an enum value requires incrementing `schema_version`.
+
+## Footnotes and Future Work
+
+For now, consider `vulnxscan` as a demonstration. Some improvement ideas are listed below:
+ - Consider adding patch information to SBOM (e.g. via the [pedigree](https://cyclonedx.org/use-cases/#pedigree) attribute) to be able to auto-detect patched vulnerabilities also when the input is SBOM.
+ - Vulnerability scanners lack support for parsing the patch data: even if `sbomnix` added the patch data to the output SBOM, we suspect not many vulnerability scanners would read the information. As an example, the following discussion touches this topic on DependencyTrack: https://github.com/DependencyTrack/dependency-track/issues/919.
+ - Identifying packages is hard as pointed out in https://discourse.nixos.org/t/the-future-of-the-vulnerability-roundups/22424/5. As an example, CPEs are inaccurate which causes issues in matching vulnerabilities: https://github.com/DependencyTrack/dependency-track/discussions/2290.
+ - Nix ecosystem is not supported in OSV: the way `osv.py` makes use of OSV data for Nix targets -- as explained in section [Nix and OSV vulnerability database](#nix-and-osv-vulnerability-database) -- makes the reported OSV vulnerabilities include false positives.
+
+### Other Future Work
+- [vulnxscan](../src//vulnxscan/vulnxscan_cli.py) could include more scanners in addition to [vulnix](https://github.com/nix-community/vulnix), [grype](https://github.com/anchore/grype), and [osv.py](../src/vulnxscan/osv.py). Suggestions for other open-source scanners, especially those that can digest CycloneDX or SPDX SBOMs are welcome. Consider e.g. [bombon](https://github.com/nikstur/bombon) and [cve-bin-tool](https://github.com/intel/cve-bin-tool). Adding cve-bin-tool to vulnxscan was [demonstrated](https://github.com/tiiuae/sbomnix/pull/75) earlier, but not merged due to reasons explained in the [PR](https://github.com/tiiuae/sbomnix/pull/75#issuecomment-1670958503).

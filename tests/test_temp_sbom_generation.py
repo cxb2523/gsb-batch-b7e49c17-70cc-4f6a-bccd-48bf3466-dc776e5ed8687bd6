@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Technology Innovation Institute (TII)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Focused tests for temporary SBOM generation and cleanup."""
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from sbomnix import cli_utils as sbomnix_cli_utils
+from vulnxscan import vulnxscan_cli
+
+
+@pytest.mark.parametrize(("skip_osv", "expected_osv_calls"), [(False, 1), (True, 0)])
+def test_vulnxscan_skip_osv_controls_api_scan(
+    tmp_path, monkeypatch, skip_osv, expected_osv_calls
+):
+    sbom_path = tmp_path / "input.cdx.json"
+    sbom_path.write_text('{"bomFormat": "CycloneDX"}', encoding="utf-8")
+    calls = []
+
+    args = SimpleNamespace(
+        TARGET=sbom_path.as_posix(),
+        out="vulns.csv",
+        buildtime=False,
+        sbom=True,
+        skip_osv=skip_osv,
+    )
+
+    class CapturingScanner:
+        def scan_grype(self, path):
+            assert path == sbom_path.as_posix()
+
+        def scan_osv(self, path):
+            assert path == sbom_path.as_posix()
+            calls.append(path)
+
+        def report(self, report_args, sbom_csv_path):
+            assert report_args is args
+            assert sbom_csv_path is None
+
+    monkeypatch.setattr(
+        vulnxscan_cli, "exit_unless_command_exists", lambda _command: None
+    )
+    monkeypatch.setattr(vulnxscan_cli, "VulnScan", CapturingScanner)
+
+    vulnxscan_cli._run(args)
+
+    assert len(calls) == expected_osv_calls
+
+
+@pytest.mark.parametrize("require_cpe_dictionary", [False, True])
+@pytest.mark.parametrize("impure", [False, True])
+def test_vulnxscan_cleans_generated_tempfiles_on_failure(
+    tmp_path, monkeypatch, require_cpe_dictionary, impure
+):
+    sbom_cdx_path = tmp_path / "generated.cdx.json"
+    sbom_csv_path = tmp_path / "generated.csv"
+    sbom_cdx_path.write_text("{}", encoding="utf-8")
+    sbom_csv_path.write_text("", encoding="utf-8")
+    generated_kwargs = {}
+
+    args = SimpleNamespace(
+        TARGET="target",
+        verbose=0,
+        out="vulns.csv",
+        buildtime=False,
+        impure=impure,
+        require_cpe_dictionary=require_cpe_dictionary,
+        sbom=False,
+        whitelist=None,
+        triage=False,
+        nixprs=False,
+    )
+
+    class FailingScanner:
+        def scan_vulnix(self, _target_path, _buildtime):
+            return None
+
+        def scan_grype(self, _sbom_path):
+            raise RuntimeError("scan failed")
+
+        def scan_osv(self, _sbom_path):
+            raise AssertionError("scan_osv should not run after grype failure")
+
+        def report(self, _args, _sbom_csv_path):
+            raise AssertionError("report should not run after scan failure")
+
+    monkeypatch.setattr(vulnxscan_cli, "getargs", lambda: args)
+    monkeypatch.setattr(vulnxscan_cli, "set_log_verbosity", lambda _verbosity: None)
+    monkeypatch.setattr(
+        vulnxscan_cli, "exit_unless_command_exists", lambda _command: None
+    )
+
+    def fake_resolve_nix_target(_target, *, buildtime=False, impure=False):
+        assert impure is args.impure
+        return sbomnix_cli_utils.ResolvedNixTarget(path="/nix/store/target")
+
+    monkeypatch.setattr(vulnxscan_cli, "resolve_nix_target", fake_resolve_nix_target)
+
+    def fake_generate_temp_sbom(_target_path, _buildtime, **kwargs):
+        generated_kwargs.update(kwargs)
+        return sbomnix_cli_utils.GeneratedSbom(
+            cdx_path=sbom_cdx_path,
+            csv_path=sbom_csv_path,
+        )
+
+    monkeypatch.setattr(vulnxscan_cli, "generate_temp_sbom", fake_generate_temp_sbom)
+    monkeypatch.setattr(vulnxscan_cli, "VulnScan", FailingScanner)
+
+    with pytest.raises(RuntimeError, match="scan failed"):
+        vulnxscan_cli.main()
+
+    assert not sbom_cdx_path.exists()
+    assert not sbom_csv_path.exists()
+    assert generated_kwargs["require_cpe_dictionary"] is require_cpe_dictionary
+
+
+def test_generate_temp_sbom_without_csv_returns_only_cdx_path(tmp_path, monkeypatch):
+    sbom_cdx_path = tmp_path / "generated.cdx.json"
+
+    class FakeTempFile:
+        def __init__(self, path):
+            self.name = path.as_posix()
+
+        def __enter__(self):
+            Path(self.name).touch()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class DummySbomBuilder:
+        def __init__(
+            self,
+            _target_path,
+            _buildtime,
+            include_meta=False,
+            require_cpe_dictionary=False,
+        ):
+            assert include_meta is False
+            assert require_cpe_dictionary is False
+
+        def to_cdx(self, sbom_path, printinfo=False):
+            Path(sbom_path).write_text("{}", encoding="utf-8")
+            assert printinfo is False
+
+        def to_csv(self, _sbom_path, loglevel=None):
+            raise AssertionError("to_csv should not run when include_csv is False")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "NamedTemporaryFile",
+        lambda **_kwargs: FakeTempFile(sbom_cdx_path),
+    )
+    monkeypatch.setattr(sbomnix_cli_utils, "SbomBuilder", DummySbomBuilder)
+
+    generated = sbomnix_cli_utils.generate_temp_sbom(
+        "/nix/store/target",
+        buildtime=False,
+        prefix="nixdeps_",
+        cdx_suffix=".cdx.json",
+    )
+
+    assert generated == sbomnix_cli_utils.GeneratedSbom(
+        cdx_path=sbom_cdx_path,
+        csv_path=None,
+    )
+    assert sbom_cdx_path.exists()
+    generated.cleanup()
+    assert not sbom_cdx_path.exists()
+
+
+def test_generate_temp_sbom_cleans_tempfiles_on_generation_failure(
+    tmp_path, monkeypatch
+):
+    sbom_cdx_path = tmp_path / "generated.cdx.json"
+    sbom_csv_path = tmp_path / "generated.csv"
+
+    class FakeTempFile:
+        def __init__(self, path):
+            self.name = path.as_posix()
+
+        def __enter__(self):
+            Path(self.name).touch()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FailingSbomBuilder:
+        def __init__(
+            self,
+            _target_path,
+            _buildtime,
+            include_meta=False,
+            require_cpe_dictionary=False,
+        ):
+            assert include_meta is False
+            assert require_cpe_dictionary is False
+
+        def to_cdx(self, sbom_path, printinfo=False):
+            Path(sbom_path).write_text("{}", encoding="utf-8")
+            assert printinfo is False
+
+        def to_csv(self, sbom_path, loglevel=None):
+            Path(sbom_path).write_text("", encoding="utf-8")
+            assert loglevel is not None
+            raise RuntimeError("sbom csv generation failed")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "NamedTemporaryFile",
+        lambda **kwargs: FakeTempFile(
+            sbom_cdx_path if kwargs["suffix"] == ".json" else sbom_csv_path
+        ),
+    )
+    monkeypatch.setattr(sbomnix_cli_utils, "SbomBuilder", FailingSbomBuilder)
+
+    with pytest.raises(RuntimeError, match="sbom csv generation failed"):
+        sbomnix_cli_utils.generate_temp_sbom(
+            "/nix/store/target",
+            buildtime=False,
+            prefix="vulnxscan_",
+            cdx_suffix=".json",
+            include_csv=True,
+        )
+
+    assert not sbom_cdx_path.exists()
+    assert not sbom_csv_path.exists()
+
+
+def test_generate_temp_sbom_cleans_first_tempfile_if_second_creation_fails(
+    tmp_path, monkeypatch
+):
+    sbom_cdx_path = tmp_path / "generated.cdx.json"
+
+    class FakeTempFile:
+        def __init__(self, path):
+            self.name = path.as_posix()
+
+        def __enter__(self):
+            Path(self.name).touch()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class DummySbomBuilder:
+        def __init__(
+            self,
+            _target_path,
+            _buildtime,
+            include_meta=False,
+            require_cpe_dictionary=False,
+        ):
+            assert include_meta is False
+            assert require_cpe_dictionary is False
+
+        def to_cdx(self, _sbom_path, printinfo=False):
+            raise AssertionError("to_cdx should not run if csv tempfile creation fails")
+
+        def to_csv(self, _sbom_path, loglevel=None):
+            raise AssertionError("to_csv should not run if csv tempfile creation fails")
+
+    def fake_named_temporary_file(**kwargs):
+        if kwargs["suffix"] == ".json":
+            return FakeTempFile(sbom_cdx_path)
+        raise RuntimeError("csv tempfile creation failed")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "NamedTemporaryFile",
+        fake_named_temporary_file,
+    )
+    monkeypatch.setattr(sbomnix_cli_utils, "SbomBuilder", DummySbomBuilder)
+
+    with pytest.raises(RuntimeError, match="csv tempfile creation failed"):
+        sbomnix_cli_utils.generate_temp_sbom(
+            "/nix/store/target",
+            buildtime=False,
+            prefix="vulnxscan_",
+            cdx_suffix=".json",
+            include_csv=True,
+        )
+
+    assert not sbom_cdx_path.exists()

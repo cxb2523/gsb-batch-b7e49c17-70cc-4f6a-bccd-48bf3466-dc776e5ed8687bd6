@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2023 Technology Innovation Institute (TII)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+temp/
+venv/
+build/
+*.egg-info/
+.eggs/
+__pycache__/
+.coverage
+.coverage.*
+.hypothesis/
+coverage.xml
+htmlcov/
+sbomnix_test_data/
+result
+*.py[cod]
+*.sqlite
+*.csv
+*.sarif
+/*.log
+/*.json
+!/pyrightconfig.json
+/*.png
+/*.jpg
+/*.pdf
+/*.dot
+/*.svg
+.idea
+.direnv
+.pre-commit-config.yaml

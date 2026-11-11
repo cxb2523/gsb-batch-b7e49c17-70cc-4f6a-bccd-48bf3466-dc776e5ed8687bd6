@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 Technology Innovation Institute (TII)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Dependency closure helpers shared by SBOM generation paths."""
+
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable
+
+import pandas as pd
+
+from common import columns as cols
+from common.nix_utils import (
+    nix_derivation_input_drv_paths,
+    nix_derivation_input_src_paths,
+)
+
+DEPENDENCY_COLUMNS = [
+    cols.SRC_PATH,
+    "src_pname",
+    cols.TARGET_PATH,
+    "target_pname",
+]
+
+
+@dataclass(frozen=True)
+class DependencyWalkRow:
+    """One dependency row reached during graph traversal."""
+
+    row: dict[str, Any]
+    depth: int
+
+
+def dependency_paths(df_deps):
+    """Return all source and target paths referenced by dependency rows."""
+    if df_deps is None or df_deps.empty:
+        return set()
+    src_paths = df_deps[cols.SRC_PATH].unique().tolist()
+    target_paths = df_deps[cols.TARGET_PATH].unique().tolist()
+    return set(src_paths + target_paths)
+
+
+def dependencies_to_depth(df_deps, start_path, depth, columns=DEPENDENCY_COLUMNS):
+    """Return dependency rows reachable from ``start_path`` up to ``depth``."""
+    rows = [walked.row for walked in walk_dependency_rows(df_deps, start_path, depth)]
+    if not rows:
+        return pd.DataFrame(columns=pd.Index(columns))
+    return pd.DataFrame.from_records(rows, columns=pd.Index(columns))
+
+
+def walk_dependency_rows(
+    df_deps,
+    start_paths: str | Iterable[str],
+    depth,
+    *,
+    inverse=False,
+    stop_at: Callable[[dict[str, Any]], bool] | None = None,
+):
+    """Return dependency rows reached by a depth-limited graph walk."""
+    if df_deps is None or df_deps.empty:
+        return []
+
+    if isinstance(start_paths, str):
+        normalized_start_paths = [start_paths]
+    else:
+        normalized_start_paths = list(start_paths)
+
+    match_column = cols.SRC_PATH if inverse else cols.TARGET_PATH
+    next_column = cols.TARGET_PATH if inverse else cols.SRC_PATH
+    rows_by_path = _dependency_rows_by_path(df_deps, match_column)
+    rows = []
+    visited_edges = set()
+
+    def walk(current_path, curr_depth=0):
+        curr_depth += 1
+        if curr_depth > depth:
+            return
+        for row in rows_by_path.get(current_path, ()):
+            edge_key = (row[cols.TARGET_PATH], row[cols.SRC_PATH])
+            if edge_key in visited_edges:
+                continue
+            visited_edges.add(edge_key)
+            rows.append(DependencyWalkRow(row=row, depth=curr_depth))
+            if stop_at is not None and stop_at(row):
+                continue
+            walk(row[next_column], curr_depth)
+
+    for start_path in dict.fromkeys(normalized_start_paths):
+        walk(start_path)
+    return rows
+
+
+def _dependency_rows_by_path(df_deps, match_column):
+    """Return dependency row records indexed by the path column used for walking."""
+    rows_by_path = {}
+    for row in df_deps.to_dict("records"):
+        rows_by_path.setdefault(row[match_column], []).append(row)
+    return rows_by_path
+
+
+def derivation_dependencies_df(drv_infos):
+    """Return build-time dependency edges from recursive derivation JSON."""
+    rows = []
+    for target_path, drv_info in drv_infos.items():
+        for src_path in _iter_input_paths(drv_info, target_path):
+            rows.append(
+                {
+                    cols.SRC_PATH: src_path,
+                    "src_pname": store_path_label(src_path),
+                    cols.TARGET_PATH: target_path,
+                    "target_pname": store_path_label(target_path),
+                }
+            )
+    return dependency_rows_to_dataframe(rows)
+
+
+def dependency_rows_to_dataframe(rows, columns=DEPENDENCY_COLUMNS):
+    """Return sorted dependency dataframe from row dictionaries."""
+    df_deps = pd.DataFrame.from_records(rows, columns=pd.Index(columns))
+    if not df_deps.empty:
+        df_deps.drop_duplicates(inplace=True)
+        df_deps.sort_values(
+            by=["src_pname", cols.SRC_PATH, "target_pname", cols.TARGET_PATH],
+            inplace=True,
+        )
+    return df_deps
+
+
+def store_path_label(path):
+    """Return the Nix store graph-style label for a store path."""
+    basename = str(path).rstrip("/").rsplit("/", maxsplit=1)[-1]
+    _hash, separator, name = basename.partition("-")
+    return name if separator else basename
+
+
+def _iter_input_paths(drv_info, target_path=None):
+    """Yield validated input derivation and source paths from derivation JSON."""
+    yield from nix_derivation_input_drv_paths(target_path, drv_info)
+    yield from nix_derivation_input_src_paths(target_path, drv_info)

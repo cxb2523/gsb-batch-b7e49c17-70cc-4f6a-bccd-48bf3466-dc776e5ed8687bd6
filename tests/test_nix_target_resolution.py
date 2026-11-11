@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Technology Innovation Institute (TII)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Focused tests for shared nix target resolution helpers."""
+
+import subprocess
+from types import SimpleNamespace
+
+import pytest
+
+from common.errors import (
+    FlakeRefRealisationError,
+    FlakeRefResolutionError,
+    InvalidNixArtifactError,
+    MissingNixOutPathError,
+)
+from common.flakeref import RealisedFlakeRef
+from sbomnix import cli_utils as sbomnix_cli_utils
+
+
+def test_resolve_nix_target_preserves_flakeref_on_success(monkeypatch):
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        lambda *_args, **_kwargs: RealisedFlakeRef(
+            "/nix/store/resolved", "/nix/store/resolved.drv"
+        ),
+    )
+
+    resolved = sbomnix_cli_utils.resolve_nix_target(".#hello", buildtime=False)
+
+    assert resolved == sbomnix_cli_utils.ResolvedNixTarget(
+        path="/nix/store/resolved",
+        flakeref=".#hello",
+        original_ref=".#hello",
+        drv_path="/nix/store/resolved.drv",
+    )
+
+
+def test_resolve_nix_target_requests_derivation_for_buildtime_flakeref(monkeypatch):
+    calls = []
+
+    def fake_resolve(flakeref, **kwargs):
+        calls.append((flakeref, kwargs))
+        return "/nix/store/resolved.drv"
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_resolve_flakeref",
+        fake_resolve,
+    )
+
+    resolved = sbomnix_cli_utils.resolve_nix_target(".#hello", buildtime=True)
+
+    assert resolved.path == "/nix/store/resolved.drv"
+    assert calls == [
+        (
+            ".#hello",
+            {
+                "impure": False,
+                "derivation": True,
+            },
+        )
+    ]
+
+
+def test_resolve_nix_target_normalizes_plain_nixos_configuration(monkeypatch):
+    calls = []
+
+    def fake_resolve(flakeref, **_kwargs):
+        calls.append(flakeref)
+        return RealisedFlakeRef("/nix/store/resolved")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        fake_resolve,
+    )
+
+    resolved = sbomnix_cli_utils.resolve_nix_target(
+        "/flake#nixosConfigurations.host",
+        buildtime=False,
+    )
+
+    assert calls == ['/flake#nixosConfigurations."host".config.system.build.toplevel']
+    assert resolved == sbomnix_cli_utils.ResolvedNixTarget(
+        path="/nix/store/resolved",
+        flakeref='/flake#nixosConfigurations."host".config.system.build.toplevel',
+        original_ref="/flake#nixosConfigurations.host",
+    )
+
+
+def test_resolve_nix_target_normalizes_quoted_nixos_configuration(monkeypatch):
+    calls = []
+
+    def fake_resolve(flakeref, **_kwargs):
+        calls.append(flakeref)
+        return RealisedFlakeRef("/nix/store/resolved")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        fake_resolve,
+    )
+
+    resolved = sbomnix_cli_utils.resolve_nix_target(
+        '/flake#nixosConfigurations."host.example.com"',
+        buildtime=False,
+    )
+
+    assert calls == [
+        '/flake#nixosConfigurations."host.example.com".config.system.build.toplevel'
+    ]
+    assert resolved == sbomnix_cli_utils.ResolvedNixTarget(
+        path="/nix/store/resolved",
+        flakeref=(
+            '/flake#nixosConfigurations."host.example.com".config.system.build.toplevel'
+        ),
+        original_ref='/flake#nixosConfigurations."host.example.com"',
+    )
+
+
+@pytest.mark.parametrize(
+    "nixref",
+    [
+        "/flake#nixosConfigurations.",
+        '/flake#nixosConfigurations."unterminated',
+        '/flake#nixosConfigurations."trailing\\',
+    ],
+)
+def test_resolve_nix_target_leaves_malformed_nixos_configuration_refs(
+    nixref,
+    monkeypatch,
+):
+    calls = []
+
+    def fake_resolve(flakeref, **_kwargs):
+        calls.append(flakeref)
+        return RealisedFlakeRef("/nix/store/resolved")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        fake_resolve,
+    )
+
+    resolved = sbomnix_cli_utils.resolve_nix_target(nixref, buildtime=False)
+
+    assert calls == [nixref]
+    assert resolved == sbomnix_cli_utils.ResolvedNixTarget(
+        path="/nix/store/resolved",
+        flakeref=nixref,
+        original_ref=nixref,
+    )
+
+
+def test_resolve_nix_target_propagates_flakeref_realisation_failure_without_path_probe(
+    monkeypatch,
+):
+    artifact_checks = []
+
+    def raise_realisation_error(*_args, **_kwargs):
+        raise FlakeRefRealisationError(".#broken", "build failed")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        raise_realisation_error,
+    )
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "exit_unless_nix_artifact",
+        lambda path, force_realise=False: artifact_checks.append((path, force_realise)),
+    )
+
+    with pytest.raises(FlakeRefRealisationError) as excinfo:
+        sbomnix_cli_utils.resolve_nix_target(".#broken", buildtime=False)
+
+    assert (
+        str(excinfo.value) == "Failed force-realising flakeref '.#broken': build failed"
+    )
+    assert not artifact_checks
+
+
+def test_resolve_nix_target_propagates_flakeref_eval_failure_without_path_probe(
+    monkeypatch,
+):
+    artifact_checks = []
+
+    def raise_resolution_error(*_args, **_kwargs):
+        raise FlakeRefResolutionError(".#broken", "attribute missing")
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        raise_resolution_error,
+    )
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "exit_unless_nix_artifact",
+        lambda path, force_realise=False: artifact_checks.append((path, force_realise)),
+    )
+
+    with pytest.raises(FlakeRefResolutionError) as excinfo:
+        sbomnix_cli_utils.resolve_nix_target(".#broken", buildtime=False)
+
+    assert (
+        str(excinfo.value) == "Failed evaluating flakeref '.#broken': attribute missing"
+    )
+    assert not artifact_checks
+
+
+def test_resolve_nix_target_uses_plain_path_validation(monkeypatch):
+    artifact_checks = []
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "exit_unless_nix_artifact",
+        lambda path, force_realise=False: artifact_checks.append((path, force_realise)),
+    )
+
+    resolved = sbomnix_cli_utils.resolve_nix_target("/nix/store/not-a-flake")
+
+    assert resolved == sbomnix_cli_utils.ResolvedNixTarget(
+        path="/nix/store/not-a-flake",
+        flakeref=None,
+        original_ref="/nix/store/not-a-flake",
+    )
+    assert artifact_checks == [("/nix/store/not-a-flake", True)]
+
+
+def test_resolve_nix_target_realises_runtime_drv_target(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_exec_cmd(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(stdout="/nix/store/resolved-output\n")
+
+    monkeypatch.setattr(sbomnix_cli_utils, "exec_cmd", fake_exec_cmd)
+
+    resolved = sbomnix_cli_utils.resolve_nix_target(
+        "/nix/store/target.drv",
+        buildtime=False,
+    )
+
+    assert resolved == sbomnix_cli_utils.ResolvedNixTarget(
+        path="/nix/store/resolved-output",
+        flakeref=None,
+        original_ref="/nix/store/target.drv",
+    )
+    assert calls == [
+        (
+            [
+                "nix",
+                "build",
+                "--no-link",
+                "--print-out-paths",
+                "/nix/store/target.drv^*",
+                "--extra-experimental-features",
+                "flakes",
+                "--extra-experimental-features",
+                "nix-command",
+            ],
+            {},
+        )
+    ]
+
+
+def test_resolve_nix_target_uses_first_runtime_drv_output(monkeypatch):
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "exec_cmd",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout="\n/nix/store/first-output\n/nix/store/second-output\n"
+        ),
+    )
+
+    resolved = sbomnix_cli_utils.resolve_nix_target(
+        "/nix/store/target.drv",
+        buildtime=False,
+    )
+
+    assert resolved.path == "/nix/store/first-output"
+
+
+def test_resolve_nix_target_rejects_empty_runtime_drv_output(monkeypatch):
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "exec_cmd",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="\n"),
+    )
+
+    with pytest.raises(MissingNixOutPathError):
+        sbomnix_cli_utils.resolve_nix_target(
+            "/nix/store/target.drv",
+            buildtime=False,
+        )
+
+
+def test_resolve_nix_target_rejects_failed_runtime_drv_realisation(monkeypatch):
+    monkeypatch.setattr(
+        sbomnix_cli_utils,
+        "try_realise_flakeref",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_exec_cmd(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, ["nix", "build"])
+
+    monkeypatch.setattr(sbomnix_cli_utils, "exec_cmd", fake_exec_cmd)
+
+    with pytest.raises(InvalidNixArtifactError):
+        sbomnix_cli_utils.resolve_nix_target(
+            "/nix/store/target.drv",
+            buildtime=False,
+        )
