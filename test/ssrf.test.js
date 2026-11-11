@@ -87,6 +87,33 @@ test('PULLMD_ALLOWED_HOSTS with an out-of-range CIDR prefix is skipped, not fata
   await assert.rejects(() => assertUrlAllowed('http://10.0.0.5/', { env }), SsrfError);
 });
 
+test('PULLMD_ALLOWED_HOSTS skips every malformed entry while still applying the valid ones', async () => {
+  // Two garbage CIDRs (non-numeric prefix, unparseable address) must be
+  // ignored; the one well-formed /24 still opens exactly that range.
+  const lookup = stubLookup({
+    'wiki.internal': ['10.0.5.20'],
+    'other.internal': ['10.0.0.9'],
+  });
+  const env = { PULLMD_ALLOWED_HOSTS: 'garbage/99, 256.256.256.256/8, 10.0.5.0/24' };
+  const { url } = await assertUrlAllowed('http://wiki.internal/', { lookup, env });
+  assert.equal(url.hostname, 'wiki.internal');
+  // 10.0.0.9 is outside the only valid entry, so the default blocklist wins.
+  await assert.rejects(() => assertUrlAllowed('http://other.internal/', { lookup, env }), SsrfError);
+});
+
+test('parseAllowedHosts keeps bare IPs and hostnames, drops malformed CIDRs without throwing', () => {
+  const parsed = parseAllowedHosts('not-an-ip/99, , 256.0.0.1/8, 10.0.0.1, wiki.internal');
+  assert.ok(parsed.blockList, 'the bare IP still creates a block list');
+  assert.deepEqual([...parsed.hostnames], ['wiki.internal']);
+});
+
+test('PULLMD_ALLOWED_HOSTS bare IP permits that exact internal address and nothing else', async () => {
+  const env = { PULLMD_ALLOWED_HOSTS: '10.0.0.1' };
+  const { url } = await assertUrlAllowed('http://10.0.0.1/', { env });
+  assert.equal(url.hostname, '10.0.0.1');
+  await assert.rejects(() => assertUrlAllowed('http://10.0.0.2/', { env }), SsrfError);
+});
+
 test('PULLMD_ALLOWED_HOSTS hostname entry permits an otherwise-blocked host', async () => {
   const lookup = stubLookup({ 'localhost': ['127.0.0.1'] });
   const env = { PULLMD_ALLOWED_HOSTS: 'localhost' };

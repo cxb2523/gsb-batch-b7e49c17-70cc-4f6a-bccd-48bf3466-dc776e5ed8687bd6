@@ -55,3 +55,39 @@ test('automatic render fallback keeps the static result when the sidecar refuses
   assert.notEqual(r.source, 'playwright');
   assert.match(r.metadata.extractorReason, /playwright render refused, URL not allowed: .*internal-secret/);
 });
+
+test('a redirect from an allowed first URL to a blocked address is rejected without reaching the target', async () => {
+  // First hop is a routable public literal IP (passes the policy) and answers
+  // with a redirect into the cloud-metadata range. safeFetch must re-validate
+  // the hop and throw before a second network call touches 169.254.169.254.
+  let hits = 0;
+  const fetchFn = async (u) => {
+    hits++;
+    if (u.startsWith('http://93.184.216.34/')) {
+      return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data/' } });
+    }
+    throw new Error(`blocked target must never be fetched, got ${u}`);
+  };
+  await assert.rejects(
+    () => extractWeb('http://93.184.216.34/start', { fetch: fetchFn }),
+    (err) => err instanceof SsrfError && /blocked address 169\.254\.169\.254/.test(err.message),
+  );
+  assert.equal(hits, 1, 'only the initial public hop may be fetched');
+});
+
+test('an allowlisted internal address is fetched and extracted normally', async () => {
+  const prev = process.env.PULLMD_ALLOWED_HOSTS;
+  process.env.PULLMD_ALLOWED_HOSTS = '10.0.0.0/24';
+  try {
+    const fetchFn = async () => new Response(ARTICLE_HTML, {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    });
+    const r = await extractWeb('http://10.0.0.10/internal-wiki', { fetch: fetchFn, render: 'skip' });
+    assert.ok(r.markdown.includes('Article'));
+    assert.equal(r.metadata.sourceUrl, 'http://10.0.0.10/internal-wiki');
+  } finally {
+    if (prev === undefined) delete process.env.PULLMD_ALLOWED_HOSTS;
+    else process.env.PULLMD_ALLOWED_HOSTS = prev;
+  }
+});
