@@ -1,0 +1,2197 @@
+@import "tailwindcss";
+
+/* Palette mirror: src/lib/theme.ts must stay in sync.
+   Dark is the default scheme; light overrides via prefers-color-scheme.
+   All text colors meet WCAG AA (>= 4.5:1) against hull/void. */
+:root {
+  color-scheme: dark;
+  --void: #020509;
+  --hull: #08111c;
+  --grid: #11263b;
+  --ink: #d9e8f5;
+  --dim: #8aa3ba;
+  --faint: #62809a;
+  --accent: #53d6e8;
+  --accent-soft: rgba(83, 214, 232, 0.14);
+  --warn: #f2a33c;
+  --star-white: #f5fbff;
+  --glow: rgba(83, 214, 232, 0.45);
+  --dop-fwd: #9fe2ff;
+  --dop-back: #ffb59c;
+}
+
+:root.scheme-light {
+  color-scheme: light;
+  --void: #eef3f8;
+  --hull: #f9fbfd;
+  --grid: #c9d8e4;
+  --ink: #16293c;
+  --dim: #43607a;
+  /* faint + accent darkened so muted text and links clear WCAG AA 4.5:1 on the
+     light canvas/panels (audited: faint 4.4 -> 5.3, accent 4.31 -> 5.0) */
+  --faint: #516678;
+  --accent: #0a7286;
+  --accent-soft: rgba(10, 114, 134, 0.10);
+  --warn: #a05a00;
+  --star-white: #0a1726;
+  --glow: rgba(10, 114, 134, 0.30);
+  --dop-fwd: #0a6c9c;
+  --dop-back: #a04a2c;
+}
+
+@theme inline {
+  --color-void: var(--void);
+  --color-hull: var(--hull);
+  --color-grid: var(--grid);
+  --color-ink: var(--ink);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-warn: var(--warn);
+  --color-star: var(--star-white);
+  --font-display: var(--font-michroma);
+  --font-sans: var(--font-chakra);
+  --font-mono: var(--font-jbmono);
+  /* Semantic type scale (rem so browser text zoom works). Floor is 12px:
+     the HUD look comes from tracking/uppercase/color, never from tiny. */
+  --text-micro: 0.75rem;
+  --text-micro--line-height: 1.4;
+  --text-label: 0.8125rem;
+  --text-label--line-height: 1.45;
+  --text-data: 0.9375rem;
+  --text-data--line-height: 1.5;
+  --text-title: 1.125rem;
+  --text-title--line-height: 1.4;
+  --text-metric: 2rem;
+  --text-metric--line-height: 1.1;
+}
+
+html {
+  background: var(--void);
+  /* clip, not hidden: full-bleed breakouts (w-screen) must never create a
+     phantom horizontal scroll container */
+  overflow-x: clip;
+}
+
+body {
+  /* TRANSPARENT on purpose: an opaque body background paints ABOVE every
+     negative-z fixed layer (nebulas, animated star backdrops), hiding them
+     all. The canvas color comes from html's background instead. */
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-chakra), sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ---- Deep space backdrop: nebula glows + blueprint grid + starfield ---- */
+
+.space-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 520px at 85% -10%, rgba(83, 214, 232, 0.07), transparent 70%),
+    radial-gradient(900px 480px at 8% 108%, rgba(242, 163, 60, 0.045), transparent 70%),
+    radial-gradient(1400px 900px at 50% 50%, rgba(10, 24, 40, 0.55), transparent 75%),
+    var(--void);
+}
+
+.space-grid {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(83, 214, 232, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(83, 214, 232, 0.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 90% 80% at 50% 35%, black 35%, transparent 100%);
+}
+
+/* Two static star layers (multi box-shadow), one with a slow twinkle. */
+.starfield,
+.starfield::after {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.starfield {
+  background-image:
+    radial-gradient(1px 1px at 12% 22%, rgba(245, 251, 255, 0.8), transparent 100%),
+    radial-gradient(1px 1px at 28% 64%, rgba(245, 251, 255, 0.5), transparent 100%),
+    radial-gradient(1.5px 1.5px at 41% 12%, rgba(83, 214, 232, 0.7), transparent 100%),
+    radial-gradient(1px 1px at 55% 44%, rgba(245, 251, 255, 0.45), transparent 100%),
+    radial-gradient(1px 1px at 63% 81%, rgba(245, 251, 255, 0.6), transparent 100%),
+    radial-gradient(1.5px 1.5px at 72% 28%, rgba(245, 251, 255, 0.75), transparent 100%),
+    radial-gradient(1px 1px at 83% 58%, rgba(83, 214, 232, 0.55), transparent 100%),
+    radial-gradient(1px 1px at 91% 14%, rgba(245, 251, 255, 0.65), transparent 100%),
+    radial-gradient(1px 1px at 7% 86%, rgba(245, 251, 255, 0.5), transparent 100%),
+    radial-gradient(1.5px 1.5px at 19% 41%, rgba(245, 251, 255, 0.4), transparent 100%),
+    radial-gradient(1px 1px at 35% 91%, rgba(245, 251, 255, 0.55), transparent 100%),
+    radial-gradient(1px 1px at 49% 68%, rgba(83, 214, 232, 0.4), transparent 100%),
+    radial-gradient(1px 1px at 66% 6%, rgba(245, 251, 255, 0.5), transparent 100%),
+    radial-gradient(1px 1px at 77% 73%, rgba(245, 251, 255, 0.45), transparent 100%),
+    radial-gradient(1.5px 1.5px at 95% 38%, rgba(245, 251, 255, 0.6), transparent 100%),
+    radial-gradient(1px 1px at 3% 52%, rgba(245, 251, 255, 0.35), transparent 100%);
+}
+
+.starfield::after {
+  content: "";
+  background-image:
+    radial-gradient(1px 1px at 16% 9%, rgba(245, 251, 255, 0.7), transparent 100%),
+    radial-gradient(1px 1px at 31% 33%, rgba(245, 251, 255, 0.5), transparent 100%),
+    radial-gradient(1.5px 1.5px at 46% 56%, rgba(245, 251, 255, 0.65), transparent 100%),
+    radial-gradient(1px 1px at 59% 19%, rgba(83, 214, 232, 0.5), transparent 100%),
+    radial-gradient(1px 1px at 69% 47%, rgba(245, 251, 255, 0.4), transparent 100%),
+    radial-gradient(1px 1px at 81% 88%, rgba(245, 251, 255, 0.55), transparent 100%),
+    radial-gradient(1.5px 1.5px at 88% 67%, rgba(245, 251, 255, 0.5), transparent 100%),
+    radial-gradient(1px 1px at 24% 78%, rgba(83, 214, 232, 0.45), transparent 100%),
+    radial-gradient(1px 1px at 52% 96%, rgba(245, 251, 255, 0.4), transparent 100%),
+    radial-gradient(1px 1px at 11% 63%, rgba(245, 251, 255, 0.45), transparent 100%);
+  animation: twinkle 9s ease-in-out infinite alternate;
+}
+
+@keyframes twinkle {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .starfield::after { animation: none; }
+}
+
+/* ---- HUD panel frame: thin border + bracket corners ---- */
+
+.hud {
+  position: relative;
+  border: 1px solid var(--grid);
+  background: linear-gradient(180deg, rgba(12, 24, 38, 0.72), rgba(5, 11, 19, 0.55));
+  backdrop-filter: blur(2px);
+}
+/* Mobile: tighten the side padding INSIDE cards (the px-4/5/6 utilities set
+   16-24px, too much on a phone) so content claims more of the narrow viewport.
+   !important to override the per-card utility intentionally for small screens. */
+@media (max-width: 640px) {
+  .hud {
+    padding-left: 0.8rem !important;
+    padding-right: 0.8rem !important;
+  }
+}
+
+.hud::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--accent), var(--accent)) left 0 top 0 / 16px 1px,
+    linear-gradient(var(--accent), var(--accent)) left 0 top 0 / 1px 16px,
+    linear-gradient(var(--accent), var(--accent)) right 0 top 0 / 16px 1px,
+    linear-gradient(var(--accent), var(--accent)) right 0 top 0 / 1px 16px,
+    linear-gradient(var(--accent), var(--accent)) left 0 bottom 0 / 16px 1px,
+    linear-gradient(var(--accent), var(--accent)) left 0 bottom 0 / 1px 16px,
+    linear-gradient(var(--accent), var(--accent)) right 0 bottom 0 / 16px 1px,
+    linear-gradient(var(--accent), var(--accent)) right 0 bottom 0 / 1px 16px;
+  background-repeat: no-repeat;
+  opacity: 0.5;
+}
+
+/* ---- Module header ---- */
+
+.module-title {
+  font-family: var(--font-michroma), sans-serif;
+  font-size: 0.8125rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.module-index {
+  font-family: var(--font-jbmono), monospace;
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+}
+
+/* phones: the wide tracking truncates real panel names ("MILESTONE
+   PROJECTI…"); tighter spacing keeps every title whole at 390px */
+@media (max-width: 639px) {
+  .module-title {
+    font-size: 0.75rem;
+    letter-spacing: 0.14em;
+  }
+}
+
+/* ---- Numerals ---- */
+
+.numeral {
+  font-family: var(--font-jbmono), monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* NYT rule E — chart labels float over the starfield; a canvas-colored halo
+   keeps them legible over stars and dust. SVG <text> only (stroke is an SVG
+   property; harmless on HTML). Theme-aware: --void is the canvas in both. */
+.chart-anno {
+  paint-order: stroke fill;
+  stroke: var(--void);
+  stroke-width: 2.6px;
+  stroke-linejoin: round;
+}
+
+.glow-accent {
+  text-shadow: 0 0 18px var(--glow);
+}
+
+/* ---- Live pulse dot ---- */
+
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: pulse 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--glow); }
+  50% { box-shadow: 0 0 0 6px transparent; }
+}
+
+/* ---- Staggered panel entrance ---- */
+
+.rise {
+  opacity: 0;
+  animation: rise 0.8s cubic-bezier(0.16, 0.84, 0.32, 1) forwards;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise { animation: none; opacity: 1; }
+}
+
+/* ---- Galactic core glow (SVG container) ---- */
+
+.core-glow {
+  filter: drop-shadow(0 0 14px rgba(245, 251, 255, 0.55)) drop-shadow(0 0 34px rgba(83, 214, 232, 0.35));
+}
+
+svg text {
+  font-family: var(--font-jbmono), monospace;
+}
+
+/* ---- Star chart motion ---- */
+
+.dust-layer {
+  animation: dust-drift 90s ease-in-out infinite alternate;
+}
+
+@keyframes dust-drift {
+  from { transform: translateX(0); }
+  to { transform: translateX(-18px); }
+}
+
+.dust-tw {
+  animation: dust-twinkle 5.5s ease-in-out infinite alternate;
+}
+
+@keyframes dust-twinkle {
+  from { opacity: 0.08; }
+  to { opacity: 0.6; }
+}
+
+/* Energy particles flowing along the route toward the core */
+.route-flow {
+  stroke-dasharray: 1 9;
+  animation: route-flow 1.6s linear infinite;
+}
+
+@keyframes route-flow {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -10; }
+}
+
+/* Expanding ping ring around our ship */
+.ship-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ship-ping 2.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+
+@keyframes ship-ping {
+  0% { transform: scale(0.35); opacity: 0.75; }
+  75% { transform: scale(1.7); opacity: 0; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+/* Radio signal: a slow sonar sweep on the ONE most-active uncharted system in
+   view (scarce on purpose — activity detected, come discover it). */
+.sig-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sig-ping 3.4s ease-out infinite;
+}
+@keyframes sig-ping {
+  0% { transform: scale(0.5); opacity: 0.55; }
+  80% { opacity: 0; }
+  100% { transform: scale(4.4); opacity: 0; }
+}
+
+/* Neighbor hover affordances */
+.nbr {
+  cursor: pointer;
+}
+
+.nbr .nbr-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.18s ease;
+}
+
+.nbr:hover .nbr-dot {
+  transform: scale(2);
+}
+
+.nbr .nbr-name {
+  transition: fill 0.15s ease;
+  /* halo so the neighbour name stays legible over the starfield (NYT rule E) */
+  paint-order: stroke fill;
+  stroke: var(--void);
+  stroke-width: 2.6px;
+  stroke-linejoin: round;
+}
+
+.nbr:hover .nbr-name {
+  fill: var(--star-white);
+}
+
+/* Game-style temporal scan card. position declared here because .hud sets
+   position: relative and both rules are unlayered (utilities would lose).
+   The entrance animates opacity ONLY: transform carries the (above/below)
+   placement via inline style and must not be overridden by keyframes. */
+.scan-card {
+  position: absolute;
+  animation: scan-in 0.16s ease-out both;
+}
+
+@keyframes scan-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.scan-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 30%, rgba(83, 214, 232, 0.16) 48%, transparent 60%);
+  background-size: 250% 100%;
+  animation: scan-sweep 0.8s ease-out 1;
+}
+
+@keyframes scan-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -60% 0; }
+}
+
+/* Continuous directional dust stream in the local system: two copies of the
+   same particle field scroll seamlessly; duration is set inline from our
+   current velocity. */
+.dust-stream {
+  animation: dust-stream 30s linear infinite;
+}
+
+@keyframes dust-stream {
+  from { transform: translateX(0); }
+  /* wrap distance = canvas width (the deck canvas can be wider than 1200) */
+  to { transform: translateX(var(--dust-w, -1200px)); }
+}
+
+/* FTL warp: near-layer stars stretch into streaks while panning.
+   Cinematic asymmetry: the stretch GROWS slowly (acceleration you can see)
+   and ONLY trails to the right (motion blur stays behind the movement),
+   then snaps back almost instantly on arrival (stars suddenly still). */
+.star-warp {
+  transform-box: fill-box;
+  transform-origin: left center;
+  transition: transform 0.06s ease-out, fill 0.45s ease; /* arrival snap */
+}
+
+.star-warp.warping {
+  transform: scaleX(13);
+  transition: transform 0.75s cubic-bezier(0.25, 0.55, 0.3, 1), fill 0.45s ease; /* slow build */
+}
+
+.star-warp.warping-fast {
+  transform: scaleX(24);
+  transition: transform 0.6s cubic-bezier(0.25, 0.55, 0.3, 1), fill 0.45s ease;
+}
+
+/* Doppler tint of the streaks while warping: blueshift flying toward the
+   core, redshift backing away. At relative rest the field stays neutral:
+   background stars carry no velocity of their own, only ours. */
+.warp-tint-fwd .star-warp { fill: var(--dop-fwd); }
+.warp-tint-back .star-warp { fill: var(--dop-back); }
+
+/* The FTL smear follows the direction of travel: panning toward the core
+   anchors streaks on their left edge (they stretch forward), panning back
+   anchors right so they stretch the other way. */
+.warp-tint-back .star-warp { transform-origin: right center; }
+
+/* Pan discovery hint: accent chevrons drifting toward the core until the
+   pilot's first real pan dismisses them. */
+.pan-hint-arrows {
+  transform-box: fill-box;
+  animation: pan-drift 1.7s ease-in-out infinite;
+}
+
+@keyframes pan-drift {
+  0%, 100% { transform: translateX(0); opacity: 0.55; }
+  50% { transform: translateX(7px); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pan-hint-arrows { animation: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .star-warp.warping, .star-warp.warping-fast { transform: none; }
+}
+
+/* Landing backdrop: drifting star layers + occasional FTL streak. */
+.lnd-drift {
+  animation: lnd-drift linear infinite;
+}
+
+@keyframes lnd-drift {
+  from { transform: translateX(0); }
+  to { transform: translateX(-1600px); }
+}
+
+/* shooting stars climb at 45 degrees, lower-left to upper-right, with the
+   tail trailing along the flight line */
+.lnd-streak {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: lnd-streak linear infinite;
+}
+
+@keyframes lnd-streak {
+  0% { opacity: 0; transform: translate(0, 0) rotate(-45deg) scaleX(0.15); }
+  1.6% { opacity: 0.75; }
+  4.5% { opacity: 0; transform: translate(380px, -380px) rotate(-45deg) scaleX(1); }
+  100% { opacity: 0; transform: translate(380px, -380px) rotate(-45deg) scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lnd-drift, .lnd-streak { animation: none; }
+  .lnd-streak { opacity: 0; }
+}
+
+/* ---- Page-character backdrop layers (SpaceBackdrop modes) ---- */
+
+/* LAUNCH (pricing): tracked missions breathing on the field. Each ring
+   expands once and rests: a slow heartbeat, not an alarm. */
+.bk-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0.12);
+  opacity: 0;
+  animation: bk-ping var(--dur, 9s) ease-out infinite;
+  animation-delay: var(--delay, 0s);
+}
+@keyframes bk-ping {
+  0% { transform: scale(0.12); opacity: 0; }
+  6% { opacity: 0.5; }
+  34% { transform: scale(1); opacity: 0; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+/* LAUNCH (pricing): a golden growth curve draws itself, holds, lets go.
+   The page sells a tracked mission; the sky rehearses one. */
+.bk-traj {
+  stroke-dasharray: var(--len, 2400);
+  stroke-dashoffset: var(--len, 2400);
+  opacity: 0;
+  animation: bk-traj 26s ease-in-out infinite;
+}
+@keyframes bk-traj {
+  0% { stroke-dashoffset: var(--len, 2400); opacity: 0; }
+  8% { opacity: 0.5; }
+  40% { stroke-dashoffset: 0; opacity: 0.5; }
+  64% { stroke-dashoffset: 0; opacity: 0.5; }
+  80% { stroke-dashoffset: 0; opacity: 0; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+/* RACEWAY (velocity): traffic crossing at three depths, climbing the same
+   45-degree line as every shooting star on the site (lower-left to
+   upper-right, toward the core). Near lanes fast and hot, far lanes pale. */
+.bk-pass {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: translate(-260px, 800px) rotate(-45deg);
+  opacity: 0;
+  animation: bk-pass var(--dur, 10s) linear infinite;
+  animation-delay: var(--delay, 0s);
+}
+@keyframes bk-pass {
+  0% { transform: translate(-260px, 800px) rotate(-45deg); opacity: 0; }
+  5% { opacity: var(--op, 0.6); }
+  90% { opacity: var(--op, 0.6); }
+  100% { transform: translate(1620px, -1080px) rotate(-45deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bk-ping, .bk-traj, .bk-pass { animation: none; opacity: 0; }
+}
+
+/* Rotate nudge: the phone tips over, settles, tips back. */
+.rotate-hint-icon {
+  animation: rotate-hint 3.2s ease-in-out infinite;
+  transform-origin: center;
+}
+@keyframes rotate-hint {
+  0%, 18% { transform: rotate(0deg); }
+  38%, 62% { transform: rotate(-90deg); }
+  82%, 100% { transform: rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rotate-hint-icon { animation: none; transform: rotate(-90deg); }
+}
+
+/* Ships fade softly into the sky when the chart replaces its skeleton
+   (staggered per node via inline animation-delay). */
+@keyframes ship-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nbr, .asc-row { animation: none !important; }
+}
+
+/* Golden pulsar: one expanding ring on our ship per REAL star landed. */
+.star-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: star-pulse 1.4s cubic-bezier(0.2, 0.6, 0.3, 1) forwards;
+}
+
+@keyframes star-pulse {
+  0% { transform: scale(0.35); opacity: 0.95; }
+  70% { opacity: 0.35; }
+  100% { transform: scale(3.4); opacity: 0; }
+}
+
+/* Relative-velocity streaks: a particle drifts from each neighbor toward us
+   (closing) or away (receding); speed and direction come via CSS vars. */
+.vel-streak {
+  transform-box: fill-box;
+  animation: vel-drift var(--dur, 3s) linear infinite;
+}
+
+/* vertical ascent (mobile chart): doppler particles and FTL streaks */
+.vel-streak-y {
+  transform-box: fill-box;
+  animation: vel-drift-y var(--dur, 3s) linear infinite;
+}
+
+@keyframes vel-drift-y {
+  0% { transform: translateY(0); opacity: 0; }
+  18% { opacity: 0.75; }
+  100% { transform: translateY(var(--drift, -16px)); opacity: 0; }
+}
+
+.asc-streak {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: asc-streak linear infinite;
+}
+
+@keyframes asc-streak {
+  0% { opacity: 0; transform: translateY(0) scaleY(0.2); }
+  2% { opacity: 0.55; }
+  5.5% { opacity: 0; transform: translateY(-360px) scaleY(1); }
+  100% { opacity: 0; transform: translateY(-360px); }
+}
+
+@keyframes vel-drift {
+  0% { transform: translateX(0); opacity: 0; }
+  18% { opacity: 0.75; }
+  100% { transform: translateX(var(--drift, -16px)); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dust-layer, .dust-tw, .dust-stream, .route-flow, .ship-ping, .scan-card, .scan-card::after, .vel-streak, .star-pulse, .vel-streak-y, .asc-streak, .sig-ping {
+    animation: none;
+  }
+}
+
+.glow-star {
+  text-shadow: 0 0 24px rgba(83, 214, 232, 0.25), 0 0 60px rgba(83, 214, 232, 0.12);
+}
+
+.scheme-light .glow-star {
+  text-shadow: none;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* ---- Light scheme variants of the decorative layers ---- */
+
+.scheme-light .space-backdrop {
+    background:
+      radial-gradient(1100px 520px at 85% -10%, rgba(12, 125, 146, 0.07), transparent 70%),
+      radial-gradient(900px 480px at 8% 108%, rgba(160, 90, 0, 0.05), transparent 70%),
+      radial-gradient(1400px 900px at 50% 50%, rgba(255, 255, 255, 0.6), transparent 75%),
+      var(--void);
+  }
+
+.scheme-light .space-grid {
+    background-image:
+      linear-gradient(rgba(12, 125, 146, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(12, 125, 146, 0.06) 1px, transparent 1px);
+  }
+
+  /* daylight star chart: faint dark specks instead of bright stars */
+.scheme-light .starfield {
+    background-image:
+      radial-gradient(1px 1px at 12% 22%, rgba(22, 41, 60, 0.35), transparent 100%),
+      radial-gradient(1.5px 1.5px at 41% 12%, rgba(12, 125, 146, 0.3), transparent 100%),
+      radial-gradient(1px 1px at 63% 81%, rgba(22, 41, 60, 0.28), transparent 100%),
+      radial-gradient(1.5px 1.5px at 72% 28%, rgba(22, 41, 60, 0.3), transparent 100%),
+      radial-gradient(1px 1px at 83% 58%, rgba(12, 125, 146, 0.25), transparent 100%),
+      radial-gradient(1px 1px at 7% 86%, rgba(22, 41, 60, 0.22), transparent 100%),
+      radial-gradient(1px 1px at 35% 91%, rgba(22, 41, 60, 0.25), transparent 100%),
+      radial-gradient(1.5px 1.5px at 95% 38%, rgba(22, 41, 60, 0.28), transparent 100%);
+  }
+
+.scheme-light .starfield::after {
+    background-image:
+      radial-gradient(1px 1px at 16% 9%, rgba(22, 41, 60, 0.3), transparent 100%),
+      radial-gradient(1.5px 1.5px at 46% 56%, rgba(22, 41, 60, 0.26), transparent 100%),
+      radial-gradient(1px 1px at 59% 19%, rgba(12, 125, 146, 0.24), transparent 100%),
+      radial-gradient(1px 1px at 81% 88%, rgba(22, 41, 60, 0.24), transparent 100%),
+      radial-gradient(1px 1px at 24% 78%, rgba(12, 125, 146, 0.2), transparent 100%);
+  }
+
+.scheme-light .hud {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 249, 252, 0.6));
+  }
+
+.scheme-light .scan-card::after {
+    background: linear-gradient(105deg, transparent 30%, rgba(12, 125, 146, 0.10) 48%, transparent 60%);
+  }
+
+.scheme-light .core-glow {
+    filter: drop-shadow(0 0 10px rgba(12, 125, 146, 0.45)) drop-shadow(0 0 26px rgba(12, 125, 146, 0.25));
+  }
+
+/* ---- Galaxy hero (landing): partially isometric star map ---- */
+/* The isometry lives in the SVG coordinates (lib/galaxy squash); the
+   pointer drives a LOCAL ZOOM around the cursor (vars set by rAF lerp on
+   the plane): each layer zooms by a different factor, so the dust lags
+   behind the systems and depth reads without ever rotating the galaxy. */
+/* the clip box extends far above the hero (--ghx-roof) so starlight never
+   hits an edge and cuts into a hard line, even at the local zoom's worst
+   case (layer x1.34 with a far origin pushes the core's glow ~240px up);
+   the stage is click-transparent so the masthead above stays usable */
+.ghx-stage {
+  --ghx-roof: 280px;
+  position: absolute;
+  inset: calc(-1 * var(--ghx-roof)) 0 0 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* scale the whole galaxy from the core corner (top-right) so the SVG layers
+     AND the interactive markers stay in sync */
+  transform-origin: 100% 0;
+}
+/* On wide / ultrawide screens the right-anchored plane leaves the hero copy over
+   empty space. Zoom the galaxy up from the core so its outer arms reach across
+   to the text and those distant systems become reachable. The hero section
+   clips the extra so it never spills into the spotlight below. Tune the factors. */
+@media (min-width: 1800px) {
+  .gx-hero-sec { overflow: hidden; }
+  .ghx-stage { transform: scale(1.16) translateY(-9%); } /* lift fills the gap above the fan */
+}
+@media (min-width: 2200px) {
+  .ghx-stage { transform: scale(1.3) translateY(-11%); }
+}
+@media (min-width: 2700px) {
+  .ghx-stage { transform: scale(1.46) translateY(-13%); }
+}
+/* FULLSCREEN. The chip is click-live even though the stage is click-transparent.
+   In immersive the stage goes fixed + opaque and the plane sheds its raised roof
+   so the map fills the viewport; a minimal mission bar floats on top. The
+   double-class selector outweighs the wide-screen transforms above, so `transform:
+   none` wins without !important. */
+.ghx-fsbtn {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 6;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--void) 70%, transparent);
+  border: 1px solid var(--grid);
+  backdrop-filter: blur(6px);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.ghx-fsbtn:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.ghx-stage.ghx-immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  transform: none;
+  pointer-events: auto;
+  /* transparent on purpose: the page's existing fixed backdrop (grid, bluish
+     wash, starfield — all in the body, covering the viewport) shows straight
+     through. No replication. The non-galaxy page content is hidden via
+     body.gx-fullscreen below, so only that backdrop is left behind the map. */
+  background: transparent;
+}
+/* fullscreen hides everything on the page except the galaxy itself, so the
+   real backdrop becomes the immersive background (one source of atmosphere).
+   The minimal mission bar inside the overlay replaces the page nav. */
+/* fade the whole page out (header, spotlight, every section) so only the
+   galaxy is left. animation:none is REQUIRED — the .rise entrance animation
+   ends at opacity:1 with fill `forwards`, and a running/filled animation beats
+   a plain opacity declaration; killing it lets the fade to 0 win. The elements
+   stay in layout but invisible behind the transparent overlay. */
+body.gx-fullscreen main > *:not(.gx-hero-sec),
+body.gx-fullscreen .gx-hero-copy {
+  opacity: 0;
+  pointer-events: none;
+  animation: none;
+  transition: opacity 0.5s ease;
+}
+/* the galaxy fills the viewport: height 100% stretches it all the way DOWN,
+   centred (not right-anchored) so the left arms come into frame instead of
+   clipping off the edge. aspect-ratio keeps it undistorted; the extra width
+   overflows and is clipped by the stage. It eases in (scale + fade) as the
+   page clears around it. */
+.ghx-stage.ghx-immersive .ghx-plane {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  height: 100%;
+  width: auto;
+  /* scaled up from near the core so the field FILLS the screen (the empty
+     margins crop away) with the core kept in the upper-right third */
+  transform-origin: 74% 30%;
+  transform: translate(-50%, -46%) scale(1.62);
+  /* soft-edged: the field melts into the backdrop, no hard rectangular crop
+     and no abrupt gradient chords at the edges */
+  -webkit-mask-image: radial-gradient(ellipse 78% 82% at 54% 50%, #000 52%, transparent 100%);
+  mask-image: radial-gradient(ellipse 78% 82% at 54% 50%, #000 52%, transparent 100%);
+  /* fade + grow in, then drift forever so it feels alive, not a static image */
+  animation: ghx-fs-in 0.8s ease-out both, ghx-fs-drift 52s ease-in-out 0.8s infinite;
+}
+@keyframes ghx-fs-in {
+  from { opacity: 0; transform: translate(-50%, -46%) scale(1.5); }
+  to   { opacity: 1; transform: translate(-50%, -46%) scale(1.62); }
+}
+@keyframes ghx-fs-drift {
+  0%, 100% { transform: translate(-50%, -46%) scale(1.62); }
+  50%      { transform: translate(-48.6%, -47.5%) scale(1.66); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ghx-stage.ghx-immersive .ghx-plane { animation: none; }
+  body.gx-fullscreen main > *:not(.gx-hero-sec),
+  body.gx-fullscreen .gx-hero-copy { transition: none; }
+}
+/* strip the persistent labels for a clean, mostly-visual field; the hover
+   tips still reveal each system on demand */
+.ghx-stage.ghx-immersive .ghx-ring-label,
+.ghx-stage.ghx-immersive .ghx-name,
+.ghx-stage.ghx-immersive .ghx-core-label,
+.ghx-stage.ghx-immersive .ghx-lore,
+.ghx-stage.ghx-immersive .ghx-scrim {
+  display: none;
+}
+.ghx-stage.ghx-immersive .ghx-warpveil {
+  inset: 0;
+}
+.ghx-immersive-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  pointer-events: auto;
+  /* fluid, not a hard bar: a faint top-down wash just for legibility, melting
+     into the galaxy with no visible seam */
+  background: linear-gradient(180deg, color-mix(in srgb, var(--void) 38%, transparent) 0%, transparent 100%);
+}
+.ghx-imm-brand {
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  color: var(--ink);
+}
+.ghx-imm-brand:hover {
+  color: var(--accent);
+}
+.ghx-imm-nav {
+  display: flex;
+  gap: 20px;
+}
+.ghx-imm-nav a,
+.ghx-imm-exit {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.ghx-imm-nav a:hover {
+  color: var(--accent);
+}
+.ghx-imm-exit {
+  border: 1px solid var(--grid);
+  padding: 6px 12px;
+}
+.ghx-imm-exit:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+@media (max-width: 640px) {
+  .ghx-imm-nav { display: none; }
+}
+.ghx-plane {
+  position: absolute;
+  top: var(--ghx-roof);
+  right: 0;
+  height: calc(100% - var(--ghx-roof));
+  aspect-ratio: 1560 / 640;
+  pointer-events: auto;
+  animation: ghx-in 1.1s ease-out both;
+}
+@keyframes ghx-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.ghx-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: var(--gx-zx, 60%) var(--gx-zy, 40%);
+}
+.ghx-far { transform: scale(calc(1 + var(--gx-zf, 0) * 0.55)); pointer-events: none; }
+.ghx-mid { transform: scale(calc(1 + var(--gx-zf, 0) * 0.78)); pointer-events: none; }
+.ghx-near { transform: scale(calc(1 + var(--gx-zf, 0) * 1.12)); }
+/* the core's wrapper layer spans the whole stage: it must NOT swallow the
+   clicks meant for the systems underneath (only the core link is live) */
+.ghx-zlnear { transform: scale(calc(1 + var(--gx-zf, 0) * 1.12)); pointer-events: none; }
+.ghx-core { pointer-events: auto; }
+.ghx-node { cursor: pointer; outline: none; }
+.ghx-node .ghx-dot { transition: opacity 0.15s ease; }
+.ghx-node:hover .ghx-dot, .ghx-node:focus-visible .ghx-dot { opacity: 1; }
+.ghx-node:focus-visible .ghx-dot { stroke: var(--accent); stroke-width: 1.5; }
+/* type never changes size: while the neighborhood leans in (local zoom),
+   every label counter-scales by its own layer's factor, so dots grow but
+   the lettering stays at design size, pinned to its anchor point */
+.ghx-name {
+  font-size: 11px;
+  fill: var(--faint);
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  transform-box: fill-box;
+  transform-origin: left center;
+  transform: scale(calc(1 / (1 + var(--gx-zf, 0) * 1.12)));
+}
+.ghx-name[text-anchor="end"] {
+  transform-origin: right center;
+}
+.ghx-tip {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.ghx-node:hover .ghx-tip, .ghx-node:focus-visible .ghx-tip { opacity: 1; }
+.ghx-tip text {
+  font-size: 13px;
+  fill: var(--star-white);
+  paint-order: stroke;
+  stroke: var(--void);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  transform-box: fill-box;
+  transform-origin: left center;
+  transform: scale(calc(1 / (1 + var(--gx-zf, 0) * 1.12)));
+}
+.ghx-tip text[text-anchor="end"] {
+  transform-origin: right center;
+}
+.ghx-tip tspan { fill: var(--accent); }
+.ghx-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.13;
+}
+.ghx-ring-label {
+  font-size: 10px;
+  fill: var(--faint);
+  opacity: 0.55;
+  letter-spacing: 0.14em;
+  transform-box: fill-box;
+  transform-origin: left center;
+  transform: scale(calc(1 / (1 + var(--gx-zf, 0) * 0.78)));
+}
+.ghx-ping {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 1;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ghx-ping 3.4s ease-out infinite;
+  animation-delay: var(--d, 0s);
+}
+/* the house mission: a steady gold ring no other system wears */
+.ghx-me-ring {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 1;
+  opacity: 0.75;
+}
+@keyframes ghx-ping {
+  0% { transform: scale(0.4); opacity: 0.8; }
+  70% { transform: scale(2.8); opacity: 0; }
+  100% { transform: scale(2.8); opacity: 0; }
+}
+.ghx-core {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  transform: translate(-50%, -50%);
+  text-decoration: none;
+}
+/* glow radii stay under the core's 78px distance to the stage's top edge,
+   otherwise overflow clips the light into a hard horizontal cut */
+.ghx-core-glow {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--star-white);
+  box-shadow:
+    0 0 16px 5px rgba(242, 163, 60, 0.85),
+    0 0 44px 14px rgba(242, 163, 60, 0.26),
+    0 0 70px 22px rgba(83, 214, 232, 0.13);
+  animation: ghx-core 5.2s ease-in-out infinite;
+}
+@keyframes ghx-core {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+.ghx-core-label {
+  position: absolute;
+  top: 20px;
+  right: -2px;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  transform-origin: top right;
+  transform: scale(calc(1 / (1 + var(--gx-zf, 0) * 1.12)));
+  /* the label box overlaps the head systems crowded around the core;
+     only the glow itself should catch their clicks */
+  pointer-events: none;
+}
+.ghx-core-tip { color: var(--faint); }
+.ghx-core:hover .ghx-core-label { color: var(--star-white); }
+/* legibility scrim under the headline column only; no bottom fade, so the
+   hero's sky stays THE page background and the spotlight section below
+   blends into it without a visible seam */
+.ghx-scrim {
+  position: absolute;
+  inset: var(--ghx-roof, 280px) 0 0 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, var(--void) 0%, transparent 44%);
+  opacity: 0.82;
+}
+.ghx-lore {
+  position: absolute;
+  right: 18px;
+  bottom: 10px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--faint);
+  opacity: 0.7;
+  pointer-events: none;
+}
+/* immersion: once the visitor has been playing in the map for a while,
+   the headline column steps back so the galaxy owns the stage; leaving
+   the map (or touching the copy, which ends the map hover) restores it
+   quickly. dimming only, no blur: blurred type reads as broken */
+.gx-hero-copy {
+  transition: opacity 0.35s ease;
+}
+body.gx-immersed .gx-hero-copy {
+  opacity: 0.26;
+  transition: opacity 0.9s ease;
+}
+@media (max-width: 1023px) {
+  /* phones: the visible window is the right side of the map, so the bulge
+     and the core stay on screen behind the centered copy */
+  .ghx-plane { opacity: 0.75; }
+  /* every map label goes: ring thresholds and the core caption cross right
+     behind the centered headline at 390px and fight it for legibility */
+  .ghx-lore, .ghx-name, .ghx-ring-label, .ghx-core-label { display: none; }
+  .ghx-scrim { background: linear-gradient(0deg, var(--void) 0%, transparent 30%), rgba(2, 5, 9, 0.30); }
+  .scheme-light .ghx-scrim { background: linear-gradient(0deg, var(--void) 0%, transparent 30%), rgba(238, 243, 248, 0.30); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ghx-ping { animation: none; opacity: 0; }
+  .ghx-core-glow { animation: none; }
+}
+.scheme-light .ghx-core-glow {
+  box-shadow:
+    0 0 14px 4px rgba(160, 90, 0, 0.55),
+    0 0 50px 20px rgba(160, 90, 0, 0.18),
+    0 0 110px 50px rgba(12, 125, 146, 0.12);
+  background: #2b1a05;
+}
+
+/* ---- Phase C: the warp jump (galaxy -> /r/) ---- */
+/* The dive is a PURE zoom into the chosen star: no rotation, no unsquash
+   (both stretched every dot into tilted ellipses and read as a glitch;
+   Santiago's call: the destination chart doesn't show the core anyway, so
+   the cleaner cut wins). Velocity is spread across a mid keyframe so the
+   pixel speed stays near-geometric, which the eye reads as constant; the
+   final frame becomes the view transition's old snapshot. */
+body.gx-warping .ghx-plane {
+  transform-origin: var(--gx-ox, 95%) var(--gx-oy, 12%);
+  animation:
+    gx-dive 950ms forwards,
+    gx-dive-s 950ms forwards;
+}
+@keyframes gx-dive {
+  0% {
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.7, 0.3);
+  }
+  16% {
+    transform: scale(1.02);
+    animation-timing-function: cubic-bezier(0.5, 0.05, 0.75, 0.4);
+  }
+  55% {
+    transform: scale(2.8);
+    animation-timing-function: cubic-bezier(0.45, 0.1, 0.5, 0.95);
+  }
+  100% {
+    transform: scale(6);
+  }
+}
+/* the same choreography as a NUMBER (registered property), so children can
+   counter-scale against the dive: stars stay near point-size while the
+   space between them grows sixfold, which is what reads as a galaxy being
+   vast instead of dots inflating */
+@property --gx-dive-s {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+@keyframes gx-dive-s {
+  0% {
+    --gx-dive-s: 1;
+    animation-timing-function: cubic-bezier(0.45, 0, 0.7, 0.3);
+  }
+  16% {
+    --gx-dive-s: 1.02;
+    animation-timing-function: cubic-bezier(0.5, 0.05, 0.75, 0.4);
+  }
+  55% {
+    --gx-dive-s: 2.8;
+    animation-timing-function: cubic-bezier(0.45, 0.1, 0.5, 0.95);
+  }
+  100% {
+    --gx-dive-s: 6;
+  }
+}
+/* dots grow only as the cube-root-ish of the dive (x6 space -> ~x1.7 star)
+   and the gate rings keep their hairline stroke all the way in */
+.ghx-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(pow(var(--gx-dive-s, 1), -0.7));
+}
+.ghx-ring {
+  stroke-width: calc(1 / var(--gx-dive-s, 1));
+}
+/* the veil: motion blur + the brightness flash that bridges the cut, all
+   via a FIXED backdrop-filter whose opacity animates (compositor-only) */
+.ghx-warpveil {
+  position: absolute;
+  inset: var(--ghx-roof, 280px) 0 0 0;
+  opacity: 0;
+  pointer-events: none;
+  backdrop-filter: blur(7px) brightness(1.5);
+  -webkit-backdrop-filter: blur(7px) brightness(1.5);
+  background: radial-gradient(closest-side, rgba(245, 251, 255, 0.16), transparent 80%);
+}
+body.gx-warping .ghx-warpveil {
+  animation: gx-veil 950ms cubic-bezier(0.5, 0, 0.8, 0.5) forwards;
+}
+@keyframes gx-veil {
+  0% { opacity: 0; }
+  16% { opacity: 0.18; }
+  55% { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+body.gx-warping .gx-hero-copy {
+  opacity: 0;
+  transition: opacity 0.3s ease-out;
+}
+/* the whole page travels: everything below/around the hero melts away
+   during the dive, otherwise the lower half of the landing sits still and
+   sharp while the galaxy flies, and the cut reads as a jump */
+body.gx-warping main > :not(.gx-hero-sec) {
+  opacity: 0.05;
+  transition: opacity 0.5s ease-out;
+}
+/* lettering never travels: every label, tip and signal ring fades during
+   the anticipation phase (first ~150ms), so by the time the rotation and
+   zoom explode only stars, dust and light make the jump (giant rotated
+   type reads as a glitch, not as speed) */
+body.gx-warping .ghx-name,
+body.gx-warping .ghx-tip,
+body.gx-warping .ghx-ring-label,
+body.gx-warping .ghx-core-label,
+body.gx-warping .ghx-ping,
+body.gx-warping .ghx-me-ring {
+  opacity: 0 !important;
+  transition: opacity 0.16s ease-out;
+  animation: none;
+}
+body.gx-warping .ghx-scrim,
+body.gx-warping .ghx-lore {
+  opacity: 0;
+  transition: opacity 0.35s ease-out;
+}
+/* The route change: the dive already did the visual work, so the old page
+   just yields fast; the new page resolves out of the warp's blur and
+   brightness flash with a depth-of-field landing. */
+::view-transition-old(.gx-warp-out) {
+  animation: 160ms ease-out both gx-warp-out;
+}
+::view-transition-new(.gx-warp-in) {
+  animation: 620ms cubic-bezier(0.22, 0.85, 0.3, 1) both gx-warp-in;
+}
+@keyframes gx-warp-out {
+  to { opacity: 0; }
+}
+@keyframes gx-warp-in {
+  from {
+    transform: scale(1.04);
+    filter: blur(14px) brightness(1.7);
+    /* 0.35, not 0: a fully transparent start left a near-black valley
+       between the dive's last frame and the skeleton's arrival */
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.gx-warping .ghx-plane,
+  body.gx-warping .ghx-warpveil { animation: none; }
+  ::view-transition-old(.gx-warp-out),
+  ::view-transition-new(.gx-warp-in) {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+  }
+}
+
+/* ---- CODEX modal (system dossier) ---- */
+.cdx-pulse {
+  animation: cdx-pulse 2.2s ease-in-out infinite;
+}
+@keyframes cdx-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+.cdx-backdrop {
+  background: rgba(2, 5, 9, 0.72);
+  backdrop-filter: blur(3px);
+  animation: cdx-fade 0.18s ease-out;
+}
+.scheme-light .cdx-backdrop { background: rgba(228, 235, 242, 0.72); }
+.cdx-panel {
+  animation: cdx-rise 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+@keyframes cdx-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cdx-rise {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cdx-pulse, .cdx-backdrop, .cdx-panel { animation: none; }
+}
+
+/* DEMO banner — only rendered on forks running the synthetic sample dataset
+   (see DemoBanner.tsx). A thin billboard back to the hosted product. */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.4rem 0.9rem;
+  background: linear-gradient(90deg, rgba(83, 214, 232, 0.08), rgba(242, 163, 60, 0.07));
+  border-bottom: 1px solid var(--grid);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: center;
+}
+.demo-banner__tag {
+  color: var(--void);
+  background: var(--warn);
+  padding: 0.05rem 0.42rem;
+  border-radius: 2px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+.demo-banner__cta {
+  color: var(--accent);
+  white-space: nowrap;
+}
+.demo-banner__cta:hover {
+  text-decoration: underline;
+}
+
+/* ── CODEX modal: an immersive dossier, always dark regardless of the site
+   theme (an instrument you open, not a page) ── */
+.cdx-dark {
+  color-scheme: dark;
+  --void: #020509;
+  --hull: #08111c;
+  --grid: #11263b;
+  --ink: #d9e8f5;
+  --dim: #8aa3ba;
+  --faint: #62809a;
+  --accent: #53d6e8;
+  --accent-soft: rgba(83, 214, 232, 0.14);
+  --warn: #f2a33c;
+  --star-white: #f5fbff;
+  --glow: rgba(83, 214, 232, 0.45);
+}
+
+.cdx-hero-sky {
+  background:
+    radial-gradient(130% 110% at 50% -25%, rgba(83, 214, 232, 0.2), transparent 55%),
+    radial-gradient(90% 90% at 88% 0%, rgba(242, 163, 60, 0.07), transparent 70%),
+    linear-gradient(180deg, #07131d, #020509);
+}
+.cdx-hero-sky::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 18% 32%, rgba(245, 251, 255, 0.7), transparent),
+    radial-gradient(1px 1px at 64% 20%, rgba(245, 251, 255, 0.5), transparent),
+    radial-gradient(1.5px 1.5px at 82% 58%, rgba(245, 251, 255, 0.6), transparent),
+    radial-gradient(1px 1px at 34% 72%, rgba(245, 251, 255, 0.4), transparent),
+    radial-gradient(1px 1px at 93% 36%, rgba(245, 251, 255, 0.5), transparent);
+}
+.cdx-hero-sky > * {
+  position: relative;
+  z-index: 1;
+}
+
+.cdx-reticle {
+  border: 1px solid rgba(83, 214, 232, 0.4);
+  box-shadow: 0 0 26px rgba(83, 214, 232, 0.25), inset 0 0 18px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.cdx-reticle::before,
+.cdx-reticle::after {
+  content: "";
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--accent);
+  z-index: 2;
+  pointer-events: none;
+}
+.cdx-reticle::before {
+  top: -3px;
+  left: -3px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.cdx-reticle::after {
+  bottom: -3px;
+  right: -3px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.cdx-rule {
+  border-left: 2px solid rgba(83, 214, 232, 0.3);
+}
+
+/* ── COMMAND DECK: the real console cards relocated into a fullscreen layout ──
+   Desktop is one screen, no page scroll: a 12-column grid of fixed slots.
+     row 1  star race (9)              · next gates (3)
+     row 2  stars/hour (3) · daily ladder (6) · world rank (3)
+     row 3  cumulative (3) · pulse (6) · usage (3)
+   Every row keeps the same 3-6-3 rhythm, so the gutters line up top to
+   bottom and the eye can run down a column. Row 1 gets the most height because the race is the story; rows 2-3 split
+   the rest. Each row has a readable floor, so a short laptop screen scrolls
+   the body instead of crushing the charts. Below 1280 wide or 820 tall it is
+   two columns that scroll; below 640 one. Off the 12-column grid every card has
+   a fixed height so the `fill` charts still have something to fill. */
+.deck-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.deck-body,
+.deck-tiles {
+  /* no single word left alone on a wrapped line */
+  text-wrap: pretty;
+}
+.deck-tile {
+  container-type: inline-size;
+  border-top: 1px solid var(--color-grid);
+  border-left: 1px solid var(--color-grid);
+  margin: -1px 0 0 -1px;
+}
+@media (min-width: 640px) {
+  .deck-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+/* seven tiles on a 2- or 4-column strip leave a hole in the last row: the
+   last tile takes the spare width instead */
+@media (max-width: 1439px) {
+  .deck-tiles > .deck-tile:last-child:nth-child(odd) {
+    grid-column: span 2;
+  }
+}
+/* a phone cannot read the race at 390px: the gates come first there, and
+   the card numbers (reading order on the grid) would then read 02, 01 */
+@media (max-width: 639px) {
+  .deck-proj {
+    order: -1;
+  }
+  .deck-body .module-index {
+    display: none;
+  }
+  /* a phone cannot read the race at all: OVERTAKE and Next gates carry what
+     it says, so the card is not drawn */
+  .deck-hero {
+    display: none;
+  }
+}
+@media (min-width: 1440px) {
+  .deck-tiles {
+    /* one row of six only where six fit whole (below 1440: 3x2, phones 2x3).
+       widths follow content: TODAY carries a delta and "yesterday now",
+       V7D is the shortest number, the named slots carry repo names and an
+       eta line. Order: stars, rank, hour, today, v7d, gate, overtake, threat */
+    /* equal cells: every value and sparkline sits on the same rhythm */
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+.deck-body {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.deck-body > * {
+  min-height: 0;
+  min-width: 0;
+}
+.deck-hero {
+  height: 240px;
+}
+.deck-body > section.hud:not(.deck-hero) {
+  height: 300px;
+}
+/* a tile's sparkline yields to its number: under ~150px of cell there is no
+   room for both, and the number is the point */
+@container (max-width: 150px) {
+  .deck-spark {
+    display: none !important;
+  }
+}
+/* deck cells are narrower than console panels: tighter tracking keeps the
+   titles whole instead of ellipsized */
+.deck-body .module-title,
+.deck-tiles .module-title {
+  letter-spacing: 0.2em;
+}
+@media (max-width: 639px) {
+  .deck-tiles .module-title {
+    letter-spacing: 0.12em;
+  }
+}
+/* a deck cell can be much narrower than the console panel it came from: under
+   ~420px the header's meta line yields so the title stays whole */
+.deck-body > section.hud:not(.deck-hero) {
+  container-type: inline-size;
+}
+@container (max-width: 420px) {
+  .deck-body header .numeral.text-label {
+    display: none;
+  }
+}
+/* a half-width deck cell: "operated by" yields to the title and the ALIVE
+   state. The panel meta stays (it carries the data's window and date,
+   "through Nov 2", "last 30 days"): it truncates, it is never hidden */
+@container (max-width: 760px) {
+  .deck-view header .vs-operated {
+    display: none !important;
+  }
+}
+/* Next gates: each dense row measures ~43px; a size container query reads
+   the content box (padding excluded), so N rows need N×43; the body (the panel's last child)
+   is a size container, and rows that would be cut are not drawn at all */
+.deck-proj > div:last-child {
+  container-type: size;
+}
+/* list cells (gates, usage) trade the panel's roomy padding for rows */
+.deck-proj > div:last-child,
+.deck-usage > div:last-child {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+@container (max-height: 224px) {
+  .deck-gates > :nth-child(n + 5) {
+    display: none;
+  }
+}
+@container (max-height: 172px) {
+  .deck-gates > :nth-child(n + 4) {
+    display: none;
+  }
+}
+@container (max-height: 128px) {
+  .deck-gates > :nth-child(n + 3) {
+    display: none;
+  }
+}
+/* panels whose content is a list, not a chart, scroll inside their slot */
+.deck-scroll > div:last-child {
+  overflow-y: auto;
+}
+/* tablet and small laptop (640-1279): the 3-6-3 grid would crush the charts,
+   so two columns at a readable height and a deliberate scroll; the wide
+   readers (race, ladder, pulse) take the full row */
+@media (min-width: 640px) {
+  .deck-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .deck-hero {
+    grid-column: 1 / -1;
+    height: 440px;
+  }
+  .deck-ladder,
+  .deck-pulse,
+  .deck-usage {
+    grid-column: 1 / -1;
+  }
+  .deck-body > section.hud:not(.deck-hero) {
+    height: 290px;
+  }
+}
+/* the one-screen grid needs room in BOTH directions: a 1280x800 laptop gets
+   the two-column layout and scrolls rather than a crushed bottom row */
+@media (min-width: 1280px) and (min-height: 820px) {
+  /* GROWTH: the console's star chart leads (8 of 12 columns, two rows, the
+     aspect its 520-unit canvas wants); gates and world rank beside it; the
+     three pace charts along the bottom. Pulse and usage live in HEALTH. */
+  .deck-body {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr) minmax(230px, 1.05fr);
+  }
+  .deck-hero,
+  .deck-body > section.hud:not(.deck-hero) {
+    height: auto;
+  }
+  .deck-hero {
+    grid-column: 1 / span 8;
+    grid-row: 1 / span 2;
+  }
+  .deck-proj {
+    grid-column: 9 / span 4;
+    grid-row: 1;
+  }
+  /* world rank sits next to the daily ladder: same 62 days, same marks */
+  .deck-cum {
+    grid-column: 9 / span 4;
+    grid-row: 2;
+  }
+  .deck-vel {
+    grid-column: 1 / span 3;
+    grid-row: 3;
+  }
+  .deck-ladder {
+    grid-column: 4 / span 6;
+    grid-row: 3;
+  }
+  .deck-rank {
+    grid-column: 10 / span 3;
+    grid-row: 3;
+  }
+}
+/* GROWTH, ladder-led layout (under trial, toggled with L): the race is a
+   shorter band on top beside the gates, the daily ladder takes the large
+   cell beside cumulative and world rank, stars/hour runs along the bottom */
+@media (min-width: 1280px) and (min-height: 820px) {
+  .deck-body.deck-body--ladder {
+    grid-template-rows: minmax(250px, 1.4fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1fr);
+  }
+  .deck-body--ladder .deck-hero {
+    grid-column: 1 / span 8;
+    grid-row: 1;
+  }
+  .deck-body--ladder .deck-proj {
+    grid-column: 9 / span 4;
+    grid-row: 1;
+  }
+  .deck-body--ladder .deck-ladder {
+    grid-column: 1 / span 8;
+    grid-row: 2 / span 2;
+  }
+  /* right column: world rank, then the two pace charts side by side in
+     the bottom row with the ladder's full width freed above them */
+  /* height goes to the series whose shape needs it: world rank's steps
+     and stars/hour's daily profile take the right column; cumulative, a
+     monotone curve, reads fine as the low strip under the ladder */
+  .deck-body--ladder .deck-vel {
+    grid-column: 9 / span 4;
+    grid-row: 2 / span 3;
+  }
+  .deck-body--ladder .deck-cum {
+    grid-column: 1 / span 4;
+    grid-row: 4;
+  }
+  .deck-body--ladder .deck-rank {
+    grid-column: 5 / span 4;
+    grid-row: 4;
+  }
+}
+/* ultrawide (21:9 and wider): wall-panel zoom fills the height; the spare
+   width goes to the chart row instead of stretching every card */
+@media (min-width: 1280px) and (min-height: 820px) and (min-aspect-ratio: 2/1) {
+  .deck-body {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr) minmax(250px, 1.1fr);
+  }
+  .deck-hero {
+    grid-column: 1 / span 7;
+  }
+  .deck-proj,
+  .deck-cum {
+    grid-column: 8 / span 5;
+  }
+  .deck-vel {
+    grid-column: 1 / span 3;
+  }
+  .deck-ladder {
+    grid-column: 4 / span 6;
+  }
+  .deck-rank {
+    grid-column: 10 / span 3;
+  }
+  .deck-body.deck-body--ladder {
+    grid-template-rows: minmax(250px, 1.4fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1fr);
+  }
+  .deck-body--ladder .deck-hero,
+  .deck-body--ladder .deck-ladder {
+    grid-column: 1 / span 7;
+  }
+  .deck-body--ladder .deck-proj,
+  .deck-body--ladder .deck-vel {
+    grid-column: 8 / span 5;
+  }
+  .deck-body--ladder .deck-cum {
+    grid-column: 1 / span 4;
+  }
+  .deck-body--ladder .deck-rank {
+    grid-column: 5 / span 3;
+  }
+}
+/* Real usage as a strip of three when its cell is wide */
+@container (min-width: 720px) {
+  .deck-usage-rows {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 2rem;
+  }
+  .deck-usage-rows > * {
+    border-top-width: 0 !important;
+  }
+  /* in the strip each figure sits beside its label, KPI-tile style, and
+     the list's row dividers go */
+  .deck-usage-rows .usage-row {
+    grid-template-columns: auto auto !important;
+    justify-content: start;
+    column-gap: 1.5rem;
+  }
+  .deck-usage-rows,
+  .deck-usage-rows * {
+    border-width: 0 !important;
+  }
+}
+
+/* deck views 2 and 3: one main column of wide panels and a side column,
+   scrolling inside the frame when the panels are taller than the screen */
+.deck-view {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+}
+.deck-view-main,
+.deck-view-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 0;
+}
+/* the last panel of a column takes what is left and scrolls inside, so a
+   column never ends early or runs past the frame */
+.deck-view-main > :last-child,
+.deck-view-side > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+/* HEALTH side: PR flow grows, the pulse below it keeps its content height */
+.deck-view-side > .deck-prflow {
+  flex: 1;
+  min-height: 0;
+}
+.deck-view-side > .deck-prflow ~ :last-child {
+  flex: none;
+}
+.deck-log > div:last-child {
+  overflow-y: auto;
+}
+/* PR flow's chart takes the height its cell has left: the deck wrapper is a
+   flex column down to the chart, and the chart grows (recharts reads the
+   resolved height of a flex item fine once every ancestor has min-height 0) */
+.deck-view-side > .deck-prflow,
+.deck-view-main > .deck-panel-scroll:last-child {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.deck-view-side > .deck-prflow > section,
+.deck-view-main > .deck-panel-scroll:last-child > section {
+  flex: 1;
+  min-height: 0;
+}
+.deck-view-side > .deck-prflow > section > div:last-child,
+.deck-view-main > .deck-panel-scroll:last-child > section > div:last-child {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.deck-view-side > .deck-prflow > section > div:last-child > *,
+.deck-view-main > .deck-panel-scroll:last-child > section > div:last-child > * {
+  min-height: 0;
+}
+.deck-view .pr-flow-chart {
+  flex: 1 1 0;
+  min-height: 150px;
+  height: auto;
+}
+.deck-view .pr-flow-body {
+  flex: 1;
+  min-height: 0;
+}
+.deck-view .pr-flow-queue {
+  flex: 1;
+  min-height: 0;
+}
+/* AUDIENCE: three bands, the last one flexible to the frame's bottom */
+.deck-audience {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  /* a single track that never grows past the frame (the log's columns
+     otherwise set the grid's width to their max-content) */
+  grid-template-columns: minmax(0, 1fr);
+  align-content: stretch;
+  flex: 1;
+  min-height: 0;
+}
+.deck-audience > * {
+  min-width: 0;
+}
+/* locked (no vault chart): each panel is one line, title and its locked
+   strip side by side, instead of a header band over a one-line body */
+@media (min-width: 1024px) {
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top > section {
+    flex-direction: row;
+    align-items: center;
+  }
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top > section > header {
+    flex: none;
+    border-bottom: 0;
+  }
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top > section > header {
+    flex: 1;
+    min-width: 0;
+  }
+  /* the status stays on one line; the call to action is what yields */
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top .locked-status {
+    white-space: nowrap;
+  }
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top > section > div:last-child {
+    flex: none !important;
+  }
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top .locked-cta {
+    display: none;
+  }
+}
+/* narrower desktops: the locked row's wide letter-spacing yields first, so
+   the window note ("kept past GitHub's 14-day window") stays readable */
+@media (min-width: 1024px) and (max-width: 1700px) {
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top .module-title,
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top .locked-status {
+    letter-spacing: 0.04em;
+  }
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top .module-index {
+    display: none;
+  }
+  .deck-audience:not(:has(.vault-chart)) .deck-audience-top > section > div:last-child {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+}
+/* Real usage figures at the KPI strip's size */
+.deck-usage-rows .usage-row > span:nth-child(2) {
+  font-size: 1.875rem;
+}
+/* AUDIENCE on a desktop (Santiago, 4-nov): the owner's two charts lead,
+   tall; under them Real usage (figures on top, the acquisition chart
+   filling the rest) beside the mission log, which scrolls in its own box.
+   Locked, the top row is the one-line strips and the bottom row gets the
+   height. Every chart is a flex item down to its recharts box. */
+@media (min-width: 1280px) {
+  .deck-audience {
+    /* the same 50/50 cut as the owner's row above, so the columns line up */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .deck-audience:has(.vault-chart) {
+    grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr);
+  }
+  .deck-audience > .deck-audience-top {
+    grid-column: 1 / -1;
+    min-height: 0;
+  }
+  .deck-audience > .deck-usage-wide {
+    grid-column: 1;
+    grid-row: 2;
+    height: auto !important;
+  }
+  .deck-audience > .deck-log {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  /* flex chains: panel body -> component root -> chart box */
+  .deck-audience-top > section,
+  .deck-audience > .deck-usage-wide,
+  .deck-audience > .deck-log {
+    min-height: 0;
+  }
+  .deck-audience:has(.vault-chart) .deck-audience-top > section > div:last-child,
+  .deck-audience > .deck-usage-wide > div:last-child {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .deck-audience .vault-root,
+  .deck-audience .vrank-root,
+  .deck-audience > .deck-usage-wide > div:last-child > div {
+    flex: 1;
+    min-height: 0;
+  }
+  .deck-audience .vrank-root {
+    display: flex;
+  }
+  .deck-audience .vault-chart,
+  .deck-audience .vrank-chart {
+    flex: 1 1 0;
+    height: auto !important;
+    min-height: 140px;
+  }
+  .deck-audience .usage-chart {
+    flex: 1;
+    min-height: 0;
+  }
+  .deck-audience .usage-chart-box {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 110px;
+  }
+  /* Real usage: three figures in one row on top */
+  .deck-audience .deck-usage-rows {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 1.5rem;
+  }
+  .deck-audience .deck-usage-rows .usage-row > span:nth-child(2) {
+    font-size: 1.6rem;
+  }
+  /* label over the figure, so the window ("30D", "14D") and the estimate's
+     disclosure ("+ 7d est.") are never cut in a narrow tile */
+  .deck-audience .deck-usage-rows .usage-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .deck-audience .deck-usage-rows .usage-row > span {
+    grid-column: 1 / -1;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .deck-audience .deck-usage-rows .usage-row > span:nth-child(2) {
+    order: -1;
+  }
+}
+/* short desktop (<=950 px tall): the owner's row takes more of the height
+   (its headers wrap at half width) and the vault keeps a real chart */
+@media (min-width: 1280px) and (max-height: 950px) {
+  .deck-audience:has(.vault-chart) {
+    grid-template-rows: minmax(0, 1.7fr) minmax(0, 1fr);
+  }
+  .deck-audience .vault-chart,
+  .deck-audience .vrank-chart {
+    min-height: 150px;
+  }
+  .deck-audience .usage-chart-box {
+    min-height: 90px;
+  }
+}
+/* the mission log scrolls inside its own box */
+.deck-log-scroll > div:last-child {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.deck-audience-top {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 1024px) {
+  .deck-audience-top {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.deck-usage-wide {
+  container-type: inline-size;
+  height: auto !important;
+}
+.deck-log-cols {
+  min-height: 0;
+}
+/* the log shows only whole rows and full columns (MissionLog fillHeight),
+   so nothing is cut and no fade is needed: the old 24 px fade hid the last
+   row that fit */
+.deck-log-cols > div:last-child {
+  overflow: hidden;
+}
+@media (min-width: 1024px) {
+  .deck-log-cols .mission-log-list {
+    display: block;
+    column-gap: 3rem;
+    column-fill: auto;
+  }
+  .deck-log-cols .mission-log-list > li {
+    break-inside: avoid;
+    margin-bottom: 0.375rem;
+  }
+  .deck-log-cols > div:last-child > div {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .deck-log-cols > div:last-child > div > ul {
+    flex: 1;
+    min-height: 0;
+  }
+}
+/* a short laptop (<=950 px tall): Vital Signs drops its operations row in the
+   deck (the console keeps it), so the view fits without scrolling */
+@media (max-height: 950px) {
+  .deck-view .deck-short-hide {
+    display: none;
+  }
+}
+/* short screens: Vital Signs keeps its ops block (lead time, revert rate,
+   the maintainer) as headline figures only; their detail rows yield, the
+   contributor chart gives up height and the fingerprint rows tighten */
+@media (max-height: 950px) {
+  .deck-view .vs-ops {
+    padding-top: 0.75rem;
+    row-gap: 0.5rem;
+  }
+  .deck-view .vs-ops > div {
+    gap: 0.375rem;
+  }
+  .deck-view .vs-ops > div > :nth-child(3) {
+    display: none;
+  }
+  .deck-view .contrib-box {
+    min-height: 140px !important;
+  }
+}
+@media (max-height: 950px) {
+
+  /* PR flow's method note (bots left out, today excluded) is a disclosure:
+     it stays, on one line that truncates */
+  .deck-view .pr-flow-note {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    line-height: 1.35;
+  }
+}
+.deck-panel-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.deck-panel-scroll > section {
+  min-height: 100%;
+}
+@media (min-width: 1280px) {
+  .deck-view {
+    overflow-y: hidden;
+    /* one row that fills the frame, so HEALTH ends on the same edge as the
+       other views and ROTATE does not jump */
+    grid-template-rows: minmax(0, 1fr);
+    align-content: stretch;
+  }
+  .deck-view > * {
+    min-height: 0;
+  }
+}
+/* deck panels whose cell is narrow: four-figure rows become 2x2 */
+.deck-view section.hud,
+.deck-body > section.hud {
+  container-type: inline-size;
+}
+@container (max-width: 560px) {
+  .deck-view .sm\:grid-cols-4,
+  .deck-body .sm\:grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1280px) {
+  .deck-view {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+}
+@media (min-width: 1280px) and (min-aspect-ratio: 2/1) {
+  .deck-view {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}
+@media (min-width: 1280px) {
+  .deck-view.deck-view-half {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── STARFALL: a prominent golden shooting star per live star gained ──
+   Same 45-degree climb as every streak on the site (lower-left to upper-right);
+   gold is the living present. A bright head leads a fading tail; both glow. */
+.starfall {
+  position: absolute;
+  height: 2.5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, rgba(244, 180, 74, 0.55) 55%, #f6c054 100%);
+  filter: drop-shadow(0 0 7px rgba(244, 180, 74, 0.85)) drop-shadow(0 0 18px rgba(244, 180, 74, 0.4));
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: starfall var(--dur, 1300ms) cubic-bezier(0.2, 0.55, 0.3, 1) forwards;
+}
+.starfall::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: #fff3d4;
+  box-shadow: 0 0 12px 4px rgba(246, 192, 84, 0.9);
+}
+@keyframes starfall {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) rotate(-45deg) scaleX(0.25);
+  }
+  9% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx, 900px), calc(var(--dx, 900px) * -1)) rotate(-45deg) scaleX(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .starfall {
+    display: none;
+  }
+}
+
+/* iOS Safari zooms the whole page when a focused text input has font-size < 16px.
+   Force every text input to >=16px on phones so typing never zooms/cuts the
+   layout. The :not() chain raises specificity above Tailwind's text-* utilities
+   so no !important is needed; pinch-zoom stays enabled (accessibility intact). */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea:not([readonly]) {
+    font-size: 16px;
+  }
+}
+
+/* SCAN/ASK toggle: a one-shot pulse hint so visitors notice they can switch */
+.mode-toggle-hint {
+  animation: mode-toggle-hint 1.5s ease-in-out 3;
+}
+@keyframes mode-toggle-hint {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(83, 214, 232, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(83, 214, 232, 0.22);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mode-toggle-hint {
+    animation: none;
+  }
+}
+
+/* race threat-alert toggle: a pulsing dot + a soft amber glow that invites the
+   click without shouting. amber = warn token (#f2c46a). */
+.race-pulse {
+  animation: race-pulse 1.4s ease-in-out infinite;
+}
+@keyframes race-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.78);
+  }
+}
+.race-invite {
+  animation: race-invite 2.2s ease-in-out infinite;
+}
+@keyframes race-invite {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(242, 196, 106, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(242, 196, 106, 0.13);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .race-pulse,
+  .race-invite {
+    animation: none;
+  }
+}
+
+/* Vital Signs — percentile fingerprint fill sweeps in on mount (telemetry
+   booting), staggered per row via inline animation-delay. Reduced-motion safe. */
+@keyframes fingerFill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.finger-fill {
+  transform-origin: left center;
+  animation: fingerFill 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .finger-fill { animation: none; }
+}
+
+/* LiveNumber: the accent that replaced @number-flow's digit animation. A tick
+   of lift and brightness when the figure changes, so a live counter still
+   feels alive - but purely decorative. The number is plain text underneath and
+   remains readable if this never runs. */
+@keyframes liveNumberBump {
+  0% { transform: translateY(0.16em); opacity: 0.45; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.live-number-bump {
+  display: inline-block;
+  animation: liveNumberBump 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-number-bump { animation: none; }
+}
+
+/* MOTION GOVERNOR (src/components/MotionGovernor.tsx): after 15 s without
+   interaction, or while the tab is hidden, every CSS animation pauses where it
+   stands. A quiet page used to keep ~400 animations running and a renderer at
+   50-70% CPU for decoration nobody was watching (25-sep-2026). Paused, not
+   removed: the first interaction resumes each one from the same frame. */
+html[data-motion="idle"] *,
+html[data-motion="idle"] *::before,
+html[data-motion="idle"] *::after {
+  animation-play-state: paused !important;
+}
+

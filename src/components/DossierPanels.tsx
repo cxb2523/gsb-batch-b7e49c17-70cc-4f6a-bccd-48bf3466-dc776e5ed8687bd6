@@ -1,0 +1,376 @@
+// Public dossier panels for /r/: MAINTENANCE PULSE (is this system alive
+// and sustainable?) and REAL USAGE (is the hype backed by installs?).
+// Server components over one cached GraphQL call (lib/explorer dossier).
+// Both panels ALWAYS render with stable heights: the loading skeleton draws
+// the same boxes, and boxes never move once drawn (zero-CLS contract).
+import Panel from "./Panel";
+import UsageChart from "./UsageChart";
+import { fmt, fmtCompact } from "@/lib/format";
+import type { Dossier } from "@/lib/explorer";
+import { shortTag } from "@/lib/release-assets";
+import { newestVersion, summarizeVersions, versionFootnote } from "@/lib/npm-versions";
+
+function ago(iso: string): string {
+  const days = Math.max(0, (Date.now() - new Date(iso).getTime()) / 864e5);
+  if (days < 1) return "today";
+  if (days < 60) return `${Math.round(days)}d ago`;
+  if (days < 365) return `${Math.round(days / 30.44)}mo ago`;
+  return `${(days / 365.25).toFixed(1)}y ago`;
+}
+
+function Metric({ label, value, hint, note, tone, wrap, small }: { label: string; value: string; hint?: string; note?: string; tone?: "accent" | "warn" | "ink"; wrap?: boolean; small?: boolean }) {
+  const color = tone === "warn" ? "text-warn" : tone === "accent" ? "text-accent" : "text-ink";
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="numeral text-micro tracking-[0.2em] text-faint">{label}</span>
+      <span className={`numeral leading-none ${small ? "text-2xl" : "text-metric"} ${color}`}>{value}</span>
+      {/* wrap: a narrow cell (the deck) shows the whole hint on two lines */}
+      {hint ? <span className={`numeral text-micro text-dim ${wrap ? "line-clamp-2" : "truncate"}`}>{hint}</span> : null}
+      {/* never truncated: it carries what makes the figure honest (the
+          measured number behind an estimate), so it wraps instead */}
+      {note ? <span className="numeral max-w-[22rem] text-micro leading-snug text-dim">{note}</span> : null}
+    </div>
+  );
+}
+
+export function PulsePanel({
+  dossier,
+  index = "03",
+  className = "",
+  delay = 0,
+  compact = false,
+}: {
+  dossier: Dossier | null;
+  index?: string;
+  className?: string;
+  delay?: number;
+  // Command Deck: numbers one size under the KPI strip (the strip leads) and
+  // the release age in ink (accent is the strip's headline colour)
+  compact?: boolean;
+}) {
+  const d = dossier;
+  const net = d ? d.issuesOpened30 - d.issuesClosed30 : 0;
+  const flowTotal = d ? d.issuesOpened30 + d.issuesClosed30 : 0;
+  const closedShare = flowTotal > 0 ? (d!.issuesClosed30 / flowTotal) * 100 : 50;
+  const lastRelease = d?.releases[0] ?? null;
+  const releaseDays = lastRelease ? (Date.now() - new Date(lastRelease.at).getTime()) / 864e5 : null;
+  return (
+    <Panel
+      index={index}
+      title="Maintenance pulse"
+      meta="last 30 days · public telemetry"
+      className={className}
+      delay={delay}
+    >
+      {/* compact (Command Deck): sized to its content, so the backlog bar
+          sits right under the figures instead of 50 px below them */}
+      <div className={`flex flex-col gap-4 py-1 ${compact ? "" : "min-h-[150px] justify-between"}`}>
+        {d ? (
+          <>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+              <Metric small={compact}
+                label="COMMITS"
+                value={d.commits30 !== null ? fmtCompact(d.commits30) : "—"}
+                hint="default branch"
+              />
+              <Metric small={compact}
+                label="ISSUE FLOW"
+                value={`${fmtCompact(d.issuesOpened30)} in`}
+                hint={`${fmtCompact(d.issuesClosed30)} resolved`}
+              />
+              <Metric small={compact} label="PRS MERGED" value={fmtCompact(d.prsMerged30)} hint="pull requests" />
+              <Metric small={compact}
+                label="LAST RELEASE"
+                value={lastRelease ? ago(lastRelease.at) : "—"}
+                hint={lastRelease ? lastRelease.tag : "no releases"}
+                tone={releaseDays !== null && releaseDays > 120 ? "warn" : compact ? "ink" : "accent"}
+              />
+            </div>
+            {/* issue flow balance: resolved share vs incoming, with the net
+                drift of the backlog called out */}
+            <div className="flex flex-col gap-1.5">
+              <div className="h-1.5 w-full overflow-hidden bg-grid/60">
+                <div className="h-full bg-accent/70" style={{ width: `${closedShare.toFixed(1)}%` }} />
+              </div>
+              <div className="numeral flex justify-between text-micro text-faint">
+                <span>
+                  backlog {net > 0 ? "+" : ""}
+                  {fmtCompact(net)} this month{" "}
+                  <span className={net > 0 ? "text-warn" : "text-accent"}>{net > 0 ? "▲" : "▼"}</span>
+                </span>
+                <span>{fmtCompact(d.openIssues)} open issues total</span>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="numeral flex min-h-[150px] items-center justify-center text-micro tracking-[0.2em] text-faint">
+            ◌ PULSE TELEMETRY UNAVAILABLE THIS REFRESH
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+export function UsagePanel({
+  dossier,
+  index = "04",
+  className = "",
+  delay = 0,
+  compact = false,
+  withChart = false,
+}: {
+  dossier: Dossier | null;
+  index?: string;
+  className?: string;
+  delay?: number;
+  // the Command Deck's cell: the three headline figures in a two-column grid,
+  // without the acquisition chart and the per-version list (the console keeps
+  // them), and the clone count in the neutral numeral colour: warn is for
+  // things that need attention, and a clone total does not
+  compact?: boolean;
+  // Command Deck AUDIENCE: the figures strip AND the acquisition chart
+  withChart?: boolean;
+}) {
+  const d = dossier;
+  const withDownloads = (d?.releases ?? []).filter((r) => r.downloads > 0).slice(0, 4);
+  const maxDl = Math.max(1, ...withDownloads.map((r) => r.downloads));
+  // clones are real usage too: a clone-and-run repo (no npm, no release binaries)
+  // still shows its acquisition signal, and a transient npm null must not blank
+  // the panel when clones are present.
+  const hasUsage = Boolean(
+    d && (d.npmLast30 !== null || withDownloads.length || d.clonesHistory?.length),
+  );
+  return (
+    <Panel
+      index={index}
+      title="Real usage"
+      meta="installs, not applause"
+      className={className}
+      delay={delay}
+    >
+      <div className={`flex flex-col gap-3 py-1 ${compact ? "" : "min-h-[150px]"}`}>
+        {hasUsage ? (
+          <>
+            {(() => {
+              const ch = d!.clonesHistory;
+              // Sum `c` (clone events) and NEVER `u` (per-day uniques). A person
+              // who clones on ten days contributes ten to a sum of `u`, so the
+              // old headline read 92K "UNIQUE CLONERS" while GitHub's own
+              // deduplicated count was 29,837 - a 3x overstatement, live, on the
+              // page linked in sponsor emails. Clone events accumulate honestly;
+              // people do not accumulate from this data at all.
+              const cloneTotal = ch ? ch.reduce((s, x) => s + x.c, 0) : 0;
+              const fmtDay = (day: string) =>
+                new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                });
+              const since = ch && ch.length ? fmtDay(ch[0].day) : "";
+              // Name the last day each channel actually covers. Without it a
+              // silently stalled feed looks identical to a live one, which is
+              // how this panel sat on 2026-07-24 data unnoticed.
+              const lastClone = ch && ch.length ? fmtDay(ch[ch.length - 1].day) : "";
+              const nh = d!.npmHistory;
+              const lastNpm = nh && nh.length ? fmtDay(nh[nh.length - 1].day) : "";
+              if (compact) {
+                // the deck: one row per figure (label left, number right), the
+                // freshness once per row and the estimate's honesty line kept
+                // whole, so all three fit a short cell at any width
+                const est =
+                  d!.npmLast30Estimate !== null && d!.npmLast30Estimate !== undefined
+                    ? `~${fmtCompact(d!.npmLast30Estimate)}`
+                    : d!.npmLast30 !== null
+                      ? fmtCompact(d!.npmLast30)
+                      : null;
+                const missing = d!.npmLast30MissingDays ?? 0;
+                const Row = ({ label, sub, value, title }: { label: string; sub: string; value: string; title?: string }) => (
+                  // two grid rows: label and value share the first, the subtitle
+                  // spans the whole cell below, so a long subtitle never pushes
+                  // the value away from its label
+                  <div className="usage-row grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 py-1 @[26rem]:grid-cols-[minmax(0,65%)_auto]" title={title}>
+                    <span className="numeral min-w-0 truncate text-micro tracking-[0.15em] text-faint">{label}</span>
+                    <span className="numeral shrink-0 text-xl leading-none text-ink sm:text-2xl">{value}</span>
+                    <span className="numeral col-span-2 truncate text-micro text-dim">{sub}</span>
+                  </div>
+                );
+                return (
+                  // full width, so rows start at the title's edge; on a wide cell
+                  // the value sits in a column at ~65 % (label and value stay close)
+                  <div className="deck-usage-rows flex w-full flex-col divide-y divide-grid/60 [container-type:inline-size]">
+                    {est !== null ? (
+                      <div>
+                        {/* deck strip: the estimate's disclosure joins the date on
+                            one line (both stay visible), so the strip is one line
+                            shorter on a short screen */}
+                        <Row label="NPM INSTALLS · 30D"
+                          sub={`${lastNpm ? `through ${lastNpm}` : d!.npmPkg ?? ""}${compact && missing > 0 && d!.npmLast30 !== null ? ` · ${fmt(d!.npmLast30)} measured + ${missing}d est.` : ""}`}
+                          value={est} title={d!.npmPkg ?? undefined} />
+                        {missing > 0 && d!.npmLast30 !== null && !compact ? (
+                          <span className="numeral block pb-1 text-micro leading-snug text-dim">
+                            {fmt(d!.npmLast30)} measured + {missing} days estimated
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {ch && ch.length ? (
+                      <Row label={`CLONE EVENTS · SINCE ${since}`} sub={`not people · through ${lastClone}`} value={fmtCompact(cloneTotal)} />
+                    ) : null}
+                    {d!.uniqueCloners14d !== null ? (
+                      <Row
+                        label="UNIQUE CLONERS · 14D"
+                        sub={d!.uniqueCloners14dAt ? `GitHub's dedup · ${fmtDay(d!.uniqueCloners14dAt)}` : "GitHub's dedup"}
+                        value={fmtCompact(d!.uniqueCloners14d)}
+                      />
+                    ) : null}
+                  </div>
+                );
+              }
+              return (
+                <div className="flex flex-wrap gap-x-8 gap-y-3">
+                  {d!.npmLast30 !== null ? (
+                    <Metric
+                      label="NPM INSTALLS · 30D"
+                      // npm's own total skips the days it never recorded. With
+                      // holes in its window the headline is the measured total
+                      // plus a LABELLED estimate of those days ("~"), and the
+                      // measured figure is always printed next to it.
+                      value={
+                        d!.npmLast30Estimate !== null && d!.npmLast30Estimate !== undefined
+                          ? `~${fmtCompact(d!.npmLast30Estimate)}`
+                          : fmtCompact(d!.npmLast30)
+                      }
+                      // the measured figure rides in `note`, which wraps: the
+                      // hint truncates on a phone, and the estimate must never
+                      // be shown without it
+                      note={
+                        (d!.npmLast30MissingDays ?? 0) > 0
+                          ? `${fmt(d!.npmLast30)} measured + ${d!.npmLast30MissingDays} days npm did not record, estimated`
+                          : d!.npmLast30MissingDays === null
+                            ? "gaps in npm's data unchecked"
+                            : undefined
+                      }
+                      hint={[
+                        d!.npmPkg ?? "",
+                        lastNpm ? `through ${lastNpm}` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || undefined}
+                      tone="accent"
+                    />
+                  ) : null}
+                  {ch && ch.length ? (
+                    <Metric
+                      label={`CLONES · SINCE ${since}`}
+                      value={fmtCompact(cloneTotal)}
+                      hint={`clone events, not people · through ${lastClone}`}
+                      tone="warn"
+                    />
+                  ) : null}
+                  {/* The deduplicated headcount, and the only place the word
+                      "unique" is allowed. Renders nothing when the vault
+                      predates its collection: an absent number beats a summed
+                      one wearing the same label. */}
+                  {d!.uniqueCloners14d !== null ? (
+                    <Metric
+                      label="UNIQUE CLONERS · 14D"
+                      value={fmtCompact(d!.uniqueCloners14d)}
+                      hint={
+                        d!.uniqueCloners14dAt
+                          ? `deduplicated by GitHub · as of ${fmtDay(d!.uniqueCloners14dAt)}`
+                          : "deduplicated by GitHub"
+                      }
+                    />
+                  ) : null}
+                </div>
+              );
+            })()}
+            {(!compact || withChart) &&
+            ((d!.npmHistory && d!.npmHistory.length >= 2) ||
+              (d!.clonesHistory && d!.clonesHistory.length >= 2)) ? (
+              <UsageChart npm={d!.npmHistory ?? []} clones={d!.clonesHistory} />
+            ) : null}
+            {!compact && d!.npmVersions?.length
+              ? (() => {
+                  // adoption per release, from npm's rolling week (downloads, not people)
+                  const v = summarizeVersions(d!.npmVersions!, 4);
+                  const max = Math.max(1, ...v.rows.map((r) => r.d));
+                  const newest = newestVersion(d!.npmVersions!);
+                  // accent only on the release npm serves as latest; an older
+                  // week's newest row is not "the" newest (2026-10-12)
+                  const latest = d!.npmLatest ?? null;
+                  const weekEnd = d!.npmVersionsThrough
+                    ? new Date(`${d!.npmVersionsThrough}T00:00:00Z`).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        timeZone: "UTC",
+                      })
+                    : null;
+                  return (
+                    <div className="flex flex-col gap-1.5">
+                      <span className="numeral text-micro tracking-[0.2em] text-faint">
+                        NPM BY VERSION · 7D
+                        {weekEnd ? ` · through ${weekEnd}` : ""}
+                      </span>
+                      {v.rows.map((r) => (
+                        <div key={r.version} className="flex items-center gap-2">
+                          <span
+                            className={`numeral w-24 truncate text-micro ${r.version === newest && (!latest || latest === newest) ? "text-accent" : "text-dim"}`}
+                            title={`${d!.npmPkg}@${r.version}`}
+                          >
+                            v{r.version}
+                          </span>
+                          <div className="h-1.5 flex-1 overflow-hidden bg-grid/60">
+                            <div
+                              className="h-full bg-accent/70"
+                              style={{ width: `${((r.d / max) * 100).toFixed(1)}%` }}
+                            />
+                          </div>
+                          <span className="numeral w-14 text-right text-micro text-ink">{fmtCompact(r.d)}</span>
+                        </div>
+                      ))}
+                      <span className="numeral text-micro text-faint">
+                        {v.rest ? `+${v.rest.versions} older · ${fmtCompact(v.rest.d)} · ` : ""}
+                        {versionFootnote(newest, latest)} · downloads, not people
+                      </span>
+                    </div>
+                  );
+                })()
+              : null}
+            {!compact && withDownloads.length ? (
+              <div className="flex flex-col gap-1.5">
+                <span className="numeral text-micro tracking-[0.2em] text-faint">
+                  RELEASE DOWNLOADS
+                </span>
+                {withDownloads.map((r) => (
+                  <div key={r.tag} className="flex items-center gap-2">
+                    <span className="numeral w-24 truncate text-micro text-dim" title={r.tag}>
+                      {shortTag(r.tag)}
+                    </span>
+                    <div className="h-1.5 flex-1 overflow-hidden bg-grid/60">
+                      <div
+                        className="h-full bg-accent/70"
+                        style={{ width: `${((r.downloads / maxDl) * 100).toFixed(1)}%` }}
+                      />
+                    </div>
+                    <span className="numeral w-14 text-right text-micro text-ink">
+                      {fmtCompact(r.downloads)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="numeral flex min-h-[150px] flex-col items-center justify-center gap-2 text-center text-micro text-faint">
+            <span className="tracking-[0.2em]">NO PUBLIC DISTRIBUTION ARTIFACTS</span>
+            <span className="text-dim">
+              no npm package or release binaries detected: stars, forks and clones carry this
+              system&apos;s usage signal
+            </span>
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}

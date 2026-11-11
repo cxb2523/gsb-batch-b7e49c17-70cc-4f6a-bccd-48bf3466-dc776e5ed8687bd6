@@ -1,0 +1,123 @@
+import { describe, expect, it } from "vitest";
+import { compareVersions, datedWeek, newestVersion, parseVersionDownloads, summarizeVersions, versionFootnote } from "@/lib/npm-versions";
+
+describe("npm downloads by version", () => {
+  it("reads npm's per-version week, busiest first", () => {
+    const list = parseVersionDownloads({
+      package: "@santifer/career-ops",
+      downloads: { "1.32.0": 13, "1.33.0": 1719, "1.34.0": 454, "1.20.0": 0 },
+    });
+    expect(list).toEqual([
+      { version: "1.33.0", d: 1719 },
+      { version: "1.34.0", d: 454 },
+      { version: "1.32.0", d: 13 },
+    ]);
+  });
+
+  // npm answers 200 with downloads:{} for a package that does not exist
+  // (checked 27-sep with @career-ops-hq/career-ops): that is no data, not zero.
+  it("says null, never zero, when npm returns an empty map", () => {
+    expect(parseVersionDownloads({ package: "@career-ops-hq/career-ops", downloads: {} })).toBeNull();
+    expect(parseVersionDownloads({ error: "not found" })).toBeNull();
+    expect(parseVersionDownloads(null)).toBeNull();
+  });
+
+  it("summarizes the top versions and folds the rest into one line", () => {
+    const list = [
+      { version: "1.33.0", d: 1719 },
+      { version: "1.34.0", d: 454 },
+      { version: "1.32.0", d: 13 },
+      { version: "1.31.0", d: 5 },
+      { version: "1.30.0", d: 3 },
+      { version: "1.29.0", d: 2 },
+    ];
+    const s = summarizeVersions(list, 3);
+    expect(s.total).toBe(2196);
+    expect(s.rows.map((r) => r.version)).toEqual(["1.33.0", "1.34.0", "1.32.0"]);
+    expect(s.rest).toEqual({ versions: 3, d: 10 });
+  });
+});
+
+describe("the week a reading belongs to", () => {
+  const versions = [
+    { version: "1.33.0", d: 1719 },
+    { version: "1.34.0", d: 490 },
+  ];
+  // Review catch: the versions endpoint does not say its week; stamping it with
+  // the fetch day dated the 19-25 Sep week as "27 Sep".
+  it("dates a reading with npm's own week when the totals agree", () => {
+    expect(datedWeek(versions, { downloads: 2209, start: "2026-09-19", end: "2026-09-25" })).toEqual({
+      list: versions,
+      start: "2026-09-19",
+      end: "2026-09-25",
+    });
+  });
+
+  it("refuses a reading whose total does not match (it straddled npm's weekly roll)", () => {
+    expect(datedWeek(versions, { downloads: 2300, start: "2026-09-20", end: "2026-09-26" })).toBeNull();
+  });
+
+  it("refuses when npm could not say which week", () => {
+    expect(datedWeek(versions, { error: "not found" } as never)).toBeNull();
+    expect(datedWeek(null, { downloads: 0, start: "a", end: "b" })).toBeNull();
+  });
+});
+
+describe("newest version", () => {
+  it("orders like semver, not like text", () => {
+    expect(compareVersions("1.10.0", "1.9.0")).toBeGreaterThan(0);
+    expect(compareVersions("1.34.0", "1.34.0-beta.1")).toBeGreaterThan(0); // review catch
+    expect(compareVersions("1.34.0+build.5", "1.34.0")).toBe(0);
+    expect(newestVersion([{ version: "1.34.0-beta.1", d: 5 }, { version: "1.34.0", d: 1 }, { version: "1.9.0", d: 9 }])).toBe("1.34.0");
+  });
+});
+
+describe("recorded week fallback", () => {
+  // the collector's file for npm's week ending 2026-10-04, as stored in the Blob
+  const FILE = {
+    package: "@santifer/career-ops",
+    start: "2026-09-28",
+    end: "2026-10-04",
+    total: 2152,
+    versions: { "1.35.0": 1102, "1.34.0": 1001, "1.33.0": 11, "1.8.1": 0 },
+    recordedAt: "2026-10-05T02:10:00Z",
+  };
+  it("serves the recorded week with its own dates, dropping zero rows", async () => {
+    const { parseRecordedWeek } = await import("@/lib/npm-versions");
+    const w = parseRecordedWeek(FILE, "@santifer/career-ops", "2026-10-09");
+    expect(w?.start).toBe("2026-09-28");
+    expect(w?.end).toBe("2026-10-04");
+    expect(w?.list.map((v) => v.version)).toEqual(["1.35.0", "1.34.0", "1.33.0"]);
+  });
+  it("refuses a file recorded for another package or without dates", async () => {
+    const { parseRecordedWeek } = await import("@/lib/npm-versions");
+    expect(parseRecordedWeek(FILE, "career-ops", "2026-10-09")).toBeNull();
+    expect(parseRecordedWeek({ ...FILE, end: undefined }, "@santifer/career-ops", "2026-10-09")).toBeNull();
+  });
+  it("refuses a recorded week older than three weeks instead of serving it as current", async () => {
+    const { parseRecordedWeek } = await import("@/lib/npm-versions");
+    expect(parseRecordedWeek(FILE, "@santifer/career-ops", "2026-10-30")).toBeNull();
+  });
+});
+
+describe("versionFootnote", () => {
+  // 2026-10-12: the recorded week (Sep 28-Oct 4) predates v1.36.0 (Oct 10) and
+  // the panel said "newest v1.35.0" as if it were the newest release
+  const week = [
+    { version: "1.34.0", d: 1046 },
+    { version: "1.35.0", d: 1030 },
+    { version: "1.33.0", d: 11 },
+  ];
+  it("says a newer release exists when the week predates it", () => {
+    expect(versionFootnote(newestVersion(week), "1.36.0")).toBe("newest that week v1.35.0 · latest v1.36.0, released after");
+  });
+  it("keeps the short form when the week already has the latest", () => {
+    expect(versionFootnote("1.36.0", "1.36.0")).toBe("newest v1.36.0");
+  });
+  it("never claims a newer release when npm could not be read", () => {
+    expect(versionFootnote("1.35.0", null)).toBe("newest v1.35.0");
+  });
+  it("ignores a latest tag older than the week (a tag moved back)", () => {
+    expect(versionFootnote("1.35.0", "1.34.0")).toBe("newest v1.35.0");
+  });
+});

@@ -1,0 +1,59 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# accumulated star history — the moat. It lives in the PRIVATE Vercel Blob
+# store and is pulled at build time by scripts/sync-from-blob.mjs (prebuild),
+# never committed to this public repo. A fork with no token builds from the
+# synthetic data-sample/ instead.
+/data/
+
+# internal SEO/GEO work artifacts — audit reports, action plans and
+# ready-to-publish off-site drafts. Working notes (incl. operational tooling
+# detail), not product. Never publish to this public repo.
+/seo-audit/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# Local Claude Code session memory (hooks write it); never publish it from this public repo
+**/.claude/memory/
+
+# Playwright smoke output
+/test-results/
+/playwright-report/

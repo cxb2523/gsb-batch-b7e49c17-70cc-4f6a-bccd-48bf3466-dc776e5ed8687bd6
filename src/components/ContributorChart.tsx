@@ -1,0 +1,396 @@
+"use client";
+
+// The contributor evolution strip inside Vital Signs: a time-linear daily step
+// curve of WHO has landed work, with a rate histogram underneath.
+//
+// Two design rules carried over from the review that shaped this:
+// - The x axis is LINEAR IN TIME. A month is as wide as the days it spans, so
+//   a 4-day partial month is a narrow sliver at the right edge instead of a
+//   full-width column that reads as a collapse.
+// - The band under the curve is a RATE histogram (height = new people per day,
+//   width = days). With unequal bins that is the only honest shape: area equals
+//   people, and a strong short month is TALL and narrow, not small.
+//
+// ONE reading, always: GitHub's own contributor count, rebuilt from the
+// commit history with GitHub's rule and ending exactly on the figure GitHub
+// shows (the "N contributors" link above). One number on the page, the same one
+// a reader finds on the repo (2026-10-11). There is no other count to fall
+// back to (Santiago, 2026-10-30: the authors / co-authored toggle is gone):
+// without GitHub's curve the chart is not drawn, and the watchdog's
+// presence.contributor-curve opens an issue.
+//
+// Every number and sentence below is computed from the series at render time.
+// Nothing is hardcoded: the copy recomputes as the data moves.
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { VitalsCensus, VitalsBusFactor } from "@/lib/vitals";
+
+const DAY = 864e5;
+const MN = [
+  "JAN",
+  "FEB",
+  "MAR",
+  "APR",
+  "MAY",
+  "JUN",
+  "JUL",
+  "AUG",
+  "SEP",
+  "OCT",
+  "NOV",
+  "DEC",
+];
+const capMonth = (m: string) => m[0] + m.slice(1).toLowerCase();
+
+type Seg = {
+  label: string;
+  a: number;
+  b: number;
+  nw: number;
+  rate: number;
+  partial: boolean;
+};
+
+function monthSegments(points: [string, number][], endMs: number): Seg[] {
+  const t0 = Date.parse(points[0][0] + "T12:00:00Z");
+  const cumAt = (ms: number) => {
+    // cumulative count as of ms (points are per-day cumulative, sorted)
+    let c = 0;
+    for (const [d, cum] of points) {
+      if (Date.parse(d + "T12:00:00Z") <= ms) c = cum;
+      else break;
+    }
+    return c;
+  };
+  const start = (t: number) => {
+    const d = new Date(t);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  };
+  const next = (t: number) => {
+    const d = new Date(t);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  };
+  const out: Seg[] = [];
+  for (let m = start(t0); m < endMs; m = next(m)) {
+    const a = Math.max(m, t0 - 12 * 36e5); // domain starts at the first day
+    const b = Math.min(next(m), endMs);
+    const nw = cumAt(b) - cumAt(a - DAY / 2);
+    out.push({
+      label: MN[new Date(m).getUTCMonth()],
+      a,
+      b,
+      nw,
+      rate: nw / ((b - a) / DAY),
+      partial: next(m) > endMs,
+    });
+  }
+  return out;
+}
+
+const LBL_DEFAULT = 172;
+
+export default function ContributorChart({
+  census,
+  busFactor,
+  compact = false,
+}: {
+  census: VitalsCensus;
+  busFactor: VitalsBusFactor | null;
+  // Command Deck: the chart and bus factor only; the sentences stay in the
+  // console, where they are read rather than glanced at
+  compact?: boolean;
+}) {
+  // Command Deck: the chart's own box, measured in layout px
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [measured, setMeasured] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!compact || !el) return;
+    const fit = () => {
+      const w = Math.round(el.clientWidth);
+      const h = Math.round(el.clientHeight);
+      if (w > 0 && h > 0) setMeasured((m) => (m && m.w === w && m.h === h ? m : { w, h }));
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [compact]);
+  const pts = useMemo(
+    () => (census.github != null ? (census.githubDaily ?? []) : []),
+    [census.github, census.githubDaily],
+  );
+  const N = census.github ?? 0;
+
+  const model = useMemo(() => {
+    if (!pts.length) return null;
+    const endMs = census.measuredAt
+      ? Date.parse(census.measuredAt)
+      : Date.parse(pts[pts.length - 1][0] + "T23:59:59Z");
+    const t0 = Date.parse(pts[0][0] + "T12:00:00Z");
+    const segs = monthSegments(pts, endMs);
+    const maxRate = Math.max(...segs.map((s) => s.rate));
+    const complete = segs.filter((s) => !s.partial);
+    const cur = segs[segs.length - 1];
+    const best = (complete.length ? complete : segs).reduce((x, y) =>
+      y.nw > x.nw ? y : x,
+    );
+    const cut30 = endMs - 30 * DAY;
+    const last30 = pts.length
+      ? N -
+        (pts
+          .filter(([d]) => Date.parse(d + "T12:00:00Z") < cut30)
+          .at(-1)?.[1] ?? 0)
+      : 0;
+    return { endMs, t0, segs, maxRate, cur, best, last30 };
+  }, [pts, N, census.measuredAt]);
+
+  if (!model) return null;
+  const { endMs, t0, segs, maxRate, cur, best, last30 } = model;
+
+  // ---- geometry ----
+  // Console: a fixed 960x180 canvas scaled to the width. Command Deck
+  // (compact): the canvas IS the box it is given (1 unit = 1 px), so a tall
+  // cell gives a tall chart and the type stays at a readable 11 px.
+  const box = compact ? measured : null;
+  const W = box ? Math.max(320, box.w) : 960;
+  const TH = box ? Math.max(140, box.h) : LBL_DEFAULT + 8;
+  const fz = box ? 11 : 9;
+  const X0 = 8,
+    X1 = W - (box ? 60 : 52),
+    CT = box ? 18 : 12,
+    LBL = TH - (box ? 6 : 8),
+    HB = LBL - (box ? 20 : 18),
+    // short box: the bars yield first (24-70 units) so the curve keeps a
+    // readable slope instead of collapsing to a line
+    HT = box ? HB - Math.min(70, Math.max(24, Math.round((HB - CT) * 0.3))) : 116,
+    CB = box ? HT - 22 : 102;
+  const x = (t: number) => X0 + ((t - t0) / (endMs - t0)) * (X1 - X0);
+  const yMax = Math.max(50, Math.ceil(N / 50) * 50);
+  const y = (v: number) => CB - (v / yMax) * (CB - CT);
+  const yr = (r: number) => HB - (r / maxRate) * (HB - HT);
+
+  let path = `M${x(Date.parse(pts[0][0] + "T12:00:00Z"))},${y(0)}`;
+  let prev = 0;
+  for (const [d, cum] of pts) {
+    const px = x(Date.parse(d + "T12:00:00Z"));
+    path += ` L${px},${y(prev)} L${px},${y(cum)}`;
+    prev = cum;
+  }
+  path += ` L${x(endMs)},${y(prev)}`;
+
+  const othersPct = busFactor
+    ? Math.round((1 - busFactor.top1Share) * 100)
+    : null;
+  const curDays = Math.max(1, Math.round((endMs - cur.a) / DAY));
+  const fastest = cur.rate >= maxRate - 1e-9;
+
+  return (
+    <div className={`flex flex-col gap-2 ${compact ? "min-h-0 flex-1" : ""}`}>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <span className="numeral text-micro tracking-[0.1em] text-faint">
+          CONTRIBUTORS · GITHUB&apos;S COUNT
+        </span>
+        <span className="numeral text-micro text-faint">
+          <span className="text-accent">{last30}</span> of {N} arrived in the
+          last 30 days
+        </span>
+      </div>
+
+      <div ref={boxRef} className={compact ? "contrib-box min-h-[150px] flex-1" : ""}>
+      <svg
+        viewBox={`0 0 ${W} ${TH}`}
+        className={box ? "block h-full w-full" : "block w-full"}
+        preserveAspectRatio={box ? "none" : undefined}
+        role="img"
+        aria-label="Cumulative contributors, GitHub's count, over time, daily"
+      >
+        <line x1={X0} y1={CB} x2={X1} y2={CB} stroke="var(--grid)" />
+        <line
+          x1={X0}
+          y1={y(yMax)}
+          x2={X1}
+          y2={y(yMax)}
+          stroke="var(--grid)"
+          opacity=".55"
+        />
+        <text
+          x={X0}
+          y={y(yMax) - 4}
+          className="numeral"
+          fontSize={fz}
+          fill="var(--faint)"
+        >
+          {yMax}
+        </text>
+        {segs.slice(1).map((s) => (
+          <line
+            key={`b${s.a}`}
+            x1={x(s.a)}
+            y1={CT}
+            x2={x(s.a)}
+            y2={HB}
+            stroke="var(--grid)"
+            opacity=".6"
+          />
+        ))}
+        {segs.map((s) => {
+          const w = x(s.b) - x(s.a);
+          return (
+            <text
+              key={`l${s.a}`}
+              x={w < 34 ? x(s.b) : (x(s.a) + x(s.b)) / 2}
+              y={LBL}
+              textAnchor={w < 34 ? "end" : "middle"}
+              className="numeral"
+              fontSize={fz + 0.5}
+              letterSpacing="1"
+              fill="var(--faint)"
+            >
+              {s.label}
+            </text>
+          );
+        })}
+        <path
+          d={`${path} L${x(endMs)},${CB} L${x(t0)},${CB} Z`}
+          fill="var(--accent-soft)"
+        />
+        <path d={path} fill="none" stroke="var(--accent)" strokeWidth="1.8" />
+        <circle
+          cx={x(endMs)}
+          cy={y(N)}
+          r="6.5"
+          fill="var(--glow)"
+          opacity=".5"
+        />
+        <circle cx={x(endMs)} cy={y(N)} r="3" fill="var(--accent)" />
+        <text
+          x={x(endMs) + 8}
+          y={y(N) + 4}
+          className="numeral"
+          fontSize={box ? 15 : 14}
+          fontWeight="600"
+          fill="var(--ink)"
+        >
+          {N}
+        </text>
+        {segs.map((s) => {
+          const bx = x(s.a) + 1;
+          const bw = Math.max(2, x(s.b) - x(s.a) - 2);
+          const by = yr(s.rate);
+          return (
+            <g key={`r${s.a}`}>
+              <rect
+                x={bx}
+                y={by}
+                width={bw}
+                height={HB - by}
+                fill="var(--accent)"
+                opacity={s.partial ? 0.95 : 0.55}
+              />
+              {/* a bar too narrow for its label (the current partial month)
+                  only labels itself when the previous month's label is not
+                  already sitting at the same spot */}
+              {bw < 34 && segs.indexOf(s) > 0 && x(s.b) - x(segs[segs.indexOf(s) - 1].b) < fz * 5 ? null : (
+                <text
+                  x={bw < 34 ? x(s.b) : bx + bw / 2}
+                  y={by - 3}
+                  textAnchor={bw < 34 ? "end" : "middle"}
+                  className="numeral"
+                  fontSize={fz}
+                  fill={s.rate === maxRate ? "var(--warn)" : "var(--faint)"}
+                >
+                  {s.rate.toFixed(1)}/d
+                </text>
+              )}
+            </g>
+          );
+        })}
+        <text
+          x={X0}
+          y={HT - 3}
+          className="numeral"
+          fontSize={fz - 0.5}
+          letterSpacing="1"
+          fill="var(--faint)"
+          opacity=".8"
+        >
+          NEW CONTRIBUTORS / DAY
+        </text>
+      </svg>
+      </div>
+
+      {busFactor ? (
+        // wraps on a phone: the shares go under the bar instead of pushing it to
+        // zero width and running off the right edge (iPhone, 2026-10-11)
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="numeral shrink-0 text-micro tracking-[0.08em] text-faint">
+            BUS FACTOR
+          </span>
+          <div className="flex h-1.5 min-w-[6rem] flex-1 gap-0.5">
+            <div
+              style={{
+                width: `${(busFactor.top1Share * 100).toFixed(1)}%`,
+                background: "var(--warn)",
+              }}
+            />
+            <div
+              style={{
+                width: `${((busFactor.top5Share - busFactor.top1Share) * 100).toFixed(1)}%`,
+                background: "var(--accent)",
+              }}
+            />
+            <div className="flex-1 bg-grid" />
+          </div>
+          <span className="numeral basis-full text-micro text-faint sm:basis-auto sm:shrink-0">
+            maintainer {Math.round(busFactor.top1Share * 100)}% · next 4{" "}
+            {Math.round((busFactor.top5Share - busFactor.top1Share) * 100)}% ·
+            others {Math.round((1 - busFactor.top5Share) * 100)}%
+          </span>
+        </div>
+      ) : null}
+
+      {compact ? null : (<>
+      <div className="numeral text-micro leading-relaxed text-faint">
+        <>
+          <span className="text-dim">{N} contributors</span> since{" "}
+          {capMonth(segs[0].label)} by GitHub&apos;s count: the accounts GitHub
+          credits on a landed commit, as author or co-author.
+          {othersPct !== null ? (
+            <>
+              {" "}
+              <span className="text-accent">
+                {othersPct}% of all commits
+              </span>{" "}
+              come from someone other than the maintainer.
+            </>
+          ) : null}
+        </>{" "}
+        {capMonth(best.label)} brought{" "}
+        <span className="text-dim">{best.nw} first-timers</span>;{" "}
+        {fastest ? (
+          <>
+            <span className="text-accent">{cur.rate.toFixed(1)} new/day</span>{" "}
+            so far in {capMonth(cur.label)}, the fastest pace on record.
+          </>
+        ) : (
+          <>
+            <span className="text-dim">{cur.rate.toFixed(1)} new/day</span> so
+            far in {capMonth(cur.label)}.
+          </>
+        )}
+      </div>
+      {/* One count on the panel, so no legend of definitions: just how the
+          curve is drawn. GitHub's figure has no dates; the curve does. */}
+      <span className="numeral text-micro leading-relaxed text-faint/60">
+        GitHub&apos;s contributor count, drawn from the commit history and
+        ending on the figure GitHub shows
+        {census.measuredAt
+          ? ` · measured ${census.measuredAt.slice(0, 10)}`
+          : ""}{" "}
+        · {capMonth(cur.label)} spans {curDays} day{curDays === 1 ? "" : "s"} ·
+        bots and AI accounts count, as on GitHub
+      </span>
+      </>)}
+    </div>
+  );
+}

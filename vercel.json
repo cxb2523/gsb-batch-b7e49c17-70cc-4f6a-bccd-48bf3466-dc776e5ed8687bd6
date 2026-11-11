@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/monitor",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/badges",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/alerts",
+      "schedule": "0 7 * * *"
+    }
+  ]
+}

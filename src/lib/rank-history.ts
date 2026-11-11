@@ -1,0 +1,154 @@
+// Reads the accumulated worldwide-rank distribution (top 10k) from the PRIVATE
+// Blob and extracts ONE repo's world-rank trajectory. This is the rank-of-record
+// moat: stars reconstruct any time, and world rank CAN be roughly reconstructed
+// from public archives (GH Archive) but those reconstructions DRIFT; Warpchart
+// records the live authoritative rank daily, so its dated trajectory is accurate
+// from the day recording began. Powers the pricing page's "locked treasure"
+// preview. Server-side only.
+//
+// The index is SHARDED (32 files, written by collector/route-history.mjs)
+// because Next's data cache caps a cached item at 2MB and the full index is
+// ~22MB. A repo query reads exactly one shard (~0.7MB), cached at most once per
+// hour. The shard hash MUST stay identical to shardOf() in route-history.mjs.
+import { get } from "@vercel/blob";
+import { unstable_cache } from "next/cache";
+import { allNamesOf } from "./aliases";
+import { toTrajectory } from "./trajectory";
+
+const SHARDS = 32; // MUST match collector/route-history.mjs
+
+interface Shard {
+  dates: string[];
+  series: Record<string, [string, number, number][]>; // repo -> [[isoDay, rank, stars]]
+}
+
+export interface RankHistoryPoint {
+  t: number; // ms timestamp (midday UTC of the recorded day)
+  rank: number;
+  stars: number;
+}
+
+// deterministic fnv-1a, identical to shardOf() in collector/route-history.mjs
+function shardOf(repo: string): number {
+  let h = 2166136261;
+  const s = repo.toLowerCase();
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) % SHARDS;
+}
+
+async function readShard(i: number, useCache = true): Promise<Shard | null> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) return null;
+  try {
+    const res = await get(`route-history/shard-${i}.json`, { access: "private", token, useCache });
+    if (!res || res.statusCode !== 200 || !res.stream) return null;
+    const parsed = JSON.parse(await new Response(res.stream).text()) as Shard;
+    return parsed?.series ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function cachedShard(i: number): Promise<Shard | null> {
+  return unstable_cache(() => readShard(i), ["route-history-shard", String(i)], {
+    revalidate: 3600,
+  })();
+}
+
+// The COLD archive shard: every day evicted from the 90-day hot window, kept
+// forever by collector/route-history.mjs (append-only, no `dates` field). Read
+// uncached with useCache:false because it grows past the 2MB cached-read cap
+// over time and is only read on the low-traffic paid trajectory surface. Absent
+// (null) until the first day rolls out of the hot window (~day 91), so the merge
+// below is a no-op until the moat is older than the window.
+interface ArchiveShard {
+  series: Record<string, [string, number, number][]>;
+}
+
+async function readArchiveShard(i: number): Promise<ArchiveShard | null> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) return null;
+  try {
+    const res = await get(`route-history/archive/shard-${i}.json`, {
+      access: "private",
+      token,
+      useCache: false,
+    });
+    if (!res || res.statusCode !== 200 || !res.stream) return null;
+    const parsed = JSON.parse(await new Response(res.stream).text()) as ArchiveShard;
+    return parsed?.series ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// case-insensitive lookup of a repo's points in a shard's series map
+function pullSeries(
+  series: Record<string, [string, number, number][]> | undefined,
+  repo: string,
+): [string, number, number][] {
+  if (!series) return [];
+  const k =
+    series[repo] !== undefined
+      ? repo
+      : Object.keys(series).find((x) => x.toLowerCase() === repo.toLowerCase());
+  return k ? series[k] : [];
+}
+
+// A repo's world-rank trajectory from the accumulated distribution. Empty array
+// when the repo has never been in the recorded top 10k (or nothing recorded
+// yet): callers degrade gracefully.
+// includeArchive merges the cold archive (the full >90-day record) and is the
+// AUTHORIZED-only path: the archive read is uncached (useCache:false), so firing
+// it on every public render (pricing, /r/, teasers) would be an unbounded private-
+// Blob cost surface. Public surfaces only need the hot 90-day window (charted
+// checks, the locked teaser); the full record is the paid/god deliverable, served
+// from the WARPCHART_GOD_KEY-gated /api/v1/rank-history.
+export async function repoRankTrajectory(
+  repo: string,
+  opts?: { includeArchive?: boolean },
+): Promise<RankHistoryPoint[]> {
+  const series = await repoRankSeries(repo, opts);
+  if (!series.length) return [];
+  // noon-stamped days, clamped so today's point is never in the future
+  return toTrajectory(series);
+}
+
+// The same record as raw [isoDay, worldRank, stars] points, oldest first and
+// merged across every name the repo carried: what the daily velocity rank
+// (src/lib/velocity-rank.ts) diffs day against day.
+// fresh: read the hot shards from origin, past the 1-hour cache. The velocity
+// rank table can be newer than a cached shard, and its last day then read as
+// "not measured" for up to an hour (god-key surface only: low traffic).
+export async function repoRankSeries(
+  repo: string,
+  opts?: { includeArchive?: boolean; fresh?: boolean },
+): Promise<[string, number, number][]> {
+  // A renamed/transferred repo's points live under EVERY name it ever carried,
+  // and different names hash to DIFFERENT shards (santifer/career-ops -> 27,
+  // career-ops-hq/career-ops -> 0 after the 2026-08-31 transfer). Read the
+  // shard of each known name and merge; canonical is last in allNamesOf so it
+  // wins any same-day overlap.
+  const names = allNamesOf(repo);
+  const shards = [...new Set(names.map((n) => shardOf(n)))];
+  const reads = await Promise.all(
+    shards.map(async (i) => ({
+      hot: await (opts?.fresh ? readShard(i, false) : cachedShard(i)).catch(() => null),
+      archive: opts?.includeArchive ? await readArchiveShard(i).catch(() => null) : null,
+    })),
+  );
+  // archive (older, evicted days) first, hot (recent 90d) second so it wins on
+  // any overlapping day; dedup by ISO day. Delivers the FULL recorded trajectory
+  // (>90 days) once the archive exists, while it stays the hot window until then.
+  const byDay = new Map<string, [string, number, number]>();
+  for (const name of names) {
+    for (const r of reads) for (const p of pullSeries(r.archive?.series, name)) byDay.set(p[0], p);
+  }
+  for (const name of names) {
+    for (const r of reads) for (const p of pullSeries(r.hot?.series, name)) byDay.set(p[0], p);
+  }
+  return [...byDay.values()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+}
