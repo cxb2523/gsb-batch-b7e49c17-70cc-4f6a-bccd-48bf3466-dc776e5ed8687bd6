@@ -1,0 +1,4 @@
+# The files to include in the sdist are handled automatically by
+# setuptools_scm — it includes all Git-committed files.
+# However, we want to exclude some committed files/dirs not needed in the sdist:
+exclude .gitattributes .gitignore .github
