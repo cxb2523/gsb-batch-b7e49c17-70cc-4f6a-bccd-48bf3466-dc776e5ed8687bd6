@@ -296,9 +296,12 @@ def _asked():
     p = pathlib.Path(__file__).parent / "asked.json"
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
         except ValueError:
-            pass
+            return []
+        # Corrupt JSON or a valid value that is not an array both mean empty.
+        if isinstance(data, list):
+            return data
     return []
 
 
@@ -318,7 +321,7 @@ def _flow(text, size, width):
 
 def asked():
     """The questions strangers have put to the agent, and what it said back."""
-    log = _asked()[:3]
+    log = [i for i in _asked()[:3] if isinstance(i, dict)]
     rows = sum(2 + len(_flow(str(i.get("a", "")), 10.5, 800)[:3]) for i in log) or 2
     h = 96 + rows * 16
     lab = "Questions asked of the agent" + (

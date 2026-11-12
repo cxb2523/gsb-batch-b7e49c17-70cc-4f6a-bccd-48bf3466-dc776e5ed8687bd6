@@ -285,9 +285,27 @@ def signals(s):
 
 # -------------------------------------------------------------- ask panel
 
+def _hard_wrap(word, size, width):
+    """Split a single token wider than the line into line-sized pieces, so a
+    long unbroken string (a URL, a dump, adversarial input) can never run off
+    the canvas. Monospace, so the capacity is a simple character count."""
+    cap = max(1, int(width / (size * CW)))
+    return [word[i:i + cap] for i in range(0, len(word), cap)]
+
+
 def _flow(text, size, width):
     words, lines, cur = text.split(), [], ""
     for w in words:
+        if mono_w(w, size) > width:
+            # An over-long token first closes the current line, then breaks
+            # into pieces that each fit on their own line.
+            if cur:
+                lines.append(cur)
+                cur = ""
+            pieces = _hard_wrap(w, size, width)
+            lines.extend(pieces[:-1])
+            cur = pieces[-1]
+            continue
         x = (cur + " " + w).strip()
         if mono_w(x, size) > width and cur:
             lines.append(cur)
@@ -300,8 +318,11 @@ def _flow(text, size, width):
 
 
 def asked_panel(log):
-    log = log[:3]
-    rows = sum(2 + len(_flow(str(i.get("a", "")), 10.5, 780)[:3]) for i in log) or 2
+    # Only the three newest entries ever reach the panel; the history itself
+    # keeps four. Anything that is not an object (a hand-edited file, an old
+    # shape) is dropped here instead of crashing the draw.
+    log = [i for i in log[:3] if isinstance(i, dict)]
+    rows = sum(2 + len(_flow(str(i.get("a", "")), 10.5, 800)[:3]) for i in log) or 2
     h = 100 + rows * 16
     lab = ("Questions asked of the agent. "
            + " ".join("%s %s" % (i.get("q", ""), i.get("a", "")) for i in log)
@@ -317,11 +338,20 @@ def asked_panel(log):
     if not log:
         p.append(t(78, y, "Nobody has asked anything yet.", 11, FAINT))
     for item in log:
+        answer_lines = _flow(str(item.get("a", "")), 10.5, 800)
+        shown = answer_lines[:3]
+        if len(answer_lines) > 3:
+            # More than three lines exist, so re-wrap against a narrower width
+            # that reserves room for the cut marker. The last line can never
+            # exceed 800px this way, and the reader sees the answer is clipped.
+            shown = _flow(str(item.get("a", "")), 10.5,
+                          800 - mono_w(" ...", 10.5))[:3]
+            shown[-1] = shown[-1].rstrip() + " ..."
         p.append('<rect x="78" y="%d" width="3" height="28" fill="%s"/>' % (y - 11, ACC))
-        p.append(t(92, y, str(item.get("q", ""))[:74], 11.5, INK))
+        p.append(t(92, y, str(item.get("q", ""))[:76], 11.5, INK))
         p.append(t(922, y, "@" + str(item.get("who", ""))[:22], 9, FAINT, anchor="end"))
         y += 16
-        for ln in _flow(str(item.get("a", "")), 10.5, 780)[:3]:
+        for ln in shown:
             p.append(t(92, y, ln, 10.5, DIM))
             y += 15
         y += 12
@@ -336,9 +366,13 @@ def asked():
     log = []
     if f.exists():
         try:
-            log = json.loads(f.read_text(encoding="utf-8"))
+            data = json.loads(f.read_text(encoding="utf-8"))
         except ValueError:
-            pass
+            data = None
+        # A corrupt file or valid JSON that is not the expected array both
+        # render as an empty panel rather than taking the build down.
+        if isinstance(data, list):
+            log = data
     return asked_panel(log)
 
 

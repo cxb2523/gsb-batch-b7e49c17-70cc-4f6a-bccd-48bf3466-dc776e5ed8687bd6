@@ -145,9 +145,12 @@ def asked():
     p = pathlib.Path(__file__).parent / "asked.json"
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
         except ValueError:
-            pass
+            return []
+        # Corrupt JSON or a valid value that is not an array both mean empty.
+        if isinstance(data, list):
+            return data
     return []
 
 
@@ -294,7 +297,7 @@ def canvas(s):
                        "Links sit below the paper.", 11, SOFT, SERIF, italic=True))
     y += 26
 
-    log = asked()
+    log = [i for i in asked()[:3] if isinstance(i, dict)]
     if not log:
         p.append(txt(M, y, "No letters yet.", 11, FAINT, SERIF, italic=True))
         y += 22

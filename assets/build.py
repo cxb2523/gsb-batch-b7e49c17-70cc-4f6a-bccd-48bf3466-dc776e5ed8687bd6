@@ -56,7 +56,10 @@ REDUCE = "@media (prefers-reduced-motion:reduce){*{animation:none!important}}"
 
 
 def esc(s):
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Quotes are escaped too: the same helper feeds both text nodes and quoted
+    # attributes (e.g. aria-label), so a stray quote must not break an SVG open.
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
 
 
 def mono_w(text, size):
@@ -248,7 +251,7 @@ if __name__ == "__main__":
 
     keep = set()
     # The workstation is style-independent: one drawing, reused by every style.
-    (OUT / "desk.svg").write_text(desk(), encoding="utf-8")
+    (OUT / "desk.svg").write_text(desk(), encoding="utf-8", newline="\n")
     keep.add("desk.svg")
     # Hand-drawn, not generated: the README's header art. Listed so the sweep
     # below does not delete files it never wrote.
@@ -258,7 +261,7 @@ if __name__ == "__main__":
         # existing file alone rather than redrawing it without them.
         out = OUT / "canvas.svg"
         if s is not None or not out.exists():
-            out.write_text(style.canvas(s), encoding="utf-8")
+            out.write_text(style.canvas(s), encoding="utf-8", newline="\n")
         keep.add(out.name)
     else:
         pieces = [("hero", style.hero), ("principles", style.principles),
@@ -266,19 +269,19 @@ if __name__ == "__main__":
         if hasattr(style, "asked"):
             pieces.append(("asked", style.asked))
         if hasattr(style, "contributions") and s is not None:
-            (OUT / "contributions.svg").write_text(style.contributions(s), encoding="utf-8")
+            (OUT / "contributions.svg").write_text(style.contributions(s), encoding="utf-8", newline="\n")
             keep.add("contributions.svg")
         elif hasattr(style, "contributions"):
             keep.add("contributions.svg")
         for stem, fn in pieces:
-            (OUT / ("%s.svg" % stem)).write_text(fn(), encoding="utf-8")
+            (OUT / ("%s.svg" % stem)).write_text(fn(), encoding="utf-8", newline="\n")
             keep.add("%s.svg" % stem)
         for key, spec in SYSTEMS.items():
-            (OUT / ("sys-%s.svg" % key)).write_text(style.card(spec), encoding="utf-8")
+            (OUT / ("sys-%s.svg" % key)).write_text(style.card(spec), encoding="utf-8", newline="\n")
             keep.add("sys-%s.svg" % key)
         sig = OUT / "signals.svg"
         if s is not None:
-            sig.write_text(style.signals(s), encoding="utf-8")
+            sig.write_text(style.signals(s), encoding="utf-8", newline="\n")
         keep.add(sig.name)
 
     for old in OUT.glob("*.svg"):
