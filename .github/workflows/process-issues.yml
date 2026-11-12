@@ -1,0 +1,48 @@
+name: Process Add URL Issues
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Run every hour
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  process-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      
+      - name: Process issues
+        id: process
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: uv run scripts/process_issues.py
+      
+      - name: Commit urls.json changes
+        if: steps.process.outputs.urls_added == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add urls.json
+          git diff --quiet --staged || git commit -m "Add URLs from processed issues"
+      
+      - name: Update README
+        if: steps.process.outputs.urls_added == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run scripts/update_readme.py
+      
+      - name: Commit README and push all changes
+        if: steps.process.outputs.urls_added == 'true'
+        run: |
+          git add README.md
+          git diff --quiet --staged || git commit -m "Update README with latest repository data"
+          git push
