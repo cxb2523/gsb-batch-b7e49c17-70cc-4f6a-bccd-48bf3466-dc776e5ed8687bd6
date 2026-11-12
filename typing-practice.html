@@ -161,7 +161,7 @@ button{font:inherit;cursor:pointer}
 <div class="overlay" id="overlay">
   <div class="modal">
     <h2 id="ovTitle">Game Over</h2>
-    <p class="sub" id="ovSub">5 mistakes — better luck this time.</p>
+    <p class="sub" id="ovSub">Game ended.</p>
     <div class="stats" id="ovStats"></div>
     <div class="btnrow">
       <button class="btn" id="ovMenuBtn">Change Settings</button>
@@ -339,10 +339,35 @@ wpmRange.oninput=()=>{wpmVal.textContent=wpmRange.value+' WPM'};
 
 let targetWpm=25,level=1,score=0,mistakes=0,correctInLevel=0;
 let currentWord='',fallMs=0,wordStartTime=0,trackHeight=0;
-let running=false,paused=false,pauseStart=0;
-let rafId=null,tickInterval=null;
+// `paused` is only the user's Pause button state; `locked` is the short
+// success/impact animation lock. They are independent flags.
+let running=false,paused=false,pauseStart=0,pauseTotal=0;
+let locked=false,wordResolved=false;
+let rafId=null,tickInterval=null,lockTimer=null,toastTimer=null,gameId=0;
 let gameStartTime=0,totalCorrectChars=0,totalWordsDone=0;
 let brickEl=null,brickWordEl=null,brickTimerEl=null;
+
+// Monotonic clock that freezes while the user is paused. Word fall times and
+// speed stats are measured in this clock, so pause never counts as play time.
+function activeNow(){
+  if(paused)return pauseStart-pauseTotal;
+  return performance.now()-pauseTotal;
+}
+function activeElapsed(){return Math.max(0,activeNow()-gameStartTime);}
+function calcWpm(elapsedMs){
+  const mins=elapsedMs/60000;
+  if(mins<=0.001)return 0;
+  return Math.round((totalCorrectChars/5)/mins);
+}
+function updatePauseBtn(){pauseBtn.textContent=paused?'Resume':'Pause';}
+function clearTimers(){
+  if(rafId!==null){cancelAnimationFrame(rafId);rafId=null;}
+  if(tickInterval!==null){clearInterval(tickInterval);tickInterval=null;}
+  if(lockTimer!==null){clearTimeout(lockTimer);lockTimer=null;}
+  if(toastTimer!==null){clearTimeout(toastTimer);toastTimer=null;}
+}
+// Each game run gets an id; callbacks from a previous run become no-ops.
+function invalidateRun(){gameId++;clearTimers();}
 
 function fmtMinSec(ms){const s=Math.max(0,Math.floor(ms/1000));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
 
@@ -354,16 +379,12 @@ function updateHud(){
     livesEl.innerHTML+='<span'+(i<mistakes?' class="lost"':'')+'>❤</span>';
   }
 }
-function liveWpm(){
-  const elapsed=performance.now()-gameStartTime;
-  const mins=elapsed/60000;
-  if(mins<=0.001)return 0;
-  return Math.round((totalCorrectChars/5)/mins);
-}
+function liveWpm(){return calcWpm(activeElapsed());}
 function showToast(msg){
   toast.textContent=msg;
   toast.classList.add('show');
-  setTimeout(()=>toast.classList.remove('show'),1200);
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>toast.classList.remove('show'),1200);
 }
 
 function clearStage(){
@@ -389,7 +410,8 @@ function spawnWord(){
   currentWord=pickWord(level);
   buffer='';pendingI=false;
   fallMs=fallTimeFor(currentWord,level,targetWpm);
-  wordStartTime=performance.now();
+  wordStartTime=activeNow();
+  wordResolved=false;
 
   brickEl=document.createElement('div');
   brickEl.className='brick';
@@ -404,20 +426,30 @@ function spawnWord(){
   brickEl.style.top='0px';
 }
 function handleMiss(){
+  if(wordResolved||!running)return;
+  wordResolved=true;
+  locked=true; // lock input/motion while the impact animation plays
   mistakes++;
   updateHud();
   if(brickEl)brickEl.classList.add('impact');
-  paused=true; // lock the loop while the impact animation plays / before next word spawns
+  const id=gameId;
   if(mistakes>=MAX_MISTAKES){
-    setTimeout(()=>endGame(),300);
+    lockTimer=setTimeout(()=>{
+      if(id!==gameId||!running)return;
+      endGame('mistakes');
+    },300);
     return;
   }
-  setTimeout(()=>{
-    paused=false;
+  lockTimer=setTimeout(()=>{
+    if(id!==gameId||!running)return;
+    locked=false;
     if(running)spawnWord();
   },320);
 }
 function handleSuccess(){
+  if(wordResolved||!running)return;
+  wordResolved=true;
+  locked=true; // lock input/motion while the success animation plays
   const len=graphemes(currentWord).length;
   score+=len*10*level;
   totalCorrectChars+=len;
@@ -425,21 +457,24 @@ function handleSuccess(){
   correctInLevel++;
   updateHud();
   if(brickEl)brickEl.classList.add('success');
-  paused=true;
-  setTimeout(()=>{
+  const id=gameId;
+  lockTimer=setTimeout(()=>{
+    if(id!==gameId||!running)return;
+    // Advance at most once: the threshold is hit only on the word that fills
+    // the quota, and correctInLevel is reset immediately afterwards.
     if(correctInLevel>=WORDS_PER_LEVEL&&level<10){
       level++;correctInLevel=0;
       showToast('⚡ Level '+level+'!');
     }
-    paused=false;
+    locked=false;
     if(running)spawnWord();
   },260);
 }
 function loop(now){
   if(!running){return;}
-  if(!paused&&brickEl){
-    const elapsed=now-wordStartTime;
-    const progress=Math.min(1,elapsed/fallMs);
+  if(!paused&&!locked&&brickEl){
+    const elapsed=activeNow()-wordStartTime;
+    const progress=Math.max(0,Math.min(1,elapsed/fallMs));
     brickEl.style.top=(progress*trackHeight)+'px';
     if(brickTimerEl){
       const left=1-progress;
@@ -452,35 +487,57 @@ function loop(now){
 }
 
 function startGame(){
+  // Fully tear down any previous session so no listener or timer survives.
+  running=false;paused=false;locked=false;wordResolved=true;
+  invalidateRun();
+  document.removeEventListener('keydown',onKeydown);
+
   targetWpm=Math.max(10,Math.min(150,+wpmRange.value||25));
   level=1;score=0;mistakes=0;correctInLevel=0;totalCorrectChars=0;totalWordsDone=0;
-  buffer='';pendingI=false;paused=false;running=true;
-  gameStartTime=performance.now();
+  buffer='';pendingI=false;currentWord='';
+  pauseStart=0;pauseTotal=0;
+  gameId++;
+  running=true;
+  gameStartTime=activeNow();
   updateHud();
+  hudWpm.textContent='0';
   startScreen.classList.add('hidden');
   gameScreen.classList.remove('hidden');
   spawnWord();
-  cancelAnimationFrame(rafId);
   rafId=requestAnimationFrame(loop);
-  clearInterval(tickInterval);
   tickInterval=setInterval(()=>{hudWpm.textContent=liveWpm();},500);
-  pauseBtn.textContent='Pause';
+  updatePauseBtn();
   document.addEventListener('keydown',onKeydown);
 }
-function endGame(){
-  running=false;
-  cancelAnimationFrame(rafId);
-  clearInterval(tickInterval);
-  document.removeEventListener('keydown',onKeydown);
-  const elapsed=performance.now()-gameStartTime;
+function endGame(reason){
+  if(!running)return;
+  // Capture everything before any clock state changes: if the player is
+  // paused, activeNow() is frozen and pause time stays excluded.
+  const elapsed=activeElapsed();
+  const avgWpm=calcWpm(elapsed);
   const attempts=totalWordsDone+mistakes;
   const acc=attempts?Math.round(totalWordsDone/attempts*100):100;
-  ovTitle.textContent='Game Over';
-  ovSub.textContent='5 mistakes — you reached level '+level+'.';
+  const isQuit=reason==='quit';
+  const wasPaused=paused;
+
+  running=false;locked=false;wordResolved=true;
+  invalidateRun();
+  document.removeEventListener('keydown',onKeydown);
+  paused=false;
+  if(wasPaused){
+    // Fold the final paused interval into pauseTotal so the active clock
+    // stays consistent even if a new run were queried before a full reset.
+    pauseTotal+=performance.now()-pauseStart;
+  }
+  pauseStart=0;
+  updatePauseBtn();
+
+  ovTitle.textContent=isQuit?'You Quit':'Game Over';
+  ovSub.textContent=(isQuit?'You quit the game — ':'5 mistakes — ')+'you reached level '+level+'.';
   ovStats.innerHTML=[
     ['⚡ '+score,'SCORE'],
     ['🏁 '+level+'/10','LEVEL REACHED'],
-    ['⌨ '+liveWpm(),'AVG WPM'],
+    ['⌨ '+avgWpm,'AVG WPM'],
     ['✅ '+acc+'%','ACCURACY'],
     ['🧱 '+totalWordsDone,'WORDS TYPED'],
     ['⏱ '+fmtMinSec(elapsed),'TIME'],
@@ -488,18 +545,22 @@ function endGame(){
   overlay.classList.add('open');
 }
 function quitToMenu(){
-  running=false;paused=false;
-  cancelAnimationFrame(rafId);
-  clearInterval(tickInterval);
+  running=false;paused=false;locked=false;wordResolved=true;
+  pauseStart=0;pauseTotal=0;
+  invalidateRun();
   document.removeEventListener('keydown',onKeydown);
+  currentWord='';buffer='';pendingI=false;
+  brickEl=null;brickWordEl=null;brickTimerEl=null;
   clearStage();
+  updatePauseBtn();
+  hudWpm.textContent='0';
   overlay.classList.remove('open');
   gameScreen.classList.add('hidden');
   startScreen.classList.remove('hidden');
 }
 
 function onKeydown(e){
-  if(!running||paused)return;
+  if(!running||paused||locked||wordResolved||!brickEl)return;
   if(e.ctrlKey||e.metaKey||e.altKey)return;
   if(e.code==='Backspace'){
     e.preventDefault();
@@ -514,18 +575,24 @@ function onKeydown(e){
   if(buffer===currentWord)handleSuccess();
 }
 
+function pauseGame(){
+  if(!running||paused)return;
+  paused=true;
+  pauseStart=performance.now();
+  updatePauseBtn();
+}
+function resumeGame(){
+  if(!running||!paused)return;
+  pauseTotal+=performance.now()-pauseStart;
+  pauseStart=0;
+  paused=false;
+  updatePauseBtn();
+}
 pauseBtn.onclick=()=>{
   if(!running)return;
-  if(paused){
-    const delta=performance.now()-pauseStart;
-    wordStartTime+=delta;gameStartTime+=delta;
-    paused=false;pauseBtn.textContent='Pause';
-  }else{
-    pauseStart=performance.now();
-    paused=true;pauseBtn.textContent='Resume';
-  }
+  if(paused)resumeGame();else pauseGame();
 };
-quitBtn.onclick=quitToMenu;
+quitBtn.onclick=()=>endGame('quit');
 ovMenuBtn.onclick=()=>{overlay.classList.remove('open');quitToMenu();};
 ovRetryBtn.onclick=()=>{overlay.classList.remove('open');startGame();};
 startBtn.onclick=startGame;
