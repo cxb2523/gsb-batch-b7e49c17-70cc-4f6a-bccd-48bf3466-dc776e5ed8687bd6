@@ -1,0 +1,45 @@
+{
+  "actor": "https://apify.com/dataspryva/dailymotion-video-discovery-by-topic-and-channel",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "ownerUsername",
+      "label": "Owner Username"
+    },
+    {
+      "field": "views",
+      "label": "Views"
+    },
+    {
+      "field": "likes",
+      "label": "Likes"
+    },
+    {
+      "field": "duration",
+      "label": "Duration"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published At"
+    },
+    {
+      "field": "videoUrl",
+      "label": "Video Url"
+    }
+  ],
+  "all": [
+    "recordType",
+    "title",
+    "ownerUsername",
+    "views",
+    "likes",
+    "duration",
+    "publishedAt",
+    "videoUrl"
+  ]
+}

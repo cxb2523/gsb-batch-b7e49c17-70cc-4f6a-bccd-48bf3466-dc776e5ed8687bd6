@@ -1,0 +1,106 @@
+{
+  "title": "X Post, Reply & Profile Lookup input",
+  "description": "Paste X post links, post IDs or profile handles. Choose whether to include replies, quote posts and author details.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "tweetUrls": {
+      "title": "Post links, post IDs or profile handles",
+      "type": "array",
+      "description": "Paste the posts you want to collect. You can also paste post IDs, x.com/i/web/status links, twitter.com links, profile links or bare handles (a profile input returns that profile's public details).",
+      "editor": "stringList",
+      "prefill": [
+        "https://x.com/NASA/status/2107095768821576019"
+      ],
+      "example": [
+        "https://x.com/elonmusk/status/1519480761749016577",
+        "2106665276758491194",
+        "NASA"
+      ]
+    },
+    "includeReplies": {
+      "title": "Include replies",
+      "type": "boolean",
+      "description": "Collect the replies X shows for each post, walked forward from the post's publication time.",
+      "default": true,
+      "prefill": true
+    },
+    "maxReplies": {
+      "title": "Maximum replies per post",
+      "type": "integer",
+      "description": "How many replies to collect for each post (0-500). Posts with very large threads may return fewer because X does not expose every reply to logged-out visitors.",
+      "default": 20,
+      "prefill": 3,
+      "minimum": 0,
+      "maximum": 500
+    },
+    "includeQuotes": {
+      "title": "Include quote posts",
+      "type": "boolean",
+      "description": "Collect the posts that quote each requested post, with their text, author and engagement counts.",
+      "default": false,
+      "prefill": false
+    },
+    "maxQuotes": {
+      "title": "Maximum quote posts per post",
+      "type": "integer",
+      "description": "How many quote posts to collect for each requested post (0-500).",
+      "default": 50,
+      "minimum": 0,
+      "maximum": 500
+    },
+    "includeRetweeters": {
+      "title": "Include retweeter handles",
+      "type": "boolean",
+      "description": "Collect the handles of accounts that reposted each requested post. X only exposes a search-index sample of visible reposts, so this is an approximate, recent-biased list.",
+      "default": false,
+      "prefill": false
+    },
+    "maxRetweeters": {
+      "title": "Maximum retweeters per post",
+      "type": "integer",
+      "description": "How many retweeter handles to collect for each post (0-500).",
+      "default": 50,
+      "minimum": 0,
+      "maximum": 500
+    },
+    "includeQuotedTweet": {
+      "title": "Include the post each result quotes",
+      "type": "boolean",
+      "description": "When a collected post quotes another post, attach the quoted post's text, author and metrics.",
+      "default": true,
+      "prefill": true
+    },
+    "includeParentTweet": {
+      "title": "Include the post being replied to",
+      "type": "boolean",
+      "description": "When a collected post is a reply, attach the post it answers under parentTweet.",
+      "default": true,
+      "prefill": true
+    },
+    "includeThreadAncestors": {
+      "title": "Include the full thread above a reply",
+      "type": "boolean",
+      "description": "When a requested post is a reply, walk up to 10 posts back to the start of the thread and attach them under threadAncestors (root first).",
+      "default": false,
+      "prefill": false
+    },
+    "includeMedia": {
+      "title": "Include images and videos",
+      "type": "boolean",
+      "description": "Include image links, video links and video variants for each post.",
+      "default": true,
+      "prefill": true
+    },
+    "includeAuthorProfile": {
+      "title": "Include author profile details",
+      "type": "boolean",
+      "description": "Attach the author's public profile details (followers, bio, verification) to every post, reply and quote row under author and authorProfile.",
+      "default": true,
+      "prefill": true
+    }
+  },
+  "required": [
+    "tweetUrls"
+  ]
+}

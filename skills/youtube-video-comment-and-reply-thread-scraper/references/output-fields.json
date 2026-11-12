@@ -1,0 +1,61 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/youtube-video-comment-and-reply-thread-scraper",
+  "source": "dataset-schema",
+  "build": "1.0.3",
+  "shown": [
+    {
+      "field": "commentId",
+      "label": "Comment ID"
+    },
+    {
+      "field": "authorName",
+      "label": "Author"
+    },
+    {
+      "field": "text",
+      "label": "Text"
+    },
+    {
+      "field": "likeCount",
+      "label": "Likes"
+    },
+    {
+      "field": "replyCount",
+      "label": "Replies"
+    },
+    {
+      "field": "isHearted",
+      "label": "Hearted"
+    },
+    {
+      "field": "videoTitle",
+      "label": "Video"
+    }
+  ],
+  "all": [
+    "recordType",
+    "commentId",
+    "authorName",
+    "text",
+    "likeCount",
+    "replyCount",
+    "isHearted",
+    "videoTitle",
+    "parentCommentId",
+    "rootCommentId",
+    "replyLevel",
+    "threadPosition",
+    "authorHandle",
+    "likeCountText",
+    "replyCountText",
+    "isPinned",
+    "heartedBy",
+    "creatorReplied",
+    "publishedTimeText",
+    "publishedAtApprox",
+    "publishedAtPrecision",
+    "videoId",
+    "sourceInput",
+    "sourceScope"
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "actor": "https://apify.com/dataspryva/youtube-community-tab-post-and-poll-scraper",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "postId",
+      "label": "Post ID"
+    },
+    {
+      "field": "postType",
+      "label": "Type"
+    },
+    {
+      "field": "channelName",
+      "label": "Channel"
+    },
+    {
+      "field": "contentText",
+      "label": "Text"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published"
+    },
+    {
+      "field": "likeCount",
+      "label": "Likes"
+    },
+    {
+      "field": "commentCount",
+      "label": "Comments"
+    }
+  ],
+  "all": [
+    "postId",
+    "postType",
+    "channelName",
+    "contentText",
+    "publishedAt",
+    "likeCount",
+    "commentCount"
+  ]
+}

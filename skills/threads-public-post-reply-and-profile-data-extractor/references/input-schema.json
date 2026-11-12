@@ -1,0 +1,135 @@
+{
+  "title": "Threads Scraper Input",
+  "description": "Collect public Threads profiles, posts, replies, media, reposts, keyword or hashtag search results, and full reply threads. No login, cookies, or API key required.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "What to collect from Threads.",
+      "editor": "select",
+      "enum": [
+        "profile",
+        "profileReplies",
+        "profileMedia",
+        "profileReposts",
+        "search",
+        "tag",
+        "profilesByKeyword",
+        "postReplies"
+      ],
+      "enumTitles": [
+        "Profile posts (by username)",
+        "Profile replies (by username)",
+        "Profile media (by username)",
+        "Profile reposts (by username)",
+        "Keyword search",
+        "Hashtag / topic search",
+        "Discover profiles by keyword",
+        "Single post + its replies"
+      ],
+      "default": "profile",
+      "prefill": "profile"
+    },
+    "usernames": {
+      "title": "Usernames (profile modes)",
+      "type": "array",
+      "description": "Threads usernames, with or without @, or full profile URLs. Used by mode=profile / profileReplies / profileMedia / profileReposts.",
+      "editor": "stringList",
+      "prefill": [
+        "zuck"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "searchQueries": {
+      "title": "Search queries (mode=search / profilesByKeyword)",
+      "type": "array",
+      "description": "Keywords, phrases, or #hashtags. Used by mode=search and mode=profilesByKeyword.",
+      "editor": "stringList",
+      "prefill": [
+        "openai"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "tag": {
+      "title": "Hashtag / topic (mode=tag)",
+      "type": "string",
+      "description": "Hashtag or topic to search without the # sign, e.g. 'ai' or 'mma'. Used by mode=tag.",
+      "editor": "textfield",
+      "prefill": "ai"
+    },
+    "postUrls": {
+      "title": "Post URLs (mode=postReplies)",
+      "type": "array",
+      "description": "Threads post links (threads.com or threads.net). Each returns the post and its reply thread. Used by mode=postReplies.",
+      "editor": "stringList",
+      "prefill": [
+        "https://www.threads.com/@zuck/post/DZpPDXbCeTt"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "sortBy": {
+      "title": "Search order (mode=search)",
+      "type": "string",
+      "description": "Order for keyword search results: Top (relevance) or Recent (newest first). 'default' is accepted as an alias of Top.",
+      "editor": "select",
+      "enum": [
+        "top",
+        "default",
+        "recent"
+      ],
+      "enumTitles": [
+        "Top (relevance)",
+        "Top (relevance, legacy alias)",
+        "Recent (newest first)"
+      ],
+      "default": "top",
+      "prefill": "top"
+    },
+    "includeProfileInfo": {
+      "title": "Include profile record",
+      "type": "boolean",
+      "description": "For profile modes, also output one profile record per username with bio, follower count, verification, links, and topics.",
+      "default": true,
+      "prefill": true
+    },
+    "postedAfter": {
+      "title": "Published after",
+      "type": "string",
+      "description": "Optional lower date bound. Accepts ISO dates (2026-01-31) or relative windows such as 7d, 24h, or 2w.",
+      "editor": "textfield"
+    },
+    "postedBefore": {
+      "title": "Published before",
+      "type": "string",
+      "description": "Optional upper date bound. Accepts ISO dates or relative windows such as 7d, 24h, or 2w.",
+      "editor": "textfield"
+    },
+    "includeMediaUrls": {
+      "title": "Rehost media files",
+      "type": "boolean",
+      "description": "Store photos and videos in the run's key-value store so their links keep working after Threads' signed CDN links expire. Turn off to keep the original links.",
+      "default": true,
+      "prefill": false
+    },
+    "maxItems": {
+      "title": "Max items",
+      "type": "integer",
+      "description": "Maximum number of post, reply, or discovered-profile records to return.",
+      "minimum": 1,
+      "maximum": 5000,
+      "default": 100,
+      "prefill": 3
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

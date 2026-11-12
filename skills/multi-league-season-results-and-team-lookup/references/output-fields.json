@@ -1,0 +1,74 @@
+{
+  "actor": "https://apify.com/dataspryva/multi-league-season-results-and-team-lookup",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "homeTeam",
+      "label": "Home Team"
+    },
+    {
+      "field": "awayTeam",
+      "label": "Away Team"
+    },
+    {
+      "field": "homeScore",
+      "label": "Home Score"
+    },
+    {
+      "field": "awayScore",
+      "label": "Away Score"
+    },
+    {
+      "field": "matchDate",
+      "label": "Match Date"
+    },
+    {
+      "field": "status",
+      "label": "Status"
+    },
+    {
+      "field": "oddsHome",
+      "label": "Odds Home"
+    },
+    {
+      "field": "oddsDraw",
+      "label": "Odds Draw"
+    },
+    {
+      "field": "oddsAway",
+      "label": "Odds Away"
+    },
+    {
+      "field": "bookmakerCount",
+      "label": "Bookmaker Count"
+    }
+  ],
+  "all": [
+    "homeTeam",
+    "awayTeam",
+    "homeScore",
+    "awayScore",
+    "matchDate",
+    "status",
+    "oddsHome",
+    "oddsDraw",
+    "oddsAway",
+    "bookmakerCount",
+    "teamName",
+    "league",
+    "country",
+    "rank",
+    "points",
+    "matchesPlayed",
+    "wins",
+    "draws",
+    "losses",
+    "teamUrl",
+    "fullName",
+    "city",
+    "stadium",
+    "coach",
+    "logoUrl"
+  ]
+}

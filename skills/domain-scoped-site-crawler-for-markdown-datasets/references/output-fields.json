@@ -1,0 +1,34 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/domain-scoped-site-crawler-for-markdown-datasets",
+  "source": "dataset-schema",
+  "build": "1.1.1",
+  "shown": [
+    {
+      "field": "url",
+      "label": "URL"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "depth",
+      "label": "Depth"
+    },
+    {
+      "field": "wordCount",
+      "label": "Words"
+    },
+    {
+      "field": "httpStatusCode",
+      "label": "Status"
+    }
+  ],
+  "all": [
+    "url",
+    "title",
+    "depth",
+    "wordCount",
+    "httpStatusCode"
+  ]
+}

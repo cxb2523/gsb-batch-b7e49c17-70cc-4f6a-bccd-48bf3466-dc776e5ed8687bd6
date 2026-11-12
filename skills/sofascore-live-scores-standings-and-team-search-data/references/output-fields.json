@@ -1,0 +1,81 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/sofascore-live-scores-standings-and-team-search",
+  "source": "dataset-schema",
+  "build": "1.1.1",
+  "shown": [
+    {
+      "field": "name",
+      "label": "Name"
+    },
+    {
+      "field": "eventId",
+      "label": "Event Id"
+    },
+    {
+      "field": "homeTeam",
+      "label": "Home Team"
+    },
+    {
+      "field": "awayTeam",
+      "label": "Away Team"
+    },
+    {
+      "field": "homeScore",
+      "label": "Home Score"
+    },
+    {
+      "field": "awayScore",
+      "label": "Away Score"
+    },
+    {
+      "field": "status",
+      "label": "Status"
+    },
+    {
+      "field": "startTime",
+      "label": "Start Time"
+    },
+    {
+      "field": "sport",
+      "label": "Sport"
+    },
+    {
+      "field": "tournamentName",
+      "label": "Tournament Name"
+    },
+    {
+      "field": "teamId",
+      "label": "Team Id"
+    },
+    {
+      "field": "playerId",
+      "label": "Player Id"
+    },
+    {
+      "field": "points",
+      "label": "Points"
+    },
+    {
+      "field": "rankingTypeName",
+      "label": "Ranking Type Name"
+    }
+  ],
+  "all": [
+    "recordType",
+    "name",
+    "eventId",
+    "homeTeam",
+    "awayTeam",
+    "homeScore",
+    "awayScore",
+    "status",
+    "startTime",
+    "sport",
+    "tournamentName",
+    "teamId",
+    "playerId",
+    "position",
+    "points",
+    "rankingTypeName"
+  ]
+}

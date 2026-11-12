@@ -1,0 +1,417 @@
+{
+  "title": "Pinterest Trends Input",
+  "description": "Collect public Pinterest trending searches, keyword history and supporting trend content by market.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "What to collect",
+      "type": "string",
+      "description": "Choose a Pinterest Trends dataset.",
+      "editor": "select",
+      "enum": [
+        "trendingSearches",
+        "keywordResearch",
+        "featuredTopics",
+        "editorialStories",
+        "shoppingCategories",
+        "shoppingMetrics",
+        "moments",
+        "featured",
+        "editorial"
+      ],
+      "enumTitles": [
+        "Trending searches",
+        "Keyword research",
+        "Featured topics",
+        "Editorial stories",
+        "Shopping categories",
+        "Shopping category metrics",
+        "Seasonal moments",
+        "Featured topics (legacy, mapped)",
+        "Editorial stories (legacy, mapped)"
+      ],
+      "default": "trendingSearches",
+      "prefill": "trendingSearches"
+    },
+    "region": {
+      "title": "Region",
+      "type": "string",
+      "description": "Pinterest Trends market. Combined codes such as `GB+IE` cover Pinterest's published regional groups.",
+      "editor": "select",
+      "enum": [
+        "US",
+        "GB+IE",
+        "CA",
+        "IT+ES+PT+GR+MT",
+        "IT",
+        "ES",
+        "DE+AT+CH",
+        "DE",
+        "FR",
+        "SE+DK+FI+NO",
+        "NL+BE+LU",
+        "PL+RO+HU+SK+CZ",
+        "MX+AR+CO+CL",
+        "CO",
+        "AR",
+        "MX",
+        "BR",
+        "AU+NZ",
+        "MY",
+        "PH",
+        "TH",
+        "EG",
+        "TR",
+        "KR",
+        "CR+DO+EC+GT+PE",
+        "CY+CZ+GR+HU+MT+PL+RO+SK"
+      ],
+      "enumTitles": [
+        "United States",
+        "Great Britain + Ireland",
+        "Canada",
+        "Italy, Spain, Portugal, Greece + Malta",
+        "Italy",
+        "Spain",
+        "Germany, Austria + Switzerland",
+        "Germany",
+        "France",
+        "Sweden, Denmark, Finland + Norway",
+        "Netherlands, Belgium + Luxembourg",
+        "Poland, Romania, Hungary, Slovakia + Czechia",
+        "Mexico, Argentina, Colombia + Chile",
+        "Colombia",
+        "Argentina",
+        "Mexico",
+        "Brazil",
+        "Australia + New Zealand",
+        "Malaysia",
+        "Philippines",
+        "Thailand",
+        "Egypt",
+        "Türkiye",
+        "South Korea",
+        "Costa Rica, Dominican Republic, Ecuador, Guatemala + Peru",
+        "Cyprus, Czechia, Greece, Hungary, Malta, Poland, Romania + Slovakia"
+      ],
+      "default": "US",
+      "prefill": "US"
+    },
+    "trendType": {
+      "title": "Trend list",
+      "type": "string",
+      "description": "Trending list to collect (mode=trendingSearches).",
+      "editor": "select",
+      "enum": [
+        "topMonthly",
+        "topYearly",
+        "growing",
+        "seasonal"
+      ],
+      "enumTitles": [
+        "Top monthly searches",
+        "Top yearly searches",
+        "Fast-growing searches",
+        "Seasonal searches"
+      ],
+      "default": "topMonthly",
+      "prefill": "topMonthly"
+    },
+    "lookbackWindow": {
+      "title": "Lookback window",
+      "type": "string",
+      "description": "Comparison window used by Pinterest for trending searches (mode=trendingSearches).",
+      "editor": "select",
+      "enum": [
+        "7D",
+        "30D",
+        "90D",
+        "180D",
+        "365D"
+      ],
+      "enumTitles": [
+        "7 days",
+        "30 days",
+        "90 days",
+        "180 days",
+        "365 days"
+      ],
+      "default": "30D",
+      "prefill": "30D"
+    },
+    "endDate": {
+      "title": "End date",
+      "type": "string",
+      "description": "Historical end date in `YYYY-MM-DD` format. Leave empty for Pinterest's latest available date (mode=trendingSearches, keywordResearch, shoppingCategories, shoppingMetrics).",
+      "editor": "textfield"
+    },
+    "interest": {
+      "title": "Interest category",
+      "type": "string",
+      "description": "Pinterest interest filter for trending searches (mode=trendingSearches).",
+      "editor": "select",
+      "enum": [
+        "all",
+        "Food and drinks",
+        "Beauty",
+        "Home decor",
+        "Fashion",
+        "Men's fashion",
+        "Children's fashion",
+        "Travel",
+        "Art",
+        "Quotes",
+        "Entertainment",
+        "DIY and crafts",
+        "Health",
+        "Wedding",
+        "Event planning",
+        "Gardening",
+        "Animals",
+        "Parenting",
+        "Education",
+        "Vehicles",
+        "Design",
+        "Sport",
+        "Electronics",
+        "Finance",
+        "Architecture"
+      ],
+      "enumTitles": [
+        "All interests",
+        "Food and drinks",
+        "Beauty",
+        "Home decor",
+        "Fashion",
+        "Men's fashion",
+        "Children's fashion",
+        "Travel",
+        "Art",
+        "Quotes",
+        "Entertainment",
+        "DIY and crafts",
+        "Health",
+        "Wedding",
+        "Event planning",
+        "Gardening",
+        "Animals",
+        "Parenting",
+        "Education",
+        "Vehicles",
+        "Design",
+        "Sport",
+        "Electronics",
+        "Finance",
+        "Architecture"
+      ],
+      "default": "all",
+      "prefill": "all"
+    },
+    "moment": {
+      "title": "Seasonal moment",
+      "type": "string",
+      "description": "Pinterest seasonal moment filter for trending searches (mode=trendingSearches).",
+      "editor": "select",
+      "enum": [
+        "all",
+        "thanksgiving",
+        "valentines day",
+        "independence day",
+        "memorial day",
+        "fathers day",
+        "hanukkah",
+        "new years eve",
+        "easter",
+        "st patricks day",
+        "summer",
+        "christmas",
+        "mothers day",
+        "halloween"
+      ],
+      "enumTitles": [
+        "All moments",
+        "Thanksgiving",
+        "Valentine's Day",
+        "Independence Day",
+        "Memorial Day",
+        "Father's Day",
+        "Hanukkah",
+        "New Year's Eve",
+        "Easter",
+        "St Patrick's Day",
+        "Summer",
+        "Christmas",
+        "Mother's Day",
+        "Halloween"
+      ],
+      "default": "all",
+      "prefill": "all"
+    },
+    "keywordsToInclude": {
+      "title": "Include keywords",
+      "type": "array",
+      "description": "Only keep trending searches containing at least one of these words (mode=trendingSearches).",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "keywordsToExclude": {
+      "title": "Exclude keywords",
+      "type": "array",
+      "description": "Drop trending searches containing any of these words (mode=trendingSearches).",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "ageGroup": {
+      "title": "Audience age",
+      "type": "string",
+      "description": "Pinterest audience age filter for trending searches and keyword research.",
+      "editor": "select",
+      "enum": [
+        "all",
+        "18-20",
+        "18-24",
+        "21-24",
+        "25-34",
+        "35-44",
+        "45-49",
+        "50-54",
+        "55-64",
+        "65+"
+      ],
+      "enumTitles": [
+        "All ages",
+        "18-20",
+        "18-24",
+        "21-24",
+        "25-34",
+        "35-44",
+        "45-49",
+        "50-54",
+        "55-64",
+        "65+"
+      ],
+      "default": "all",
+      "prefill": "all"
+    },
+    "gender": {
+      "title": "Audience gender",
+      "type": "string",
+      "description": "Pinterest audience gender filter for trending searches and keyword research.",
+      "editor": "select",
+      "enum": [
+        "all",
+        "female",
+        "male",
+        "unspecified"
+      ],
+      "enumTitles": [
+        "All genders",
+        "Female",
+        "Male",
+        "Unspecified"
+      ],
+      "default": "all",
+      "prefill": "all"
+    },
+    "keywords": {
+      "title": "Keywords",
+      "type": "array",
+      "description": "Terms to research (mode=keywordResearch). Leave empty to use Pinterest's current top trending searches.",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "days": {
+      "title": "History window",
+      "type": "integer",
+      "description": "History length in days for keyword research and shopping metrics.",
+      "default": 90,
+      "prefill": 90,
+      "minimum": 30,
+      "maximum": 730
+    },
+    "predictedDays": {
+      "title": "Forecast days",
+      "type": "integer",
+      "description": "Pinterest forecast horizon. Forecasts are published for the US only (mode=keywordResearch, shoppingMetrics).",
+      "default": 0,
+      "prefill": 0,
+      "minimum": 0,
+      "maximum": 28
+    },
+    "includeRelated": {
+      "title": "Include related terms",
+      "type": "boolean",
+      "description": "Add Pinterest's related terms and their weekly history for each keyword (mode=keywordResearch).",
+      "default": false,
+      "prefill": false
+    },
+    "includeAudience": {
+      "title": "Include audience demographics",
+      "type": "boolean",
+      "description": "Add age and gender distributions for each keyword (mode=keywordResearch).",
+      "default": false,
+      "prefill": false
+    },
+    "includeImages": {
+      "title": "Include images",
+      "type": "boolean",
+      "description": "Add a representative Pinterest image for each keyword (mode=keywordResearch).",
+      "default": false,
+      "prefill": false
+    },
+    "includeSuggestions": {
+      "title": "Include search suggestions",
+      "type": "boolean",
+      "description": "Add Pinterest search suggestions for each keyword (mode=keywordResearch).",
+      "default": false,
+      "prefill": false
+    },
+    "shoppingEvent": {
+      "title": "Shopping signal",
+      "type": "string",
+      "description": "Pinterest shopping signal used for category metrics and ranked shopping trends.",
+      "editor": "select",
+      "enum": [
+        "OUTBOUND_CLICK",
+        "SAVE"
+      ],
+      "enumTitles": [
+        "Outbound clicks",
+        "Saves"
+      ],
+      "default": "OUTBOUND_CLICK",
+      "prefill": "OUTBOUND_CLICK"
+    },
+    "includeTopCategories": {
+      "title": "Include ranked shopping categories",
+      "type": "boolean",
+      "description": "Add Pinterest's fastest-growing shopping categories with related searches (mode=shoppingCategories).",
+      "default": false,
+      "prefill": false
+    },
+    "categoryNames": {
+      "title": "Shopping category names",
+      "type": "array",
+      "description": "Exact Pinterest shopping category names for metrics, such as `Sofas` or `Wedding dress` (mode=shoppingMetrics). Leave empty to use Pinterest's featured level-2 categories.",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "maxItems": {
+      "title": "Maximum records",
+      "type": "integer",
+      "description": "Maximum records to return. Trending lists are partitioned by interest to go beyond Pinterest's 100-term list ceiling.",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 100,
+      "prefill": 3
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

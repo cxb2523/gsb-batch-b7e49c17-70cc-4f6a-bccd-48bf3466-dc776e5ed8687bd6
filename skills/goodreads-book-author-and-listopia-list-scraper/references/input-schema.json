@@ -1,0 +1,530 @@
+{
+  "title": "Goodreads Scraper Input",
+  "description": "Scrape books, reviews, editions, quotes, authors, series, Listopia lists, shelves, genres, similar books, and release charts from Goodreads.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "What to scrape. Auto runs every non-empty input you provide.",
+      "editor": "select",
+      "enum": [
+        "auto",
+        "books",
+        "search",
+        "isbns",
+        "authors",
+        "series",
+        "lists",
+        "shelves",
+        "genres",
+        "reviews",
+        "editions",
+        "quotes",
+        "similar",
+        "bookLists",
+        "newReleases"
+      ],
+      "enumTitles": [
+        "Auto (run every non-empty input)",
+        "Books by URL or ID",
+        "Search by keyword",
+        "Books by ISBN",
+        "Books by author",
+        "Books in a series",
+        "Listopia lists",
+        "Popular shelves",
+        "Genres",
+        "Reviews of books",
+        "Editions of books",
+        "Quotes",
+        "Similar books",
+        "Lists containing books",
+        "New releases by date"
+      ],
+      "default": "auto",
+      "prefill": "isbns"
+    },
+    "bookUrls": {
+      "title": "Book URLs or IDs",
+      "type": "array",
+      "description": "Goodreads book URLs, bare book IDs, or ISBNs. Used by books, reviews, editions, similar, and bookLists. (mode=books, reviews, editions, similar, bookLists, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "https://www.goodreads.com/book/show/4671.The_Great_Gatsby"
+      ],
+      "default": []
+    },
+    "searchQueries": {
+      "title": "Search queries",
+      "type": "array",
+      "description": "Titles, authors, or keywords to search for. (mode=search, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "isbns": {
+      "title": "ISBNs",
+      "type": "array",
+      "description": "ISBN-10 or ISBN-13 values. Hyphens and spaces are accepted. (mode=isbns, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "9780743273565"
+      ],
+      "default": []
+    },
+    "authorUrls": {
+      "title": "Author URLs or IDs",
+      "type": "array",
+      "description": "Goodreads author URLs or bare author IDs. (mode=authors, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "seriesUrls": {
+      "title": "Series URLs or IDs",
+      "type": "array",
+      "description": "Goodreads series URLs or bare series IDs. (mode=series, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "listUrls": {
+      "title": "Listopia URLs or IDs",
+      "type": "array",
+      "description": "Listopia /list/show/ URLs or bare list IDs. (mode=lists, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "shelfNames": {
+      "title": "Shelf names",
+      "type": "array",
+      "description": "Popular shelf names such as mystery, fantasy, or historical-fiction. (mode=shelves, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "genreNames": {
+      "title": "Genre names",
+      "type": "array",
+      "description": "Genre slugs such as fantasy, romance, or science-fiction. (mode=genres, auto)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "maxItems": {
+      "title": "Max items",
+      "type": "integer",
+      "description": "Hard cap on every record emitted in the run, including review, edition, quote, list, and summary records.",
+      "minimum": 1,
+      "maximum": 1000000,
+      "default": 50,
+      "prefill": 1
+    },
+    "detailLevel": {
+      "title": "Detail level",
+      "type": "string",
+      "description": "Full returns complete book records. Listing returns lighter row records for search, author, series, list, shelf, and genre results.",
+      "editor": "select",
+      "enum": [
+        "full",
+        "listing"
+      ],
+      "enumTitles": [
+        "Full book records",
+        "Listing rows only"
+      ],
+      "default": "full",
+      "prefill": "full"
+    },
+    "includeMetadata": {
+      "title": "Include summary records",
+      "type": "boolean",
+      "description": "Also emit one author, series, or Listopia summary record alongside the books.",
+      "default": false,
+      "prefill": false
+    },
+    "includeRelated": {
+      "title": "Include related book data",
+      "type": "boolean",
+      "description": "In auto mode, also collect reviews, editions, similar books, and lists for each book URL.",
+      "default": false,
+      "prefill": false
+    },
+    "minRating": {
+      "title": "Minimum average rating",
+      "type": "number",
+      "description": "Drop books rated below this value. Decimals such as 4.5 are supported.",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "minRatingsCount": {
+      "title": "Minimum ratings count",
+      "type": "integer",
+      "description": "Drop books with fewer ratings than this.",
+      "minimum": 0,
+      "maximum": 10000000
+    },
+    "publishYearMin": {
+      "title": "Published year from",
+      "type": "integer",
+      "description": "Drop books first published before this year.",
+      "minimum": 0,
+      "maximum": 3000
+    },
+    "publishYearMax": {
+      "title": "Published year to",
+      "type": "integer",
+      "description": "Drop books first published after this year.",
+      "minimum": 0,
+      "maximum": 3000
+    },
+    "language": {
+      "title": "Language",
+      "type": "string",
+      "description": "Keep books whose language starts with this text, for example en, English, or fre.",
+      "editor": "textfield"
+    },
+    "containsGenre": {
+      "title": "Contains genre",
+      "type": "string",
+      "description": "Keep books with a genre containing this text.",
+      "editor": "textfield"
+    },
+    "containsAuthor": {
+      "title": "Contains author",
+      "type": "string",
+      "description": "Keep books with an author name containing this text.",
+      "editor": "textfield"
+    },
+    "maxReviewsPerBook": {
+      "title": "Max reviews per book",
+      "type": "integer",
+      "description": "Reviews to collect for each book. (mode=reviews)",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 30,
+      "prefill": 3
+    },
+    "reviewSort": {
+      "title": "Review sort order",
+      "type": "string",
+      "description": "Order reviews by Goodreads default, newest first, or oldest first. (mode=reviews)",
+      "editor": "select",
+      "enum": [
+        "DEFAULT",
+        "NEWEST",
+        "OLDEST"
+      ],
+      "enumTitles": [
+        "Goodreads default",
+        "Newest first",
+        "Oldest first"
+      ],
+      "default": "DEFAULT",
+      "prefill": "DEFAULT"
+    },
+    "reviewLanguage": {
+      "title": "Review language",
+      "type": "string",
+      "description": "Only collect reviews written in this language. (mode=reviews)",
+      "editor": "select",
+      "enum": [
+        "all",
+        "en",
+        "es",
+        "fr",
+        "de",
+        "it",
+        "pt",
+        "nl",
+        "pl",
+        "tr",
+        "ar",
+        "ru",
+        "uk",
+        "zh",
+        "zh-TW",
+        "ja",
+        "ko",
+        "hi",
+        "bn",
+        "id",
+        "vi",
+        "th",
+        "sv",
+        "no",
+        "da",
+        "fi",
+        "cs",
+        "sk",
+        "hu",
+        "ro",
+        "bg",
+        "el",
+        "he",
+        "sr",
+        "hr",
+        "sl",
+        "lt",
+        "lv",
+        "et",
+        "ca",
+        "gl",
+        "eu",
+        "fa",
+        "ur",
+        "ms",
+        "tl",
+        "af",
+        "sw",
+        "ka",
+        "hy",
+        "az",
+        "uz",
+        "mn",
+        "is",
+        "ga",
+        "cy",
+        "sq",
+        "bs",
+        "mk",
+        "be",
+        "la"
+      ],
+      "enumTitles": [
+        "All languages",
+        "English",
+        "Spanish",
+        "French",
+        "German",
+        "Italian",
+        "Portuguese",
+        "Dutch",
+        "Polish",
+        "Turkish",
+        "Arabic",
+        "Russian",
+        "Ukrainian",
+        "Chinese",
+        "Chinese (Traditional)",
+        "Japanese",
+        "Korean",
+        "Hindi",
+        "Bengali",
+        "Indonesian",
+        "Vietnamese",
+        "Thai",
+        "Swedish",
+        "Norwegian",
+        "Danish",
+        "Finnish",
+        "Czech",
+        "Slovak",
+        "Hungarian",
+        "Romanian",
+        "Bulgarian",
+        "Greek",
+        "Hebrew",
+        "Serbian",
+        "Croatian",
+        "Slovenian",
+        "Lithuanian",
+        "Latvian",
+        "Estonian",
+        "Catalan",
+        "Galician",
+        "Basque",
+        "Persian",
+        "Urdu",
+        "Malay",
+        "Tagalog",
+        "Afrikaans",
+        "Swahili",
+        "Georgian",
+        "Armenian",
+        "Azerbaijani",
+        "Uzbek",
+        "Mongolian",
+        "Icelandic",
+        "Irish",
+        "Welsh",
+        "Albanian",
+        "Bosnian",
+        "Macedonian",
+        "Belarusian",
+        "Latin"
+      ],
+      "default": "all",
+      "prefill": "all"
+    },
+    "reviewRatingMin": {
+      "title": "Minimum review rating",
+      "type": "integer",
+      "description": "Only collect reviews with at least this star rating. (mode=reviews)",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "reviewRatingMax": {
+      "title": "Maximum review rating",
+      "type": "integer",
+      "description": "Only collect reviews with at most this star rating. (mode=reviews)",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "excludeSpoilers": {
+      "title": "Exclude spoilers",
+      "type": "boolean",
+      "description": "Skip reviews Goodreads marks as containing spoilers. (mode=reviews)",
+      "default": false,
+      "prefill": false
+    },
+    "maxEditionsPerBook": {
+      "title": "Max editions per book",
+      "type": "integer",
+      "description": "Editions to collect for each book. (mode=editions)",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 20,
+      "prefill": 3
+    },
+    "quoteTags": {
+      "title": "Quote tags",
+      "type": "array",
+      "description": "Quote tag pages to scrape, such as love, life, or wisdom. (mode=quotes)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "love"
+      ],
+      "default": []
+    },
+    "quoteAuthorUrls": {
+      "title": "Quote author URLs or IDs",
+      "type": "array",
+      "description": "Author quote pages as Goodreads URLs or bare author IDs. (mode=quotes)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "quoteWorkUrls": {
+      "title": "Quote work URLs or IDs",
+      "type": "array",
+      "description": "Work quote pages as Goodreads URLs or bare work IDs. (mode=quotes)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [],
+      "default": []
+    },
+    "maxQuotesPerSource": {
+      "title": "Max quotes per source",
+      "type": "integer",
+      "description": "Quotes to collect from each tag, author, or work. (mode=quotes)",
+      "minimum": 1,
+      "maximum": 3000,
+      "default": 30,
+      "prefill": 3
+    },
+    "maxSimilarPerBook": {
+      "title": "Max similar books per book",
+      "type": "integer",
+      "description": "Similar books to collect for each input book. (mode=similar)",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 20,
+      "prefill": 5
+    },
+    "maxListsPerBook": {
+      "title": "Max lists per book",
+      "type": "integer",
+      "description": "Listopia lists to collect for each input book. (mode=bookLists)",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 20,
+      "prefill": 5
+    },
+    "releaseYear": {
+      "title": "Release chart year",
+      "type": "integer",
+      "description": "Year of the new-releases chart. (mode=newReleases)",
+      "minimum": 1900,
+      "maximum": 2100,
+      "default": 2026,
+      "prefill": 2026
+    },
+    "releaseMonth": {
+      "title": "Release chart month",
+      "type": "string",
+      "description": "Month of the new-releases chart, or all for the yearly chart. (mode=newReleases)",
+      "editor": "select",
+      "enum": [
+        "all",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12"
+      ],
+      "enumTitles": [
+        "Whole year",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December"
+      ],
+      "default": "all",
+      "prefill": "all"
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/espn-scores-standings-teams-and-news-by-league",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "mode",
+      "label": "Mode"
+    },
+    {
+      "field": "sport",
+      "label": "Sport"
+    },
+    {
+      "field": "league",
+      "label": "League"
+    },
+    {
+      "field": "name",
+      "label": "Name"
+    },
+    {
+      "field": "status",
+      "label": "Status"
+    },
+    {
+      "field": "homeTeam",
+      "label": "Home Team"
+    },
+    {
+      "field": "awayTeam",
+      "label": "Away Team"
+    },
+    {
+      "field": "homeScore",
+      "label": "Home Score"
+    },
+    {
+      "field": "awayScore",
+      "label": "Away Score"
+    },
+    {
+      "field": "date",
+      "label": "Date"
+    }
+  ],
+  "all": [
+    "recordType",
+    "mode",
+    "sport",
+    "league",
+    "name",
+    "status",
+    "homeTeam",
+    "awayTeam",
+    "homeScore",
+    "awayScore",
+    "date"
+  ]
+}

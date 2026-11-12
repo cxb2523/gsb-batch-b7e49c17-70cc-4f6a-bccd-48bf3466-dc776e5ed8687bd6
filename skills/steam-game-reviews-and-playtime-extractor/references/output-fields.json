@@ -1,0 +1,66 @@
+{
+  "actor": "https://apify.com/dataspryva/steam-game-reviews-and-playtime-extractor",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "gameTitle",
+      "label": "Game"
+    },
+    {
+      "field": "rating",
+      "label": "Rating"
+    },
+    {
+      "field": "reviewText",
+      "label": "Review"
+    },
+    {
+      "field": "authorName",
+      "label": "Author"
+    },
+    {
+      "field": "authorSteamId",
+      "label": "Author ID"
+    },
+    {
+      "field": "authorPlaytimeForever",
+      "label": "Playtime (hrs)"
+    },
+    {
+      "field": "votesHelpful",
+      "label": "Helpful Votes"
+    },
+    {
+      "field": "timestampCreated",
+      "label": "Date"
+    },
+    {
+      "field": "language",
+      "label": "Language"
+    },
+    {
+      "field": "steamPurchase",
+      "label": "Steam Purchase"
+    },
+    {
+      "field": "primarilySteamDeck",
+      "label": "Steam Deck"
+    }
+  ],
+  "all": [
+    "gameTitle",
+    "rating",
+    "reviewText",
+    "authorName",
+    "authorSteamId",
+    "authorPlaytimeForever",
+    "votesHelpful",
+    "timestampCreated",
+    "language",
+    "steamPurchase",
+    "primarilySteamDeck",
+    "recordType",
+    "scrapedAt"
+  ]
+}

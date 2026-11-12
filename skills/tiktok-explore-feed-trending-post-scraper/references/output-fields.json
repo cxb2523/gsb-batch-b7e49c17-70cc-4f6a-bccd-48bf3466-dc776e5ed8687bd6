@@ -1,0 +1,99 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/tiktok-explore-feed-trending-post-scraper",
+  "source": "dataset-schema",
+  "build": "1.2.1",
+  "shown": [
+    {
+      "field": "rank",
+      "label": "Rank"
+    },
+    {
+      "field": "marketRegion",
+      "label": "Market"
+    },
+    {
+      "field": "categoryName",
+      "label": "Category"
+    },
+    {
+      "field": "categoryId",
+      "label": "Category ID"
+    },
+    {
+      "field": "itemCategoryName",
+      "label": "Item Category"
+    },
+    {
+      "field": "feedType",
+      "label": "Feed Type"
+    },
+    {
+      "field": "postId",
+      "label": "Post ID"
+    },
+    {
+      "field": "caption",
+      "label": "Caption"
+    },
+    {
+      "field": "playCount",
+      "label": "Plays"
+    },
+    {
+      "field": "likeCount",
+      "label": "Likes"
+    },
+    {
+      "field": "engagementRate",
+      "label": "Engagement Rate"
+    },
+    {
+      "field": "ageHours",
+      "label": "Age (hours)"
+    },
+    {
+      "field": "playsPerHour",
+      "label": "Plays / Hour"
+    },
+    {
+      "field": "createdAt",
+      "label": "Created At"
+    },
+    {
+      "field": "postUrl",
+      "label": "Post URL"
+    },
+    {
+      "field": "mediaRehosted",
+      "label": "Media Rehosted"
+    },
+    {
+      "field": "mediaRehostedAll",
+      "label": "All Media Rehosted"
+    },
+    {
+      "field": "rehostStatus",
+      "label": "Rehost Status"
+    }
+  ],
+  "all": [
+    "rank",
+    "marketRegion",
+    "categoryName",
+    "categoryId",
+    "itemCategoryName",
+    "feedType",
+    "postId",
+    "caption",
+    "playCount",
+    "likeCount",
+    "engagementRate",
+    "ageHours",
+    "playsPerHour",
+    "createdAt",
+    "postUrl",
+    "mediaRehosted",
+    "mediaRehostedAll",
+    "rehostStatus"
+  ]
+}

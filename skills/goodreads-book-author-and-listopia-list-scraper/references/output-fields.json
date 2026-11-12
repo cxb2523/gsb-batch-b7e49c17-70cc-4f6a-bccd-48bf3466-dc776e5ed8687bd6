@@ -1,0 +1,46 @@
+{
+  "actor": "https://apify.com/dataspryva/goodreads-book-author-and-listopia-list-scraper",
+  "source": "dataset-schema",
+  "build": "1.1.1",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "primaryAuthor",
+      "label": "Author"
+    },
+    {
+      "field": "averageRating",
+      "label": "Rating"
+    },
+    {
+      "field": "ratingsCount",
+      "label": "# Ratings"
+    },
+    {
+      "field": "publishedYear",
+      "label": "Year"
+    },
+    {
+      "field": "url",
+      "label": "URL"
+    }
+  ],
+  "all": [
+    "recordType",
+    "title",
+    "primaryAuthor",
+    "averageRating",
+    "ratingsCount",
+    "publishedYear",
+    "url",
+    "bookId",
+    "rating",
+    "reviewer.name",
+    "createdAt",
+    "likesCount",
+    "reviewText"
+  ]
+}

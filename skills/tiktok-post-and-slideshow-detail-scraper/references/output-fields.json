@@ -1,0 +1,76 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/tiktok-post-and-slideshow-detail-scraper",
+  "source": "dataset-schema",
+  "build": "2.0.1",
+  "shown": [
+    {
+      "field": "postId",
+      "label": "Post ID"
+    },
+    {
+      "field": "postUrl",
+      "label": "Post URL"
+    },
+    {
+      "field": "postType",
+      "label": "Type"
+    },
+    {
+      "field": "caption",
+      "label": "Caption"
+    },
+    {
+      "field": "createdAt",
+      "label": "Created At"
+    },
+    {
+      "field": "playCount",
+      "label": "Plays"
+    },
+    {
+      "field": "likeCount",
+      "label": "Likes"
+    },
+    {
+      "field": "commentCount",
+      "label": "Comments"
+    },
+    {
+      "field": "shareCount",
+      "label": "Shares"
+    },
+    {
+      "field": "author",
+      "label": "Author"
+    },
+    {
+      "field": "source",
+      "label": "Source"
+    }
+  ],
+  "all": [
+    "postId",
+    "postUrl",
+    "postType",
+    "caption",
+    "createdAt",
+    "playCount",
+    "likeCount",
+    "commentCount",
+    "shareCount",
+    "author",
+    "recordType",
+    "source",
+    "scrapedAt",
+    "commentId",
+    "text",
+    "user",
+    "replyCount",
+    "isReply",
+    "language",
+    "status",
+    "input",
+    "message",
+    "httpStatus"
+  ]
+}

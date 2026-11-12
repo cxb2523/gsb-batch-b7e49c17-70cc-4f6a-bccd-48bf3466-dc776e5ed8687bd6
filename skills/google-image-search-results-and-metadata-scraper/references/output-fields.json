@@ -1,0 +1,66 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/google-image-search-results-and-metadata-scraper",
+  "source": "dataset-schema",
+  "build": "2.1.1",
+  "shown": [
+    {
+      "field": "engine",
+      "label": "Engine"
+    },
+    {
+      "field": "imageUrlType",
+      "label": "URL type"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "sourceDomain",
+      "label": "Source domain"
+    },
+    {
+      "field": "imageUrl",
+      "label": "Image URL"
+    },
+    {
+      "field": "imageWidth",
+      "label": "Width"
+    },
+    {
+      "field": "imageHeight",
+      "label": "Height"
+    }
+  ],
+  "all": [
+    "query",
+    "position",
+    "engine",
+    "imageUrlType",
+    "title",
+    "sourceDomain",
+    "imageUrl",
+    "imageWidth",
+    "imageHeight",
+    "page",
+    "retrievalMethod",
+    "isFallback",
+    "fallbackReason",
+    "imageId",
+    "isCrawlerOnly",
+    "hasOriginal",
+    "searchUrl",
+    "fetchedAt",
+    "aspectRatio",
+    "orientation",
+    "fileFormat",
+    "thumbnailUrl",
+    "thumbnailWidth",
+    "thumbnailHeight",
+    "sourcePageTitle",
+    "origin",
+    "siteName",
+    "contentUrl",
+    "googleUrl"
+  ]
+}

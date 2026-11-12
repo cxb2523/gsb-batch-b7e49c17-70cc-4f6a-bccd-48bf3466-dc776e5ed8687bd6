@@ -1,0 +1,39 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/mlb-teams-player-search-and-season-schedule-lookup",
+  "source": "dataset-schema",
+  "build": "1.0.3",
+  "shown": [
+    {
+      "field": "teamName",
+      "label": "Team Name"
+    },
+    {
+      "field": "playerName",
+      "label": "Player Name"
+    },
+    {
+      "field": "eventName",
+      "label": "Event Name"
+    },
+    {
+      "field": "homeTeam",
+      "label": "Home Team"
+    },
+    {
+      "field": "awayTeam",
+      "label": "Away Team"
+    },
+    {
+      "field": "matchDate",
+      "label": "Match Date"
+    }
+  ],
+  "all": [
+    "teamName",
+    "playerName",
+    "eventName",
+    "homeTeam",
+    "awayTeam",
+    "matchDate"
+  ]
+}

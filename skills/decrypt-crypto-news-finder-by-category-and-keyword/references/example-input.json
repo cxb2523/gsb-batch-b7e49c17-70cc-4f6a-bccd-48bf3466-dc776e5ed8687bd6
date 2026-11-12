@@ -1,0 +1,13 @@
+{
+  "searchQuery": "bitcoin",
+  "category": "news",
+  "articleIds": [
+    "375656"
+  ],
+  "locale": "en",
+  "maxItems": 25,
+  "proxyConfiguration": {
+    "useApifyProxy": false
+  },
+  "mode": "search"
+}

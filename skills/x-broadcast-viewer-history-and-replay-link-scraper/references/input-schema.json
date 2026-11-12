@@ -1,0 +1,85 @@
+{
+  "title": "Twitter (X) Broadcast Scraper",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "broadcastIds": {
+      "title": "Broadcast links, IDs or broadcast posts",
+      "type": "array",
+      "description": "Paste broadcast links such as https://x.com/i/broadcasts/1YGNrbPLejQGw, bare broadcast IDs, post links that announce a broadcast, or legacy Periscope links (/v/<id> or /<user>/<id>). Old pscp.tv/w share links cannot be resolved and return a status row.",
+      "editor": "stringList",
+      "minItems": 1,
+      "prefill": [
+        "https://x.com/i/broadcasts/1YGNrbPLejQGw"
+      ],
+      "example": [
+        "https://x.com/i/broadcasts/1YGNrbPLejQGw",
+        "1YGNrbPLejQGw",
+        "https://x.com/SpaceX/status/1649033533846097927"
+      ]
+    },
+    "includeViewerStats": {
+      "title": "Include viewer statistics",
+      "type": "boolean",
+      "description": "Include current/total viewers, the viewer-history graph when X exposes it, and derived peak/average viewers. Turn off for a lighter output.",
+      "default": true,
+      "prefill": true
+    },
+    "includeViewerTimeline": {
+      "title": "Emit viewer timeline points as rows",
+      "type": "boolean",
+      "description": "Push one \"viewer timeline point\" row per point of the broadcast's viewer-history graph. No rows are emitted when X provides no graph.",
+      "default": false,
+      "prefill": false
+    },
+    "maxViewerTimelinePoints": {
+      "title": "Max viewer timeline points per broadcast",
+      "type": "integer",
+      "description": "Maximum timeline rows per broadcast. 0 means all points. When capped, points are evenly sampled across the full broadcast and each row keeps its original index.",
+      "default": 0,
+      "prefill": 0,
+      "minimum": 0,
+      "maximum": 50000
+    },
+    "includeReplayVideo": {
+      "title": "Include replay video link",
+      "type": "boolean",
+      "description": "Resolve the HLS playback URL and stream status. For a live broadcast the URL is the live stream; for an ended broadcast it is the replay.",
+      "default": false,
+      "prefill": false
+    },
+    "includeChatHistory": {
+      "title": "Include public chat replay",
+      "type": "boolean",
+      "description": "Collect text messages from the broadcast's public chat replay after it ends. Live chat and private chats are not collected. No text is emitted when the chat only contains join/heart events.",
+      "default": false,
+      "prefill": false
+    },
+    "maxChatMessages": {
+      "title": "Max chat messages per broadcast",
+      "type": "integer",
+      "description": "Maximum public chat text messages per broadcast. Older events and join/heart events are not counted.",
+      "default": 1000,
+      "prefill": 100,
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "includeThumbnail": {
+      "title": "Include thumbnail image",
+      "type": "boolean",
+      "description": "Store the broadcast cover image in the run's key-value store and return its stable URL plus the original X image URL.",
+      "default": true,
+      "prefill": true
+    },
+    "includeBroadcasterProfile": {
+      "title": "Include broadcaster profile",
+      "type": "boolean",
+      "description": "Add the broadcaster's public profile (followers, bio, location, account creation date, pinned posts). Falls back to the compact broadcaster record if the profile is unavailable.",
+      "default": true,
+      "prefill": true
+    }
+  },
+  "required": [
+    "broadcastIds"
+  ]
+}

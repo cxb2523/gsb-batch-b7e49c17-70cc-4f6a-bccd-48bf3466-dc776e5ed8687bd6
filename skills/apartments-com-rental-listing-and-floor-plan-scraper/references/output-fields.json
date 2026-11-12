@@ -1,0 +1,84 @@
+{
+  "actor": "https://apify.com/dataspryva/apartments-com-rental-listing-and-floor-plan",
+  "source": "dataset-schema",
+  "build": "2.0.1",
+  "shown": [
+    {
+      "field": "name",
+      "label": "Name"
+    },
+    {
+      "field": "address",
+      "label": "Address"
+    },
+    {
+      "field": "city",
+      "label": "City"
+    },
+    {
+      "field": "state",
+      "label": "State"
+    },
+    {
+      "field": "zipCode",
+      "label": "Zip Code"
+    },
+    {
+      "field": "priceMin",
+      "label": "Price Min"
+    },
+    {
+      "field": "priceMax",
+      "label": "Price Max"
+    },
+    {
+      "field": "priceCurrency",
+      "label": "Price Currency"
+    },
+    {
+      "field": "bedsMin",
+      "label": "Beds Min"
+    },
+    {
+      "field": "bedsMax",
+      "label": "Beds Max"
+    },
+    {
+      "field": "propertyType",
+      "label": "Property Type"
+    },
+    {
+      "field": "rating",
+      "label": "Rating"
+    },
+    {
+      "field": "photoCount",
+      "label": "Photo Count"
+    },
+    {
+      "field": "propertyManager",
+      "label": "Property Manager"
+    },
+    {
+      "field": "url",
+      "label": "Url"
+    }
+  ],
+  "all": [
+    "name",
+    "address",
+    "city",
+    "state",
+    "zipCode",
+    "priceMin",
+    "priceMax",
+    "priceCurrency",
+    "bedsMin",
+    "bedsMax",
+    "propertyType",
+    "rating",
+    "photoCount",
+    "propertyManager",
+    "url"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "videoUrls": [
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  ],
+  "maxComments": 25,
+  "maxRepliesPerComment": 3,
+  "maxTotalRows": 20
+}

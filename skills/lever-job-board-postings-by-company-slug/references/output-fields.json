@@ -1,0 +1,49 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/lever-job-board-postings-by-company-slug",
+  "source": "dataset-schema",
+  "build": "2.0.1",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "companySlug",
+      "label": "Company Slug"
+    },
+    {
+      "field": "location",
+      "label": "Location"
+    },
+    {
+      "field": "workplaceType",
+      "label": "Workplace Type"
+    },
+    {
+      "field": "employmentType",
+      "label": "Employment Type"
+    },
+    {
+      "field": "salaryText",
+      "label": "Salary Text"
+    },
+    {
+      "field": "createdAt",
+      "label": "Created At"
+    },
+    {
+      "field": "hostedUrl",
+      "label": "Hosted Url"
+    }
+  ],
+  "all": [
+    "title",
+    "companySlug",
+    "location",
+    "workplaceType",
+    "employmentType",
+    "salaryText",
+    "createdAt",
+    "hostedUrl"
+  ]
+}

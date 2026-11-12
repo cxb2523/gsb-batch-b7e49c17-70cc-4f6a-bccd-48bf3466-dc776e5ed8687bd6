@@ -1,0 +1,195 @@
+{
+  "title": "Amazon Deals Grid Tracker Input",
+  "description": "Scrape Amazon's Today's Deals grid by category, discount, price, collection and Prime status across 23 marketplaces. Includes rating, deal window and product details.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "marketplace": {
+      "title": "Amazon marketplace",
+      "type": "string",
+      "description": "Which Amazon domain's Today's Deals page to scrape.",
+      "editor": "select",
+      "enum": [
+        "amazon.com",
+        "amazon.co.uk",
+        "amazon.de",
+        "amazon.fr",
+        "amazon.it",
+        "amazon.es",
+        "amazon.ca",
+        "amazon.com.au",
+        "amazon.co.jp",
+        "amazon.in",
+        "amazon.com.br",
+        "amazon.com.mx",
+        "amazon.nl",
+        "amazon.se",
+        "amazon.pl",
+        "amazon.com.tr",
+        "amazon.ae",
+        "amazon.sa",
+        "amazon.sg",
+        "amazon.eg",
+        "amazon.ie",
+        "amazon.com.be",
+        "amazon.co.za"
+      ],
+      "enumTitles": [
+        "United States (amazon.com)",
+        "United Kingdom (amazon.co.uk)",
+        "Germany (amazon.de)",
+        "France (amazon.fr)",
+        "Italy (amazon.it)",
+        "Spain (amazon.es)",
+        "Canada (amazon.ca)",
+        "Australia (amazon.com.au)",
+        "Japan (amazon.co.jp)",
+        "India (amazon.in)",
+        "Brazil (amazon.com.br)",
+        "Mexico (amazon.com.mx)",
+        "Netherlands (amazon.nl)",
+        "Sweden (amazon.se)",
+        "Poland (amazon.pl)",
+        "Turkey (amazon.com.tr)",
+        "United Arab Emirates (amazon.ae)",
+        "Saudi Arabia (amazon.sa)",
+        "Singapore (amazon.sg)",
+        "Egypt (amazon.eg)",
+        "Ireland (amazon.ie)",
+        "Belgium (amazon.com.be)",
+        "South Africa (amazon.co.za)"
+      ],
+      "default": "amazon.com",
+      "prefill": "amazon.com"
+    },
+    "categories": {
+      "title": "Categories / departments",
+      "type": "array",
+      "description": "Amazon departments to scan. Common names: Electronics, Home & Kitchen, Kitchen, Beauty & Personal Care, Clothing Shoes & Jewelry, Toys & Games, Sports & Outdoors, Books, Pet Supplies, Automotive, Health & Household, Computers & Accessories, Cell Phones & Accessories, Video Games, Tools & Home Improvement, Patio Lawn & Garden, Baby Products, Office Products, Musical Instruments, Camera & Photo, Grocery & Gourmet Food, Amazon Devices & Accessories. Add several categories to scan past Amazon's 500-deal window.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "prefill": []
+    },
+    "collection": {
+      "title": "Deal collection",
+      "type": "string",
+      "description": "Restrict to one of Amazon's curated deal collections. The collection names differ by marketplace; unsupported collections return a clear status record instead of unfiltered data.",
+      "editor": "select",
+      "enum": [
+        "",
+        "lightning-deals",
+        "coupons",
+        "outlet",
+        "customers-most-loved",
+        "new-arrivals",
+        "trending",
+        "prime-exclusive",
+        "refurbished",
+        "premium-brands",
+        "amazon-brands"
+      ],
+      "enumTitles": [
+        "Any collection",
+        "Lightning Deals",
+        "Coupons",
+        "Outlet",
+        "Customers' Most-Loved",
+        "New Arrivals",
+        "Trending",
+        "Prime Exclusive",
+        "Refurbished",
+        "Premium Brands",
+        "Amazon Brands"
+      ],
+      "default": "",
+      "prefill": ""
+    },
+    "brand": {
+      "title": "Brand",
+      "type": "string",
+      "description": "Case-insensitive brand name substring (e.g. Anker, Samsung). Leave empty for all brands.",
+      "editor": "textfield",
+      "default": "",
+      "prefill": ""
+    },
+    "minRating": {
+      "title": "Minimum rating",
+      "type": "integer",
+      "description": "Keep only deals whose product rating is at least this value. Deals without a rating are excluded when this is set.",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "priceMin": {
+      "title": "Minimum deal price",
+      "type": "integer",
+      "description": "Keep deals at or above this price in the marketplace's local currency.",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "priceMax": {
+      "title": "Maximum deal price",
+      "type": "integer",
+      "description": "Keep deals at or below this price in the marketplace's local currency.",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "discountMin": {
+      "title": "Minimum discount (%)",
+      "type": "integer",
+      "description": "Keep deals with at least this percentage off, filtered by Amazon itself.",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "discountMax": {
+      "title": "Maximum discount (%)",
+      "type": "integer",
+      "description": "Keep deals with at most this percentage off, filtered by Amazon itself.",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "primeExclusiveOnly": {
+      "title": "Prime Exclusive deals only",
+      "type": "boolean",
+      "description": "Only return deals in Amazon's Prime Exclusive collection.",
+      "default": false,
+      "prefill": false
+    },
+    "sortBy": {
+      "title": "Sort results",
+      "type": "string",
+      "description": "Featured keeps Amazon's order. Other sorts read the fetched deal window before returning, so they may take longer.",
+      "editor": "select",
+      "enum": [
+        "featured",
+        "priceLow",
+        "priceHigh",
+        "discountHigh",
+        "ratingHigh"
+      ],
+      "enumTitles": [
+        "Amazon featured",
+        "Price: low to high",
+        "Price: high to low",
+        "Biggest discount",
+        "Highest rating"
+      ],
+      "default": "featured",
+      "prefill": "featured"
+    },
+    "maxItems": {
+      "title": "Max items",
+      "type": "integer",
+      "description": "Hard cap on emitted deal records. Amazon exposes up to 500 deals per category/collection query; add categories to partition the window.",
+      "minimum": 1,
+      "maximum": 2000,
+      "default": 30,
+      "prefill": 3
+    }
+  },
+  "required": [
+    "marketplace"
+  ]
+}

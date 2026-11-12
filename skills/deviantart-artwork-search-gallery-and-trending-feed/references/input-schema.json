@@ -1,0 +1,127 @@
+{
+  "title": "DeviantArt Scraper Input",
+  "description": "Search DeviantArt artwork, browse a tag, read an artist's gallery, collect Daily Deviations, or open specific artwork pages.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "Choose what to collect.",
+      "editor": "select",
+      "enum": [
+        "search",
+        "tag",
+        "gallery",
+        "daily",
+        "artwork"
+      ],
+      "enumTitles": [
+        "Search by keyword",
+        "Browse a tag",
+        "Artist gallery",
+        "Daily Deviations",
+        "Specific artwork URLs or IDs"
+      ],
+      "default": "search",
+      "prefill": "tag"
+    },
+    "searchQuery": {
+      "title": "Search query",
+      "type": "string",
+      "description": "Keyword or phrase to search for. Supports DeviantArt search syntax.",
+      "editor": "textfield",
+      "default": "fantasy art"
+    },
+    "tag": {
+      "title": "Tag",
+      "type": "string",
+      "description": "Tag slug or tag URL, for example fantasy or https://www.deviantart.com/tag/fantasy.",
+      "editor": "textfield",
+      "prefill": "fantasy"
+    },
+    "username": {
+      "title": "Artist username",
+      "type": "string",
+      "description": "DeviantArt username or profile URL whose gallery should be collected.",
+      "editor": "textfield"
+    },
+    "artworkUrls": {
+      "title": "Artwork URLs or IDs",
+      "type": "array",
+      "description": "Artwork page URLs, /art/... links, or numeric deviation IDs.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "contentType": {
+      "title": "Content type",
+      "type": "string",
+      "description": "Limit keyword searches to images or literature.",
+      "editor": "select",
+      "enum": [
+        "all",
+        "image",
+        "literature"
+      ],
+      "enumTitles": [
+        "All content",
+        "Images only",
+        "Literature only"
+      ],
+      "default": "all"
+    },
+    "order": {
+      "title": "Tag order",
+      "type": "string",
+      "description": "Order used when browsing a tag.",
+      "editor": "select",
+      "enum": [
+        "recommended",
+        "most-recent"
+      ],
+      "enumTitles": [
+        "Recommended",
+        "Most recent"
+      ],
+      "default": "recommended"
+    },
+    "includeDetails": {
+      "title": "Include artwork details",
+      "type": "boolean",
+      "description": "Open each artwork page to add tags, description, original dimensions, file size and watermark flag when available.",
+      "editor": "checkbox",
+      "default": false,
+      "prefill": false
+    },
+    "includeArtistStats": {
+      "title": "Include artist statistics",
+      "type": "boolean",
+      "description": "Open each artist profile to add watchers, deviation count, pageviews and join date.",
+      "editor": "checkbox",
+      "default": false,
+      "prefill": false
+    },
+    "excludeMature": {
+      "title": "Exclude mature artwork",
+      "type": "boolean",
+      "description": "Skip artwork flagged as mature or sensitive.",
+      "editor": "checkbox",
+      "default": false,
+      "prefill": false
+    },
+    "maxItems": {
+      "title": "Maximum records",
+      "type": "integer",
+      "description": "Maximum number of artwork records to return.",
+      "minimum": 1,
+      "maximum": 500,
+      "default": 30,
+      "prefill": 3
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

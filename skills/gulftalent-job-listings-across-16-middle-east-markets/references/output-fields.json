@@ -1,0 +1,61 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/gulftalent-job-listings-across-16-middle-east",
+  "source": "dataset-schema",
+  "build": "2.0.1",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "companyName",
+      "label": "Company Name"
+    },
+    {
+      "field": "country",
+      "label": "Country"
+    },
+    {
+      "field": "city",
+      "label": "City"
+    },
+    {
+      "field": "salaryMin",
+      "label": "Salary Min"
+    },
+    {
+      "field": "salaryMax",
+      "label": "Salary Max"
+    },
+    {
+      "field": "salaryCurrency",
+      "label": "Salary Currency"
+    },
+    {
+      "field": "median",
+      "label": "Median"
+    },
+    {
+      "field": "sampleSize",
+      "label": "Sample Size"
+    },
+    {
+      "field": "postedAt",
+      "label": "Posted At"
+    }
+  ],
+  "all": [
+    "recordType",
+    "title",
+    "companyName",
+    "country",
+    "city",
+    "salaryMin",
+    "salaryMax",
+    "salaryCurrency",
+    "median",
+    "sampleSize",
+    "postedAt",
+    "sourceUrl"
+  ]
+}

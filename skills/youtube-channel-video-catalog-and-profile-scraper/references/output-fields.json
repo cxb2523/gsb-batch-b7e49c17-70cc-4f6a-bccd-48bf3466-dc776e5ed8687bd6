@@ -1,0 +1,90 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/youtube-channel-video-catalog-and-profile-scraper",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "videoId",
+      "label": "Video ID"
+    },
+    {
+      "field": "viewCount",
+      "label": "Views"
+    },
+    {
+      "field": "duration",
+      "label": "Duration"
+    },
+    {
+      "field": "publishedTimeText",
+      "label": "Published"
+    },
+    {
+      "field": "url",
+      "label": "URL"
+    },
+    {
+      "field": "authorMetadata.channelName",
+      "label": "Channel"
+    },
+    {
+      "field": "authorMetadata.subscriberCount",
+      "label": "Subscribers"
+    }
+  ],
+  "all": [
+    "title",
+    "videoId",
+    "viewCount",
+    "duration",
+    "publishedTimeText",
+    "url",
+    "authorMetadata.channelName",
+    "authorMetadata.subscriberCount",
+    "viewCountText",
+    "durationSeconds",
+    "thumbnailUrl",
+    "description",
+    "isLive",
+    "isShort",
+    "isUpcoming",
+    "isMembersOnly",
+    "concurrentViewersText",
+    "likeCount",
+    "publishedAt",
+    "category",
+    "badges",
+    "authorMetadata.channelId",
+    "authorMetadata.handle",
+    "authorMetadata.channelUrl",
+    "authorMetadata.subscriberCountText",
+    "authorMetadata.videoCount",
+    "authorMetadata.videoCountText",
+    "authorMetadata.country",
+    "authorMetadata.isVerified",
+    "authorMetadata.avatarUrl",
+    "authorMetadata.bannerUrl",
+    "authorMetadata.rssUrl",
+    "authorMetadata.isFamilySafe",
+    "authorMetadata.keywords",
+    "authorMetadata.description",
+    "authorMetadata.aboutDescription",
+    "authorMetadata.channelLinks",
+    "authorMetadata.joinedDateText",
+    "authorMetadata.totalViewsText",
+    "authorMetadata.totalViews",
+    "authorMetadata.location",
+    "authorMetadata.externalLinks",
+    "shorts",
+    "playlists",
+    "liveVideos",
+    "podcasts",
+    "courses",
+    "releases",
+    "scrapedAt"
+  ]
+}

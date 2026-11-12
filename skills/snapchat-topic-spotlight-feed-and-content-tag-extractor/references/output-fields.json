@@ -1,0 +1,85 @@
+{
+  "actor": "https://apify.com/dataspryva/snapchat-topic-spotlight-feed-and-content-tag",
+  "source": "dataset-schema",
+  "build": "1.1.1",
+  "shown": [
+    {
+      "field": "topicId",
+      "label": "Topic"
+    },
+    {
+      "field": "snapId",
+      "label": "Snap"
+    },
+    {
+      "field": "creatorUsername",
+      "label": "Creator"
+    },
+    {
+      "field": "viewCount",
+      "label": "Views"
+    },
+    {
+      "field": "uploadedAt",
+      "label": "Uploaded"
+    },
+    {
+      "field": "snapUrl",
+      "label": "Spotlight"
+    }
+  ],
+  "all": [
+    "topicId",
+    "snapId",
+    "creatorUsername",
+    "viewCount",
+    "uploadedAt",
+    "snapUrl",
+    "topicDisplayName",
+    "numSnaps",
+    "topicUrl",
+    "relatedTo",
+    "searchQuery",
+    "recordType",
+    "topicDescription",
+    "topicSource",
+    "rank",
+    "topicType",
+    "iconUrl",
+    "storyId",
+    "compositeStoryId",
+    "embedUrl",
+    "videoUrl",
+    "videoUrlUnwatermarked",
+    "videoFormat",
+    "thumbnailUrl",
+    "creatorDisplayName",
+    "creatorProfileUrl",
+    "creatorFollowerCount",
+    "creatorSubscriberCount",
+    "likeCount",
+    "shareCount",
+    "commentCount",
+    "pendingCommentCount",
+    "remixCount",
+    "recommendCount",
+    "durationSeconds",
+    "width",
+    "height",
+    "description",
+    "caption",
+    "llmTitle",
+    "llmDescription",
+    "llmKeywords",
+    "hashtags",
+    "detectedLanguage",
+    "relatedTags",
+    "soundTitle",
+    "soundArtist",
+    "isFeatured",
+    "storySubtype",
+    "latestUpdateAt",
+    "remainingSpotlightCount",
+    "scrapedAt"
+  ]
+}

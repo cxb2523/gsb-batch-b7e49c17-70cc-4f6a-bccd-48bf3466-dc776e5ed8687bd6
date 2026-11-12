@@ -1,0 +1,46 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/pinterest-trending-topics-and-shopping-category",
+  "source": "dataset-schema",
+  "build": "1.1.1",
+  "shown": [
+    {
+      "field": "term",
+      "label": "Term"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "name",
+      "label": "Name"
+    },
+    {
+      "field": "region",
+      "label": "Region"
+    },
+    {
+      "field": "trendType",
+      "label": "Trend Type"
+    },
+    {
+      "field": "rank",
+      "label": "Rank"
+    },
+    {
+      "field": "weekOverWeekChange",
+      "label": "Week Over Week Change"
+    }
+  ],
+  "all": [
+    "recordType",
+    "term",
+    "title",
+    "name",
+    "region",
+    "trendType",
+    "rank",
+    "weekOverWeekChange",
+    "sourceUrl"
+  ]
+}

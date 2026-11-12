@@ -1,0 +1,88 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/youtube-caption-and-whisper-ai-transcript",
+  "source": "dataset-schema",
+  "build": "1.0.3",
+  "shown": [
+    {
+      "field": "video_id",
+      "label": "Video id"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "channel_name",
+      "label": "Channel name"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published At"
+    },
+    {
+      "field": "transcript_language",
+      "label": "Transcript language"
+    },
+    {
+      "field": "segment_count",
+      "label": "Segment count"
+    },
+    {
+      "field": "success",
+      "label": "Success"
+    },
+    {
+      "field": "transcript_available",
+      "label": "Transcript available"
+    },
+    {
+      "field": "transcript_source",
+      "label": "Transcript source"
+    },
+    {
+      "field": "accessStatus",
+      "label": "Access Status"
+    },
+    {
+      "field": "errorCode",
+      "label": "Error Code"
+    },
+    {
+      "field": "duration_seconds",
+      "label": "Duration seconds"
+    }
+  ],
+  "all": [
+    "video_id",
+    "title",
+    "channel_name",
+    "publishedAt",
+    "transcript_language",
+    "segment_count",
+    "success",
+    "transcript_available",
+    "transcript_source",
+    "accessStatus",
+    "errorCode",
+    "duration_seconds",
+    "scrapedAt",
+    "canonicalUrl",
+    "channel_id",
+    "channelHandle",
+    "full_text",
+    "transcript_language_name",
+    "is_auto_generated",
+    "was_translated",
+    "views",
+    "published_date",
+    "segments",
+    "wordTimings",
+    "srt",
+    "vtt",
+    "available_languages",
+    "captionTracks",
+    "chapters",
+    "heatmap",
+    "inputUrl"
+  ]
+}

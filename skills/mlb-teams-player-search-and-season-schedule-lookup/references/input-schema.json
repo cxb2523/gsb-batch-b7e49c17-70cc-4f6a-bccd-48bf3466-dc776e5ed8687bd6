@@ -1,0 +1,64 @@
+{
+  "title": "MLB Stats Scraper Input",
+  "description": "Scrape MLB teams, players, and game results from TheSportsDB free API.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "description": "What data to fetch.",
+      "type": "string",
+      "editor": "select",
+      "enum": [
+        "teams",
+        "players",
+        "games"
+      ],
+      "enumTitles": [
+        "MLB Teams",
+        "Player Search",
+        "Season Games"
+      ],
+      "default": "teams",
+      "prefill": "teams"
+    },
+    "searchQuery": {
+      "title": "Search query",
+      "description": "Player name for players mode.",
+      "type": "string",
+      "editor": "textfield",
+      "default": "Shohei Ohtani",
+      "prefill": "Shohei Ohtani"
+    },
+    "season": {
+      "title": "Season",
+      "description": "MLB season year.",
+      "type": "string",
+      "editor": "select",
+      "enum": [
+        "2022",
+        "2023",
+        "2024"
+      ],
+      "enumTitles": [
+        "2022",
+        "2023",
+        "2024"
+      ],
+      "default": "2024",
+      "prefill": "2024"
+    },
+    "maxItems": {
+      "title": "Max items",
+      "description": "Maximum records to return.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 20,
+      "prefill": 20
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

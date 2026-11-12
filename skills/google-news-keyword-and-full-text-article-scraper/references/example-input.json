@@ -1,0 +1,8 @@
+{
+  "queries": [
+    "artificial intelligence"
+  ],
+  "maxResultsPerQuery": 3,
+  "maxItems": 25,
+  "mode": "keyword"
+}

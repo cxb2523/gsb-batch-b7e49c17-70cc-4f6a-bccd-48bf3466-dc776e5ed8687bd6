@@ -1,0 +1,8 @@
+{
+  "topics": [
+    "food"
+  ],
+  "maxResultsPerTopic": 3,
+  "includeRelatedTags": false,
+  "maxItems": 25
+}

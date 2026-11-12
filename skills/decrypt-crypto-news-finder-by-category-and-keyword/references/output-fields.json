@@ -1,0 +1,40 @@
+{
+  "actor": "https://apify.com/dataspryva/decrypt-crypto-news-finder-by-category-and-keyword",
+  "source": "dataset-schema",
+  "build": "1.1.1",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "authors",
+      "label": "Authors"
+    },
+    {
+      "field": "category",
+      "label": "Category"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published At"
+    },
+    {
+      "field": "readingTimeMinutes",
+      "label": "Reading Time Minutes"
+    },
+    {
+      "field": "wordCount",
+      "label": "Word Count"
+    }
+  ],
+  "all": [
+    "title",
+    "authors",
+    "category",
+    "publishedAt",
+    "readingTimeMinutes",
+    "wordCount",
+    "sourceUrl"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "startUrls": [
+    {
+      "url": "https://docs.apify.com"
+    }
+  ],
+  "maxCrawlDepth": 1,
+  "maxCrawlPages": 3
+}

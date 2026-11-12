@@ -1,0 +1,201 @@
+{
+  "title": "Lowe's Product Scraper Input",
+  "description": "Find Lowe's products by keyword, category, item ID, or URL, then read live price, stock, specs, and store details from Lowe's product pages.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "What to look up.",
+      "editor": "select",
+      "enum": [
+        "search",
+        "byCategory",
+        "productDetails",
+        "byUrl"
+      ],
+      "enumTitles": [
+        "Search by keyword",
+        "Browse a category",
+        "Look up item IDs",
+        "Scrape URLs (product, search, or category)"
+      ],
+      "default": "productDetails",
+      "prefill": "productDetails"
+    },
+    "searchQueries": {
+      "title": "Search queries",
+      "type": "array",
+      "description": "Keywords to search for (mode=search). Each query adds its own discovery results.",
+      "editor": "stringList",
+      "default": [
+        "power drill"
+      ],
+      "prefill": []
+    },
+    "category": {
+      "title": "Category",
+      "type": "string",
+      "description": "Lowe's department to browse (mode=byCategory).",
+      "editor": "select",
+      "enum": [
+        "tools",
+        "electrical",
+        "plumbing",
+        "building-supplies",
+        "flooring",
+        "paint",
+        "lighting-ceiling-fans",
+        "bathroom",
+        "kitchen",
+        "appliances",
+        "outdoor-power-equipment",
+        "storage-organization",
+        "windows-doors",
+        "heating-cooling"
+      ],
+      "enumTitles": [
+        "Tools",
+        "Electrical",
+        "Plumbing",
+        "Building Supplies",
+        "Flooring",
+        "Paint",
+        "Lighting & Ceiling Fans",
+        "Bathroom",
+        "Kitchen",
+        "Appliances",
+        "Outdoor Power Equipment",
+        "Storage & Organization",
+        "Windows & Doors",
+        "Heating & Cooling"
+      ],
+      "default": "tools",
+      "prefill": "tools"
+    },
+    "itemIds": {
+      "title": "Item IDs or product URLs",
+      "type": "array",
+      "description": "Lowe's item numbers (for example 5013207487) or /pd/ product URLs. Used by mode=productDetails.",
+      "editor": "stringList",
+      "default": [],
+      "prefill": [
+        "5013207487"
+      ]
+    },
+    "startUrls": {
+      "title": "Start URLs",
+      "type": "array",
+      "description": "Lowe's product, search, or /pl/ category URLs. Used by mode=byUrl, and category URLs are also accepted by mode=byCategory.",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "storeId": {
+      "title": "Store number",
+      "type": "string",
+      "description": "Four-digit Lowe's store number used for price and stock context. Default 0208 (La Quinta, CA).",
+      "editor": "textfield",
+      "pattern": "^\\d{4}$",
+      "default": "0208",
+      "prefill": "0208"
+    },
+    "zipCode": {
+      "title": "ZIP code",
+      "type": "string",
+      "description": "Five-digit ZIP code used with the store number for price and stock context. Default 92253.",
+      "editor": "textfield",
+      "pattern": "^\\d{5}$",
+      "default": "92253",
+      "prefill": "92253"
+    },
+    "sortBy": {
+      "title": "Sort results by",
+      "type": "string",
+      "description": "How to order the products found in this run.",
+      "editor": "select",
+      "enum": [
+        "featured",
+        "bestSellers",
+        "highestRated",
+        "newest",
+        "priceLowToHigh",
+        "priceHighToLow",
+        "brand"
+      ],
+      "enumTitles": [
+        "Featured (discovery order)",
+        "Best sellers (discovery order)",
+        "Highest rated",
+        "Newest",
+        "Price: low to high",
+        "Price: high to low",
+        "Brand name"
+      ],
+      "default": "featured",
+      "prefill": "featured"
+    },
+    "inStockOnly": {
+      "title": "In-stock only",
+      "type": "boolean",
+      "description": "Only emit products with at least one fulfilment method available.",
+      "default": false,
+      "prefill": false
+    },
+    "onSaleOnly": {
+      "title": "On-sale only",
+      "type": "boolean",
+      "description": "Only emit products with a current was/sale price.",
+      "default": false,
+      "prefill": false
+    },
+    "onShelfOnly": {
+      "title": "On shelf at the store only",
+      "type": "boolean",
+      "description": "Only emit products with pickup quantity above zero at the selected store.",
+      "default": false,
+      "prefill": false
+    },
+    "minPrice": {
+      "title": "Minimum price (USD)",
+      "type": "integer",
+      "description": "Drop products priced below this value. Products without a price are skipped when a price filter is set.",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "maxPrice": {
+      "title": "Maximum price (USD)",
+      "type": "integer",
+      "description": "Drop products priced above this value. Products without a price are skipped when a price filter is set.",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "minRating": {
+      "title": "Minimum rating",
+      "type": "number",
+      "description": "Drop products rated below this value. Products without a rating are skipped when this filter is set.",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "includeDetails": {
+      "title": "Include specification details",
+      "type": "boolean",
+      "description": "Add description, bullets, specifications, UPC, dimensions, warranty, and manuals to each product.",
+      "default": true,
+      "prefill": false
+    },
+    "maxItems": {
+      "title": "Max items",
+      "type": "integer",
+      "description": "Maximum number of products to emit. Discovery may return fewer candidates than this.",
+      "minimum": 1,
+      "maximum": 5000,
+      "default": 50,
+      "prefill": 1
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

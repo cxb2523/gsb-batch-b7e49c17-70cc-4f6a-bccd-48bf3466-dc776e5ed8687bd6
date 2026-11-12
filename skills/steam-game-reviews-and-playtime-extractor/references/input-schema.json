@@ -1,0 +1,272 @@
+{
+  "title": "Steam Review Scraper Input",
+  "description": "Choose games by app ID, URL or name, then export reviews or a per-game summary.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "reviews = one row per review; gameSummary = one row per game with metadata and overall score.",
+      "editor": "select",
+      "enum": [
+        "reviews",
+        "gameSummary"
+      ],
+      "enumTitles": [
+        "Reviews (one row per review)",
+        "Game summaries (one row per game)"
+      ],
+      "default": "reviews",
+      "prefill": "reviews"
+    },
+    "appIds": {
+      "title": "Steam App IDs",
+      "type": "array",
+      "description": "Numeric app IDs, store URLs, community review URLs, or old appreviews URLs. Example: 1174180 or https://store.steampowered.com/app/1174180/",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "startUrls": {
+      "title": "Steam Game URLs (legacy)",
+      "type": "array",
+      "description": "Steam store page URLs for the games to scrape. Merged with appIds.",
+      "editor": "requestListSources",
+      "prefill": [
+        {
+          "url": "https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/"
+        }
+      ]
+    },
+    "gameNames": {
+      "title": "Game Names",
+      "type": "array",
+      "description": "Search Steam by name. An exact case-insensitive title match is preferred over the first search result.",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "maxReviews": {
+      "title": "Max Reviews per Game",
+      "type": "integer",
+      "description": "Reviews to collect per game. Use 0 for every matching review (hard safety cap 1,000,000 per game).",
+      "default": 50,
+      "prefill": 3,
+      "minimum": 0,
+      "maximum": 1000000,
+      "editor": "number"
+    },
+    "maxGames": {
+      "title": "Max Games",
+      "type": "integer",
+      "description": "Cap the merged game list. Use 0 for no cap.",
+      "default": 0,
+      "prefill": 0,
+      "minimum": 0,
+      "maximum": 1000,
+      "editor": "number"
+    },
+    "reviewType": {
+      "title": "Review Type",
+      "type": "string",
+      "description": "Filter reviews by recommendation verdict.",
+      "default": "all",
+      "prefill": "all",
+      "editor": "select",
+      "enum": [
+        "all",
+        "positive",
+        "negative"
+      ],
+      "enumTitles": [
+        "All Reviews",
+        "Positive Only",
+        "Negative Only"
+      ]
+    },
+    "language": {
+      "title": "Language",
+      "type": "string",
+      "description": "Steam language code for review text. Select All Languages to include every language.",
+      "default": "all",
+      "prefill": "all",
+      "editor": "select",
+      "enum": [
+        "all",
+        "english",
+        "german",
+        "french",
+        "spanish",
+        "latam",
+        "portuguese",
+        "brazilian",
+        "russian",
+        "schinese",
+        "tchinese",
+        "japanese",
+        "koreana",
+        "turkish",
+        "italian",
+        "dutch",
+        "polish",
+        "thai",
+        "vietnamese",
+        "indonesian",
+        "bulgarian",
+        "czech",
+        "danish",
+        "finnish",
+        "greek",
+        "hungarian",
+        "norwegian",
+        "romanian",
+        "swedish",
+        "ukrainian"
+      ],
+      "enumTitles": [
+        "All Languages",
+        "English",
+        "German",
+        "French",
+        "Spanish (Spain)",
+        "Spanish (Latin America)",
+        "Portuguese (Portugal)",
+        "Portuguese (Brazil)",
+        "Russian",
+        "Chinese (Simplified)",
+        "Chinese (Traditional)",
+        "Japanese",
+        "Korean",
+        "Turkish",
+        "Italian",
+        "Dutch",
+        "Polish",
+        "Thai",
+        "Vietnamese",
+        "Indonesian",
+        "Bulgarian",
+        "Czech",
+        "Danish",
+        "Finnish",
+        "Greek",
+        "Hungarian",
+        "Norwegian",
+        "Romanian",
+        "Swedish",
+        "Ukrainian"
+      ]
+    },
+    "sortBy": {
+      "title": "Sort",
+      "type": "string",
+      "description": "recent and updated walk the full history; helpful is a ranked sample inside the helpfulness window; funny is also ranked and not exhaustive.",
+      "default": "recent",
+      "prefill": "recent",
+      "editor": "select",
+      "enum": [
+        "recent",
+        "helpful",
+        "updated",
+        "funny"
+      ],
+      "enumTitles": [
+        "Most Recent",
+        "Most Helpful (ranked)",
+        "Recently Updated",
+        "Funniest"
+      ]
+    },
+    "helpfulWithinDays": {
+      "title": "Helpful Window (days)",
+      "type": "integer",
+      "description": "Only for sortBy=helpful: rank reviews from the last 1-365 days. Use recent for full history.",
+      "default": 30,
+      "prefill": 30,
+      "minimum": 1,
+      "maximum": 365,
+      "editor": "number"
+    },
+    "purchaseType": {
+      "title": "Purchase Type",
+      "type": "string",
+      "description": "Whether the reviewer acquired the game through Steam, outside Steam, or either.",
+      "default": "all",
+      "prefill": "all",
+      "editor": "select",
+      "enum": [
+        "all",
+        "steam",
+        "nonSteamPurchase"
+      ],
+      "enumTitles": [
+        "All Purchases",
+        "Steam Purchase",
+        "Non-Steam Purchase (key, gift, free)"
+      ]
+    },
+    "minPlaytimeHours": {
+      "title": "Minimum Playtime (hours)",
+      "type": "integer",
+      "description": "Minimum hours played at the time of review. Use 0 for no minimum.",
+      "default": 0,
+      "prefill": 0,
+      "minimum": 0,
+      "maximum": 100000,
+      "editor": "number"
+    },
+    "maxPlaytimeHours": {
+      "title": "Maximum Playtime (hours)",
+      "type": "integer",
+      "description": "Maximum hours played at the time of review. Use 0 for no maximum.",
+      "default": 0,
+      "prefill": 0,
+      "minimum": 0,
+      "maximum": 100000,
+      "editor": "number"
+    },
+    "steamDeckOnly": {
+      "title": "Steam Deck Only",
+      "type": "boolean",
+      "description": "Only reviews written while playing primarily on a Steam Deck.",
+      "default": false,
+      "prefill": false
+    },
+    "includeOffTopic": {
+      "title": "Include Off-Topic Reviews",
+      "type": "boolean",
+      "description": "Include reviews Steam hides as off-topic review-bomb activity. Off by default, matching the store.",
+      "default": false,
+      "prefill": false
+    },
+    "useReviewQuality": {
+      "title": "Use Review Quality Ranking",
+      "type": "boolean",
+      "description": "Only for sortBy=helpful: rank low-quality reviews lower.",
+      "default": true,
+      "prefill": true
+    },
+    "reviewsFromDate": {
+      "title": "Reviews From (YYYY-MM-DD)",
+      "type": "string",
+      "description": "Include reviews created on or after this UTC date.",
+      "editor": "datepicker"
+    },
+    "reviewsToDate": {
+      "title": "Reviews To (YYYY-MM-DD)",
+      "type": "string",
+      "description": "Include reviews created on or before this UTC date.",
+      "editor": "datepicker"
+    },
+    "includeGameDetails": {
+      "title": "Attach Game Details",
+      "type": "boolean",
+      "description": "mode=reviews: attach game metadata, price and overall review summary to every review row.",
+      "default": false,
+      "prefill": false
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

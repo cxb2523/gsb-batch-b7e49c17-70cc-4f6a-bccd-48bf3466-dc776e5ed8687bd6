@@ -1,0 +1,18 @@
+{
+  "mode": "isbns",
+  "bookUrls": [
+    "https://www.goodreads.com/book/show/4671.The_Great_Gatsby"
+  ],
+  "isbns": [
+    "9780743273565"
+  ],
+  "maxItems": 25,
+  "maxReviewsPerBook": 3,
+  "maxEditionsPerBook": 3,
+  "quoteTags": [
+    "love"
+  ],
+  "maxQuotesPerSource": 3,
+  "maxSimilarPerBook": 5,
+  "maxListsPerBook": 5
+}

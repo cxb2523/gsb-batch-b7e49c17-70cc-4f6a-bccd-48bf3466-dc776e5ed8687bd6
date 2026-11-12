@@ -1,0 +1,65 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/google-flights-fare-and-itinerary-filter-scraper",
+  "source": "dataset-schema",
+  "build": "1.1.2",
+  "shown": [
+    {
+      "field": "price",
+      "label": "Price"
+    },
+    {
+      "field": "currency",
+      "label": "Currency"
+    },
+    {
+      "field": "airline",
+      "label": "Airline"
+    },
+    {
+      "field": "departureAirport",
+      "label": "Departure Airport"
+    },
+    {
+      "field": "departureTime",
+      "label": "Departure Time"
+    },
+    {
+      "field": "arrivalAirport",
+      "label": "Arrival Airport"
+    },
+    {
+      "field": "arrivalTime",
+      "label": "Arrival Time"
+    },
+    {
+      "field": "durationMinutes",
+      "label": "Duration Minutes"
+    },
+    {
+      "field": "stops",
+      "label": "Stops"
+    },
+    {
+      "field": "emissionsGrams",
+      "label": "Emissions Grams"
+    },
+    {
+      "field": "bookingUrl",
+      "label": "Booking Url"
+    }
+  ],
+  "all": [
+    "price",
+    "currency",
+    "airline",
+    "departureAirport",
+    "departureTime",
+    "arrivalAirport",
+    "arrivalTime",
+    "durationMinutes",
+    "stops",
+    "emissionsGrams",
+    "bookingUrl",
+    "scrapedAt"
+  ]
+}

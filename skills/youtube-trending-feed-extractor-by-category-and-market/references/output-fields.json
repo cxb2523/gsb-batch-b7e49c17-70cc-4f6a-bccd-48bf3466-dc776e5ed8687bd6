@@ -1,0 +1,115 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/youtube-trending-feed-extractor-by-category",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "sourceName",
+      "label": "Source"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "channelName",
+      "label": "Channel"
+    },
+    {
+      "field": "chartViewCount",
+      "label": "Chart Views"
+    },
+    {
+      "field": "viewCount",
+      "label": "Lifetime Views"
+    },
+    {
+      "field": "countryCode",
+      "label": "Country"
+    },
+    {
+      "field": "chartType",
+      "label": "Chart"
+    },
+    {
+      "field": "url",
+      "label": "URL"
+    },
+    {
+      "field": "status",
+      "label": "Status"
+    }
+  ],
+  "all": [
+    "position",
+    "sourceName",
+    "title",
+    "channelName",
+    "chartViewCount",
+    "viewCount",
+    "countryCode",
+    "chartType",
+    "type",
+    "url",
+    "status",
+    "recordType",
+    "videoId",
+    "trackId",
+    "artistId",
+    "playlistId",
+    "channelId",
+    "channelUrl",
+    "channelHandle",
+    "channelAvatarUrl",
+    "isVerified",
+    "viewCountText",
+    "likeCount",
+    "commentCount",
+    "subscriberCount",
+    "subscriberCountText",
+    "publishedTimeText",
+    "publishedDate",
+    "durationText",
+    "durationSeconds",
+    "thumbnailUrl",
+    "thumbnails",
+    "badges",
+    "isLive",
+    "liveStatus",
+    "scheduledStartTime",
+    "isShortsEligible",
+    "isFamilySafe",
+    "viewsPerHour",
+    "description",
+    "keywords",
+    "youtubeCategory",
+    "artists",
+    "songwriters",
+    "producers",
+    "label",
+    "releaseDate",
+    "primaryGenre",
+    "numEpisodes",
+    "lastUpdatedDate",
+    "previousPosition",
+    "rankChange",
+    "periodsOnChart",
+    "viewsChangePercent",
+    "isNewEntry",
+    "chartDate",
+    "chartPeriod",
+    "period",
+    "date",
+    "countryName",
+    "category",
+    "market",
+    "sourceType",
+    "sourceUrl",
+    "rankSource",
+    "fallbackQuery",
+    "message",
+    "mode",
+    "resultCount",
+    "scrapedAt"
+  ]
+}

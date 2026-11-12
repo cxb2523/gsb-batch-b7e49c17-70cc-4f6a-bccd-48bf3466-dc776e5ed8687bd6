@@ -1,0 +1,45 @@
+{
+  "actor": "https://apify.com/dataspryva/unsplash-photo-search-by-topic-collection",
+  "source": "dataset-schema",
+  "build": "1.1.1",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "photographerName",
+      "label": "Photographer Name"
+    },
+    {
+      "field": "orientation",
+      "label": "Orientation"
+    },
+    {
+      "field": "width",
+      "label": "Width"
+    },
+    {
+      "field": "height",
+      "label": "Height"
+    },
+    {
+      "field": "likes",
+      "label": "Likes"
+    },
+    {
+      "field": "imageUrl",
+      "label": "Image Url"
+    }
+  ],
+  "all": [
+    "title",
+    "photographerName",
+    "orientation",
+    "width",
+    "height",
+    "likes",
+    "imageUrl",
+    "sourceUrl"
+  ]
+}

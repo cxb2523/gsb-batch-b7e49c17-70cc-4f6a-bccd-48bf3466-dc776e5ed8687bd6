@@ -1,0 +1,10 @@
+{
+  "searchQueries": [
+    "Real Madrid"
+  ],
+  "includeStatistics": false,
+  "includeLineups": false,
+  "includeIncidents": false,
+  "maxItems": 25,
+  "mode": "search"
+}

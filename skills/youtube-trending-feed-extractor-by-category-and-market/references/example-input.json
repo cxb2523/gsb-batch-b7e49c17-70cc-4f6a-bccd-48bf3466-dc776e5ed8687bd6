@@ -1,0 +1,7 @@
+{
+  "maxItems": 25,
+  "maxItemsPerChart": 3,
+  "includeVideoDetails": false,
+  "maxConcurrency": 3,
+  "mode": "charts"
+}

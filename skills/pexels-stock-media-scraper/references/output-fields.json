@@ -1,0 +1,70 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/pexels-stock-media-scraper-2",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "photoId",
+      "label": "Photo Id"
+    },
+    {
+      "field": "videoId",
+      "label": "Video Id"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "photographerName",
+      "label": "Photographer Name"
+    },
+    {
+      "field": "width",
+      "label": "Width"
+    },
+    {
+      "field": "height",
+      "label": "Height"
+    },
+    {
+      "field": "orientation",
+      "label": "Orientation"
+    },
+    {
+      "field": "durationSeconds",
+      "label": "Duration Seconds"
+    },
+    {
+      "field": "license",
+      "label": "License"
+    },
+    {
+      "field": "attribution",
+      "label": "Attribution"
+    },
+    {
+      "field": "downloadUrl",
+      "label": "Download Url"
+    },
+    {
+      "field": "pageUrl",
+      "label": "Page Url"
+    }
+  ],
+  "all": [
+    "recordType",
+    "photoId",
+    "videoId",
+    "title",
+    "photographerName",
+    "width",
+    "height",
+    "orientation",
+    "durationSeconds",
+    "license",
+    "attribution",
+    "downloadUrl",
+    "pageUrl"
+  ]
+}

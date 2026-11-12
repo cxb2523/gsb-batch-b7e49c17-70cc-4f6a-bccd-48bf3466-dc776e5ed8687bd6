@@ -1,0 +1,15 @@
+{
+  "usernames": [
+    "zuck"
+  ],
+  "searchQueries": [
+    "openai"
+  ],
+  "tag": "ai",
+  "postUrls": [
+    "https://www.threads.com/@zuck/post/DZpPDXbCeTt"
+  ],
+  "includeMediaUrls": false,
+  "maxItems": 25,
+  "mode": "profile"
+}

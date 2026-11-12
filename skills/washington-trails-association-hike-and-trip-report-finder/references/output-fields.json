@@ -1,0 +1,64 @@
+{
+  "actor": "https://apify.com/dataspryva/washington-trails-association-hike-and-trip-report",
+  "source": "dataset-schema",
+  "build": "1.1.2",
+  "shown": [
+    {
+      "field": "trailName",
+      "label": "Trail Name"
+    },
+    {
+      "field": "region",
+      "label": "Region"
+    },
+    {
+      "field": "lengthMiles",
+      "label": "Length Miles"
+    },
+    {
+      "field": "elevationGainFeet",
+      "label": "Elevation Gain Feet"
+    },
+    {
+      "field": "difficulty",
+      "label": "Difficulty"
+    },
+    {
+      "field": "rating",
+      "label": "Rating"
+    },
+    {
+      "field": "reviewCount",
+      "label": "Review Count"
+    },
+    {
+      "field": "tripReportCount",
+      "label": "Trip Report Count"
+    },
+    {
+      "field": "latitude",
+      "label": "Latitude"
+    },
+    {
+      "field": "longitude",
+      "label": "Longitude"
+    },
+    {
+      "field": "trailUrl",
+      "label": "Trail Url"
+    }
+  ],
+  "all": [
+    "trailName",
+    "region",
+    "lengthMiles",
+    "elevationGainFeet",
+    "difficulty",
+    "rating",
+    "reviewCount",
+    "tripReportCount",
+    "latitude",
+    "longitude",
+    "trailUrl"
+  ]
+}

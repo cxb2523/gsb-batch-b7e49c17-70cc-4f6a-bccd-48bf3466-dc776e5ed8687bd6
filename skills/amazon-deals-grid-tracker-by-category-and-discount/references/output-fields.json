@@ -1,0 +1,45 @@
+{
+  "actor": "https://apify.com/dataspryva/amazon-deals-grid-tracker-by-category-and-discount",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "asin",
+      "label": "Asin"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "dealPrice",
+      "label": "Deal Price"
+    },
+    {
+      "field": "savingsPercent",
+      "label": "Savings Percent"
+    },
+    {
+      "field": "averageRating",
+      "label": "Average Rating"
+    },
+    {
+      "field": "dealEndsAt",
+      "label": "Deal Ends At"
+    },
+    {
+      "field": "category",
+      "label": "Category"
+    }
+  ],
+  "all": [
+    "asin",
+    "title",
+    "dealPrice",
+    "savingsPercent",
+    "averageRating",
+    "dealEndsAt",
+    "category",
+    "sourceUrl"
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/world-market-product-scraper",
+  "source": "dataset-schema",
+  "build": "1.2.1",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "price",
+      "label": "Price"
+    },
+    {
+      "field": "originalPrice",
+      "label": "Original Price"
+    },
+    {
+      "field": "saleBadge",
+      "label": "Sale Badge"
+    },
+    {
+      "field": "brand",
+      "label": "Brand"
+    },
+    {
+      "field": "sku",
+      "label": "Sku"
+    },
+    {
+      "field": "availability",
+      "label": "Availability"
+    },
+    {
+      "field": "pickupStatus",
+      "label": "Pickup Status"
+    },
+    {
+      "field": "rating",
+      "label": "Rating"
+    },
+    {
+      "field": "reviewCount",
+      "label": "Review Count"
+    },
+    {
+      "field": "productUrl",
+      "label": "Product Url"
+    }
+  ],
+  "all": [
+    "title",
+    "price",
+    "originalPrice",
+    "saleBadge",
+    "brand",
+    "sku",
+    "availability",
+    "pickupStatus",
+    "rating",
+    "reviewCount",
+    "productUrl"
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "title": "Google Scholar Scraper Input",
+  "description": "Search Google Scholar papers, list citing papers, or export public author profiles. No account, API key, or proxy setup is needed.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "What to fetch: paper search, citing papers, or public author profiles.",
+      "editor": "select",
+      "enum": [
+        "search",
+        "citations",
+        "authorProfile"
+      ],
+      "enumTitles": [
+        "Search papers",
+        "List citing papers",
+        "Export author profile"
+      ],
+      "default": "search",
+      "prefill": "search"
+    },
+    "queries": {
+      "title": "Search Queries",
+      "type": "array",
+      "description": "Keywords or paper titles to search on Google Scholar (mode=search). Each query runs separately.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "attention is all you need"
+      ]
+    },
+    "clusterIds": {
+      "title": "Cluster IDs or Citing URLs",
+      "type": "array",
+      "description": "Paper cluster IDs or Google Scholar 'cites=' URLs to list citing papers for (mode=citations).",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "authorIds": {
+      "title": "Author IDs or Profile URLs",
+      "type": "array",
+      "description": "Google Scholar author IDs or profile URLs to export (mode=authorProfile).",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "maxItems": {
+      "title": "Maximum Results",
+      "type": "integer",
+      "description": "Maximum papers per query or cluster, or papers per author. Google Scholar serves about 10 search results per page.",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 1000,
+      "prefill": 3
+    },
+    "sortBy": {
+      "title": "Sort By",
+      "type": "string",
+      "description": "Sort search results by relevance or date (mode=search).",
+      "default": "relevance",
+      "enum": [
+        "relevance",
+        "date"
+      ],
+      "enumTitles": [
+        "Relevance",
+        "Newest first"
+      ],
+      "editor": "select",
+      "prefill": "relevance"
+    },
+    "filter": {
+      "title": "Document Format",
+      "type": "string",
+      "description": "Keep only PDF or HTML results; applied to returned rows (mode=search).",
+      "default": "all",
+      "enum": [
+        "all",
+        "pdfOnly",
+        "htmlOnly"
+      ],
+      "enumTitles": [
+        "All formats",
+        "PDF only",
+        "HTML only"
+      ],
+      "editor": "select",
+      "prefill": "all"
+    },
+    "articleType": {
+      "title": "Article Type",
+      "type": "string",
+      "description": "Return all articles or review articles only (mode=search).",
+      "default": "any",
+      "enum": [
+        "any",
+        "review"
+      ],
+      "enumTitles": [
+        "All articles",
+        "Review articles only"
+      ],
+      "editor": "select",
+      "prefill": "any"
+    },
+    "newerThan": {
+      "title": "Published After (Year)",
+      "type": "integer",
+      "description": "Only include papers published in this year or later (mode=search).",
+      "minimum": 1900,
+      "maximum": 2030
+    },
+    "olderThan": {
+      "title": "Published Before (Year)",
+      "type": "integer",
+      "description": "Only include papers published in this year or earlier (mode=search).",
+      "minimum": 1900,
+      "maximum": 2030
+    },
+    "author": {
+      "title": "Authored By",
+      "type": "string",
+      "description": "Return papers written by this author, e.g. 'Geoffrey Hinton' (mode=search).",
+      "editor": "textfield"
+    },
+    "publication": {
+      "title": "Published In",
+      "type": "string",
+      "description": "Return papers from this journal or venue, e.g. 'Nature' (mode=search).",
+      "editor": "textfield"
+    },
+    "titleOnly": {
+      "title": "Search Titles Only",
+      "type": "boolean",
+      "description": "Match the query against paper titles instead of the full text (mode=search).",
+      "default": false,
+      "prefill": false
+    },
+    "includeCitationFormats": {
+      "title": "Include Citation Formats",
+      "type": "boolean",
+      "description": "Also return MLA, APA, Chicago, Harvard, and Vancouver citations for returned rows, within a bounded budget (mode=search or citations).",
+      "default": false,
+      "prefill": false
+    },
+    "includePaperDetails": {
+      "title": "Include Paper Details",
+      "type": "boolean",
+      "description": "Fetch journal, volume, pages, publisher, and abstract for each author publication (mode=authorProfile).",
+      "default": false,
+      "prefill": false
+    }
+  }
+}

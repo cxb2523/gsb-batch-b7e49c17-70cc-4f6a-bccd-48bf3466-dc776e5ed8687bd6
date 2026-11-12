@@ -1,0 +1,172 @@
+{
+  "title": "World Market Product Scraper Input",
+  "description": "Search worldmarket.com by keyword, browse a department or collection, or paste product URLs. Prices, sale savings, images, SKUs, variants and optional store pickup. No login or cookies required.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "What to fetch. `search` uses a keyword, `byCategory` browses a department or collection, and `byProductUrls` reads the URLs you paste.",
+      "editor": "select",
+      "enum": [
+        "search",
+        "byCategory",
+        "byProductUrls"
+      ],
+      "enumTitles": [
+        "Search by keyword",
+        "Browse a department or collection",
+        "Look up product URLs"
+      ],
+      "default": "search",
+      "prefill": "search"
+    },
+    "searchQuery": {
+      "title": "Search query",
+      "type": "string",
+      "description": "Keyword to search for (mode=search), e.g. `candle`, `dining chair`, `chocolate`.",
+      "editor": "textfield",
+      "default": "candle",
+      "prefill": "candle"
+    },
+    "category": {
+      "title": "Department or collection (mode=byCategory)",
+      "type": "string",
+      "description": "A World Market department or curated collection. Use `categoryUrl` instead if you want a sub-category that is not listed here.",
+      "editor": "select",
+      "enum": [
+        "bestSellers",
+        "bath",
+        "clothingAndJewelry",
+        "decorAndPillows",
+        "dining",
+        "foodAndDrinks",
+        "freeShipping",
+        "furniture",
+        "gifts",
+        "holidays",
+        "kitchen",
+        "lighting",
+        "newAndTrending",
+        "outdoor",
+        "rugs",
+        "sale",
+        "wallDecorAndMirrors"
+      ],
+      "enumTitles": [
+        "Best Sellers",
+        "Bath & Body",
+        "Clothing & Jewelry",
+        "Decor & Pillows",
+        "Dining",
+        "Food & Drinks",
+        "Free Shipping",
+        "Furniture",
+        "Gifts",
+        "Holidays",
+        "Kitchen",
+        "Lighting",
+        "New & Trending",
+        "Outdoor",
+        "Rugs",
+        "Sale / Clearance",
+        "Wall Decor & Mirrors"
+      ]
+    },
+    "categoryUrl": {
+      "title": "Custom category or collection URL (mode=byCategory)",
+      "type": "string",
+      "description": "A worldmarket.com category or collection URL, e.g. `https://www.worldmarket.com/c/furniture/shop-all-furniture/`. Takes priority over `category`.",
+      "editor": "textfield"
+    },
+    "productUrls": {
+      "title": "Product URLs (mode=byProductUrls)",
+      "type": "array",
+      "description": "Direct worldmarket.com product-page URLs, e.g. `https://www.worldmarket.com/p/<slug>-<id>.html`. Up to 500 unique URLs per run.",
+      "editor": "stringList",
+      "default": []
+    },
+    "sortBy": {
+      "title": "Sort order",
+      "type": "string",
+      "description": "Sort order for search and department results. `bestselling` and `newArrivals` keep World Market's own listing order.",
+      "editor": "select",
+      "enum": [
+        "bestselling",
+        "newArrivals",
+        "ratingHighToLow",
+        "priceLowToHigh",
+        "priceHighToLow"
+      ],
+      "enumTitles": [
+        "Bestselling",
+        "New Arrivals",
+        "Rating: High to Low",
+        "Price: Low to High",
+        "Price: High to Low"
+      ],
+      "default": "bestselling"
+    },
+    "minPrice": {
+      "title": "Minimum price (USD)",
+      "type": "integer",
+      "description": "Drop products whose current price is below this amount.",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "maxPrice": {
+      "title": "Maximum price (USD)",
+      "type": "integer",
+      "description": "Drop products whose current price is above this amount.",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "maxItems": {
+      "title": "Max items",
+      "type": "integer",
+      "description": "Hard cap on emitted products (1–500). Search and department pages are read 120 tiles at a time.",
+      "minimum": 1,
+      "maximum": 500,
+      "default": 20,
+      "prefill": 1
+    },
+    "storeId": {
+      "title": "Store ID (optional, pickup only)",
+      "type": "string",
+      "description": "A World Market store ID such as `store398`. Used only when `includePickup` is enabled. If omitted, the nearest store is resolved from `postalCode`.",
+      "editor": "textfield"
+    },
+    "postalCode": {
+      "title": "ZIP / postal code (optional, pickup only)",
+      "type": "string",
+      "description": "US ZIP code used to resolve the nearest store when `storeId` is not set and `includePickup` is enabled.",
+      "editor": "textfield"
+    },
+    "includeVariants": {
+      "title": "Include variant options",
+      "type": "boolean",
+      "description": "Include the selectable color, size or fragrance options for products that have them (up to 20).",
+      "default": true,
+      "prefill": true
+    },
+    "includePickup": {
+      "title": "Include store pickup availability",
+      "type": "boolean",
+      "description": "Add per-store pickup status, quantity and message. Requires `storeId` or `postalCode`.",
+      "default": false,
+      "prefill": false
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Optional. The actor connects directly first and only uses a proxy fallback if World Market blocks a request. Choose your own proxy to use it as that fallback, or leave it unset.",
+      "editor": "proxy",
+      "sectionCaption": "Advanced",
+      "sectionDescription": "Proxy settings."
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

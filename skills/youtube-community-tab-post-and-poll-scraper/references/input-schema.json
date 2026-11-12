@@ -1,0 +1,273 @@
+{
+  "title": "YouTube Community Posts & Polls Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "What to scrape",
+      "type": "string",
+      "description": "Choose channel posts, one post per URL/ID, or comments from post URLs/IDs.",
+      "editor": "select",
+      "enum": [
+        "channelPosts",
+        "postDetails",
+        "postComments"
+      ],
+      "enumTitles": [
+        "Posts from channel URLs",
+        "One post per URL or ID",
+        "Comments from post URLs or IDs"
+      ],
+      "default": "channelPosts",
+      "prefill": "channelPosts"
+    },
+    "urls": {
+      "title": "Channel or post URLs / IDs",
+      "type": "array",
+      "description": "Channel URLs, @handles or channel IDs when mode=channelPosts. Post URLs or post IDs when mode=postDetails/postComments.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "https://www.youtube.com/@MrBeast"
+      ]
+    },
+    "maxPosts": {
+      "title": "Maximum posts",
+      "type": "integer",
+      "description": "Maximum posts per channel, or per run in the post modes. The run also accepts at most this many channel/post inputs. YouTube exposes at most 200 posts per channel.",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 200,
+      "prefill": 3
+    },
+    "postTypes": {
+      "title": "Post types",
+      "type": "array",
+      "description": "In channelPosts mode, only return these post types. Leave empty to include every type. The post modes return the post URLs/IDs you give them.",
+      "editor": "select",
+      "items": {
+        "type": "string",
+        "enum": [
+          "text",
+          "image",
+          "video",
+          "poll",
+          "quiz",
+          "playlist",
+          "shared"
+        ],
+        "enumTitles": [
+          "Text",
+          "Image or carousel",
+          "Shared video",
+          "Poll",
+          "Quiz",
+          "Shared playlist",
+          "Repost"
+        ]
+      },
+      "uniqueItems": true,
+      "default": [],
+      "prefill": []
+    },
+    "keyword": {
+      "title": "Keyword filter",
+      "type": "string",
+      "description": "In channelPosts mode, only keep posts whose text contains this phrase. Case-insensitive. Leave empty for all posts.",
+      "editor": "textfield"
+    },
+    "publishedAfter": {
+      "title": "Published on or after",
+      "type": "string",
+      "description": "In channelPosts mode, keep posts published on or after this date. Uses YouTube's exact publish date, so details are fetched when set.",
+      "editor": "datepicker"
+    },
+    "publishedBefore": {
+      "title": "Published on or before",
+      "type": "string",
+      "description": "In channelPosts mode, keep posts published on or before this date. Uses YouTube's exact publish date, so details are fetched when set.",
+      "editor": "datepicker"
+    },
+    "includeDetails": {
+      "title": "Fetch per-post details",
+      "type": "boolean",
+      "description": "In channelPosts mode, fill the exact publish date, exact like count, comment count and a 3-comment preview. Adds one detail and one comment request per post. postDetails always returns details.",
+      "default": true,
+      "prefill": false
+    },
+    "includeComments": {
+      "title": "Include comments",
+      "type": "boolean",
+      "description": "Return comment threads on each post (up to Maximum comments) in channelPosts and postDetails modes. postComments always returns comments.",
+      "default": false,
+      "prefill": false
+    },
+    "maxComments": {
+      "title": "Maximum comments per post",
+      "type": "integer",
+      "description": "Maximum top-level comments to keep per post when comments are included. Replies are counted separately.",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "includeReplies": {
+      "title": "Include comment replies",
+      "type": "boolean",
+      "description": "Also fetch replies under each comment when comments are included.",
+      "default": false,
+      "prefill": false
+    },
+    "maxRepliesPerComment": {
+      "title": "Maximum replies per comment",
+      "type": "integer",
+      "description": "Maximum replies to keep per comment when replies are included.",
+      "default": 10,
+      "minimum": 1,
+      "maximum": 100
+    },
+    "commentSort": {
+      "title": "Comment order",
+      "type": "string",
+      "description": "Show YouTube's featured comments first, or the newest comments first, when comments are returned.",
+      "editor": "select",
+      "enum": [
+        "top",
+        "newest"
+      ],
+      "enumTitles": [
+        "Top comments",
+        "Newest comments"
+      ],
+      "default": "top",
+      "prefill": "top"
+    },
+    "market": {
+      "title": "Market",
+      "type": "string",
+      "description": "Country used to render YouTube's localized labels and relative times.",
+      "editor": "select",
+      "enum": [
+        "US",
+        "GB",
+        "CA",
+        "AU",
+        "DE",
+        "FR",
+        "JP",
+        "KR",
+        "BR",
+        "IN",
+        "MX",
+        "IT",
+        "ES",
+        "NL",
+        "PL",
+        "RU",
+        "SE",
+        "NO",
+        "DK",
+        "FI",
+        "ZA",
+        "SG",
+        "HK",
+        "TW",
+        "ID",
+        "MY",
+        "TH",
+        "PH",
+        "AR",
+        "CO",
+        "CL"
+      ],
+      "enumTitles": [
+        "United States",
+        "United Kingdom",
+        "Canada",
+        "Australia",
+        "Germany",
+        "France",
+        "Japan",
+        "South Korea",
+        "Brazil",
+        "India",
+        "Mexico",
+        "Italy",
+        "Spain",
+        "Netherlands",
+        "Poland",
+        "Russia",
+        "Sweden",
+        "Norway",
+        "Denmark",
+        "Finland",
+        "South Africa",
+        "Singapore",
+        "Hong Kong",
+        "Taiwan",
+        "Indonesia",
+        "Malaysia",
+        "Thailand",
+        "Philippines",
+        "Argentina",
+        "Colombia",
+        "Chile"
+      ],
+      "default": "US",
+      "prefill": "US"
+    },
+    "language": {
+      "title": "Interface language",
+      "type": "string",
+      "description": "Language used for YouTube's relative times and display labels. Post text is never translated.",
+      "editor": "select",
+      "enum": [
+        "en",
+        "es",
+        "pt",
+        "de",
+        "fr",
+        "it",
+        "nl",
+        "pl",
+        "ru",
+        "tr",
+        "ar",
+        "hi",
+        "id",
+        "th",
+        "vi",
+        "ja",
+        "ko",
+        "zh",
+        "sv",
+        "da"
+      ],
+      "enumTitles": [
+        "English",
+        "Spanish",
+        "Portuguese",
+        "German",
+        "French",
+        "Italian",
+        "Dutch",
+        "Polish",
+        "Russian",
+        "Turkish",
+        "Arabic",
+        "Hindi",
+        "Indonesian",
+        "Thai",
+        "Vietnamese",
+        "Japanese",
+        "Korean",
+        "Chinese",
+        "Swedish",
+        "Danish"
+      ],
+      "default": "en",
+      "prefill": "en"
+    }
+  }
+}

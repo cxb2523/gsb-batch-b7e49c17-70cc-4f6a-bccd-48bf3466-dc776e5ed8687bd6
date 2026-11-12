@@ -1,0 +1,133 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/youtube-video-metadata-and-chapter-extractor",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "videoId",
+      "label": "Video ID"
+    },
+    {
+      "field": "url",
+      "label": "URL"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "channelName",
+      "label": "Channel"
+    },
+    {
+      "field": "viewCount",
+      "label": "Views"
+    },
+    {
+      "field": "likeCount",
+      "label": "Likes"
+    },
+    {
+      "field": "commentCount",
+      "label": "Comments"
+    },
+    {
+      "field": "durationSeconds",
+      "label": "Duration (s)"
+    },
+    {
+      "field": "publishedDate",
+      "label": "Published"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published at"
+    },
+    {
+      "field": "category",
+      "label": "Category"
+    },
+    {
+      "field": "playabilityStatus",
+      "label": "Playability Status"
+    },
+    {
+      "field": "isPlayable",
+      "label": "Is Playable"
+    },
+    {
+      "field": "isAgeGated",
+      "label": "Age Gated"
+    },
+    {
+      "field": "commentsDisabled",
+      "label": "Comments Disabled"
+    },
+    {
+      "field": "success",
+      "label": "Success"
+    }
+  ],
+  "all": [
+    "videoId",
+    "url",
+    "title",
+    "channelName",
+    "viewCount",
+    "likeCount",
+    "commentCount",
+    "durationSeconds",
+    "publishedDate",
+    "publishedAt",
+    "category",
+    "playabilityStatus",
+    "isPlayable",
+    "isAgeGated",
+    "commentsDisabled",
+    "success",
+    "type",
+    "description",
+    "channelId",
+    "commentCountText",
+    "tags",
+    "defaultAudioLanguage",
+    "liveStatus",
+    "isLiveNow",
+    "isUpcoming",
+    "isUnlisted",
+    "engagementRate",
+    "hashtags",
+    "uploadType",
+    "resolution",
+    "isFamilySafe",
+    "isShortsEligible",
+    "thumbnails",
+    "requiresLogin",
+    "availableCountries",
+    "captionTracks",
+    "captionTrackCount",
+    "hasManualCaptions",
+    "hasAutoCaptions",
+    "chapters",
+    "heatmap",
+    "mostReplayed",
+    "heatmapSegmentCount",
+    "chapterSource",
+    "endscreen",
+    "relatedVideos",
+    "transcript",
+    "comments",
+    "clipId",
+    "clipStartMs",
+    "clipEndMs",
+    "channel.id",
+    "channel.name",
+    "channel.handle",
+    "channel.url",
+    "channel.subscriberCount",
+    "channel.subscriberCountText",
+    "channel.badges",
+    "inputUrl",
+    "scrapedAt"
+  ]
+}

@@ -1,0 +1,196 @@
+{
+  "title": "Lever Jobs Scraper Input",
+  "description": "Collect open postings from Lever job boards by company slug, board URL, API URL or posting URL. Global and EU boards are supported; all filters run on the complete board data.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "Fetch every open posting from one or more boards, or fetch specific postings by ID or URL.",
+      "editor": "select",
+      "enum": [
+        "getJobs",
+        "getJob"
+      ],
+      "enumTitles": [
+        "Get all postings from boards or URLs",
+        "Get specific postings by ID or URL"
+      ],
+      "default": "getJobs",
+      "prefill": "getJobs"
+    },
+    "companySlugs": {
+      "title": "Companies (mode=getJobs)",
+      "type": "array",
+      "description": "Company slugs, board URLs, API URLs or posting URLs. Examples: \"wealthfront\", \"https://jobs.lever.co/wealthfront\", \"https://jobs.eu.lever.co/olx\", \"https://api.lever.co/v0/postings/wealthfront\".",
+      "editor": "stringList",
+      "prefill": [
+        "wealthfront"
+      ]
+    },
+    "companySlug": {
+      "title": "Company (mode=getJob)",
+      "type": "string",
+      "description": "Company slug, board URL, API URL or posting URL used with postingIds (mode=getJob).",
+      "editor": "textfield"
+    },
+    "postingIds": {
+      "title": "Posting IDs (mode=getJob)",
+      "type": "array",
+      "description": "Posting UUIDs or posting/apply URLs (mode=getJob).",
+      "editor": "stringList"
+    },
+    "boardRegion": {
+      "title": "Lever region",
+      "type": "string",
+      "description": "Use auto to try the global board first and fall back to the EU board when global returns 404 or no postings.",
+      "editor": "select",
+      "enum": [
+        "auto",
+        "global",
+        "eu"
+      ],
+      "enumTitles": [
+        "Auto-detect",
+        "Global (api.lever.co)",
+        "EU (api.eu.lever.co)"
+      ],
+      "default": "auto",
+      "prefill": "auto"
+    },
+    "team": {
+      "title": "Team",
+      "type": "string",
+      "description": "Keep postings whose team contains this text (case-insensitive).",
+      "editor": "textfield"
+    },
+    "department": {
+      "title": "Department",
+      "type": "string",
+      "description": "Keep postings whose department contains this text (case-insensitive).",
+      "editor": "textfield"
+    },
+    "location": {
+      "title": "Location",
+      "type": "string",
+      "description": "Keep postings whose primary location or any additional location contains this text (case-insensitive), e.g. \"London\" or \"Remote\".",
+      "editor": "textfield"
+    },
+    "commitment": {
+      "title": "Commitment",
+      "type": "string",
+      "description": "Keep postings whose commitment or normalized employment type matches this text, e.g. \"Full-time\", \"Contract\", \"Internship\".",
+      "editor": "textfield"
+    },
+    "workplaceType": {
+      "title": "Workplace type",
+      "type": "string",
+      "description": "Keep postings with this exact workplace arrangement.",
+      "editor": "select",
+      "enum": [
+        "",
+        "remote",
+        "hybrid",
+        "onsite",
+        "unspecified"
+      ],
+      "enumTitles": [
+        "All workplaces",
+        "Remote",
+        "Hybrid",
+        "On-site",
+        "Unspecified"
+      ],
+      "default": "",
+      "prefill": ""
+    },
+    "remoteOnly": {
+      "title": "Remote only",
+      "type": "boolean",
+      "description": "Keep only postings marked remote or with a remote location.",
+      "default": false,
+      "prefill": false
+    },
+    "country": {
+      "title": "Country",
+      "type": "string",
+      "description": "Keep postings for one ISO 3166-1 alpha-2 country code, e.g. \"US\", \"DE\" or \"IN\".",
+      "editor": "textfield"
+    },
+    "titleKeywords": {
+      "title": "Title must include",
+      "type": "array",
+      "description": "Keep postings whose title contains every word in this list, in any order.",
+      "editor": "stringList"
+    },
+    "excludeTitleKeywords": {
+      "title": "Title must not include",
+      "type": "array",
+      "description": "Drop postings whose title contains any word in this list.",
+      "editor": "stringList"
+    },
+    "postedAfter": {
+      "title": "Posted after",
+      "type": "string",
+      "description": "Keep postings created on or after this date (YYYY-MM-DD).",
+      "editor": "textfield"
+    },
+    "hasSalaryOnly": {
+      "title": "Has salary only",
+      "type": "boolean",
+      "description": "Keep only postings with a structured salary range published by Lever.",
+      "default": false,
+      "prefill": false
+    },
+    "salaryMin": {
+      "title": "Minimum salary",
+      "type": "integer",
+      "description": "Keep postings whose structured salary range starts at or above this value (same currency and interval as the posting).",
+      "minimum": 0,
+      "maximum": 100000000
+    },
+    "maxItems": {
+      "title": "Max items",
+      "type": "integer",
+      "description": "Maximum number of posting records to emit.",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 500,
+      "prefill": 3
+    },
+    "maxItemsPerCompany": {
+      "title": "Max items per company",
+      "type": "integer",
+      "description": "Maximum records per company board; 0 means no per-company limit.",
+      "minimum": 0,
+      "maximum": 10000,
+      "default": 0,
+      "prefill": 0
+    },
+    "includeDescription": {
+      "title": "Include descriptions",
+      "type": "boolean",
+      "description": "Include full and section descriptions plus requirement lists.",
+      "default": true,
+      "prefill": true
+    },
+    "includeHtml": {
+      "title": "Include HTML",
+      "type": "boolean",
+      "description": "Add the original HTML for descriptions, additional text and list content.",
+      "default": false,
+      "prefill": false
+    },
+    "onlyNewSinceLastRun": {
+      "title": "Only new since last run",
+      "type": "boolean",
+      "description": "Emit only postings not seen by an earlier run with the same query shape. The first run returns everything.",
+      "default": false,
+      "prefill": false
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

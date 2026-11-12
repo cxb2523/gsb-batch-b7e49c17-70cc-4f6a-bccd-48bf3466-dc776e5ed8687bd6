@@ -1,0 +1,8 @@
+{
+  "companySlugs": [
+    "wealthfront"
+  ],
+  "maxItems": 25,
+  "mode": "getJobs",
+  "location": "New York, NY"
+}

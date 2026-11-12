@@ -1,0 +1,269 @@
+{
+  "title": "Domain-Scoped Site Crawler Input",
+  "description": "Enter one or more start URLs, set your crawl and content options, and run the Actor to get clean Markdown, text, or HTML per page — with metadata, links, and images. The Actor fetches each page the fastest way that works automatically (plain HTTP, browser TLS fingerprint, or a headless browser for JavaScript pages).",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrls": {
+      "title": "Start URLs",
+      "type": "array",
+      "description": "One or more URLs to start crawling from. The crawler follows links found on these pages and stays on the domain of the first start URL.",
+      "editor": "requestListSources",
+      "prefill": [
+        {
+          "url": "https://docs.apify.com"
+        }
+      ]
+    },
+    "maxCrawlDepth": {
+      "title": "Max Crawl Depth",
+      "type": "integer",
+      "description": "How many links deep to follow from the start URLs. 0 means only the start URLs are crawled.",
+      "default": 10,
+      "prefill": 1,
+      "minimum": 0,
+      "maximum": 100,
+      "sectionCaption": "Crawling",
+      "sectionDescription": "Where the crawl starts and how far it goes."
+    },
+    "maxCrawlPages": {
+      "title": "Max Pages",
+      "type": "integer",
+      "description": "Maximum number of pages (and files) to store. The crawl stops when this limit is reached.",
+      "default": 20,
+      "prefill": 3,
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "useSitemaps": {
+      "title": "Use Sitemaps",
+      "type": "boolean",
+      "description": "Look for sitemaps (from robots.txt and /sitemap.xml) and enqueue the URLs they list. Finds pages that are not linked from the start URLs.",
+      "default": false,
+      "prefill": false,
+      "sectionCaption": "Discovery & filters",
+      "sectionDescription": "How the crawler finds pages and which URLs it keeps."
+    },
+    "useLlmsTxt": {
+      "title": "Use llms.txt",
+      "type": "boolean",
+      "description": "Look for /llms.txt at the start URL domains and enqueue the files listed there (common on documentation sites).",
+      "default": false,
+      "prefill": false
+    },
+    "respectRobotsTxtFile": {
+      "title": "Respect robots.txt",
+      "type": "boolean",
+      "description": "Skip discovered pages that the site's robots.txt disallows. Start URLs are always crawled.",
+      "default": true,
+      "prefill": true
+    },
+    "crawlOnlyPagesChangedSince": {
+      "title": "Crawl Only Pages Changed Since",
+      "type": "string",
+      "description": "Optional date (YYYY-MM-DD or full ISO date-time). Crawls only pages that may have changed since then and outputs a delta. Leave empty to crawl everything.",
+      "default": "",
+      "prefill": "",
+      "editor": "textfield"
+    },
+    "includeUrlGlobs": {
+      "title": "Include URL Patterns (globs)",
+      "type": "array",
+      "description": "Only crawl discovered URLs matching these glob patterns (e.g. https://example.com/docs/*). Leave empty to allow everything on the domain.",
+      "editor": "globs",
+      "default": [],
+      "prefill": []
+    },
+    "excludeUrlGlobs": {
+      "title": "Exclude URL Patterns (globs)",
+      "type": "array",
+      "description": "Skip discovered URLs matching any of these glob patterns (e.g. *login*, *.pdf).",
+      "editor": "globs",
+      "default": [],
+      "prefill": []
+    },
+    "includeUrlRegexps": {
+      "title": "Include URL Patterns (regex)",
+      "type": "array",
+      "description": "Only crawl discovered URLs matching at least one of these regular expressions. Combined with glob patterns (both must pass when both are set).",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "excludeUrlRegexps": {
+      "title": "Exclude URL Patterns (regex)",
+      "type": "array",
+      "description": "Skip discovered URLs matching any of these regular expressions.",
+      "editor": "stringList",
+      "default": [],
+      "prefill": []
+    },
+    "keepUrlFragments": {
+      "title": "Keep URL Fragments",
+      "type": "boolean",
+      "description": "Treat URLs that differ only in #fragment as different pages. Enable for single-page sites that use fragments as routes.",
+      "default": false,
+      "prefill": false
+    },
+    "ignoreCanonicalUrl": {
+      "title": "Ignore canonical URL",
+      "type": "boolean",
+      "description": "When disabled, pages whose canonical URL points to a page that was already crawled are skipped as duplicates.",
+      "default": false,
+      "prefill": false
+    },
+    "outputFormat": {
+      "title": "Output Format",
+      "type": "string",
+      "description": "How page content is returned. Markdown keeps headings, lists, tables, and links — best for LLMs and RAG.",
+      "editor": "select",
+      "default": "markdown",
+      "prefill": "markdown",
+      "enum": [
+        "markdown",
+        "text",
+        "html"
+      ],
+      "enumTitles": [
+        "Markdown",
+        "Plain text",
+        "Cleaned HTML"
+      ],
+      "sectionCaption": "Content extraction",
+      "sectionDescription": "How page content is cleaned and returned."
+    },
+    "htmlTransformer": {
+      "title": "HTML Transformer",
+      "type": "string",
+      "description": "How the main content is isolated from navigation, footers, ads, and cookie banners.",
+      "editor": "select",
+      "default": "auto",
+      "prefill": "auto",
+      "enum": [
+        "auto",
+        "trafilatura",
+        "readability",
+        "basic",
+        "none"
+      ],
+      "enumTitles": [
+        "Auto (recommended) — best content, boilerplate removed",
+        "Trafilatura (article/text extraction)",
+        "Readability (Mozilla article extractor)",
+        "Basic cleanup (remove nav/header/footer only)",
+        "No cleaning (keep the full page)"
+      ]
+    },
+    "includeImages": {
+      "title": "Include Images in Markdown",
+      "type": "boolean",
+      "description": "Add image references to the markdown field. Image URLs are always collected in the imageUrls field.",
+      "default": false,
+      "prefill": false
+    },
+    "chunkMarkdown": {
+      "title": "Split Content into Chunks",
+      "type": "boolean",
+      "description": "Emit a chunks array per page — heading-aware Markdown pieces ready for embeddings. Code blocks and tables are never split, each piece carries its heading path and character count, and consecutive pieces overlap so context is kept at the boundaries.",
+      "default": false,
+      "prefill": false
+    },
+    "chunkMaxChars": {
+      "title": "Chunk Size (characters)",
+      "type": "integer",
+      "description": "Target size of each chunk when chunkMarkdown is on. Code blocks and tables stay whole even when larger than this.",
+      "minimum": 200,
+      "maximum": 10000,
+      "default": 2000,
+      "prefill": 2000
+    },
+    "chunkOverlapChars": {
+      "title": "Chunk Overlap (characters)",
+      "type": "integer",
+      "description": "Approximate overlap between consecutive chunks when chunkMarkdown is on, so context is not lost at chunk boundaries.",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 200,
+      "prefill": 200
+    },
+    "keepElementsCssSelector": {
+      "title": "Keep HTML Elements (CSS selector)",
+      "type": "string",
+      "description": "Keep only the elements matching this CSS selector (e.g. article, main .content) before extraction. Leave empty to use the whole page.",
+      "default": "",
+      "prefill": "",
+      "editor": "textfield"
+    },
+    "removeElementsCssSelector": {
+      "title": "Remove HTML Elements (CSS selector)",
+      "type": "string",
+      "description": "Remove elements matching this CSS selector (e.g. .sidebar, .ad, nav) before extraction.",
+      "default": "",
+      "prefill": "",
+      "editor": "textfield"
+    },
+    "parsePdfText": {
+      "title": "Extract PDF Text",
+      "type": "boolean",
+      "description": "When a crawled URL serves a PDF, extract its text into the text field as a file record instead of skipping it.",
+      "default": true,
+      "prefill": true
+    },
+    "clickElementsCssSelector": {
+      "title": "Click Elements (CSS selector)",
+      "type": "string",
+      "description": "Click elements matching this CSS selector (e.g. [aria-expanded=\"false\"]) before extraction to expand collapsed content.",
+      "default": "",
+      "prefill": "",
+      "editor": "textfield",
+      "sectionCaption": "Rendered pages",
+      "sectionDescription": "Options for content that only appears after JavaScript runs."
+    },
+    "takeScreenshots": {
+      "title": "Take Page Screenshots",
+      "type": "boolean",
+      "description": "Render every stored page in the browser and capture a full-page JPEG (quality 80) of it, putting its public URL in the screenshot field. Screenshots are held in memory until pushed and add roughly 0.3-1 MB and a fraction of a second per page; screenshot capture always runs after the page is rendered.",
+      "default": false,
+      "prefill": false
+    },
+    "customHttpHeaders": {
+      "title": "Custom HTTP Headers",
+      "type": "array",
+      "description": "Extra request headers for all engines and discovery requests, as a list of {\"key\", \"value\"} pairs (e.g. an Authorization token or a specific User-Agent for sites that ask for one). Transport/framing and cookie headers (Host, Cookie, Content-Length, Connection, ...) are rejected so the actor stays cookieless.",
+      "editor": "json",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Header name",
+            "description": "HTTP header name, e.g. Authorization or Accept-Language."
+          },
+          "value": {
+            "type": "string",
+            "title": "Header value",
+            "description": "Header value sent with every request."
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ]
+      },
+      "default": [],
+      "prefill": [],
+      "sectionCaption": "Advanced",
+      "sectionDescription": "Request headers and run diagnostics."
+    },
+    "storeSkippedUrls": {
+      "title": "Store Skipped URLs",
+      "type": "boolean",
+      "description": "Save a SKIPPED_URLS record to the key-value store listing skipped URLs grouped by reason (robots, blocked, non-HTML, errors, duplicates).",
+      "default": false,
+      "prefill": false
+    }
+  },
+  "required": [
+    "startUrls"
+  ]
+}

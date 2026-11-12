@@ -1,0 +1,103 @@
+{
+  "title": "Snapchat Topic Scraper",
+  "description": "Collect public Snapchat Spotlight videos from topic pages, hashtag feeds and the anonymous Spotlight feed, with creator, engagement, AI keywords, hashtags and S2I content tags. Discover related topics from keyword search.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "Choose what to collect: videos for topics/tags, topics for search keywords, or the current Spotlight feed.",
+      "editor": "select",
+      "enum": [
+        "topicFeed",
+        "topicSearch",
+        "spotlightFeed"
+      ],
+      "enumTitles": [
+        "Topic or tag videos",
+        "Find topics by keyword",
+        "Spotlight trending feed"
+      ],
+      "default": "topicFeed",
+      "prefill": "topicFeed"
+    },
+    "topics": {
+      "title": "Topics or tags",
+      "type": "array",
+      "description": "Topic names, hashtags, or Snapchat URLs. Examples: food, #travel, https://www.snapchat.com/tag/food, https://www.snapchat.com/topic/cappuccino-foam-technique.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "prefill": [
+        "food"
+      ],
+      "sectionCaption": "Topic videos",
+      "sectionDescription": "Used in Topic or tag videos mode. Each topic is checked on its topic and tag pages, then combined with Explore Spotlight results."
+    },
+    "maxResultsPerTopic": {
+      "title": "Max videos per topic",
+      "type": "integer",
+      "description": "Maximum videos to keep for each topic after combining its topic/tag page with Explore results. Snapchat serves 19-32 videos per page and the combined pool is usually 40-54.",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 100,
+      "prefill": 3
+    },
+    "includeRelatedTags": {
+      "title": "Include S2I content tags",
+      "type": "boolean",
+      "description": "Include Snapchat's scene-to-interest (S2I) tags for each video when the page provides them. Coverage is partial, so the field is omitted when unavailable.",
+      "default": true,
+      "prefill": false
+    },
+    "searchQueries": {
+      "title": "Search keywords",
+      "type": "array",
+      "description": "Keywords or phrases used to discover topics, such as coffee, new york, or taylor swift.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "prefill": [],
+      "sectionCaption": "Topic discovery",
+      "sectionDescription": "Used in Find topics by keyword mode."
+    },
+    "maxTopicsPerQuery": {
+      "title": "Max topics per query",
+      "type": "integer",
+      "description": "Maximum topic rows to keep for each search query, including related topics when expansion is enabled.",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500,
+      "prefill": 50
+    },
+    "includeRelatedTopics": {
+      "title": "Expand related topics",
+      "type": "boolean",
+      "description": "Add one hop of related topics found on each discovered topic's topic, tag, or Explore page. This follows public page links; it does not recurse further.",
+      "default": false,
+      "prefill": false
+    },
+    "enrichVideos": {
+      "title": "Enrich videos with detail pages",
+      "type": "boolean",
+      "description": "Visit each video's Spotlight page to fill missing AI title, comment/recommend counts, language, S2I tags and sound, and each creator's profile once for subscriberCount. Cached and bounded; failures keep the original row.",
+      "default": false,
+      "prefill": false
+    },
+    "maxItems": {
+      "title": "Max items",
+      "type": "integer",
+      "description": "Maximum rows to save across the whole run.",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 10000,
+      "prefill": 3
+    }
+  },
+  "required": []
+}

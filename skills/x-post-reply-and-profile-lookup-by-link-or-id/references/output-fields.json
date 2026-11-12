@@ -1,0 +1,50 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/x-post-reply-and-profile-lookup-by-link-or-id",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "text",
+      "label": "Text"
+    },
+    {
+      "field": "author.username",
+      "label": "Author.username"
+    },
+    {
+      "field": "createdAt",
+      "label": "Created At"
+    },
+    {
+      "field": "likeCount",
+      "label": "Like Count"
+    },
+    {
+      "field": "retweetCount",
+      "label": "Retweet Count"
+    },
+    {
+      "field": "replyCount",
+      "label": "Reply Count"
+    },
+    {
+      "field": "viewCount",
+      "label": "View Count"
+    },
+    {
+      "field": "url",
+      "label": "Url"
+    }
+  ],
+  "all": [
+    "type",
+    "text",
+    "author.username",
+    "createdAt",
+    "likeCount",
+    "retweetCount",
+    "replyCount",
+    "viewCount",
+    "url"
+  ]
+}

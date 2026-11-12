@@ -1,0 +1,65 @@
+{
+  "actor": "https://apify.com/dataspryva/stocktwits-ticker-sentiment-and-trending-symbol",
+  "source": "dataset-schema",
+  "build": "1.0.3",
+  "shown": [
+    {
+      "field": "symbol",
+      "label": "Symbol"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "sentiment",
+      "label": "Sentiment"
+    },
+    {
+      "field": "sentimentScore",
+      "label": "Sentiment Score"
+    },
+    {
+      "field": "priceLast",
+      "label": "Price Last"
+    },
+    {
+      "field": "pricePercentChange",
+      "label": "Price Percent Change"
+    },
+    {
+      "field": "body",
+      "label": "Body"
+    },
+    {
+      "field": "username",
+      "label": "Username"
+    },
+    {
+      "field": "rank",
+      "label": "Rank"
+    },
+    {
+      "field": "createdAt",
+      "label": "Created At"
+    },
+    {
+      "field": "stocktwitsUrl",
+      "label": "Stocktwits Url"
+    }
+  ],
+  "all": [
+    "recordType",
+    "symbol",
+    "title",
+    "sentiment",
+    "sentimentScore",
+    "priceLast",
+    "pricePercentChange",
+    "body",
+    "username",
+    "rank",
+    "createdAt",
+    "stocktwitsUrl"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/threads-public-post-reply-and-profile-data",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "authorUsername",
+      "label": "Author Username"
+    },
+    {
+      "field": "postText",
+      "label": "Post Text"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published At"
+    },
+    {
+      "field": "likeCount",
+      "label": "Like Count"
+    },
+    {
+      "field": "commentCount",
+      "label": "Comment Count"
+    },
+    {
+      "field": "repostCount",
+      "label": "Repost Count"
+    },
+    {
+      "field": "quoteCount",
+      "label": "Quote Count"
+    },
+    {
+      "field": "shareCount",
+      "label": "Share Count"
+    },
+    {
+      "field": "mediaType",
+      "label": "Media Type"
+    },
+    {
+      "field": "postUrl",
+      "label": "Post Url"
+    }
+  ],
+  "all": [
+    "recordType",
+    "authorUsername",
+    "postText",
+    "publishedAt",
+    "likeCount",
+    "commentCount",
+    "repostCount",
+    "quoteCount",
+    "shareCount",
+    "mediaType",
+    "postUrl"
+  ]
+}

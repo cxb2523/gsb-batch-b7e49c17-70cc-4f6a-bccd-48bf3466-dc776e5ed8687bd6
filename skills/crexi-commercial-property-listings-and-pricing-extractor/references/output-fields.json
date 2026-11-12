@@ -1,0 +1,64 @@
+{
+  "actor": "https://apify.com/dataspryva/crexi-commercial-property-listings-and-pricing",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "name",
+      "label": "Property Name"
+    },
+    {
+      "field": "transaction_type",
+      "label": "Kind"
+    },
+    {
+      "field": "property_type",
+      "label": "Type"
+    },
+    {
+      "field": "city",
+      "label": "City"
+    },
+    {
+      "field": "state",
+      "label": "State"
+    },
+    {
+      "field": "price",
+      "label": "Price"
+    },
+    {
+      "field": "cap_rate",
+      "label": "Cap Rate %"
+    },
+    {
+      "field": "net_operating_income",
+      "label": "NOI"
+    },
+    {
+      "field": "building_sqft",
+      "label": "Building SqFt"
+    },
+    {
+      "field": "broker_names",
+      "label": "Brokers"
+    },
+    {
+      "field": "property_url",
+      "label": "URL"
+    }
+  ],
+  "all": [
+    "name",
+    "transaction_type",
+    "property_type",
+    "city",
+    "state",
+    "price",
+    "cap_rate",
+    "net_operating_income",
+    "building_sqft",
+    "broker_names",
+    "property_url"
+  ]
+}

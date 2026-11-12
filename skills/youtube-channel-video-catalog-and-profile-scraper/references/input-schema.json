@@ -1,0 +1,296 @@
+{
+  "title": "YouTube Channel Scraper Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "required": [
+    "channelUrls"
+  ],
+  "properties": {
+    "channelUrls": {
+      "title": "Channel URLs",
+      "type": "array",
+      "description": "YouTube channel URLs, handles (@username), or channel IDs (UCxxx). Accepts any format.",
+      "editor": "stringList",
+      "prefill": [
+        "https://www.youtube.com/@Apify"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "maxVideos": {
+      "title": "Max Videos Per Channel",
+      "type": "integer",
+      "description": "Maximum number of videos to scrape per channel. Set to 0 to get only channel info without videos.",
+      "default": 50,
+      "minimum": 0,
+      "maximum": 10000,
+      "editor": "number",
+      "prefill": 3
+    },
+    "sortVideosBy": {
+      "title": "Sort Videos By",
+      "type": "string",
+      "description": "How to sort the channel's video listings. If YouTube does not offer the chosen sort for a channel, newest-first is used.",
+      "default": "newest",
+      "enum": [
+        "newest",
+        "popular",
+        "oldest"
+      ],
+      "enumTitles": [
+        "Newest first",
+        "Most popular",
+        "Oldest first"
+      ],
+      "editor": "select"
+    },
+    "sortShortsBy": {
+      "title": "Sort Shorts By",
+      "type": "string",
+      "description": "How to sort the channel's Shorts listing (when includeShorts is enabled). Falls back to newest-first when the channel offers no Shorts sort.",
+      "default": "newest",
+      "enum": [
+        "newest",
+        "popular",
+        "oldest"
+      ],
+      "enumTitles": [
+        "Newest first",
+        "Most popular",
+        "Oldest first"
+      ],
+      "editor": "select"
+    },
+    "includeAbout": {
+      "title": "Include About Page Data",
+      "type": "boolean",
+      "default": true,
+      "prefill": true,
+      "description": "Extract total views, join date, location, country, and external links from the channel About page."
+    },
+    "includeShorts": {
+      "title": "Include Channel Shorts",
+      "type": "boolean",
+      "default": false,
+      "prefill": false,
+      "description": "Scrape the channel Shorts tab and include Shorts in the output."
+    },
+    "maxShorts": {
+      "title": "Max Shorts",
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 2000,
+      "description": "Maximum number of Shorts to return (when includeShorts is enabled)."
+    },
+    "includeLiveVideos": {
+      "title": "Include Live/Stream Videos",
+      "type": "boolean",
+      "default": false,
+      "prefill": false,
+      "description": "Scrape the channel Live/Streams tab and include live, upcoming, and past streams."
+    },
+    "maxLiveVideos": {
+      "title": "Max Live Videos",
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Maximum live/stream videos to return (when includeLiveVideos is enabled)."
+    },
+    "includePlaylists": {
+      "title": "Include Channel Playlists",
+      "type": "boolean",
+      "default": false,
+      "prefill": false,
+      "description": "Scrape the channel Playlists tab and include playlist metadata in the output."
+    },
+    "maxPlaylists": {
+      "title": "Max Playlists",
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Maximum number of playlists to scrape (when includePlaylists is enabled)."
+    },
+    "includePodcasts": {
+      "title": "Include Podcast Shows",
+      "type": "boolean",
+      "default": false,
+      "prefill": false,
+      "description": "Scrape the channel Podcasts tab and include podcast shows (when the channel has one)."
+    },
+    "maxPodcasts": {
+      "title": "Max Podcast Shows",
+      "type": "integer",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Maximum number of podcast shows to return (when includePodcasts is enabled)."
+    },
+    "includeCourses": {
+      "title": "Include Courses",
+      "type": "boolean",
+      "default": false,
+      "prefill": false,
+      "description": "Scrape the channel Courses tab and include course playlists (when the channel has one)."
+    },
+    "maxCourses": {
+      "title": "Max Courses",
+      "type": "integer",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Maximum number of courses to return (when includeCourses is enabled)."
+    },
+    "includeReleases": {
+      "title": "Include Music Releases",
+      "type": "boolean",
+      "default": false,
+      "prefill": false,
+      "description": "Scrape the channel Releases tab and include release playlists (when the channel has one)."
+    },
+    "maxReleases": {
+      "title": "Max Releases",
+      "type": "integer",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Maximum number of releases to return (when includeReleases is enabled)."
+    },
+    "includeMembersOnly": {
+      "title": "Include Members-Only Videos",
+      "type": "boolean",
+      "default": false,
+      "prefill": false,
+      "description": "Also list members-only videos (titles and public metadata) when YouTube offers the Members-only filter for this channel. Rows carry isMembersOnly and are added in addition to maxVideos. Playback still requires the membership."
+    },
+    "includeExactMetrics": {
+      "title": "Fetch Exact Video Metrics",
+      "type": "boolean",
+      "default": true,
+      "prefill": true,
+      "description": "Also fetch each video's exact view and like counts, duration, publish date, category, and description. Turn off for faster, cheaper runs with listing-page values only."
+    },
+    "market": {
+      "title": "Market / Region",
+      "type": "string",
+      "default": "US",
+      "enum": [
+        "US",
+        "GB",
+        "CA",
+        "AU",
+        "DE",
+        "FR",
+        "JP",
+        "KR",
+        "BR",
+        "IN",
+        "MX",
+        "IT",
+        "ES",
+        "NL",
+        "PL",
+        "RU",
+        "SE",
+        "NO",
+        "DK",
+        "FI",
+        "ZA",
+        "SG",
+        "HK",
+        "TW",
+        "ID",
+        "MY",
+        "TH",
+        "PH",
+        "AR",
+        "CO",
+        "CL"
+      ],
+      "enumTitles": [
+        "United States",
+        "United Kingdom",
+        "Canada",
+        "Australia",
+        "Germany",
+        "France",
+        "Japan",
+        "South Korea",
+        "Brazil",
+        "India",
+        "Mexico",
+        "Italy",
+        "Spain",
+        "Netherlands",
+        "Poland",
+        "Russia",
+        "Sweden",
+        "Norway",
+        "Denmark",
+        "Finland",
+        "South Africa",
+        "Singapore",
+        "Hong Kong",
+        "Taiwan",
+        "Indonesia",
+        "Malaysia",
+        "Thailand",
+        "Philippines",
+        "Argentina",
+        "Colombia",
+        "Chile"
+      ],
+      "description": "Country used for regional content availability and localized results (YouTube gl parameter).",
+      "editor": "select"
+    },
+    "language": {
+      "title": "Language",
+      "type": "string",
+      "default": "en",
+      "enum": [
+        "en",
+        "ar",
+        "de",
+        "es",
+        "fr",
+        "hi",
+        "id",
+        "it",
+        "ja",
+        "ko",
+        "nl",
+        "pl",
+        "pt",
+        "ru",
+        "th",
+        "tr",
+        "vi"
+      ],
+      "enumTitles": [
+        "English",
+        "Arabic",
+        "German",
+        "Spanish",
+        "French",
+        "Hindi",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Dutch",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Thai",
+        "Turkish",
+        "Vietnamese"
+      ],
+      "description": "Language for YouTube's interface text (relative dates like \"2 days ago\"). Titles and descriptions stay in the creator's own language.",
+      "editor": "select"
+    }
+  }
+}

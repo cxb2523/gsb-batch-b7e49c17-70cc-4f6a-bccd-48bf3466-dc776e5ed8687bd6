@@ -1,0 +1,7 @@
+{
+  "outboundDate": "2026-12-10",
+  "maxResults": 25,
+  "includePriceInsights": false,
+  "priceGraphDays": 1,
+  "mode": "search"
+}

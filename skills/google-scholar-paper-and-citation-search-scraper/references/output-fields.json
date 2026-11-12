@@ -1,0 +1,66 @@
+{
+  "actor": "https://apify.com/dataspryva/google-scholar-paper-and-citation-search-scraper",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "name",
+      "label": "Author"
+    },
+    {
+      "field": "authors",
+      "label": "Authors"
+    },
+    {
+      "field": "year",
+      "label": "Year"
+    },
+    {
+      "field": "publication",
+      "label": "Publication"
+    },
+    {
+      "field": "citations",
+      "label": "Citations"
+    },
+    {
+      "field": "documentType",
+      "label": "Type"
+    },
+    {
+      "field": "documentLink",
+      "label": "PDF/HTML"
+    },
+    {
+      "field": "link",
+      "label": "Link"
+    },
+    {
+      "field": "clusterId",
+      "label": "Cluster"
+    },
+    {
+      "field": "scholarUrl",
+      "label": "Scholar URL"
+    }
+  ],
+  "all": [
+    "recordType",
+    "title",
+    "name",
+    "authors",
+    "year",
+    "publication",
+    "citations",
+    "documentType",
+    "documentLink",
+    "link",
+    "clusterId",
+    "scholarUrl",
+    "searchQuery"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "urls": [
+    "https://www.youtube.com/@MrBeast"
+  ],
+  "maxPosts": 25,
+  "includeDetails": false,
+  "keyword": "coffee shop",
+  "maxComments": 25
+}

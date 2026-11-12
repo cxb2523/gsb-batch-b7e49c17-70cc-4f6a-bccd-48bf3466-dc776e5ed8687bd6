@@ -1,0 +1,83 @@
+{
+  "actor": "https://apify.com/vexaloom-labs/youtube-search-results-and-entity-type-scraper",
+  "source": "dataset-schema",
+  "build": "1.1.2",
+  "shown": [
+    {
+      "field": "videoId",
+      "label": "Video ID"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "channelName",
+      "label": "Channel"
+    },
+    {
+      "field": "viewCount",
+      "label": "Views"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published At"
+    },
+    {
+      "field": "publishedTimeText",
+      "label": "Published"
+    },
+    {
+      "field": "duration",
+      "label": "Duration"
+    },
+    {
+      "field": "url",
+      "label": "URL"
+    }
+  ],
+  "all": [
+    "position",
+    "type",
+    "videoId",
+    "title",
+    "channelName",
+    "viewCount",
+    "publishedAt",
+    "publishedTimeText",
+    "duration",
+    "url",
+    "searchQuery",
+    "description",
+    "fullDescription",
+    "channelId",
+    "channelUrl",
+    "channelHandle",
+    "channelVerified",
+    "viewCountText",
+    "likeCount",
+    "category",
+    "tags",
+    "durationText",
+    "durationSeconds",
+    "isLive",
+    "isUpcoming",
+    "scheduledStartTime",
+    "concurrentViewers",
+    "badges",
+    "richThumbnailUrl",
+    "isVerified",
+    "subscriberCount",
+    "subscriberCountText",
+    "videoCount",
+    "videoCountText",
+    "playlistId",
+    "firstVideoId",
+    "ownerName",
+    "handle",
+    "badge",
+    "isShort",
+    "estimatedResults",
+    "scrapedAt"
+  ]
+}

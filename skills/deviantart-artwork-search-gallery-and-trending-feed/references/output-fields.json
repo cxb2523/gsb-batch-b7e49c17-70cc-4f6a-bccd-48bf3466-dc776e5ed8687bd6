@@ -1,0 +1,45 @@
+{
+  "actor": "https://apify.com/dataspryva/deviantart-artwork-search-gallery-and-trending",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "deviationId",
+      "label": "Deviation Id"
+    },
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "artistUsername",
+      "label": "Artist Username"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published At"
+    },
+    {
+      "field": "views",
+      "label": "Views"
+    },
+    {
+      "field": "favourites",
+      "label": "Favourites"
+    },
+    {
+      "field": "deviationUrl",
+      "label": "Deviation Url"
+    }
+  ],
+  "all": [
+    "deviationId",
+    "title",
+    "artistUsername",
+    "type",
+    "publishedAt",
+    "views",
+    "favourites",
+    "deviationUrl"
+  ]
+}

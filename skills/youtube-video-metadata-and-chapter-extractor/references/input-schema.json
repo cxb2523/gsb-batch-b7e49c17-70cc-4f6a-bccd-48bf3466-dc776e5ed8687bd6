@@ -1,0 +1,86 @@
+{
+  "title": "YouTube Video Metadata & Chapter Extractor Input",
+  "description": "Scrape metadata, chapters, heatmap and caption availability for YouTube videos or Shorts.",
+  "type": "object",
+  "schemaVersion": 1,
+  "required": [
+    "videoUrls"
+  ],
+  "properties": {
+    "videoUrls": {
+      "title": "Video URLs or IDs",
+      "type": "array",
+      "description": "YouTube watch, youtu.be, Shorts, embed or live links, or 11-character video IDs. Duplicates are removed.",
+      "editor": "stringList",
+      "prefill": [
+        "jNQXAC9IVRw",
+        "dQw4w9WgXcQ",
+        "M7lc1UVf-VE"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "maxComments": {
+      "title": "Max comments per video",
+      "type": "integer",
+      "description": "Maximum comment texts to collect per video. Set to 0 to skip comments. The display comment count is extracted separately.",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1000,
+      "editor": "number"
+    },
+    "includeChapters": {
+      "title": "Extract chapters",
+      "type": "boolean",
+      "description": "Extract manual and automatic chapters with title, start, end and source.",
+      "default": true,
+      "prefill": true
+    },
+    "includeHeatmap": {
+      "title": "Extract heatmap",
+      "type": "boolean",
+      "description": "Add the Most replayed heatmap segments and labels when YouTube provides them.",
+      "default": false,
+      "prefill": false
+    },
+    "includeEndscreen": {
+      "title": "Extract endscreen",
+      "type": "boolean",
+      "description": "Extract endscreen elements shown at the end of the video.",
+      "default": true,
+      "prefill": false
+    },
+    "includeCards": {
+      "title": "Extract info cards",
+      "type": "boolean",
+      "description": "Extract interactive info cards embedded in the video.",
+      "default": false,
+      "prefill": false
+    },
+    "includeTranscriptMetadata": {
+      "title": "List caption tracks",
+      "type": "boolean",
+      "description": "List available caption tracks with language and manual or auto-generated status.",
+      "default": true,
+      "prefill": true
+    },
+    "includeTranscript": {
+      "title": "Extract transcript text",
+      "type": "boolean",
+      "description": "Download the transcript when a caption track is available. Adds one request per video.",
+      "default": true,
+      "prefill": false
+    },
+    "includeRelatedVideos": {
+      "title": "Max related videos",
+      "type": "integer",
+      "description": "Number of related videos to extract from the watch page sidebar. 0 skips them.",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 50,
+      "editor": "number"
+    }
+  }
+}

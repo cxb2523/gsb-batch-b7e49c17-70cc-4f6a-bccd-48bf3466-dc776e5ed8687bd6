@@ -1,0 +1,79 @@
+{
+  "actor": "https://apify.com/dataspryva/op-gg-league-of-legends-tier-list-and-win-rate",
+  "source": "dataset-schema",
+  "build": "1.0.2",
+  "shown": [
+    {
+      "field": "championName",
+      "label": "Champion Name"
+    },
+    {
+      "field": "tier",
+      "label": "Tier"
+    },
+    {
+      "field": "tierNumber",
+      "label": "Tier Number"
+    },
+    {
+      "field": "tierRank",
+      "label": "Tier Rank"
+    },
+    {
+      "field": "rankChange",
+      "label": "Rank Change"
+    },
+    {
+      "field": "winRate",
+      "label": "Win Rate"
+    },
+    {
+      "field": "pickRate",
+      "label": "Pick Rate"
+    },
+    {
+      "field": "banRate",
+      "label": "Ban Rate"
+    },
+    {
+      "field": "region",
+      "label": "Region"
+    },
+    {
+      "field": "rankTier",
+      "label": "Rank Tier"
+    },
+    {
+      "field": "queueType",
+      "label": "Queue Type"
+    },
+    {
+      "field": "patch",
+      "label": "Patch"
+    }
+  ],
+  "all": [
+    "championName",
+    "position",
+    "tier",
+    "tierNumber",
+    "tierRank",
+    "rankChange",
+    "winRate",
+    "pickRate",
+    "banRate",
+    "region",
+    "rankTier",
+    "queueType",
+    "patch",
+    "sourceUrl",
+    "gamesPlayed",
+    "kda",
+    "averageCs",
+    "averageGold",
+    "period",
+    "targetChampionName",
+    "games",
+    "wins"
+  ]
+}

@@ -1,0 +1,36 @@
+name: Bug report
+description: A skill fails, returns nothing or returns the wrong fields.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: input
+    id: which
+    attributes:
+      label: Which skill
+      placeholder: e.g. skills/google-maps-business-lead-and-email-finder
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Agent and Node.js version
+      placeholder: e.g. Claude Code 2.1, Node 22
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The error text from the failing step, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: The input you used
+      render: json
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Secrets
+      options:
+        - label: I removed my Apify token and any private data from what I pasted.
+          required: true

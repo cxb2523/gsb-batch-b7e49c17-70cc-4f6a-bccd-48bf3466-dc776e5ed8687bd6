@@ -1,0 +1,44 @@
+name: Request a skill
+description: Ask for a skill for a site or a data job that is not in the list yet.
+title: "Skill request: "
+labels: ["skill request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Say which site, which fields and what you do with them. Requests are public, so leave out private details.
+  - type: input
+    id: site
+    attributes:
+      label: Site or source
+      placeholder: e.g. Yelp, LinkedIn posts, Etsy
+    validations:
+      required: true
+  - type: textarea
+    id: job
+    attributes:
+      label: What you want to do with the data
+      description: e.g. "find 50 dentists in Austin with an email and give me a CSV"
+    validations:
+      required: true
+  - type: input
+    id: fields
+    attributes:
+      label: Fields you need
+      placeholder: e.g. title, url, author, date
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent you use
+      options:
+        - Claude Code
+        - Codex CLI
+        - Cursor
+        - Other
+  - type: checkboxes
+    id: public
+    attributes:
+      label: Public data
+      options:
+        - label: The data is public (no login, no paywall).
+          required: true

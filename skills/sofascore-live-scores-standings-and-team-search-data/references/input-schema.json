@@ -1,0 +1,332 @@
+{
+  "title": "SofaScore Scraper Input",
+  "description": "Scrape live scores, fixtures, standings, team/player profiles, match details and rankings from SofaScore across 25 sports. No login or API key.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "What to fetch from SofaScore.",
+      "editor": "select",
+      "enum": [
+        "search",
+        "live",
+        "scheduled",
+        "team",
+        "player",
+        "tournament",
+        "standings",
+        "event",
+        "rankings"
+      ],
+      "enumTitles": [
+        "Search by name",
+        "Live events",
+        "Fixtures by date",
+        "Team profile",
+        "Player profile",
+        "Tournament profile",
+        "League standings",
+        "Match details by ID or URL",
+        "Rankings"
+      ],
+      "default": "search",
+      "prefill": "search"
+    },
+    "searchQueries": {
+      "title": "Search Queries",
+      "type": "array",
+      "description": "Team, player, tournament or match names to resolve (mode=search).",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "Real Madrid"
+      ]
+    },
+    "searchType": {
+      "title": "Search Result Type",
+      "type": "string",
+      "description": "Restrict search results to one entity type (mode=search).",
+      "editor": "select",
+      "enum": [
+        "all",
+        "team",
+        "player",
+        "tournament",
+        "event"
+      ],
+      "enumTitles": [
+        "All types",
+        "Teams",
+        "Players",
+        "Tournaments",
+        "Matches"
+      ],
+      "default": "all",
+      "prefill": "all"
+    },
+    "sports": {
+      "title": "Sports",
+      "type": "array",
+      "description": "Sports for live and scheduled modes. Supported: football, basketball, tennis, american-football, aussie-rules, ice-hockey, handball, rugby, futsal, minifootball, floorball, volleyball, badminton, table-tennis, padel, snooker, baseball, cricket, esports, darts, mma, cycling, motorsport, waterpolo, bandy.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "football"
+      ],
+      "prefill": [
+        "football"
+      ]
+    },
+    "date": {
+      "title": "Date",
+      "type": "string",
+      "description": "Start date for fixtures (mode=scheduled), format YYYY-MM-DD. Defaults to today UTC.",
+      "editor": "datepicker"
+    },
+    "daysAhead": {
+      "title": "Days Ahead",
+      "type": "integer",
+      "description": "Number of extra days after Date to include (mode=scheduled).",
+      "minimum": 0,
+      "maximum": 31,
+      "default": 0,
+      "prefill": 0
+    },
+    "teamIds": {
+      "title": "Team IDs or URLs",
+      "type": "array",
+      "description": "SofaScore team IDs or team page URLs (mode=team).",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "playerIds": {
+      "title": "Player IDs or URLs",
+      "type": "array",
+      "description": "SofaScore player IDs or player page URLs (mode=player).",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tournamentIds": {
+      "title": "Tournament IDs or URLs",
+      "type": "array",
+      "description": "SofaScore unique-tournament IDs or tournament page URLs (modes tournament, standings).",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "eventIds": {
+      "title": "Match IDs or URLs",
+      "type": "array",
+      "description": "SofaScore match IDs or match page URLs (mode=event).",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "seasonId": {
+      "title": "Season ID",
+      "type": "integer",
+      "description": "Optional season ID for standings or tournament mode. If omitted, the latest season with a table is used.",
+      "minimum": 1
+    },
+    "tableType": {
+      "title": "Table Type",
+      "type": "string",
+      "description": "Standings table to fetch (modes standings, tournament).",
+      "editor": "select",
+      "enum": [
+        "total",
+        "home",
+        "away"
+      ],
+      "enumTitles": [
+        "Overall",
+        "Home",
+        "Away"
+      ],
+      "default": "total",
+      "prefill": "total"
+    },
+    "rankingType": {
+      "title": "Ranking Type",
+      "type": "string",
+      "description": "Ranking table to fetch (mode=rankings).",
+      "editor": "select",
+      "enum": [
+        "uefa-countries",
+        "fifa",
+        "rugby-union",
+        "rugby-league",
+        "atp",
+        "wta",
+        "atp-live",
+        "wta-live",
+        "uefa-clubs",
+        "ufc-flyweight",
+        "ufc-bantamweight",
+        "ufc-featherweight",
+        "ufc-lightweight",
+        "ufc-welterweight",
+        "ufc-middleweight",
+        "ufc-light-heavyweight",
+        "ufc-heavyweight",
+        "ufc-womens-strawweight",
+        "ufc-womens-flyweight",
+        "ufc-womens-bantamweight",
+        "ufc-womens-featherweight",
+        "utr-men",
+        "utr-women",
+        "fip-men",
+        "fip-women",
+        "fnc-bantamweight",
+        "fnc-featherweight",
+        "fnc-lightweight",
+        "fnc-welterweight",
+        "fnc-middleweight",
+        "fnc-light-heavyweight"
+      ],
+      "enumTitles": [
+        "UEFA Countries",
+        "FIFA Rankings",
+        "Rugby Union Rankings",
+        "Rugby League Rankings",
+        "ATP Rankings",
+        "WTA Rankings",
+        "ATP Rankings Live",
+        "WTA Rankings Live",
+        "UEFA Clubs",
+        "UFC Flyweight",
+        "UFC Bantamweight",
+        "UFC Featherweight",
+        "UFC Lightweight",
+        "UFC Welterweight",
+        "UFC Middleweight",
+        "UFC Light Heavyweight",
+        "UFC Heavyweight",
+        "UFC Women's Strawweight",
+        "UFC Women's Flyweight",
+        "UFC Women's Bantamweight",
+        "UFC Women's Featherweight",
+        "UTR Men",
+        "UTR Women",
+        "FIP Ranking Men",
+        "FIP Ranking Women",
+        "FNC Bantamweight",
+        "FNC Featherweight",
+        "FNC Lightweight",
+        "FNC Welterweight",
+        "FNC Middleweight",
+        "FNC Light Heavyweight"
+      ],
+      "default": "fifa",
+      "prefill": "fifa"
+    },
+    "includeStatistics": {
+      "title": "Include Statistics",
+      "type": "boolean",
+      "description": "Add team and player statistics to match records.",
+      "default": true,
+      "prefill": false
+    },
+    "includeLineups": {
+      "title": "Include Lineups",
+      "type": "boolean",
+      "description": "Add lineups, formations and player ratings to match records.",
+      "default": true,
+      "prefill": false
+    },
+    "includeIncidents": {
+      "title": "Include Incidents",
+      "type": "boolean",
+      "description": "Add goals, cards and substitutions to match records.",
+      "default": true,
+      "prefill": false
+    },
+    "includeOdds": {
+      "title": "Include Odds",
+      "type": "boolean",
+      "description": "Add pre-match odds markets to match records.",
+      "default": false,
+      "prefill": false
+    },
+    "includeVotes": {
+      "title": "Include Votes",
+      "type": "boolean",
+      "description": "Add crowd prediction polls to match records.",
+      "default": false,
+      "prefill": false
+    },
+    "includeH2h": {
+      "title": "Include Head-to-Head",
+      "type": "boolean",
+      "description": "Add head-to-head win/draw tallies to match records.",
+      "default": false,
+      "prefill": false
+    },
+    "includeAdvanced": {
+      "title": "Include Advanced Match Data",
+      "type": "boolean",
+      "description": "Add shotmap, momentum, average positions, best players, win probability, managers, streaks and pre-game form.",
+      "default": false,
+      "prefill": false
+    },
+    "includeComments": {
+      "title": "Include Commentary",
+      "type": "boolean",
+      "description": "Add the text commentary feed to match records. This is a large payload.",
+      "default": false,
+      "prefill": false
+    },
+    "includeSquad": {
+      "title": "Include Squad",
+      "type": "boolean",
+      "description": "Add the full squad to team records (mode=team).",
+      "default": false,
+      "prefill": false
+    },
+    "includePlayerStats": {
+      "title": "Include Player Statistics",
+      "type": "boolean",
+      "description": "Add per-competition season statistics to player records (mode=player).",
+      "default": false,
+      "prefill": false
+    },
+    "includeStandings": {
+      "title": "Include Standings",
+      "type": "boolean",
+      "description": "Add the league table to tournament records (mode=tournament).",
+      "default": false,
+      "prefill": false
+    },
+    "includeEvents": {
+      "title": "Include Team Events",
+      "type": "boolean",
+      "description": "Add recent and upcoming events to team records (mode=team).",
+      "default": false,
+      "prefill": false
+    },
+    "maxItems": {
+      "title": "Max Items",
+      "type": "integer",
+      "description": "Maximum number of records to return. 0 means no user limit (hard cap 10,000).",
+      "minimum": 0,
+      "maximum": 10000,
+      "default": 50,
+      "prefill": 3
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

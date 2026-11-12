@@ -1,0 +1,319 @@
+{
+  "title": "YouTube Search Scraper Input",
+  "description": "Search YouTube by keyword for videos, Shorts, channels, playlists, or movies. Filter by upload date, duration, sort order, features, market, and language. Optional video details add exact publish dates, views, likes, categories, and tags.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "searchQueries": {
+      "title": "Search Queries",
+      "type": "array",
+      "description": "One or more YouTube search terms. Each query is scraped separately and its results are combined in the dataset.",
+      "editor": "stringList",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "prefill": [
+        "apify"
+      ]
+    },
+    "maxResults": {
+      "title": "Max Results Per Query",
+      "type": "integer",
+      "description": "Maximum number of results per query. YouTube may serve fewer rows for a given query, entity type, session, or IP; the run reports the requested and actual counts and whether the result pool was exhausted.",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 1000,
+      "prefill": 3
+    },
+    "scrapeAllResults": {
+      "title": "Scrape All Available Results",
+      "type": "boolean",
+      "description": "Keep loading pages until YouTube stops offering results. This ignores Max Results Per Query and can take longer on broad searches.",
+      "default": false,
+      "prefill": false
+    },
+    "sortBy": {
+      "title": "Sort By",
+      "type": "string",
+      "description": "Order of the search results. YouTube currently supports relevance and popularity (view count). Legacy values upload_date and rating are accepted for saved tasks and mapped to relevance with a warning.",
+      "editor": "select",
+      "default": "relevance",
+      "prefill": "relevance",
+      "enumTitles": [
+        "Relevance",
+        "View count (popularity)"
+      ],
+      "enumSuggestedValues": [
+        "relevance",
+        "view_count"
+      ]
+    },
+    "uploadDate": {
+      "title": "Upload Date",
+      "type": "string",
+      "description": "Only return results uploaded in the selected period. Applies to videos and Shorts.",
+      "editor": "select",
+      "default": "",
+      "prefill": "",
+      "enum": [
+        "",
+        "last_hour",
+        "today",
+        "this_week",
+        "this_month",
+        "this_year"
+      ],
+      "enumTitles": [
+        "Any time",
+        "Last hour",
+        "Today",
+        "This week",
+        "This month",
+        "This year"
+      ]
+    },
+    "type": {
+      "title": "Result Type",
+      "type": "string",
+      "description": "Restrict results to one entity type. Legacy plural value shorts is accepted and mapped to Shorts.",
+      "editor": "select",
+      "default": "",
+      "prefill": "video",
+      "enumTitles": [
+        "All",
+        "Videos",
+        "Shorts",
+        "Channels",
+        "Playlists",
+        "Movies"
+      ],
+      "enumSuggestedValues": [
+        "",
+        "video",
+        "short",
+        "channel",
+        "playlist",
+        "movie"
+      ]
+    },
+    "duration": {
+      "title": "Duration",
+      "type": "string",
+      "description": "Filter videos by length. Applies to video and Shorts searches.",
+      "editor": "select",
+      "default": "",
+      "prefill": "",
+      "enum": [
+        "",
+        "short",
+        "medium",
+        "long"
+      ],
+      "enumTitles": [
+        "Any duration",
+        "Under 3 minutes",
+        "3 to 20 minutes",
+        "Over 20 minutes"
+      ]
+    },
+    "features": {
+      "title": "Video Features",
+      "type": "array",
+      "description": "Filter videos by features. Multiple selections are combined. Legacy aliases cc, location, and purchased are accepted for saved tasks; cc maps to subtitles and the other two are ignored with a warning.",
+      "editor": "select",
+      "items": {
+        "type": "string",
+        "enumTitles": [
+          "HD",
+          "Subtitles/CC",
+          "Creative Commons",
+          "Live",
+          "4K",
+          "HDR",
+          "360 degrees",
+          "VR180",
+          "3D"
+        ],
+        "enumSuggestedValues": [
+          "hd",
+          "subtitles",
+          "creative_commons",
+          "live",
+          "4k",
+          "hdr",
+          "360",
+          "vr180",
+          "3d"
+        ]
+      },
+      "default": [],
+      "prefill": []
+    },
+    "market": {
+      "title": "Market",
+      "type": "string",
+      "description": "Country used for YouTube's search context (gl). Results and labels follow this market.",
+      "editor": "select",
+      "default": "US",
+      "prefill": "US",
+      "enum": [
+        "US",
+        "GB",
+        "CA",
+        "AU",
+        "DE",
+        "FR",
+        "JP",
+        "KR",
+        "BR",
+        "IN",
+        "MX",
+        "IT",
+        "ES",
+        "NL",
+        "PL",
+        "RU",
+        "SE",
+        "NO",
+        "DK",
+        "FI",
+        "ZA",
+        "SG",
+        "HK",
+        "TW",
+        "ID",
+        "MY",
+        "TH",
+        "PH",
+        "AR",
+        "CO",
+        "CL"
+      ],
+      "enumTitles": [
+        "United States",
+        "United Kingdom",
+        "Canada",
+        "Australia",
+        "Germany",
+        "France",
+        "Japan",
+        "South Korea",
+        "Brazil",
+        "India",
+        "Mexico",
+        "Italy",
+        "Spain",
+        "Netherlands",
+        "Poland",
+        "Russia",
+        "Sweden",
+        "Norway",
+        "Denmark",
+        "Finland",
+        "South Africa",
+        "Singapore",
+        "Hong Kong",
+        "Taiwan",
+        "Indonesia",
+        "Malaysia",
+        "Thailand",
+        "Philippines",
+        "Argentina",
+        "Colombia",
+        "Chile"
+      ]
+    },
+    "language": {
+      "title": "Interface Language",
+      "type": "string",
+      "description": "Language for YouTube labels and search text (hl). Auto follows the selected market.",
+      "editor": "select",
+      "default": "auto",
+      "prefill": "auto",
+      "enum": [
+        "auto",
+        "ar",
+        "bn",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "fa",
+        "fi",
+        "fr",
+        "he",
+        "hi",
+        "hu",
+        "id",
+        "it",
+        "ja",
+        "ko",
+        "ms",
+        "nl",
+        "no",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sv",
+        "th",
+        "tr",
+        "uk",
+        "ur",
+        "vi",
+        "zh-Hans",
+        "zh-Hant"
+      ],
+      "enumTitles": [
+        "Auto (from market)",
+        "Arabic",
+        "Bengali",
+        "Czech",
+        "Danish",
+        "German",
+        "Greek",
+        "English",
+        "Spanish",
+        "Persian",
+        "Finnish",
+        "French",
+        "Hebrew",
+        "Hindi",
+        "Hungarian",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Malay",
+        "Dutch",
+        "Norwegian",
+        "Polish",
+        "Portuguese",
+        "Romanian",
+        "Russian",
+        "Swedish",
+        "Thai",
+        "Turkish",
+        "Ukrainian",
+        "Urdu",
+        "Vietnamese",
+        "Chinese (Simplified)",
+        "Chinese (Traditional)"
+      ]
+    },
+    "includeVideoDetails": {
+      "title": "Include Video Details",
+      "type": "boolean",
+      "description": "Fetch each video's public detail payload to add exact publish date, views, likes, category, tags, and full description. Adds one request per video and makes runs slower.",
+      "default": false,
+      "prefill": false
+    }
+  },
+  "required": [
+    "searchQueries"
+  ]
+}

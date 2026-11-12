@@ -1,0 +1,44 @@
+{
+  "actor": "https://apify.com/nimbryxo-studio/google-news-keyword-and-full-text-article-scraper",
+  "source": "dataset-schema",
+  "build": "2.0.1",
+  "shown": [
+    {
+      "field": "title",
+      "label": "Title"
+    },
+    {
+      "field": "source",
+      "label": "Source"
+    },
+    {
+      "field": "domain",
+      "label": "Domain"
+    },
+    {
+      "field": "publishedAt",
+      "label": "Published"
+    },
+    {
+      "field": "url",
+      "label": "URL"
+    },
+    {
+      "field": "fullTextStatus",
+      "label": "Status"
+    }
+  ],
+  "all": [
+    "query",
+    "title",
+    "source",
+    "domain",
+    "publishedAt",
+    "url",
+    "fullTextStatus",
+    "scrapedAt",
+    "author",
+    "imageUrl",
+    "fullText"
+  ]
+}
