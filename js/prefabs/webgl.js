@@ -100,13 +100,24 @@ function prefabs_webgl_football_pitch(args){
     const goalbox_width_half = (args.goalbox_width / 2) * args.scaling;
     const half_length = (args.pitch_length / 2) * args.scaling;
     const half_width = (args.pitch_width / 2) * args.scaling;
-    const line_height = args.line_height;
+    const line_height = args.line_height * args.scaling;
     const line_width = args.line_width * args.scaling;
     const line_width_half = line_width / 2;
-    const penalty_distance = half_length - args.penalty_distance * args.scaling;
+    const penalty_distance_scaled = args.penalty_distance * args.scaling;
+    const penalty_distance = half_length - penalty_distance_scaled;
     const penaltybox_length = args.penaltybox_length * args.scaling;
     const penaltybox_width_half = (args.penaltybox_width / 2) * args.scaling;
-    const penaltyarc_width_half = Math.sqrt(circle_radius ** 2 - (penaltybox_length - args.penalty_distance * args.scaling) ** 2);
+    // The penalty arc is part of a circle_radius circle centred on the penalty
+    // spot.  Its half-width only exists where the circle intersects the
+    // penalty-box line; a negative radicand means no intersection, in which
+    // case the arcs must be skipped instead of emitting NaN vertices.
+    const penaltyarc_intersection = circle_radius ** 2
+      - (penaltybox_length - penalty_distance_scaled) ** 2;
+    const penaltyarc_valid = Number.isFinite(penaltyarc_intersection)
+      && penaltyarc_intersection > 0;
+    const penaltyarc_width_half = penaltyarc_valid
+      ? Math.sqrt(penaltyarc_intersection)
+      : 0;
     const spot_radius = args.spot_radius * args.scaling;
 
     const flag_properties = {
@@ -128,6 +139,47 @@ function prefabs_webgl_football_pitch(args){
       'draw_mode': 'TRIANGLE_STRIP',
       'vertex_colors': args.line_color,
     };
+
+    const penaltyarc_entities = [];
+    if(penaltyarc_valid){
+        penaltyarc_entities.push(
+          {
+            ...line_properties,
+            'id': args.prefix + '_line_penaltyarc_0',
+            'vertices': [
+              -half_length + penaltybox_length, line_height, -penaltyarc_width_half,
+              -half_length + penaltybox_length, line_height, -penaltyarc_width_half + line_width,
+              -penalty_distance + circle_radius, line_height, -penaltyarc_width_half,
+              -penalty_distance + circle_radius - line_width, line_height, -penaltyarc_width_half + line_width,
+              -penalty_distance + circle_radius, line_height, penaltyarc_width_half,
+              -penalty_distance + circle_radius - line_width, line_height, penaltyarc_width_half - line_width,
+              -half_length + penaltybox_length, line_height, penaltyarc_width_half,
+              -half_length + penaltybox_length, line_height, penaltyarc_width_half - line_width,
+            ],
+          },
+          {
+            ...line_properties,
+            'id': args.prefix + '_line_penaltyarc_1',
+            'vertices': [
+              half_length - penaltybox_length, line_height, -penaltyarc_width_half + line_width,
+              half_length - penaltybox_length, line_height, -penaltyarc_width_half,
+              penalty_distance - circle_radius + line_width, line_height, -penaltyarc_width_half + line_width,
+              penalty_distance - circle_radius, line_height, -penaltyarc_width_half,
+              penalty_distance - circle_radius + line_width, line_height, penaltyarc_width_half - line_width,
+              penalty_distance - circle_radius, line_height, penaltyarc_width_half,
+              half_length - penaltybox_length, line_height, penaltyarc_width_half - line_width,
+              half_length - penaltybox_length, line_height, penaltyarc_width_half,
+            ],
+          },
+        );
+    }else{
+        console.warn(
+          'prefabs_webgl_football_pitch: penalty arcs skipped - circle_radius ('
+            + args.circle_radius + ') cannot intersect the penalty-box line for'
+            + ' the given penalty_distance (' + args.penalty_distance
+            + ') and penaltybox_length (' + args.penaltybox_length + ').'
+        );
+    }
 
     webgl_entity_create({
       'character': args.character,
@@ -251,34 +303,7 @@ function prefabs_webgl_football_pitch(args){
             half_length - line_width, line_height, penaltybox_width_half,
           ],
         },
-        {
-          ...line_properties,
-          'id': args.prefix + '_line_penaltyarc_0',
-          'vertices': [
-            -half_length + penaltybox_length, line_height, -penaltyarc_width_half,
-            -half_length + penaltybox_length, line_height, -penaltyarc_width_half + line_width,
-            -penalty_distance + circle_radius, line_height, -penaltyarc_width_half,
-            -penalty_distance + circle_radius - line_width, line_height, -penaltyarc_width_half + line_width,
-            -penalty_distance + circle_radius, line_height, penaltyarc_width_half,
-            -penalty_distance + circle_radius - line_width, line_height, penaltyarc_width_half - line_width,
-            -half_length + penaltybox_length, line_height, penaltyarc_width_half,
-            -half_length + penaltybox_length, line_height, penaltyarc_width_half - line_width,
-          ],
-        },
-        {
-          ...line_properties,
-          'id': args.prefix + '_line_penaltyarc_1',
-          'vertices': [
-            half_length - penaltybox_length, line_height, -penaltyarc_width_half + line_width,
-            half_length - penaltybox_length, line_height, -penaltyarc_width_half,
-            penalty_distance - circle_radius + line_width, line_height, -penaltyarc_width_half + line_width,
-            penalty_distance - circle_radius, line_height, -penaltyarc_width_half,
-            penalty_distance - circle_radius + line_width, line_height, penaltyarc_width_half - line_width,
-            penalty_distance - circle_radius, line_height, penaltyarc_width_half,
-            half_length - penaltybox_length, line_height, penaltyarc_width_half - line_width,
-            half_length - penaltybox_length, line_height, penaltyarc_width_half,
-          ],
-        },
+        ...penaltyarc_entities,
         {
           ...line_properties,
           'id': args.prefix + '_spot_penalty_0',

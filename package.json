@@ -1,0 +1,8 @@
+{
+  "name": "iterami-common",
+  "private": true,
+  "description": "Browser framework (no build step). The test script runs the Node-side prefab tests under test/.",
+  "scripts": {
+    "test": "node test/football_pitch_test_node.js"
+  }
+}

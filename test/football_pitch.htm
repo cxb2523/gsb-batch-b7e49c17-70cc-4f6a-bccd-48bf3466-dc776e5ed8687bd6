@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang=en>
+<meta charset=utf-8>
+<meta content="width=device-width,initial-scale=1" name=viewport>
+<title>prefabs_webgl_football_pitch tests</title>
+<style>
+  body{font-family:monospace;margin:1em}
+  .pass{color:green}
+  .fail{color:red;font-weight:bold}
+  pre{background:#f4f4f4;padding:.5em;white-space:pre-wrap}
+</style>
+
+<h1>prefabs_webgl_football_pitch tests</h1>
+<p>
+  Same suite as <code>node test/football_pitch_test_node.js</code>.
+  Results render below once the page loads.
+</p>
+<div id=results>running&hellip;</div>
+
+<!-- Framework, in dependency order. webgl_init() normally runs on the load
+     event and registers the "opaque" entity type the prefab needs; without a
+     WebGL context the tests register a minimal stand-in instead. -->
+<script src=../js/math.js></script>
+<script src=../js/core.js></script>
+<script src=../js/entity.js></script>
+<script src=../js/webgl.js></script>
+<script src=../js/prefabs/webgl.js></script>
+<script src=football_pitch_default_entities.js></script>
+<script src=football_pitch_test.js></script>
+<script>
+'use strict';
+(function(){
+    // No real WebGL context is needed to build entity vertices, so register
+    // the entity type webgl_init() would otherwise create.
+    if(!entity_info.opaque){
+        entity_set({
+          'defaults': true,
+          'properties': {
+            'alpha': 1,
+            'attach_to': '',
+            'attach_x': 0,
+            'attach_y': 0,
+            'attach_z': 0,
+            'billboard': false,
+            'collision': true,
+            'draw': true,
+            'draw_mode': 'TRIANGLE_FAN',
+            'groups': [],
+            'picking': false,
+            'position_x': 0,
+            'position_y': 0,
+            'position_z': 0,
+            'rotate_x': 0,
+            'rotate_y': 0,
+            'rotate_z': 0,
+            'texture': 'default.png',
+            'vertex_colors': [],
+            'vertices': [],
+          },
+          'type': 'opaque',
+        });
+    }
+
+    globalThis.football_pitch_default_fixture =
+      globalThis.football_pitch_default_entities;
+
+    const results = football_pitch_run_tests();
+    const target = document.getElementById('results');
+    let failed = 0;
+    target.innerHTML = '';
+    for(const result of results){
+      const row = document.createElement('p');
+      row.className = result.passed ? 'pass' : 'fail';
+      row.textContent = (result.passed ? 'PASS  ' : 'FAIL  ') + result.name;
+      target.appendChild(row);
+      if(!result.passed){
+        failed++;
+        const detail = document.createElement('pre');
+        detail.textContent = result.error;
+        target.appendChild(detail);
+      }
+    }
+    const summary = document.createElement('h2');
+    summary.className = failed ? 'fail' : 'pass';
+    summary.textContent =
+      (results.length - failed) + '/' + results.length + ' test groups passed';
+    target.appendChild(summary);
+})();
+</script>
+</html>
