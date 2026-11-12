@@ -1,0 +1,85 @@
+name: Bug Report
+description: Report a bug in codetree
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the form below.
+  - type: input
+    id: version
+    attributes:
+      label: codetree version
+      description: "Run `pip show mcp-server-codetree` to find the version"
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: "Run `python --version`"
+      placeholder: "3.12.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: editor
+    attributes:
+      label: Editor / MCP client
+      options:
+        - Claude Code
+        - Cursor
+        - VS Code (Copilot)
+        - Windsurf
+        - Claude Desktop
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: "Describe what you expected vs. what actually happened"
+      placeholder: "I called get_file_skeleton('main.py') and got..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: "Minimal steps to reproduce the issue"
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: dropdown
+    id: language
+    attributes:
+      label: Affected language
+      description: "Which language is the file you're analyzing?"
+      options:
+        - Python
+        - JavaScript
+        - TypeScript
+        - TSX
+        - Go
+        - Rust
+        - Java
+        - C
+        - C++
+        - Ruby
+        - Kotlin
+        - Not language-specific
+    validations:
+      required: false
+  - type: textarea
+    id: code-sample
+    attributes:
+      label: Code sample (if applicable)
+      description: "Paste the code that triggers the bug"
+      render: python
+    validations:
+      required: false

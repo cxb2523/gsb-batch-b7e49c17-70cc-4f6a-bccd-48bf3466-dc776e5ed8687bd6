@@ -1,0 +1,43 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature ideas welcome! Describe what you'd like and why.
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - New MCP tool
+        - New language support
+        - Improvement to existing tool
+        - Performance
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the feature
+      description: "What should codetree do that it doesn't do today?"
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: "What problem does this solve? When would an agent use this?"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: "Have you tried any workarounds?"
+    validations:
+      required: false
