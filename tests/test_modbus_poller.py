@@ -327,6 +327,105 @@ class ModbusPollerTests(unittest.TestCase):
             assert bus._status.text() == "● 已连接 · 2 块 · 正常", bus._status.text()
         """)
 
+    def test_a_reconnected_link_starts_a_fresh_round_without_the_old_failure(self):
+        # A block times out, then the link drops and comes back: the new connection has read
+        # nothing yet, so the status is 轮询中 again, not the old round's failure.
+        self.run_both([
+            control("bus", "SerialConfigCard", {}),
+            bound("low", {"mbRegIndex": 0}, 5),
+            bound("high", {"mbRegIndex": 50}, 6),
+        ], SETUP + r"""
+            bus = widgets["bus"]
+            low, high = rtu("010300000001"), rtu("010300320001")
+            serial.configure({"parser": "modbus"})
+            serial.connected.emit("PLC")
+            check_payloads([low])
+            serial.modbus_master._timer.timeout.emit()  # the first block goes unanswered
+            check_payloads([low, high])
+            reply("0103020007")
+            failed = "● 已连接 · 第 1 块无响应（从站 1 功能码 3 地址 0）"
+            assert bus._status.text() == failed, bus._status.text()
+            serial.disconnect()
+            assert poller.status() == "等待连接", poller.status()
+            port.is_open = True
+            serial._port = port
+            serial.connected.emit("PLC")  # the same link, back: nothing read on it yet
+            assert poller.status() == "2 块 · 轮询中", poller.status()
+            assert bus._status.text() == "● 已连接 · 2 块 · 轮询中", bus._status.text()
+            check_payloads([low, high, low])
+            reply("0103020007")
+            check_payloads([low, high, low, high])
+            reply("0103020007")
+            assert bus._status.text() == "● 已连接 · 2 块 · 正常", bus._status.text()
+        """)
+
+    def test_switching_the_polling_link_restarts_the_round_with_the_new_links_settings(self):
+        # Two links parse Modbus; the first card's settings count while its link polls. When that
+        # link leaves, the link that is left has read nothing of this round yet: the first failed
+        # round is forgotten, and period, timeout and default slave are the second card's.
+        self.run_both([
+            control("first", "SerialConfigCard", {"modbusPeriod": 300, "modbusTimeout": 60000,
+                                                  "modbusSlave": 7}),
+            control("second", "SerialConfigCard", {"modbusPeriod": 200, "modbusTimeout": 2000,
+                                                   "modbusSlave": 5}, 1),
+            # The binding names its slave and period: the plan itself survives the switch.
+            bound("value", {"mbRegIndex": 0, "mbSlaveFilter": 3, "mbPeriod": 1000}, 10),
+        ], SETUP + r"""
+            first, second = widgets["first"], widgets["second"]
+            other, other_port = second.link, MemoryPort()
+            assert other is not serial
+            other.configure({"parser": "modbus"})
+            other_device = create_parser("modbus", {}, other.modbus_requests)
+            serial.configure({"parser": "modbus"})
+            serial.connected.emit("PLC")  # the first card's link polls: its settings count
+            assert (poller.default_period, poller.timeout, poller.default_slave) == (300, 60000, 7)
+            read = rtu("030300000001")
+            check_payloads([read])
+            assert serial.modbus_master._timer.interval() == 60000
+            serial.modbus_master._timer.timeout.emit()  # no reply: the round fails
+            failed = "● 已连接 · 第 1 块无响应（从站 3 功能码 3 地址 0）"
+            assert first._status.text() == failed, first._status.text()
+            other._port = other_port
+            other.connected.emit("PLC")  # the second link joins; the first still polls
+            assert other_port.writes == []  # it has read nothing yet
+            assert first._status.text() == failed, first._status.text()
+            serial.disconnect()  # the first link leaves: the second link's settings count now
+            assert (poller.default_period, poller.timeout, poller.default_slave) == (200, 2000, 5)
+            assert poller._timer.interval() == 200, poller._timer.interval()
+            assert poller.blocks() == [[3, 3, 0, 1, 1000]], poller.blocks()
+            assert poller.status() == "1 块 · 轮询中", poller.status()  # not the old failure
+            assert first._status.text() == "未连接", first._status.text()
+            assert second._status.text() == "● 已连接 · 1 块 · 轮询中", second._status.text()
+            assert other_port.writes == [read]  # the fresh round reads at once
+            assert other.modbus_master._timer.interval() == 2000  # with the new timeout
+            for data in other_device.feed(rtu("0303020007")):
+                other.dataReceived.emit(data)
+            assert second._status.text() == "● 已连接 · 1 块 · 正常", second._status.text()
+        """)
+
+    def test_the_programs_own_slave_addresses_are_not_polled(self):
+        # A card in the slave role answers slave 2 from its own table: the binding that reads it
+        # is left to that table and never enters a read block; the other slaves are polled as usual.
+        self.run_both([
+            control("bus", "SerialConfigCard", {}),
+            control("slave_card", "SerialConfigCard", {"modbusRole": "从站", "modbusSlave": 2}, 1),
+            bound("own", {"mbRegIndex": 0, "mbSlaveFilter": 2}, 10),
+            bound("other", {"mbRegIndex": 0, "mbSlaveFilter": 3}, 11),
+            bound("plain", {"mbRegIndex": 10}, 12),
+        ], SETUP + r"""
+            bus, slave_card = widgets["bus"], widgets["slave_card"]
+            assert slave_card.link is not serial and not slave_card.link.is_connected
+            serial.configure({"parser": "modbus"})
+            serial.connected.emit("PLC")
+            plain, other = rtu("0103000a0001"), rtu("030300000001")
+            assert poller.blocks() == [[1, 3, 10, 1, 500], [3, 3, 0, 1, 500]], poller.blocks()
+            check_payloads([plain])
+            reply("0103020007")
+            check_payloads([plain, other])
+            reply("0303020007")
+            assert bus._status.text() == "● 已连接 · 2 块 · 正常", bus._status.text()
+        """)
+
     def test_tutorial_projects_plan_their_blocks(self):
         # Their link cards set no period of their own: the default, 500 ms. 02: the four bindings read holding
         # registers 0–3; the chart's two curves name no register table, so they read holding registers

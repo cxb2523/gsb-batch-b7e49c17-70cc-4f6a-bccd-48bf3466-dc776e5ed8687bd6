@@ -17,6 +17,11 @@ its card neither hands the poller its settings nor shows its status; bindings an
 that one of the program's slave-role cards answers to are left to that card's table and not read. Without such a card the period is 500 ms, a read waits 1000 ms
 for its reply and the slave is 1. A change counts at once. A link card whose link is connected,
 parses Modbus and can send shows the poller's status after its own.
+
+The round and its timings belong to the links that carry them: when the read blocks change, when
+no link can send any more, or when a link that polled leaves (another taking its place, or none),
+the due times and the round's results so far are forgotten and the links that are left start a
+fresh round — a new connection has read nothing yet, so no old failure outlives it.
 """
 import time
 from functools import partial
@@ -97,6 +102,7 @@ class ModbusPoller(QObject):
         self._due = {}          # block -> when it is due next (ms, _now)
         self._results = {}      # block index -> problem (None: answered) in this round
         self._round_status = None  # how the last round went
+        self._master_ids = frozenset()  # the masters the round and its timings belong to
         self._read = None       # the block read awaiting its replies (_BlockRead)
         self._status = ("", "")  # nothing before start()
         self._reply_slot = [self._on_read_done]
@@ -196,6 +202,7 @@ class ModbusPoller(QObject):
 
     def _on_links_changed(self):
         self._watch_links()  # a new link counts once it connects; one that left was disconnected first
+        self._tick()  # one that left while connected is gone from the plan at once
 
     def stop(self):
         """The runtime goes away: no more reads; those not sent yet are withdrawn."""
@@ -265,8 +272,17 @@ class ModbusPoller(QObject):
         masters = self._masters()
         if not masters:  # nothing to read with: a link that comes back starts afresh
             self._blocks, self._due, self._results, self._round_status = [], {}, {}, None
+            self._master_ids = frozenset()
+            self._withdraw()
             self._set_status(tr(WAITING))
             return
+        master_ids = frozenset(id(master) for master in masters)
+        if self._master_ids - master_ids:
+            # A link that carried the polling is gone: the round and its timings belonged to the
+            # links that carried them, so the links that are left start a fresh round.
+            self._blocks, self._due, self._results, self._round_status = [], {}, {}, None
+            self._withdraw()
+        self._master_ids = master_ids
         blocks = self._plan()
         if blocks != self._blocks:  # a new plan: its blocks start their round afresh
             self._blocks = blocks
