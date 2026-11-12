@@ -167,22 +167,28 @@ def _start_job(job_id: str, input_path: Path, mlsharp_cli: str | None) -> None:
         except Exception as exc:  # noqa: BLE001
             storage.write_status(job_id, {"status": "error", "message": f"360 failed: {exc}"})
             return
-        # Six faces with no merge is not a finished scene: nothing can be
-        # previewed, so say that in the status rather than reporting success.
-        if meta.get("mode360", {}).get("mergedPly"):
+        # Six faces with no merge are not a single previewable scene, so say
+        # why instead of reporting success: the tool was never installed
+        # (skipped) or it ran and failed (failed). Either way the six face
+        # PLYs remain available as individual layers and metadata.json
+        # records exactly which branch was taken.
+        mode_meta = meta.get("mode360", {})
+        if mode_meta.get("mergedPly"):
             _compress_for_the_wire(job_id)
             storage.write_status(job_id, {"status": "done", "message": "360 scene merged"})
         else:
-            storage.write_status(
-                job_id,
-                {
-                    "status": "done",
-                    "message": (
-                        "360 faces generated but NOT merged - no splat-transform found; "
-                        "nothing to preview"
-                    ),
-                },
-            )
+            merge_state = mode_meta.get("mergeState", "skipped")
+            if merge_state == "failed":
+                message = (
+                    "360 faces generated but the merge FAILED - see the job logs; "
+                    "the six face PLYs are kept as individual layers"
+                )
+            else:
+                message = (
+                    "360 faces generated but NOT merged - no splat-transform found; "
+                    "the six face PLYs are kept as individual layers"
+                )
+            storage.write_status(job_id, {"status": "done", "message": message})
         return
 
     storage.write_status(job_id, {"status": "running", "message": "ml-sharp started"})

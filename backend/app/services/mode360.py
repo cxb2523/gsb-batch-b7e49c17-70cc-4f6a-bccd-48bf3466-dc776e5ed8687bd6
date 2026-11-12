@@ -1,10 +1,14 @@
 """
-Equirectangular 360 ingestion helpers (stub).
+Equirectangular 360 ingestion helpers.
 
-This module only defines the interfaces and metadata for the future 360 pipeline:
-- Detect *.360.jpg/png uploads.
-- Define cube face orientations and overscan FOV handling.
-- Provide a stub entry point for the equirectangular pipeline.
+The 360 pipeline:
+- Detect *.360.jpg / *.360.jpeg / *.360.png uploads (case-insensitive).
+- Reproject the equirectangular source onto the six cube faces of FACE_SPECS,
+  clamping the per-face FOV to 100..110 degrees and recording the value used.
+- Run ml-sharp once per face and rotate every PLY into that face's orientation.
+- Merge the six layers with an external splat-transform CLI when one is
+  available. A missing or failing merge tool never fails the job: the six
+  face PLYs stay in `layers` and metadata.json always records the outcome.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -117,41 +122,53 @@ def is_360_filename(filename: str) -> bool:
     """
 
     lowered = filename.lower()
-    return lowered.endswith(".360.jpg") or lowered.endswith(".360.jpeg") or lowered.endswith(".360.png")
+    return lowered.endswith((".360.jpg", ".360.jpeg", ".360.png"))
 
 
 def extract_cube_faces(
     source: Path, workdir: Path, overscan_fov_deg: float = DEFAULT_OVERSCAN_FOV_DEG
 ) -> list[CubeFaceExtraction]:
     """
-    Stub for equirectangular -> cube face extraction.
+    Reproject an equirectangular source into six cube face JPEGs.
 
     Args:
         source: Path to the uploaded equirectangular image (2:1 aspect).
-        workdir: Job directory where face_i.png and metadata.json will live.
-        overscan_fov_deg: Per-face FOV (horizontal=vertical) including overscan to
-            leave overlap near edges. Values outside 100..110 should be clamped by
-            the caller before invoking this function.
+        workdir: Job directory where face_i.jpg will live.
+        overscan_fov_deg: Requested per-face FOV (horizontal=vertical)
+            including overscan to leave overlap near edges. Clamped to
+            100..110 degrees; the clamped value is what is returned on every
+            face and written into the job metadata.
 
     Returns:
         A list of six CubeFaceExtraction items, ordered by FACE_SPECS, each
-        pointing to face_{index}.png under workdir.
+        pointing to face_{index}.jpg under workdir.
 
     Raises:
-        Mode360Error: always, until the extraction pipeline is implemented.
+        Mode360Error: if the source is missing, empty/unreadable, has a zero
+            dimension, or is more than 0.1 away from a 2:1 aspect ratio.
     """
 
     if not source.exists():
         raise Mode360Error(f"360 source image not found: {source}")
+    if source.stat().st_size == 0:
+        raise Mode360Error(f"360 source image is empty (0 bytes): {source}")
 
     clamped_fov = max(100.0, min(110.0, overscan_fov_deg))
-    img = Image.open(source).convert("RGB")
+    try:
+        img = Image.open(source)
+        img.load()
+        img = img.convert("RGB")
+    except (OSError, Image.UnidentifiedImageError) as exc:
+        raise Mode360Error(f"360 source image could not be read: {source} ({exc})") from exc
+
     width, height = img.size
     if height == 0 or width == 0:
         raise Mode360Error("360 source image has invalid dimensions")
-    if abs((width / height) - 2.0) > 0.1:
+    aspect_error = abs((width / height) - 2.0)
+    if aspect_error > 0.1:
         raise Mode360Error(
-            f"360 source image must be ~2:1 aspect ratio; got {width}x{height}"
+            "360 source image must be ~2:1 aspect ratio "
+            f"(tolerance 0.1); got {width}x{height}, deviation {aspect_error:.3f}"
         )
 
     face_size = height
@@ -183,15 +200,18 @@ def process_equirectangular_job(
     job_id: str, input_image: Path, workdir: Path, mlsharp_cli: str | None = None
 ) -> dict[str, Any]:
     """
-    Stub entry point for the 360 pipeline.
+    Run the full 360 pipeline for one upload.
 
-    The intended flow is:
-    1) Call extract_cube_faces(...) to emit face_i.png and metadata.json.
-    2) Run ml-sharp per face to get face_i.ply.
-    3) Apply known rotations from FACE_SPECS and merge (external CLI if present,
-       otherwise fall back to multi-layer serving).
-
-    For now this function simply raises to signal the missing implementation.
+    Flow:
+    1) extract_cube_faces(...) emits face_0.jpg .. face_5.jpg.
+    2) ml-sharp runs once per face to produce face_i.ply, and each PLY is
+       rotated into that face's world orientation, aligned and normalised.
+    3) The six layers are merged when a splat-transform CLI is available.
+       When the tool is missing (SKIPPED) or fails (FAILED) mergedPly stays
+       null, no half-written merge output is left behind, and the six face
+       PLYs remain in `layers` for multi-layer playback.
+    4) metadata.json is written either way, describing faces, layers and the
+       merge outcome, so the job always finishes with an explainable result.
     """
 
     workdir.mkdir(parents=True, exist_ok=True)
@@ -232,6 +252,10 @@ def process_equirectangular_job(
 
     merged_path = workdir / f"{input_image.stem}.ply"
     merged_ply = None
+    # Recorded in metadata so a caller can tell "no tool installed" apart from
+    # "a tool ran and failed"; both leave mergedPly null but mean different
+    # remedies.
+    merge_state = "skipped"
     merge_cli = _resolve_merge_cli()
     # The log is the only place a 360 job explains itself, so say what happened
     # to the merge either way. Without this the log simply stops after the
@@ -249,9 +273,15 @@ def process_equirectangular_job(
     if merge_cli:
         if _merge_plys(merge_cli, merged_path, ply_paths, stdout_path, stderr_path):
             merged_ply = merged_path.name
+            merge_state = "merged"
         else:
+            merge_state = "failed"
             with stdout_path.open("a", encoding="utf-8") as stdout_file:
-                stdout_file.write("=== 360 merge: FAILED (see stderr) ===\n")
+                stdout_file.write(
+                    "=== 360 merge: FAILED ===\n"
+                    "The merge tool returned non-zero or produced no output. No merged scene "
+                    "was kept; the six face PLYs remain available as individual layers.\n"
+                )
 
     overscan_fov = faces[0].face.fov_deg if faces else DEFAULT_OVERSCAN_FOV_DEG
     metadata = {
@@ -259,8 +289,12 @@ def process_equirectangular_job(
             "enabled": True,
             "overscanFovDeg": overscan_fov,
             "faces": face_outputs,
-            "mergedPly": merged_ply,
             "layers": [path.name for path in ply_paths],
+            "mergedPly": merged_ply,
+            # "merged"   -> mergedPly names the combined scene.
+            # "skipped"  -> no merge tool was found; install one and re-upload.
+            # "failed"   -> the tool ran but failed; see the job logs.
+            "mergeState": merge_state,
         }
     }
     storage.metadata_path(job_id).write_text(
@@ -304,8 +338,8 @@ def _save_face_jpeg(path: Path, image: np.ndarray, fov_deg: float, face_size: in
     f_35mm = f_px * math.sqrt(36**2 + 24**2) / diag
     exif_dict = {
         "Exif": {
-            piexif.ExifIFD.FocalLengthIn35mmFilm: int(round(f_35mm)),
-            piexif.ExifIFD.FocalLength: (int(round(f_35mm * 100)), 100),
+            piexif.ExifIFD.FocalLengthIn35mmFilm: round(f_35mm),
+            piexif.ExifIFD.FocalLength: (round(f_35mm * 100), 100),
         }
     }
     exif_bytes = piexif.dump(exif_dict)
@@ -428,8 +462,41 @@ def _matrix_from_quat(quat: np.ndarray) -> np.ndarray:
     )
 
 
+def _read_ply(ply_path: Path) -> PlyData:
+    """
+    Read a PLY without memory-mapping it.
+
+    plyfile defaults to mmap='c', which on Windows holds an open mapping on the
+    file for the life of the PlyData. Every transform here reads a face PLY and
+    writes it back to the same path; an open mapping makes that rewrite fail
+    with EINVAL and would also keep the file locked. mmap=False reads the bytes
+    and releases the handle immediately, which is what a file we are about to
+    rewrite needs.
+    """
+
+    return PlyData.read(str(ply_path), mmap=False)
+
+
+def _write_ply(ply: PlyData, ply_path: Path) -> None:
+    """
+    Rewrite a PLY in place via a temp file in the same directory.
+
+    Writing to a sibling temp file and replacing the target atomically means a
+    crashed or interrupted transform can never leave a truncated PLY under the
+    name the rest of the pipeline reads, and it avoids reopening the exact path
+    that was just read.
+    """
+
+    tmp_path = ply_path.with_name(f"{ply_path.name}.tmp")
+    try:
+        ply.write(str(tmp_path))
+        os.replace(tmp_path, ply_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def _apply_face_rotation(ply_path: Path, face: CubeFaceSpec) -> None:
-    ply = PlyData.read(ply_path)
+    ply = _read_ply(ply_path)
     vertex = ply["vertex"].data.copy()
     right, up, forward = _face_basis(face.name)
     rot = np.stack([right, up, forward], axis=1)
@@ -458,7 +525,7 @@ def _apply_face_rotation(ply_path: Path, face: CubeFaceSpec) -> None:
         else:
             elements.append(element)
     updated = PlyData(elements, text=ply.text, byte_order=ply.byte_order)
-    updated.write(ply_path)
+    _write_ply(updated, ply_path)
 
 
 def _align_face_layers(
@@ -511,7 +578,7 @@ def _align_face_layers(
 
 
 def _load_positions(ply_path: Path) -> np.ndarray:
-    ply = PlyData.read(ply_path)
+    ply = _read_ply(ply_path)
     vertex = ply["vertex"].data
     return np.stack([vertex["x"], vertex["y"], vertex["z"]], axis=1).astype(np.float32)
 
@@ -578,7 +645,7 @@ def _sample_overlap(
 def _apply_normal_adjust(
     ply_path: Path, forward: np.ndarray, scale: float, offset: float
 ) -> None:
-    ply = PlyData.read(ply_path)
+    ply = _read_ply(ply_path)
     vertex = ply["vertex"].data.copy()
     positions = np.stack([vertex["x"], vertex["y"], vertex["z"]], axis=1)
     proj = positions @ forward
@@ -594,7 +661,7 @@ def _apply_normal_adjust(
         else:
             elements.append(element)
     updated = PlyData(elements, text=ply.text, byte_order=ply.byte_order)
-    updated.write(ply_path)
+    _write_ply(updated, ply_path)
 
 
 def _apply_global_flip_and_center(ply_paths: list[Path], stdout_path: Path) -> None:
@@ -649,7 +716,7 @@ def _compute_global_center(ply_paths: list[Path], max_samples: int = 200000) -> 
 
 
 def _apply_transform(ply_path: Path, rot: np.ndarray, offset: np.ndarray) -> None:
-    ply = PlyData.read(ply_path)
+    ply = _read_ply(ply_path)
     vertex = ply["vertex"].data.copy()
     positions = np.stack([vertex["x"], vertex["y"], vertex["z"]], axis=1)
     positions = positions @ rot.T + offset
@@ -679,7 +746,7 @@ def _apply_transform(ply_path: Path, rot: np.ndarray, offset: np.ndarray) -> Non
         else:
             elements.append(element)
     updated = PlyData(elements, text=ply.text, byte_order=ply.byte_order)
-    updated.write(ply_path)
+    _write_ply(updated, ply_path)
 
 
 def _resolve_merge_cli() -> str | None:
@@ -696,7 +763,26 @@ def _merge_plys(
     stdout_path: Path,
     stderr_path: Path,
 ) -> bool:
-    cmd = [cli, "-w"] + [str(path) for path in inputs] + [str(output_path)]
+    """
+    Merge the six face PLYs into one scene with the external CLI.
+
+    A merge is accepted only when the tool exits zero AND writes the output.
+    On every other outcome -- tool missing, non-zero exit, or no output -- any
+    bytes the tool may already have written to the output path are removed, so
+    a failed merge can never leave a half-written file that later code mistakes
+    for a finished scene.
+
+    The CLI string is split with shlex so SPLAT_MERGE_CLI may carry arguments
+    (e.g. "python /opt/tools/merge.py"), not just a bare executable path. On
+    Windows POSIX splitting must be disabled: it treats a backslash as an escape
+    character and would eat every path separator in "C:\\...".
+    """
+
+    cmd = shlex.split(cli, posix=os.name != "nt") + ["-w"]
+    cmd += [str(path) for path in inputs] + [str(output_path)]
+    # A stale output from an earlier run would otherwise make a missing-tool
+    # run look like a successful merge. Start from a guaranteed-empty target.
+    output_path.unlink(missing_ok=True)
     try:
         with stdout_path.open("a", encoding="utf-8") as stdout_file, stderr_path.open(
             "a", encoding="utf-8"
@@ -709,5 +795,31 @@ def _merge_plys(
                 check=False,
             )
     except FileNotFoundError:
+        with stderr_path.open("a", encoding="utf-8") as stderr_file:
+            stderr_file.write(
+                f"merge tool not found: '{cli}'. Set SPLAT_MERGE_CLI or install "
+                "splat-transform (npm install -g @playcanvas/splat-transform).\n"
+            )
+        output_path.unlink(missing_ok=True)
         return False
-    return result.returncode == 0 and output_path.exists()
+    except OSError as exc:
+        with stderr_path.open("a", encoding="utf-8") as stderr_file:
+            stderr_file.write(f"merge tool could not be started: {exc}\n")
+        output_path.unlink(missing_ok=True)
+        return False
+
+    if result.returncode != 0:
+        with stderr_path.open("a", encoding="utf-8") as stderr_file:
+            stderr_file.write(
+                f"merge tool exited with code {result.returncode}; discarding output\n"
+            )
+        output_path.unlink(missing_ok=True)
+        return False
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        with stderr_path.open("a", encoding="utf-8") as stderr_file:
+            stderr_file.write("merge tool reported success but wrote no output\n")
+        output_path.unlink(missing_ok=True)
+        return False
+
+    return True

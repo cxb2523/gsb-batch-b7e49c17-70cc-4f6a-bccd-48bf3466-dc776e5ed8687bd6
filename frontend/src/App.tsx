@@ -674,11 +674,25 @@ function App() {
               )}
               {meta?.mode360?.enabled && !meta?.mode360?.mergedPly && status?.status === "done" && (
                 <p className="error">
-                  The six cube faces were generated but never merged into one scene, so there is
-                  nothing to preview. The merge needs the <code>splat-transform</code> command:
-                  install it with <code>npm install -g @playcanvas/splat-transform</code>, or point{" "}
-                  <code>SPLAT_MERGE_CLI</code> at it, then restart the backend and upload again.
-                  The faces are in the job folder as face_0.ply … face_5.ply.
+                  {meta.mode360.mergeState === "failed" ? (
+                    <>
+                      The six cube faces were generated but the merge failed, so there is no
+                      combined scene to preview. Open the <strong>Logs</strong> for the merge
+                      tool&apos;s error. The six faces are kept in the job folder as{" "}
+                      <code>face_0.ply</code> … <code>face_5.ply</code> and listed in{" "}
+                      <code>metadata.json</code>.
+                    </>
+                  ) : (
+                    <>
+                      The six cube faces were generated but never merged into one scene, so there
+                      is nothing to preview. The merge needs the <code>splat-transform</code>{" "}
+                      command: install it with{" "}
+                      <code>npm install -g @playcanvas/splat-transform</code>, or point{" "}
+                      <code>SPLAT_MERGE_CLI</code> at it, then restart the backend and upload
+                      again. The faces are in the job folder as <code>face_0.ply</code> …{" "}
+                      <code>face_5.ply</code> and listed in <code>metadata.json</code>.
+                    </>
+                  )}
                 </p>
               )}
               <div className="row">

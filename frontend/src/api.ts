@@ -34,6 +34,17 @@ export type SceneMetadata = {
   mode360?: {
     enabled?: boolean;
     mergedPly?: string | null;
+    /**
+     * Which branch the merge took:
+     * - "merged":  mergedPly names the combined scene.
+     * - "skipped": no merge tool was installed; install one and re-upload.
+     * - "failed":  a tool ran but failed; the job logs say why.
+     * In the last two cases mergedPly is null and `layers` holds the six
+     * face PLYs that can still be played individually.
+     */
+    mergeState?: "merged" | "skipped" | "failed";
+    /** The six face PLYs, in cube-face order, kept regardless of merge state. */
+    layers?: string[];
   };
 };
 
