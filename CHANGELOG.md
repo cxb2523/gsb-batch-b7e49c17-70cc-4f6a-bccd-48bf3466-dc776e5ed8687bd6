@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **SQL placeholder false positives across TypeScript, C# and Java.** Queries that build an `IN` clause from a generated placeholder list (`ids.map(() => "?").join(",")`, `string.Join(",", ids.Select(...))`, `Collections.nCopies(n, "?")`) and bind values separately no longer trigger `security/sql-injection`. TypeScript templates now also accept placeholder identifier expressions, member calls on them, and bare placeholder literals such as `'?'` or `"$1"`. C# (`SqlCommand`, `CommandText`) and Java (`prepareStatement`, `executeQuery`, `createQuery`) gain the same exemption when parameters follow via a parameter collection (`SqlParameter`, `Parameters.Add*`, `setString`, `setParameter`, `SqlParameterSource`). Templates or queries without separate bindings, and any non-placeholder variable interpolation or concatenation, are still reported.
+
 ## 0.20.1 (2026-11-11)
 
 A patch release that fixes Python diagnostic false positives and reduces CPU work when security checks produce many findings.

@@ -310,7 +310,7 @@ Finds secrets, risky constructs, and vulnerable dependencies.
 | `security/eval` | `eval()` usage (JS/TS/Python/Ruby/PHP) |
 | `security/innerhtml` | Direct `.innerHTML` assignment |
 | `security/dangerously-set-innerhtml` | React `dangerouslySetInnerHTML` usage that needs sanitization |
-| `security/sql-injection` | String concatenation/interpolation in SQL queries (JS/TS, C#) |
+| `security/sql-injection` | String concatenation/interpolation in SQL queries (JS/TS, C#, Java); parameterized queries with separately bound values are exempt |
 | `security/shell-injection` | User input in command execution (JS/TS/Python, C#, C/C++ `system`/`popen`) |
 | `security/unsafe-deserialization` | Legacy .NET formatters (`BinaryFormatter`, `SoapFormatter`, ...) that deserialize arbitrary types |
 | `security/unsafe-c-call` | Memory-unsafe C string functions (`gets`, `strcpy`, `strcat`, `sprintf`) |
