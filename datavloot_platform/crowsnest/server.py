@@ -150,6 +150,10 @@ def create_app(host: str | None = None) -> FastAPI:
         version=VERSION,
     )
     app.state.sql_write = sql_write_enabled(host)
+    # Structured query rejections: the SQL editor's route raises QueryRejected
+    # with a machine-readable reason; render {detail, reason} instead of the
+    # default {detail} body.
+    app.add_exception_handler(query.QueryRejected, query.query_rejected_handler)
     # The Shut down button: only on a laptop, where the Crows Nest listens on
     # this machine alone. On a shared host anyone signed in could stop the
     # service for everyone. `server` is the uvicorn server the CLI runs this app

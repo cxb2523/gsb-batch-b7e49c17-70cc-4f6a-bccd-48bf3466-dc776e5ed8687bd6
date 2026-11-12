@@ -26,6 +26,7 @@ import time
 
 import duckdb
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from datavloot_platform.crowsnest.config import get_config
@@ -35,6 +36,38 @@ from datavloot_platform.crowsnest.db import get_conn, is_lock_error
 router = APIRouter()
 
 MAX_ROWS = 10_000
+
+# Machine-readable rejection reasons, sent alongside the human `detail`. The
+# frontend switches on `reason` instead of matching the prose, so the wording
+# of detail can change without breaking it.
+REASON_STATEMENT_NOT_ALLOWED = "statement_not_allowed"
+REASON_MULTIPLE_STATEMENTS = "multiple_statements"
+REASON_SYNTAX_ERROR = "syntax_error"
+REASON_EXPLAIN_ANALYZE = "explain_analyze_forbidden"
+REASON_FILE_ACCESS = "file_access_forbidden"
+
+
+class QueryRejected(HTTPException):
+    """
+    An HTTPException whose body also carries a machine-readable `reason`.
+
+    The status code conventions are unchanged (403 for something the editor
+    never does, 400 for a shape the editor could do but this request did not),
+    and `detail` keeps the sentence a person reads. `reason` is the stable tag
+    the frontend branches on.
+    """
+
+    def __init__(self, status_code: int, reason: str, detail: str):
+        super().__init__(status_code=status_code, detail=detail)
+        self.reason = reason
+
+
+async def query_rejected_handler(_request: Request, exc: QueryRejected) -> JSONResponse:
+    """Render QueryRejected as `{detail, reason}`; registered in server.create_app."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "reason": exc.reason},
+    )
 
 # DuckDB reports `select`, `show`, `describe`, `pragma` and CTE queries all as
 # SELECT, which is exactly the read surface a query editor wants. Everything that
@@ -100,6 +133,100 @@ def _is_explain_analyze(statement) -> bool:
     )
 
 
+# Table functions that open a file or walk the file system on their first
+# argument. A read-only DuckDB connection only stops *database* writes: these
+# read any path the server process can, and on a lake the sandbox leaves the
+# data directory open, so a file placed there was readable too. The connection
+# sandbox (db.py) is the backstop; this is the statement-level refusal that
+# answers with a clear reason before any byte is read. Names are lowercased
+# unquoted identifiers, so quoted aliases ("read_csv" as a column name) do not
+# match.
+_FILE_READING_FUNCTIONS = frozenset(
+    name.lower()
+    for name in (
+        "read_csv",
+        "read_csv_auto",
+        "sniff_csv",
+        "read_parquet",
+        "parquet_scan",
+        "parquet_metadata",
+        "parquet_schema",
+        "parquet_file_metadata",
+        "parquet_kv_metadata",
+        "parquet_full_metadata",
+        "read_json",
+        "read_json_auto",
+        "read_ndjson",
+        "read_ndjson_auto",
+        "read_json_objects",
+        "read_json_objects_auto",
+        "read_ndjson_objects",
+        "read_blob",
+        "read_text",
+        "read_duckdb",
+        "glob",
+    )
+)
+
+
+def _unquote_identifier(lexeme: str) -> str:
+    """The bare name inside a quoted ("x", [x]) or unquoted identifier lexeme."""
+    if len(lexeme) >= 2 and lexeme[0] in '"[' and lexeme[-1] in '"]':
+        return lexeme[1:-1].replace('""', '"').lower()
+    return lexeme.lower()
+
+
+def _find_file_access(query: str) -> str | None:
+    """
+    The name of a file-reading table function or replacement scan used by the
+    statement, or None.
+
+    Two shapes are file access even on a SELECT:
+
+      * a file-reading function call -- `read_csv('x')`, `parquet_scan('x')`,
+        `glob('*.csv')` -- detected as an identifier token immediately followed
+        by the `(` operator, so the same word inside a string, a comment or a
+        column list does not count
+      * a string-literal table -- `FROM 'x.csv'` -- DuckDB's replacement scan,
+        which opens the file named after FROM without a function at all
+    """
+    tokens = duckdb.tokenize(query)
+    for i, (start, kind) in enumerate(tokens):
+        end = tokens[i + 1][0] if i + 1 < len(tokens) else len(query)
+        lexeme = query[start:end].strip()
+
+        if kind in (duckdb.token_type.identifier, duckdb.token_type.keyword):
+            # A call is this name token followed by `(`, allowing for the `]`
+            # a bracket-quoted name leaves between them: `[read_csv](...)`
+            # tokenizes as `[`, identifier `read_csv`, operator `]`, then `(`.
+            # Keyword tokens matter too: `glob` is a DuckDB keyword, so
+            # glob('*.csv') tokenizes as a keyword, while a column or a string
+            # of the same name has no `(` after it. Schema-qualified calls
+            # (`main.read_csv(...)`) leave the dot as an operator; the function
+            # name is still the token before `(`.
+            call_index = i + 1
+            if (
+                call_index + 1 < len(tokens)
+                and query[tokens[call_index][0]:tokens[call_index + 1][0]].strip() == "]"
+            ):
+                call_index += 1
+            if call_index < len(tokens):
+                call_end = tokens[call_index + 1][0] if call_index + 1 < len(tokens) else len(query)
+                call_lexeme = query[tokens[call_index][0]:call_end].strip()
+                name = _unquote_identifier(lexeme)
+                if call_lexeme.startswith("(") and name in _FILE_READING_FUNCTIONS:
+                    return name
+
+        elif kind == duckdb.token_type.string_const and i >= 1:
+            # A string token straight after FROM is a replacement scan, not a
+            # string constant in an expression: `FROM 'x.csv'` opens that file
+            # without any function name to match.
+            prev_start = tokens[i - 1][0]
+            if query[prev_start:start].strip().lower() == "from":
+                return "replacement_scan"
+    return None
+
+
 def _needs_confirmation(statement) -> str | None:
     """
     Why a write should be confirmed first, or None.
@@ -144,21 +271,24 @@ class QueryResponse(BaseModel):
 
 def _validate(sql: str, allow_write: bool = False):
     """
-    Return the single statement to run, or raise.
+    Return the single statement to run, or raise QueryRejected.
 
     Parsing is the check: one statement, and its type must be in the allowlist --
-    the read one, plus the write one when the editor may write.
+    the read one, plus the write one when the editor may write. Every refusal
+    carries a machine-readable reason so the frontend can tell a disallowed
+    statement type, a multi-statement request and a syntax error apart.
     """
     try:
         statements = duckdb.extract_statements(sql)
     except Exception as e:
-        raise HTTPException(400, f"SQL syntax error: {e}")
+        raise QueryRejected(400, REASON_SYNTAX_ERROR, f"SQL syntax error: {e}")
 
     if not statements:
-        raise HTTPException(400, "Empty query")
+        raise QueryRejected(400, REASON_SYNTAX_ERROR, "Empty query")
     if len(statements) > 1:
-        raise HTTPException(
+        raise QueryRejected(
             400,
+            REASON_MULTIPLE_STATEMENTS,
             f"One statement at a time — got {len(statements)}. "
             "Run them separately.",
         )
@@ -167,15 +297,17 @@ def _validate(sql: str, allow_write: bool = False):
     kind = statement.type.name.replace("_", " ")
     if statement.type in _WRITE_STATEMENTS:
         if not allow_write:
-            raise HTTPException(
+            raise QueryRejected(
                 403,
+                REASON_STATEMENT_NOT_ALLOWED,
                 f"{kind} statements are not allowed: the query editor is read-only "
                 "on this installation. Set CROWSNEST_SQL_WRITE=1 to let it change "
                 "the lake.",
             )
     elif statement.type not in _ALLOWED_STATEMENTS:
-        raise HTTPException(
+        raise QueryRejected(
             403,
+            REASON_STATEMENT_NOT_ALLOWED,
             f"{kind} statements are not allowed in the query editor"
             + (
                 ", also not with write access: it changes the database, not files, "
@@ -185,10 +317,25 @@ def _validate(sql: str, allow_write: bool = False):
             ),
         )
     if _is_explain_analyze(statement):
-        raise HTTPException(
+        raise QueryRejected(
             403,
+            REASON_EXPLAIN_ANALYZE,
             "EXPLAIN ANALYZE is not allowed in the query editor: it runs the "
             "statement it explains. Use EXPLAIN without ANALYZE.",
+        )
+    # A SELECT that reads through a file-reading table function or a string
+    # table (`FROM 'x.csv'`) reaches the file system, which the read-only
+    # connection does not guard. Block before execution, in either mode, so no
+    # byte of an outside file is ever returned -- including files inside a
+    # lake's otherwise-open data directory.
+    file_access = _find_file_access(statement.query)
+    if file_access is not None:
+        raise QueryRejected(
+            403,
+            REASON_FILE_ACCESS,
+            "Reading files through SQL is not allowed in the query editor: "
+            "the editor queries the attached database, not the server's file "
+            f"system ({file_access}).",
         )
     return statement
 
@@ -242,14 +389,18 @@ async def execute_query(req: QueryRequest, request: Request):
         )
 
     except duckdb.ParserException as e:
-        raise HTTPException(400, f"SQL syntax error: {e}")
+        raise QueryRejected(400, REASON_SYNTAX_ERROR, f"SQL syntax error: {e}")
     except duckdb.BinderException as e:
-        raise HTTPException(400, f"SQL error: {e}")
+        raise QueryRejected(400, REASON_SYNTAX_ERROR, f"SQL error: {e}")
     except duckdb.CatalogException as e:
         raise HTTPException(404, f"Table or column not found: {e}")
     except duckdb.PermissionException as e:
-        # The db.py sandbox refusing a filesystem or extension access.
-        raise HTTPException(403, f"Not permitted: {e}")
+        # The db.py sandbox refusing a filesystem or extension access. The
+        # statement-level checks catch the known shapes; this keeps the backstop
+        # a structured 403 if a new one slips through.
+        raise QueryRejected(403, REASON_FILE_ACCESS, f"Not permitted: {e}")
+    except QueryRejected:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -404,15 +555,17 @@ async def _execute_write(statement, confirmed: bool) -> QueryResponse:
         )
 
     except duckdb.ParserException as e:
-        raise HTTPException(400, f"SQL syntax error: {e}")
+        raise QueryRejected(400, REASON_SYNTAX_ERROR, f"SQL syntax error: {e}")
     except duckdb.BinderException as e:
-        raise HTTPException(400, f"SQL error: {e}")
+        raise QueryRejected(400, REASON_SYNTAX_ERROR, f"SQL error: {e}")
     except duckdb.CatalogException as e:
         raise HTTPException(404, f"Table or column not found: {e}")
     except duckdb.ConstraintException as e:
-        raise HTTPException(400, f"Constraint violated: {e}")
+        raise QueryRejected(400, REASON_SYNTAX_ERROR, f"Constraint violated: {e}")
     except duckdb.PermissionException as e:
-        raise HTTPException(403, f"Not permitted: {e}")
+        raise QueryRejected(403, REASON_FILE_ACCESS, f"Not permitted: {e}")
+    except QueryRejected:
+        raise
     except HTTPException:
         raise
     except Exception as e:
