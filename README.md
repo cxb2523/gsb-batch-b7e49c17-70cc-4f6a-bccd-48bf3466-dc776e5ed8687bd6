@@ -98,6 +98,8 @@ node index.js discover --source ashby --dry-run   # preview without writing
 
 Runs daily via `.github/workflows/discover.yml`. Lever isn't included here — it blocks Common Crawl's bot in its own `robots.txt`, so there's no free crawl index to query for it; new Lever companies currently need a manual `site:jobs.lever.co` search-engine query and a CLI `add`.
 
+Each run logs a verifiable summary — candidates after dedupe, already-tracked exclusions, slugs actually verified, successful writes, and failures broken into `api-error`, `invalid-structure` and `no-jobs` with the failing slug and reason on its own line — so a skipped candidate is never silent.
+
 ### Via the Web UI
 
 Navigate to `/add` in the frontend. Pick Ashby, Lever, or Greenhouse, then paste a job board URL (e.g. `https://jobs.ashbyhq.com/stripe`) or just the slug (`stripe`). The system validates the board against that platform's API, scrapes all open positions, and adds them to the database in real time. Future cron runs pick up the new company automatically.

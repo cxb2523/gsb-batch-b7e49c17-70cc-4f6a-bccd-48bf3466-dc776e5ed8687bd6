@@ -10,12 +10,16 @@ const DEFAULT_HEADERS = {
 };
 
 class FetchError extends Error {
-  constructor(message, slug, statusCode, retryable) {
+  constructor(message, slug, statusCode, retryable, code) {
     super(message);
     this.name = 'FetchError';
     this.slug = slug;
     this.statusCode = statusCode;
     this.retryable = retryable;
+    // Machine-readable reason for callers that have to tell failure kinds apart
+    // (discovery reports "invalid response structure" separately from an API
+    // error) — string-matching the message would break on any wording change.
+    this.code = code;
   }
 }
 
@@ -129,7 +133,7 @@ async function readJsonCapped(response, slug, source) {
       if (size > maxBodyBytes) {
         throw new FetchError(
           `Response too large for ${slug} (${source}): over ${Math.round(maxBodyBytes / 1048576)} MB`,
-          slug, response.status, false
+          slug, response.status, false, 'too-large'
         );
       }
       chunks.push(chunk);
@@ -157,7 +161,7 @@ async function fetchOnce(url, options, slug, source, extractJobs) {
         const retryable = response.status >= 500 || response.status === 429;
         throw new FetchError(
           `Fetch failed for ${slug} (${source}): HTTP ${response.status}`,
-          slug, response.status, retryable
+          slug, response.status, retryable, 'http'
         );
       }
 
@@ -166,7 +170,7 @@ async function fetchOnce(url, options, slug, source, extractJobs) {
       if (jobs === null) {
         throw new FetchError(
           `Invalid response structure for ${slug} (${source})`,
-          slug, response.status, false
+          slug, response.status, false, 'invalid-structure'
         );
       }
 
@@ -176,7 +180,7 @@ async function fetchOnce(url, options, slug, source, extractJobs) {
       // them as retryable, same as the old "no status code" axios case.
       const fetchErr = err instanceof FetchError
         ? err
-        : new FetchError(`Fetch failed for ${slug} (${source}): ${err.message}`, slug, null, true);
+        : new FetchError(`Fetch failed for ${slug} (${source}): ${err.message}`, slug, null, true, 'network');
 
       if (!fetchErr.retryable) {
         logger.error(`Non-retryable error for ${slug} (${source}, HTTP ${fetchErr.statusCode})`);
@@ -207,7 +211,7 @@ const WORKDAY_MAX_PAGES = 10;
 async function fetchWorkdayJobBoard(slug, source) {
   const [tenant, wdHost, site] = slug.split('/');
   if (!tenant || !wdHost || !site) {
-    throw new FetchError(`Malformed workday slug "${slug}" (expected tenant/wdHost/site)`, slug, null, false);
+    throw new FetchError(`Malformed workday slug "${slug}" (expected tenant/wdHost/site)`, slug, null, false, 'invalid-slug');
   }
 
   const boardUrl = `https://${tenant}.${wdHost}.myworkdayjobs.com/${site}`;
@@ -248,14 +252,14 @@ async function fetchKekaJobBoard(slug, source) {
       headers: { ...DEFAULT_HEADERS, Accept: 'text/html' },
       signal: AbortSignal.timeout(timeoutMs),
     }), timeoutMs);
-    if (!res.ok) throw new FetchError(`Fetch failed for ${slug} (${source}): HTTP ${res.status}`, slug, res.status, false);
+    if (!res.ok) throw new FetchError(`Fetch failed for ${slug} (${source}): HTTP ${res.status}`, slug, res.status, false, 'http');
     html = await timeLimit(res.text(), timeoutMs);
   } catch (err) {
     if (err instanceof FetchError) throw err;
-    throw new FetchError(`Fetch failed for ${slug} (${source}): ${err.message}`, slug, null, true);
+    throw new FetchError(`Fetch failed for ${slug} (${source}): ${err.message}`, slug, null, true, 'network');
   }
   const orgId = html.match(/\/ats\/documents\/([0-9a-f-]{36})\//i)?.[1];
-  if (!orgId) throw new FetchError(`No Keka careers portal for ${slug}`, slug, null, false);
+  if (!orgId) throw new FetchError(`No Keka careers portal for ${slug}`, slug, null, false, 'not-a-board');
 
   const jobs = await fetchOnce(
     new URL(`${boardUrl}api/embedjobs/default/active/${orgId}`), {}, slug, source,
@@ -272,7 +276,7 @@ async function fetchJobBoard(slug, source = 'ashby') {
 
   const sourceConfig = SOURCE_REQUESTS[source];
   if (!sourceConfig) {
-    throw new FetchError(`Unknown source "${source}" for ${slug}`, slug, null, false);
+    throw new FetchError(`Unknown source "${source}" for ${slug}`, slug, null, false, 'unknown-source');
   }
 
   const url = sourceConfig.buildUrl(slug);

@@ -58,6 +58,34 @@ const WORKDAY_SLUG_REGEX = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/;
 const TEAMTAILOR_SLUG_REGEX = /^[a-zA-Z0-9_-]+(\.na)?$/;
 const SLUG_REGEX_BY_SOURCE = { workday: WORKDAY_SLUG_REGEX, teamtailor: TEAMTAILOR_SLUG_REGEX };
 
+// SmartRecruiters company identifiers are case-sensitive (e.g. "BMWDealerCareers")
+// — the casing is part of the URL its API expects. Every other source's slug is
+// case-insensitive. Two separate notions follow from that:
+//
+//   normalizeSlug() — the value that goes to the ATS and is stored/displayed.
+//                     SmartRecruiters keeps the crawled casing; everything else
+//                     lowercases.
+//   slugKey()       — the identity used for dedupe, already-tracked checks and
+//                     registry/DB lookups. It folds case for every source, because
+//                     a single board can be crawled as "BMWDealerCareers" and
+//                     "bmwdealercareers" (or "Notion" and "notion") and both are
+//                     one company, not two. Folding here matches the web app's
+//                     case-insensitive `WHERE LOWER(slug) = LOWER($1)` existence
+//                     check in web/app/api/companies/route.ts.
+const CASE_SENSITIVE_SOURCES = new Set(['smartrecruiters']);
+
+function normalizeSlug(slug, source = 'ashby') {
+  const value = String(slug);
+  return CASE_SENSITIVE_SOURCES.has(source) ? value : value.toLowerCase();
+}
+
+function slugKey(slug, _source = 'ashby') {
+  // `source` is accepted so callers can key on (source, slug) without having to
+  // know which sources are case-sensitive; the identity rule itself is one
+  // case-folded form per slug for every source.
+  return String(slug).toLowerCase();
+}
+
 function isValidSlug(slug, source = 'ashby') {
   return (
     typeof slug === 'string' &&
@@ -82,9 +110,10 @@ function addCompany(slug, name, source = 'ashby') {
     return false;
   }
 
-  const normalizedSlug = slug.toLowerCase();
+  const normalizedSlug = normalizeSlug(slug, normalizedSource);
   const registry = loadRegistry();
-  const exists = registry.find(c => c.slug.toLowerCase() === normalizedSlug && (c.source || 'ashby') === normalizedSource);
+  const key = slugKey(slug, normalizedSource);
+  const exists = registry.find(c => (c.source || 'ashby') === normalizedSource && slugKey(c.slug, c.source || 'ashby') === key);
   if (exists) {
     logger.warn(`Company with slug "${slug}" already exists for source "${normalizedSource}"`);
     return false;
@@ -119,5 +148,8 @@ module.exports = {
   addCompany,
   getDueCompanies,
   isValidSlug,
+  normalizeSlug,
+  slugKey,
+  CASE_SENSITIVE_SOURCES,
   SUPPORTED_SOURCES,
 };

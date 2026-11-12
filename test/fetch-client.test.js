@@ -152,7 +152,27 @@ test('fetchJobBoard throws when the response shape is invalid', async () => {
     },
     (baseUrl) =>
       withAshbyBaseUrl(baseUrl, async () => {
-        await assert.rejects(() => fetchJobBoard('acme', 'ashby'), FetchError);
+        await assert.rejects(
+          () => fetchJobBoard('acme', 'ashby'),
+          // Discovery classifies failures by this code, so it must be set.
+          (err) => err instanceof FetchError && err.code === 'invalid-structure'
+        );
+      })
+  );
+});
+
+test('fetchJobBoard tags HTTP and network failures with their own codes', async () => {
+  await withServer(
+    (req, res) => {
+      res.writeHead(404);
+      res.end('not found');
+    },
+    (baseUrl) =>
+      withAshbyBaseUrl(baseUrl, async () => {
+        await assert.rejects(
+          () => fetchJobBoard('acme', 'ashby'),
+          (err) => err instanceof FetchError && err.code === 'http'
+        );
       })
   );
 });

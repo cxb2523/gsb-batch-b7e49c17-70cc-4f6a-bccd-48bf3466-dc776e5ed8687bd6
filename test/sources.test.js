@@ -60,3 +60,14 @@ test('scrape history is keyed by source and slug', () => {
     [companies[1]]
   );
 });
+
+test('slug normalization keeps SmartRecruiters casing but folds it for identity', () => {
+  const { normalizeSlug, slugKey } = require('../src/sources');
+  // The value sent to the ATS / stored: SmartRecruiters keeps its casing.
+  assert.equal(normalizeSlug('BMWDealerCareers', 'smartrecruiters'), 'BMWDealerCareers');
+  assert.equal(normalizeSlug('Notion', 'ashby'), 'notion');
+  // Identity: case-folded everywhere, so casing variants are one company.
+  assert.equal(slugKey('BMWDealerCareers', 'smartrecruiters'), 'bmwdealercareers');
+  assert.equal(slugKey('bmwdealercareers', 'smartrecruiters'), 'bmwdealercareers');
+  assert.equal(slugKey('Notion', 'ashby'), slugKey('notion', 'ashby'));
+});
