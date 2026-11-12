@@ -1,4 +1,5 @@
 import { AnalyzerException } from '../exception/AnalyzerException';
+import { JsVmException } from '../exception/JsVmException';
 import { ILogger, LogLevel } from '../logger';
 import type { Analyzer } from './Analyzer';
 import { AnalyzerJS } from './AnalyzerJS';
@@ -10,11 +11,14 @@ class SingleRule {
   analyzer: Analyzer;
   rule: string;
   replace: string;
+  // 该段规则的原始文本（含 @css: 等前缀与 ## 替换部分），用于错误定位
+  sourceRule: string;
 
-  constructor(analyzer: Analyzer, rule: string, replace = '') {
+  constructor(analyzer: Analyzer, rule: string, replace = '', sourceRule = '') {
     this.analyzer = analyzer;
     this.rule = rule;
     this.replace = replace;
+    this.sourceRule = sourceRule || rule;
   }
 }
 
@@ -54,6 +58,43 @@ export class AnalyzerManager {
     return this.analyzers[0];
   }
 
+  // 出错段的规则文本：优先展示该段原始规则（含前缀），子规则（&& / || 拆分后）附带具体片段
+  protected segmentText(r: SingleRule, rule?: string) {
+    const source = r.sourceRule || r.rule;
+    if (rule === undefined || rule === r.rule) return source;
+    return `${source} -> ${rule}`;
+  }
+
+  // 为解析器抛出的异常补充出错的规则片段，同时保留原始错误信息
+  protected wrapRuleError(error: any, r: SingleRule, rule?: string): Error {
+    // 已包装过的异常（如 && / || 递归调用）直接透传，避免重复叠加规则文本
+    if (error instanceof AnalyzerException || error instanceof JsVmException) {
+      if ((error as any).ruleSegment) return error;
+    }
+
+    const segment = this.segmentText(r, rule);
+    const reason = error instanceof Error ? error.message : String(error);
+    const message = `规则解析失败，出错片段: "${segment}"，原因: ${reason}`;
+
+    let wrapped: Error;
+    if (error instanceof JsVmException) {
+      // 保留 JsVmException 类型，避免影响上游按类型区分 JS 执行异常的处理
+      wrapped = new JsVmException(message);
+    } else {
+      wrapped = new AnalyzerException(message);
+    }
+    (wrapped as any).ruleSegment = segment;
+    (wrapped as any).cause = error;
+    return wrapped;
+  }
+
+  // 判断某段规则的返回值是否为空结果
+  protected isEmptyResult(value: any): boolean {
+    if (value === null || value === undefined) return true;
+    if (Array.isArray(value)) return value.length === 0 || value.every((v) => v === null || v === undefined || String(v).trim() === '');
+    return String(value).trim() === '';
+  }
+
   // 规则从后往前解析
   splitRuleReversed(rule: string) {
     const ruleMath = Array.from(rule.matchAll(RULE_TYPE_PATTERN)).reverse();
@@ -61,7 +102,8 @@ export class AnalyzerManager {
     let end = rule.length;
     for (const m of ruleMath) {
       const start = m.index as number;
-      let r = rule.substring(start, end);
+      const sourceRule = rule.substring(start, end);
+      let r = sourceRule;
       end = start as number;
       const analyzer = this.getAnalyzer(r);
       r = r.replace(analyzer.replace || analyzer.pattern, '');
@@ -73,7 +115,8 @@ export class AnalyzerManager {
               JSEngine: this.JSEngine
             }),
             r.substring(0, position),
-            r.substring(position + 2)
+            r.substring(position + 2),
+            sourceRule
           )
         );
       } else {
@@ -83,7 +126,8 @@ export class AnalyzerManager {
               JSEngine: this.JSEngine
             }),
             r,
-            ''
+            '',
+            sourceRule
           )
         );
       }
@@ -98,7 +142,7 @@ export class AnalyzerManager {
       try {
         return await r.analyzer.getElements(rule);
       } catch (error: any) {
-        throw new AnalyzerException(error?.message);
+        throw this.wrapRuleError(error, r, rule);
       }
     }
 
@@ -118,7 +162,7 @@ export class AnalyzerManager {
     try {
       return await r.analyzer.getElements(rule);
     } catch (error: any) {
-      throw new AnalyzerException(error?.message);
+      throw this.wrapRuleError(error, r, rule);
     }
   }
 
@@ -127,7 +171,14 @@ export class AnalyzerManager {
 
     for (const r of this.splitRuleReversed(rule)) {
       r.analyzer.parse(temp as string);
-      temp = await this._getElements(r);
+      try {
+        temp = await this._getElements(r);
+      } catch (error: any) {
+        throw this.wrapRuleError(error, r);
+      }
+
+      // 某段返回空结果时，后续解析已无意义，直接返回空
+      if (this.isEmptyResult(temp)) return [];
     }
 
     if (Array.isArray(temp)) return temp;
@@ -163,16 +214,20 @@ export class AnalyzerManager {
     }
 
     if (r.analyzer instanceof AnalyzerJS) {
-      const temp = await r.analyzer.getString(rule);
-      if (temp === null) {
-        return '';
-      } else if (Array.isArray(temp)) {
-        return temp
-          .map((s) => typeof s !== 'undefined' && String(s).trim())
-          .filter((s) => s)
-          .join('  ');
+      try {
+        const temp = await r.analyzer.getString(rule);
+        if (temp === null) {
+          return '';
+        } else if (Array.isArray(temp)) {
+          return temp
+            .map((s) => typeof s !== 'undefined' && String(s).trim())
+            .filter((s) => s)
+            .join('  ');
+        }
+        return String(temp).trim();
+      } catch (error: any) {
+        throw this.wrapRuleError(error, r, rule);
       }
-      return String(temp).trim();
     }
 
     let result = '';
@@ -194,14 +249,18 @@ export class AnalyzerManager {
         }
       }
     } else {
-      const temp = await r.analyzer.getString(rule);
-      if (Array.isArray(temp)) {
-        result = temp
-          .map((s) => typeof s !== 'undefined' && String(s).trim())
-          .filter((s) => s)
-          .join('  ');
-      } else if (temp !== null) {
-        result = String(temp).trim();
+      try {
+        const temp = await r.analyzer.getString(rule);
+        if (Array.isArray(temp)) {
+          result = temp
+            .map((s) => typeof s !== 'undefined' && String(s).trim())
+            .filter((s) => s)
+            .join('  ');
+        } else if (temp !== null) {
+          result = String(temp).trim();
+        }
+      } catch (error: any) {
+        throw this.wrapRuleError(error, r, rule);
       }
     }
 
@@ -231,9 +290,16 @@ export class AnalyzerManager {
     let temp: string = body;
     for (const r of this.splitRuleReversed(rule)) {
       r.analyzer.parse(temp as string);
-      temp = await this._getString(r);
+      try {
+        temp = await this._getString(r);
+      } catch (error: any) {
+        throw this.wrapRuleError(error, r);
+      }
 
       if (r.replace) temp = this.replaceSmart(r.replace)(temp);
+
+      // 某段返回空结果时，后续解析已无意义，直接返回空
+      if (this.isEmptyResult(temp)) return '';
     }
     return temp;
   }
@@ -244,7 +310,11 @@ export class AnalyzerManager {
     }
 
     if (r.analyzer instanceof AnalyzerJS) {
-      return await r.analyzer.getStringList(rule);
+      try {
+        return await r.analyzer.getStringList(rule);
+      } catch (error: any) {
+        throw this.wrapRuleError(error, r, rule);
+      }
     }
 
     if (rule.includes('&&')) {
@@ -272,7 +342,11 @@ export class AnalyzerManager {
         }
       }
     } else {
-      return await r.analyzer.getStringList(rule);
+      try {
+        return await r.analyzer.getStringList(rule);
+      } catch (error: any) {
+        throw this.wrapRuleError(error, r, rule);
+      }
     }
 
     return [];
@@ -301,8 +375,15 @@ export class AnalyzerManager {
     let temp: string | string[] = body;
     for (const r of this.splitRuleReversed(rule)) {
       r.analyzer.parse(temp as string);
-      temp = await this._getStringList(r);
+      try {
+        temp = await this._getStringList(r);
+      } catch (error: any) {
+        throw this.wrapRuleError(error, r);
+      }
       if (r.replace) temp = this.replaceSmart(r.replace)(Array.isArray(temp) ? temp.join('\n') : temp);
+
+      // 某段返回空结果时，后续解析已无意义，直接返回空
+      if (this.isEmptyResult(temp)) return [];
     }
     return Array.isArray(temp) ? temp : [temp];
   }
