@@ -1,0 +1,84 @@
+# Regras para decidir se uma vaga e de nivel de entrada (junior/estagio/trainee).
+#
+# A checagem roda sobre o TITULO normalizado (minusculo, sem acento, pontuacao
+# virando espaco -- o PONTO e preservado para distinguir "N1" de "N1.5").
+# Ex.: "Desenvolvedor Jr." -> "desenvolvedor jr"
+#
+# Logica:
+#   1. Se casar algum padrao em `include`, a vaga entra com o rotulo daquele grupo.
+#   2. Caso contrario, a vaga e descartada.
+#   3. Os padroes de `exclude` marcam niveis acima de junior. No modo padrao eles
+#      NAO descartam uma vaga que ja casou em `include` -- titulos mistos como
+#      "Desenvolvedor Junior/Pleno" continuam valendo. Rodando com `--strict`,
+#      qualquer padrao de `exclude` descarta a vaga (contagem conservadora).
+#
+# Os valores sao expressoes regulares Python.
+
+include:
+  Estágio:
+    - \bestagio\b
+    - \bestagiario\b
+    - \bestagiaria\b
+    - \bintern\b
+    - \binternship\b
+  Trainee:
+    - \btrainee\b
+    - \btrainne\b
+    - \bprograma de trainee\b
+  Aprendiz:
+    - \baprendiz\b
+    - \bjovem aprendiz\b
+  Júnior:
+    - \bjunior\b
+    - \bjr\b
+    - \bjunior?es\b
+    - \bentry level\b
+    - \bespecialista e auxiliar\b  # Anuncia as duas funções.
+
+inferir_junior:
+  - \bnivel 1\b(?!\.\d)
+  - \bnivel i\b
+  - \bn1\b(?!\.\d)
+  - \btier 1\b
+  - \biniciante\b
+  - \bassistente\b
+  - \bauxiliar\b
+  - \bi\b$          # "Desenvolvedor I"
+
+# Níveis declarados têm prioridade sobre N1, assistente e nível I.
+# Títulos que também declaram Júnior continuam elegíveis no modo padrão.
+acima_explicito:
+  - \bsenior\b
+  - \bsr\b
+  - \bpleno\b
+  - \bpl\b
+  - \bmid level\b
+  - \bespecialista\b
+  - \bexpert\b
+
+descricao_acima:
+  - \b(?:vaga|oportunidade) (?:e )?especial para profissionais pleno senior\b
+
+exclude:
+  - \btech lead\b
+  - \bteam lead\b
+  - \blider\b
+  - \bcoordenador\b
+  - \bcoordenadora\b
+  - \bgerente\b
+  - \bsupervisor\b
+  - \bhead\b
+  - \barquiteto\b
+  - \bprincipal\b
+  - \bstaff\b
+  - \bconsultor\b
+  - \bii\b$          # "Desenvolvedor II" (pleno)
+  - \biii\b$         # "Desenvolvedor III" (senior)
+  - \biv\b$
+  - \bnivel [2-5]\b
+  - \bnivel ii\b
+  - \bnivel iii\b
+  - \bnivel iv\b
+  - \bn[2-5]\b
+  - \btier [2-5]\b
+

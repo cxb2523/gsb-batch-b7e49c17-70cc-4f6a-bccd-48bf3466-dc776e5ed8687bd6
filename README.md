@@ -1,0 +1,55 @@
+# Tech Skills Brasil
+
+Dados sobre as habilidades citadas em anúncios de vagas de entrada em tecnologia no Brasil.
+
+[Explorar o painel](https://diasgarcia.github.io/tech-skills-br/) · [Analisar no Kaggle](https://www.kaggle.com/code/rafaeldiasgarcia/tech-skills-brasil-analise-diaria) · [Dataset no Kaggle](https://www.kaggle.com/datasets/rafaeldiasgarcia/tech-skills-br) · [Dataset no Hugging Face](https://huggingface.co/datasets/diasgarcia/tech-skills-br) · [Consultar a metodologia](https://github.com/diasgarcia/tech-skills-br/wiki)
+
+O projeto acompanha anúncios de estágio, aprendiz, trainee e nível júnior. A coleta consulta dez portais três vezes por dia. O processo organiza as vagas por área e identifica as habilidades citadas em cada anúncio.
+
+## Visão atual dos dados
+
+[![Vagas por data de publicação e habilidades distintas dessas vagas nos últimos 30 dias](https://diasgarcia.github.io/tech-skills-br/assets/vagas-habilidades-30d.svg)](https://diasgarcia.github.io/tech-skills-br/)
+
+[![Mapa de calor das dez maiores áreas e das quinze habilidades mais citadas](https://diasgarcia.github.io/tech-skills-br/assets/areas-habilidades.svg)](https://www.kaggle.com/code/rafaeldiasgarcia/tech-skills-brasil-analise-diaria)
+
+![Presença média por área e quantidade de vagas das vinte habilidades mais citadas](https://diasgarcia.github.io/tech-skills-br/assets/skills-presenca-vagas.svg)
+
+Os gráficos são gerados com o banco consolidado. Eles mudam automaticamente quando uma área ou habilidade altera sua posição no ranking.
+
+## Como os dados são produzidos
+
+1. A coleta localiza vagas de entrada em dez portais.
+2. Os filtros removem duplicidades e anúncios fora do escopo.
+3. Cada vaga recebe uma área técnica, uma modalidade e uma região.
+4. Uma taxonomia curada identifica as habilidades presentes na descrição.
+5. O projeto publica o banco consolidado, a API, o painel e o dataset.
+
+Detalhes sobre fontes, critérios, limitações e decisões estão na [wiki do projeto](https://github.com/diasgarcia/tech-skills-br/wiki).
+
+## Acesse os resultados
+
+| Recurso | Conteúdo |
+|---|---|
+| [Painel público](https://diasgarcia.github.io/tech-skills-br/) | Visão geral, rankings e exploradores de vagas e áreas |
+| [Notebook no Kaggle](https://www.kaggle.com/code/rafaeldiasgarcia/tech-skills-brasil-analise-diaria) | Análise atualizada da base |
+| [Dataset no Kaggle](https://www.kaggle.com/datasets/rafaeldiasgarcia/tech-skills-br) | Snapshot em Parquet para análise e reutilização |
+| [Dataset no Hugging Face](https://huggingface.co/datasets/diasgarcia/tech-skills-br) | Base atual em Parquet e versões fixas para citação |
+| [API JSON](https://diasgarcia.github.io/tech-skills-br/api/resumo.json) | Dados estáticos usados pelo painel |
+| [Relatório consolidado](docs/relatorios/relatorio_banco_consolidado.md) | Resumo textual mais recente |
+
+## Escopo
+
+- A amostra contém vagas encontradas durante o período da coleta. Ela não representa todas as vagas de tecnologia do Brasil.
+- Uma menção identificada no anúncio não mede contratações nem a necessidade real de uma habilidade no trabalho. A ausência de registro pode resultar de texto incompleto ou de um termo fora do vocabulário.
+- Os resultados mudam conforme novos anúncios entram na base.
+- O projeto não é um portal de empregos e não participa de processos seletivos.
+- Os links das vagas identificam a origem das informações.
+
+## Execução local
+
+O guia de [execução rápida](docs/execucao-rapida.md) contém os comandos necessários para preparar o ambiente e consultar a base.
+Para contribuir com o código, consulte a [organização dos módulos e seus contratos](docs/arquitetura.md).
+
+## Licença
+
+O código é distribuído sob a [licença MIT](LICENSE).

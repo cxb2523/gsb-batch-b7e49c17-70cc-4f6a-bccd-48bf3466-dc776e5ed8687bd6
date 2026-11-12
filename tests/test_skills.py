@@ -1,0 +1,849 @@
+import re
+
+import pytest
+
+from scraper.models import Job
+from scraper.skills import (
+    SkillExtractor,
+    attach_skills,
+    jobs_with_skills_by_area,
+    normalize_tech,
+    overall_skill_counts,
+    skills_by_area,
+)
+
+
+@pytest.fixture(scope="module")
+def ext():
+    return SkillExtractor.from_file()
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("C# e C++", "c# e c++"),
+        ("Node.js", "node js"),
+        ("Programação Ágil", "programacao agil"),
+    ],
+)
+def test_normalize_tech_preserva_cerquilha_e_mais(raw, expected):
+    result = normalize_tech(raw)
+
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "texto,espera_nodejs,espera_node_red",
+    [
+        ("Node", True, False),
+        ("Node.js", True, False),
+        ("NodeJS", True, False),
+        ("Node-RED", False, True),
+        ("node red", False, True),
+        ("nodered", False, True),
+        ("Node-RED e Node.js", True, True),
+    ],
+)
+def test_node_nao_confunde_nodejs_com_node_red(
+    ext, texto, espera_nodejs, espera_node_red
+):
+    encontradas = set(ext.extract("Desenvolvedor Júnior", texto))
+    assert ("Node.js" in encontradas) is espera_nodejs
+    assert ("Node-RED" in encontradas) is espera_node_red
+
+
+def test_exclusao_de_sufixo_do_alias_e_generica():
+    extractor = SkillExtractor(
+        {"grupo": {"Ferramenta": ["foo"], "Ferramenta Bar": ["foo bar"]}},
+        secoes_descarte=[],
+        secoes_conteudo=[],
+        contextos_descarte={},
+        exclusoes_sufixo_alias={"Ferramenta": {"foo": ("bar",)}},
+    )
+
+    foo = extractor.extract("Uso de foo")
+    foo_bar = extractor.extract("Uso de foo bar")
+
+    assert foo == ["Ferramenta"]
+    assert foo_bar == ["Ferramenta Bar"]
+
+
+def test_extrai_linguagens_e_frameworks(ext):
+    found = ext.extract("Desenvolvedor Júnior", "Vaga com Python, Django e PostgreSQL.")
+    assert {"Python", "Django", "PostgreSQL"} <= set(found)
+
+
+def test_extrai_habilidades_de_analise_de_redes_sociais(ext):
+    texto = (
+        "Analisar dados e desenvolver dashboards de social media. "
+        "Atuar com Social Listening nas ferramentas Stilingue e Sprinklr. "
+        "Transformação de dados em narrativas para apoiar decisões."
+    )
+
+    found = set(ext.extract("Analista de Dados Júnior", texto))
+
+    assert {
+        "Análise de Dados",
+        "Social Listening",
+        "Data Storytelling",
+        "Stilingue",
+        "Sprinklr",
+    } <= found
+    assert "Dashboards" not in found
+
+
+def test_c_sharp_nao_vira_c_solto(ext):
+    # "C#" nao pode ser reduzido a "c" e casar com qualquer letra c do texto.
+    legitimas = ext.extract("Dev .NET", "Experiência com C# e SQL Server.")
+    falso_positivo = ext.extract("Analista", "Turno c de segunda a sexta.")
+
+    assert "C#" in legitimas
+    assert "C#" not in falso_positivo
+
+
+def test_nao_casa_dentro_de_outra_palavra(ext):
+    found = ext.extract("Vaga em Goiânia", "Atuação presencial.")
+    java_only = ext.extract("Dev", "Stack JavaScript no front.")
+
+    assert "Go" not in found
+    assert "JavaScript" in java_only
+    assert "Java" not in java_only
+
+
+def test_go_casa_so_com_g_maiusculo(ext):
+    # "Go" (linguagem) casa; "go" minusculo e palavra comum do ingles.
+    linguagem = ext.extract("Dev", "Conhecimento de Go.")
+    go_live = ext.extract("Dev", "Apoiar o go live do sistema.")
+    estado = ext.extract("Dev", "Vaga em Anápolis, GO.")
+
+    assert "Go" in linguagem
+    assert "Go" not in go_live
+    assert "Go" not in estado
+
+
+def test_alias_de_caixa_mista_casa_em_qualquer_caixa(ext):
+    # "pfSense" tem maiuscula no proprio nome: continua casando normalizado.
+    textos = [
+        "Configurar pfSense na rede.",
+        "Configurar PFSENSE na rede.",
+        "Configurar pfsense na rede.",
+    ]
+
+    resultados = [ext.extract("Dev", texto) for texto in textos]
+
+    assert all("Firewall" in resultado for resultado in resultados)
+
+
+def test_secao_de_beneficios_nao_conta_como_requisito(ext):
+    # "Open English" e uma parceria, nao requisito de ingles.
+    desc = (
+        "Requisitos: conhecimento em hardware e software. "
+        "Beneficios: plano de saude e parcerias com Open English e Gympass."
+    )
+    found = ext.extract("Analista de Suporte", desc)
+    assert "Hardware" in found
+    assert "Inglês" not in found
+
+
+def test_beneficio_de_hardware_nao_conta_como_skill(ext):
+    # Padrao BairesDev: hardware como item de beneficio, nao requisito.
+    desc = (
+        "Atuar com Python e Django. "
+        "What to Expect from Us: Home Office Setup: Complete hardware provision."
+    )
+    found = ext.extract("Desenvolvedor Python", desc)
+    assert "Python" in found
+    assert "Hardware" not in found
+
+
+def test_requisitos_depois_de_beneficios_seguem_valendo_antes(ext):
+    desc = "Conhecimento em Git e AWS. Informações adicionais: vale refeição."
+
+    found = ext.extract("Dev", desc)
+
+    assert {"Git", "AWS"} <= set(found)
+
+
+def test_beneficios_no_meio_nao_corta_requisitos(ext):
+    # Padrao LinkedIn (Camisaria FMW): "Beneficios" vem ANTES de
+    # "Principais atividades" e "Requisitos" -- o corte ali descartaria
+    # os proprios requisitos.
+    desc = (
+        "Sobre a vaga: auxiliar de ti. Salario: R$ 2.100,00. "
+        "Beneficios: vale transporte e vale refeicao. "
+        "Principais atividades: suporte em hardware, Windows e Pacote Office. "
+        "Requisitos: conhecimento em Hardware, Windows e Pacote Office."
+    )
+    found = ext.extract("Auxiliar de TI", desc)
+    assert {"Hardware", "Windows"} <= set(found)
+
+
+def test_beneficios_no_fim_continuam_sendo_cortados(ext):
+    # Sem marcador de conteudo depois, o corte segue valendo normalmente.
+    desc = "Requisitos: conhecimento em hardware e software. Beneficios: plano de saude."
+    found = ext.extract("Analista de Suporte", desc)
+    assert "Hardware" in found
+    assert "Inglês" not in found
+
+
+@pytest.mark.parametrize("section", ["Benefícios", "O que oferecemos", "Benefits"])
+@pytest.mark.parametrize("aliases", ["Go e pfSense", "golang e pfsense", "GOLANG e PFSENSE"])
+def test_aliases_com_caixa_diferente_nao_escapam_do_descarte(ext, section, aliases):
+    text = f"Requisitos: SQL. {section}: curso de {aliases}."
+
+    found = ext.extract(text)
+
+    assert found == ["SQL"]
+
+
+def test_contexto_de_empresa_descarta_alias_de_caixa_exata():
+    extractor = SkillExtractor(
+        {"grupo": {"Go": ["~Go"], "Firewall": ["pfSense"], "SQL": ["sql"]}},
+        secoes_descarte=[],
+        secoes_conteudo=[],
+        contextos_descarte={"empresa": [re.compile("empresa go pfsense")]},
+    )
+
+    found = extractor.extract("Empresa Go pfSense. Requisitos: SQL.")
+
+    assert found == ["SQL"]
+
+
+def test_requisitos_com_alias_de_caixa_exata_permanecem(ext):
+    text = "Benefícios: vale transporte. Requisitos: Go e pfSense. Benefícios: curso de Python."
+
+    found = ext.extract("Desenvolvedor Node-RED e n8n", text)
+
+    assert {"Go", "Firewall", "Node-RED", "n8n"} <= set(found)
+    assert "Node.js" not in found
+    assert "Python" not in found
+
+
+def test_descarte_preserva_indices_com_acentos_unicode_e_espacos(ext):
+    text = "Qualiﬁcações:\n  SQL e C++. Beneﬁ́cios: curso de Go e pfSense."
+
+    found = ext.extract(text)
+
+    assert set(found) == {"SQL", "C++"}
+
+
+@pytest.mark.parametrize(
+    "texto,esperadas",
+    [
+        (
+            "Ambiente descentralizado e repleto de benefícios para colaboradores. "
+            "Esperamos que você projete pipelines ETL com Spark. "
+            "É importante que você conheça Python e SQL. "
+            "É legal que você tenha Azure e Power BI. Benefícios: curso de Go.",
+            {"ETL", "Spark", "Python", "SQL", "Azure", "Power BI"},
+        ),
+        (
+            "O que você pode esperar do seu dia com a gente? Aplicar ITIL e metodologia ágil. "
+            "O que você precisa ter ou saber? Pacote Office, Inglês e Espanhol. "
+            "Benefícios: curso de Python.",
+            {"ITIL", "Metodologias Ágeis", "Pacote Office", "Inglês", "Espanhol"},
+        ),
+        (
+            "Informações Adicionais: bolsa e transporte. Cursando Design Gráfico; "
+            "Conhecimento em ferramentas de edição gráfica: Canva, Photoshop e Illustrator.",
+            {"Canva", "Photoshop", "Illustrator"},
+        ),
+        (
+            "CLT | R$ 2.500 + benefícios Buscamos profissional para atuar com Help Desk.",
+            {"Help Desk"},
+        ),
+        (
+            "Oferecemos benefícios como plano de saúde. Sobre a vaga: analisar certificados "
+            "digitais. Para se destacar nessa posição: conhecimentos básicos de hardware.",
+            {"Hardware", "Certificados Digitais"},
+        ),
+    ],
+)
+def test_preserva_requisitos_dos_anuncios_revisados(ext, texto, esperadas):
+    found = set(ext.extract(texto))
+
+    assert esperadas <= found
+    assert "Go" not in found
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Requisitos: SQL. Benefícios: curso de Python.",
+        "Requisitos: SQL. Benefícios Curso de Python.",
+        "Requisitos: SQL.\nbenefícios\nCurso de Python.",
+        "Requisitos: SQL. Benefícios para colaboradores. Benefícios: curso de Python.",
+        "Requisitos: SQL. benefícios: curso de Python.",
+        "Requisitos: SQL. Informações adicionais ✔️ Convênio com Open English.",
+        "Requisitos: SQL. Informações adicionaisVale refeição. Curso de Python.",
+        "Requisitos: SQL. Benefícios: desconto em cursos de inglês e atividades para a família.",
+    ],
+)
+def test_corta_titulos_de_beneficios_sem_confundir_prosa(ext, texto):
+    found = ext.extract(texto)
+
+    assert found == ["SQL"]
+
+
+@pytest.mark.parametrize(
+    "titulo",
+    [
+        "Diferencial:", "Para se destacar nesta posição seria legal ter", "Desejável conhecimento em",
+        "Você irá se diferenciar se tiver:",
+    ],
+)
+def test_retoma_requisitos_apos_informacoes_adicionais(ext, titulo):
+    texto = (
+        f"Requisitos: SQL. Informações adicionais: curso de inglês. {titulo} PHP e Laravel. "
+        "Benefícios: curso de Python."
+    )
+
+    found = ext.extract(texto)
+
+    assert set(found) == {"SQL", "PHP", "Laravel"}
+
+
+def test_reconhece_secao_tecnica_de_gupy_apos_beneficios(ext):
+    texto = (
+        "Benefícios Vale-transporte e curso de Python. "
+        "Responsibilities and assignments Apoiar no atendimento técnico de 1º nível. "
+        "Requirements And Qualifications Desejável conhecimento básico de redes."
+    )
+
+    found = ext.extract(texto)
+
+    assert set(found) == {"Suporte N1/N2", "Redes de Computadores"}
+
+
+@pytest.mark.parametrize(
+    "texto,esperadas",
+    [
+        (
+            "Requisitos: Cursando Engenharia de Software ou Estatística. Atividades: consultar PostgreSQL.",
+            {"PostgreSQL"},
+        ),
+        (
+            "Formação: graduação em Eletrônica, com conhecimentos básicos em Python e Eletrônica.",
+            {"Eletrônica", "Python"},
+        ),
+        (
+            "Graduação em andamento em Estatística Conhecimentos técnicos React e SQL.",
+            {"React", "SQL"},
+        ),
+        (
+            "Ensino superior completo ou cursando Instalação e configuração de Linux e Windows Server.",
+            {"Linux", "Windows Server"},
+        ),
+        (
+            "Cursando Ciência da Computação Conhecimentos intermediários em SQL e Python.",
+            {"SQL", "Python"},
+        ),
+        (
+            "Formação: Engenharia de Software. Requisitos: experiência em engenharia de software e SQL.",
+            {"Engenharia de Software", "SQL"},
+        ),
+        (
+            "Formação Ciência da Computação; Engenharia de Software; Estatística; Áreas correlatas. "
+            "Conhecimentos técnicos Python.",
+            {"Python"},
+        ),
+        (
+            "Ensino superior completo em Estatística. Requisitos: Excel e SQL.",
+            {"Excel", "SQL"},
+        ),
+        (
+            "Formação completa em uma das seguintes áreas: Engenharia: elétrica, eletrônica, computação. "
+            "Diferencial: C++.",
+            {"C++"},
+        ),
+        (
+            "Formação técnica ou superior (completa ou cursando) em Eletrônica; Pacote Office.",
+            {"Pacote Office"},
+        ),
+        (
+            "Curso superior concluído ou em andamento (com mínimo de 50% já concluído) "
+            "HDI Desktop Support Technician Fundamentos de ITIL com mínimo de 10h aula "
+            "Hardware e Windows.",
+            {"Hardware", "Windows", "ITIL"},
+        ),
+    ],
+)
+def test_separa_formacao_de_competencias_tecnicas(ext, texto, esperadas):
+    found = ext.extract(texto)
+
+    assert set(found) == esperadas
+
+
+def test_formacao_na_descricao_preserva_habilidade_do_titulo(ext):
+    texto = "Cursando Engenharia de Software ou Estatística."
+
+    found = ext.extract("Estágio em Engenharia de Software", texto)
+
+    assert found == ["Engenharia de Software"]
+
+
+def test_formacao_de_modelos_nao_e_formacao_academica(ext):
+    texto = "Aplicar Python na formação de modelos de Machine Learning."
+
+    found = ext.extract(texto)
+
+    assert set(found) == {"Python", "Machine Learning"}
+
+
+@pytest.mark.parametrize(
+    "texto,esperadas",
+    [
+        ("Administrar ambientes virtualizados em Hyper-V e Proxmox.", {"Hyper-V"}),
+        ("Administrar hosts ESXi por meio do vCenter.", {"VMware"}),
+        ("Acompanhar solicitações via sistema de tickets.", {"Gestão de Chamados"}),
+        ("Atendimento de 1º e 2º nível.", {"Suporte N1/N2"}),
+        ("Realizar manutenção de notebooks.", {"Montagem e Manutenção de PCs"}),
+        ("Prestar suporte presencial e remoto via Remote Desktop.", {"Suporte Remoto"}),
+    ],
+)
+def test_distingue_ferramentas_e_atividades_de_suporte(ext, texto, esperadas):
+    found = ext.extract(texto)
+
+    assert set(found) == esperadas
+
+
+@pytest.mark.parametrize(
+    "texto,esperadas",
+    [
+        ("Gerenciar o sistema Moodle.", {"Moodle"}),
+        ("Conceder acessos no One Drive.", {"OneDrive"}),
+        ("Evoluir o e-commerce na VTEX usando DECO. Integrar APIs.", {"VTEX", "deco.cx", "APIs"}),
+        ("Estagiário Desenvolvimento Genesys", {"Genesys"}),
+        ("Input de informações no ALM/Octane.", {"ALM/Octane"}),
+        ("Conhecimento em SIP Trunk, SBC e Softswitch.", {"SIP", "SBC (Session Border Controller)", "Softswitch"}),
+        ("Certificação AZ-900 e plataformas APM.", {"AZ-900 (Azure Fundamentals)", "APM (Monitoramento de Aplicações)"}),
+        ("Conhecer certificado digital e sistemas de chamado no Qcertifica.", {"Certificados Digitais", "Gestão de Chamados", "Qcertifica"}),
+        ("Atuar na rede corporativa e infraestrutura de tecnologia da informação.", {"Redes de Computadores", "Infraestrutura de TI"}),
+        ("Teste / manutenção computadores e notebooks.", {"Montagem e Manutenção de PCs"}),
+    ],
+)
+def test_extrai_tecnologias_e_variacoes_confirmadas_na_revisao(ext, texto, esperadas):
+    found = set(ext.extract(texto))
+
+    assert esperadas <= found
+
+
+def test_novos_aliases_nao_transformam_texto_generico_em_skill(ext):
+    texto = "Suporte aos sistemas e máquinas. Trabalho home office. Conversar com Deco."
+
+    found = ext.extract(texto)
+
+    assert found == []
+
+
+def test_novas_tecnologias_em_beneficios_nao_contam_como_requisitos(ext):
+    texto = "Requisitos: SQL. Benefícios: cursos de Moodle, VTEX, Genesys e AZ-900."
+
+    found = ext.extract(texto)
+
+    assert found == ["SQL"]
+
+
+def test_novos_acronimos_nao_confundem_empresa_e_produto_com_protocolo(ext):
+    texto = (
+        "Empresa SBC Soluções em Impressões. Os produtos do grupo são a SIP e a HYU. "
+        "A empresa é parceira global da VTEX."
+    )
+
+    found = ext.extract(texto)
+
+    assert found == []
+
+
+def test_contextos_de_empresa_nao_apagam_uso_real_da_tecnologia(ext):
+    texto = (
+        "Empresa SBC Soluções em Impressões. Requisitos: SIP Trunk e SBC Oracle. "
+        "A empresa é parceira global da VTEX. Atividades: integrar com a plataforma VTEX."
+    )
+
+    found = set(ext.extract(texto))
+
+    assert {"SIP", "SBC (Session Border Controller)", "VTEX"} <= found
+
+
+def test_url_nao_vira_tecnologia_ao_preservar_requisitos(ext):
+    texto = (
+        "Conhecimento em HTML. Saiba mais em https://empresa.net/cursos/python.html "
+        "e WWW.EXEMPLO.COM/azure. Currículos: rh@empresa.net."
+    )
+
+    found = ext.extract(texto)
+
+    assert found == ["HTML"]
+
+
+def test_corte_separa_habilidade_do_titulo_colado_pelo_html(ext):
+    texto = "Requisitos: Power BI e ITILInformações adicionaisBenefícios: curso de Python."
+
+    found = set(ext.extract(texto))
+
+    assert found == {"Power BI", "ITIL"}
+
+
+def test_competencias_tecnicas_apos_beneficios_sao_preservadas(ext):
+    texto = (
+        "Benefícios: vale refeição. Competências Técnicas Essenciais: React e AWS. "
+        "Competências Técnicas Desejáveis: Docker. Benefícios: curso de Go."
+    )
+
+    found = set(ext.extract(texto))
+
+    assert found == {"React", "AWS", "Docker"}
+
+
+def test_extrai_tecnologias_recentemente_adicionadas(ext):
+    desc = (
+        "Noções de Kubernetes e Argo CD, Temporal.io, Camunda, Retool e WireMock. "
+        "Inglês intermediário e espanhol."
+    )
+    found = ext.extract("Dev", desc)
+    assert {"Kubernetes", "ArgoCD", "Temporal.io", "Camunda",
+            "Retool", "WireMock", "Inglês", "Espanhol"} <= set(found)
+
+
+def test_extrai_stack_ios_da_evoluservices(ext):
+    # Vaga da Evoluservices: iOS nativo com Swift, libs e MVVM.
+    desc = (
+        "Aplicações em iOS nativo escritas em Swift, utilizando Storyboard, "
+        "Alamofire, ReactiveSwift e Firebase. Criação e manutenção de testes "
+        "unitários. Padrões de arquitetura (MVVM). TDD e BDD."
+    )
+    found = ext.extract("Desenvolvedora iOS", desc)
+    assert {"Swift", "iOS", "Storyboard", "Alamofire", "ReactiveSwift",
+            "Firebase", "MVVM", "TDD", "BDD"} <= set(found)
+    assert "Testes Automatizados" not in found
+
+
+def test_storyboard_de_ux_nao_conta_como_ferramenta_ios(ext):
+    # "Ilustrar ideias de design por meio de storyboards" e tecnica de UX.
+    desc = (
+        "Ilustrar ideias de design por meio de storyboards, fluxos de "
+        "processo e mapas de sites. Desenvolver em React e JavaScript."
+    )
+    found = ext.extract("Desenvolvedor Front-end JR", desc)
+    assert "Storyboard" not in found
+
+
+def test_llama_cpp_nao_conta_como_cpp(ext):
+    # "llama.cpp" vira "llama cpp" na normalizacao e casava com o alias
+    # "cpp" da linguagem C++.
+    desc = "Execucao local de modelos abertos (ollama, vllm ou llama.cpp)."
+    found = ext.extract("Desenvolvedor FullStack", desc)
+    legitimas = ext.extract("Dev", "Conhecimento de C++.")
+
+    assert "C++" not in found
+    assert "C++" in legitimas
+
+
+def test_extrai_certificacoes_sla_e_oci_da_mv(ext):
+    # Vaga da MV Saude Digital: CSM/PSM, governanca de SLA e OCI ficavam de fora.
+    desc = (
+        "Governança de SLA. Metodologias ágeis (Scrum, Kanban). CSM. PSM. "
+        "Cloud (AWS, OCI ou GCP). Integrações via APIs REST. Jira."
+    )
+    found = ext.extract("Coordenador Sistemas Junior", desc)
+    assert {"Certificações Ágeis", "SLA", "OCI", "AWS", "GCP", "API REST", "Jira"} <= set(found)
+
+
+def test_extrai_requisitos_genericos_de_engenharia(ext):
+    desc = (
+        "Requisitos: lógica de programação, qualidade de software, "
+        "engenharia de software e métodos ágeis."
+    )
+    found = ext.extract("Dev", desc)
+    assert {"Lógica de Programação", "Qualidade de Software",
+            "Engenharia de Software", "Metodologias Ágeis"} <= set(found)
+
+
+def test_complexidade_generica_nao_vira_algoritmos(ext):
+    # "requisições de baixa complexidade" nao e complexidade algoritmica.
+    found = ext.extract(
+        "Analista", "Tratar incidentes e requisições de baixa complexidade."
+    )
+
+    assert "Algoritmos" not in found
+
+
+def test_https_de_link_nao_vira_criptografia(ext):
+    found = ext.extract("Analista", "Saiba mais em https://exemplo.com/pagina")
+
+    assert "Criptografia" not in found
+
+
+def test_extrai_conceitos_genericos_de_dados(ext):
+    desc = (
+        "Análise de dados, qualidade de dados, conceitos de bancos de dados "
+        "e processos de automação."
+    )
+    found = ext.extract("Analista de Dados Júnior", desc)
+    assert {"Análise de Dados", "Qualidade de Dados", "Banco de Dados",
+            "Automação"} <= set(found)
+
+
+def test_extrai_skills_adicionadas_na_revisao_de_cobertura(ext):
+    desc = (
+        "Usar Node-RED e arquitetura de dados Bronze, Silver e Gold em um "
+        "lakehouse. Possuir certificação CTFL (ISTQB Foundation Level), "
+        "conhecimento de SOQL, Gherkin, Azure DevOps e Businessmap/Kanbanize."
+    )
+    found = ext.extract("Analista de Tecnologia", desc)
+    assert {
+        "Node-RED", "Arquitetura de Dados", "CTFL (ISTQB Foundation Level)",
+        "SOQL", "Gherkin", "Azure DevOps", "Businessmap/Kanbanize",
+    } <= set(found)
+
+
+def test_extrai_atividades_de_suporte_da_vaga_embelleze(ext):
+    desc = (
+        "Auxiliar na manutencao de equipamentos e redes. Acompanhar chamados "
+        "para garantir o funcionamento da infraestrutura de TI. Apoiar na "
+        "seguranca da informacao e backupsVaga Presencial."
+    )
+    found = ext.extract("Estagio em TI", desc)
+    assert {
+        "Redes de Computadores", "Gestão de Chamados",
+        "Infraestrutura de TI", "Segurança da Informação", "Backup",
+    } <= set(found)
+    assert "Hardware" not in found
+
+
+def test_extrai_api_e_planilhas_genericas_da_vaga_omie(ext):
+    desc = "Conhecimento em integrações via API ou planilhas será um diferencial."
+
+    found = ext.extract("Analista Júnior", desc)
+
+    assert {"APIs", "Planilhas"} <= set(found)
+
+
+@pytest.mark.parametrize(
+    "texto,esperadas",
+    [
+        ("Conhecimento em API REST.", {"API REST"}),
+        ("Consumo de APIs REST.", {"API REST"}),
+        ("Integrações via API RESTful.", {"API REST"}),
+        ("Integrar REST APIs.", {"API REST"}),
+        ("Consumir RESTful APIs.", {"API REST"}),
+        ("Desenvolver REST Web APIs.", {"API REST"}),
+        ("Conhecimento em REST.", {"API REST"}),
+        ("Construir APIs.", {"APIs"}),
+        ("Consumir Web APIs.", {"APIs"}),
+        ("Conhecimento em APIs Web.", {"APIs"}),
+        ("Integrar APIs e desenvolver APIs REST.", {"APIs", "API REST"}),
+        ("Consumir REST APIs e documentar uma API.", {"APIs", "API REST"}),
+    ],
+)
+def test_api_rest_nao_implica_registro_de_api_generica(ext, texto, esperadas):
+    found = set(ext.extract(texto))
+
+    assert found == esperadas
+
+
+@pytest.mark.parametrize(
+    "texto,esperadas",
+    [
+        ("Stack: SQL Server e PL/SQL.", {"SQL Server", "PL/SQL"}),
+        ("Consultar SQL Server e escrever SQL.", {"SQL Server", "SQL"}),
+        ("Node.js, React.js e Next.js.", {"Node.js", "React", "Next.js"}),
+        ("Node, JS e React Native.", {"Node.js", "JavaScript", "React Native"}),
+        ("Desenvolver pipelines de dados com contêineres.", set()),
+        ("Criar usuário e fazer triagem de chamados.", {"IAM", "Gestão de Chamados"}),
+        ("Conhecer Microsoft 365, Outlook, Teams e OneDrive.", {"Office 365", "Microsoft Teams", "OneDrive"}),
+        ("Experiência com equipes e cross-functional teams.", set()),
+        ("Atendimento de segundo nível e manutenção preventiva em desktops.", {
+            "Suporte N1/N2", "Montagem e Manutenção de PCs", "Manutenção Preventiva",
+        }),
+        ("Realizar testes funcionais, exploratórios, de aceitação e de regressão.", {
+            "Testes Funcionais", "Testes de Regressão",
+        }),
+        ("Trabalhar com Python, R e C/C++.", {"Python", "R", "C", "C++"}),
+        ("Treinamento em Python. R$ a combinar.", {"Python"}),
+        ("Suporte remotoNoções de ITILFormação: Estatística.", {"Suporte Remoto", "ITIL"}),
+        ("Cursando ou ser recém-formado em Engenharia de Software. Experiência com AWS.", {"AWS"}),
+    ],
+)
+def test_extrai_mencoes_explicitas_e_preserva_distincao_entre_habilidades(ext, texto, esperadas):
+    assert set(ext.extract(texto)) == esperadas
+
+
+def test_extrai_atividades_especificas_de_suporte_gupy(ext):
+    desc = (
+        "Análise de alarmes, diagnóstico e troubleshooting de redes. "
+        "Conhecimento de microinformática e sistemas operacionais. Abertura de tickets. "
+        "Atender usuários - 1º nível - e fazer abertura de incidentes. "
+        "Manutenções preventivas em hardwares e equipamentos de informática. "
+        "Registrar as solicitações no sistema de chamados e montar racks."
+    )
+    found = ext.extract("Técnico de Suporte", desc)
+
+    assert {
+        "Redes de Computadores", "Gestão de Chamados", "Suporte N1/N2",
+        "Manutenção Preventiva", "Hardware", "Microinformática",
+        "Sistemas Operacionais",
+    } <= set(found)
+
+
+def test_sem_texto_devolve_lista_vazia(ext):
+    vazio = ext.extract("")
+    titulo_sem_descricao = ext.extract("Analista Júnior", "")
+
+    assert vazio == []
+    assert titulo_sem_descricao == []
+
+
+def test_resultado_sem_repeticao_e_ordenado(ext):
+    found = ext.extract("Dev Python", "Python, python e mais Python. Também AWS.")
+    assert found == sorted(found)
+    assert found.count("Python") == 1
+
+
+def test_attach_skills_preenche_o_campo():
+    jobs = [Job(source="t", external_id="1", title="Dev Jr",
+                description="Rotina com Java, Spring e Docker.")]
+    attach_skills(jobs)
+    assert {"Java", "Spring", "Docker"} <= set(jobs[0].skills)
+
+
+def test_skills_by_area_agrupa_e_ordena():
+    jobs = [
+        Job(source="t", external_id="1", title="a", area="Data", skills=["SQL", "Python"]),
+        Job(source="t", external_id="2", title="b", area="Data", skills=["SQL"]),
+        Job(source="t", external_id="3", title="c", area="Backend", skills=["Java"]),
+    ]
+    result = skills_by_area(jobs)
+    assert result["Data"][0] == ("SQL", 2)
+    assert result["Backend"] == [("Java", 1)]
+
+
+def test_skills_by_area_ignora_area_sem_skills():
+    jobs = [Job(source="t", external_id="1", title="a", area="QA", skills=[])]
+
+    result = skills_by_area(jobs)
+
+    assert "QA" not in result
+
+
+def test_jobs_with_skills_by_area():
+    """Base dos percentuais: nem toda vaga informa tecnologia."""
+    jobs = [
+        Job(source="t", external_id="1", title="a", area="Data", skills=["SQL"]),
+        Job(source="t", external_id="2", title="b", area="Data", skills=[]),
+        Job(source="t", external_id="3", title="c", area="Data", skills=["Python"]),
+        Job(source="t", external_id="4", title="d", area="Backend", skills=[]),
+    ]
+    base = jobs_with_skills_by_area(jobs)
+    assert base["Data"] == 2  # e não 3
+    assert "Backend" not in base  # nenhuma vaga informa tecnologia
+
+
+def test_jobs_with_skills_by_area_lista_vazia():
+    result = jobs_with_skills_by_area([])
+
+    assert result == {}
+
+
+def test_overall_skill_counts():
+    jobs = [
+        Job(source="t", external_id="1", title="a", skills=["SQL", "Python"]),
+        Job(source="t", external_id="2", title="b", skills=["SQL"]),
+    ]
+
+    result = overall_skill_counts(jobs)
+
+    assert result[0] == ("SQL", 2)
+
+
+def test_skills_vao_para_o_csv_como_texto():
+    job = Job(source="t", external_id="1", title="a", skills=["SQL", "Python"])
+
+    row = job.to_row()
+
+    assert row["skills"] == "SQL, Python"
+
+def test_contextos_descarte_ignora_mencao_a_empresa(ext):
+    # 'Hardware' nao deve contar quando fala da empresa contratante.
+    texto = ('Vaga de suporte. Uma gigante brasileira de hardware e servicos, '
+             'referencia em inovacao. Requisitos: conhecimento em redes.')
+
+    found = ext.extract('Vaga', texto)
+
+    assert 'Hardware' not in found
+
+
+def test_contextos_descarte_ignora_nome_proprio(ext):
+    found = ext.extract('Estagio', 'Vaga no Instituto Hardware BR.')
+
+    assert 'Hardware' not in found
+
+
+def test_contextos_descarte_mantem_menção_legitima(ext):
+    texto = 'Tecnico: realizar manutencao de hardware e software. Instalar equipamentos.'
+
+    found = ext.extract('Tecnico', texto)
+
+    assert 'Hardware' in found
+
+
+@pytest.mark.parametrize("cabecalho", [
+    "Benefícios para você", "Benefícios oferecidos", "Conheça os benefícios",
+])
+def test_idioma_em_beneficio_nao_e_requisito(ext, cabecalho):
+    texto = f"Requisitos: SQL. {cabecalho}: desconto em curso de inglês."
+
+    found = ext.extract(texto)
+
+    assert "SQL" in found
+    assert "Inglês" not in found
+
+
+@pytest.mark.parametrize("aviso", [
+    "Dados usados exclusivamente para fins do processo seletivo, respeitando a LGPD.",
+    "Você concorda com nossa Política de Proteção de Dados da LGPD.",
+    "Você concorda com nossa Política de Proteção de Dados – LGPD.",
+])
+def test_aviso_de_privacidade_nao_vira_requisito_lgpd(ext, aviso):
+    texto = f"Requisitos: SQL. {aviso}"
+
+    found = ext.extract(texto)
+
+    assert "SQL" in found
+    assert "LGPD" not in found
+
+
+def test_aviso_de_privacidade_preserva_requisito_lgpd(ext):
+    texto = (
+        "Requisitos: conhecimento da LGPD. "
+        "Você concorda com nossa Política de Proteção de Dados – LGPD."
+    )
+
+    found = ext.extract(texto)
+
+    assert "LGPD" in found
+
+
+def test_variantes_de_chamados_e_manutencao_sem_fila_de_estrutura_de_dados(ext):
+    texto = (
+        "Monitoramento de redes, registro de chamados e controle de filas. "
+        "Instalação e manutenção em PC e notebooks."
+    )
+
+    found = ext.extract(texto)
+
+    assert {"Gestão de Chamados", "Redes de Computadores", "Montagem e Manutenção de PCs"} <= set(found)
+    assert "Estrutura de Dados" not in found
+
+
+def test_extrai_design_pattern_sem_contar_parceria_comercial_ou_confundir_azure_devops(ext):
+    texto = (
+        "Parceiro oficial credenciado Salesforce e Mulesoft. "
+        "Requisitos: conhecimento de design pattern e Azure DevOps."
+    )
+
+    found = ext.extract(texto)
+
+    assert {"Design Patterns", "Azure DevOps"} <= set(found)
+    assert {"Salesforce", "Azure"}.isdisjoint(found)

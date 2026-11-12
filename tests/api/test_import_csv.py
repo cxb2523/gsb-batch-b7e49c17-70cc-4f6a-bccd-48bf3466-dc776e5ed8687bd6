@@ -1,0 +1,867 @@
+"""Importador CSV -> SQLite e a normalizacao das datas."""
+
+from __future__ import annotations
+
+import csv
+import os
+from contextlib import closing
+from datetime import date, datetime, timezone
+
+import pytest
+from sqlalchemy import func, select
+
+from api.dates import parse_published_date, reference_date_from_csv
+from api.database import connect_sqlite, read_session
+from api.models import Tecnologia, Vaga
+from scripts.import_csv import _canonical_company, importar
+
+REFERENCIA = date(2026, 7, 31)
+
+
+@pytest.mark.parametrize(
+    "bruto,esperado",
+    [
+        ("2026-06-26", date(2026, 6, 26)),          # ISO, da Gupy
+        ("09/07/2026", date(2026, 7, 9)),           # dd/mm/aaaa, do Vagas.com
+        ("Hoje", REFERENCIA),
+        ("Ontem", date(2026, 7, 30)),
+        ("Anteontem", date(2026, 7, 29)),
+        ("Há 3 dias", date(2026, 7, 28)),
+        ("há 1 dia", date(2026, 7, 30)),
+        ("Publicada há 20 horas", REFERENCIA),
+        ("Atualizada há 16 horas", REFERENCIA),
+        ("Há mais de 30 dias", date(2026, 7, 1)),
+        ("Há 2 meses", date(2026, 6, 1)),
+        ("", None),
+        (None, None),
+        ("qualquer coisa", None),
+        ("32/13/2026", None),                       # data impossivel
+    ],
+)
+def test_parse_published_date(bruto, esperado):
+    result = parse_published_date(bruto, REFERENCIA)
+
+    assert result == esperado
+
+
+def test_datas_relativas_usam_a_referencia_e_nao_hoje():
+    """Importar um CSV antigo tem que reproduzir as datas da época da coleta."""
+    antiga = date(2020, 1, 10)
+
+    result = parse_published_date("Ontem", antiga)
+
+    assert result == date(2020, 1, 9)
+
+
+def test_referencia_sai_do_nome_do_arquivo(tmp_path):
+    arquivo = tmp_path / "vagas_20260731_174407.csv"
+    arquivo.write_text("x", encoding="utf-8")
+
+    result = reference_date_from_csv(arquivo)
+
+    assert result == date(2026, 7, 31)
+
+
+def test_referencia_cai_para_mtime_sem_timestamp_no_nome(tmp_path):
+    arquivo = tmp_path / "vagas_sem_stamp.csv"
+    arquivo.write_text("x", encoding="utf-8")
+
+    result = reference_date_from_csv(arquivo)
+
+    assert isinstance(result, date)
+
+
+def test_referencia_sem_timestamp_converte_mtime_utc_para_brasilia(tmp_path):
+    arquivo = tmp_path / "vagas.csv"
+    arquivo.write_text("x", encoding="utf-8")
+    instante = datetime(2026, 10, 7, 0, 35, tzinfo=timezone.utc).timestamp()
+    os.utime(arquivo, (instante, instante))
+
+    result = reference_date_from_csv(arquivo)
+
+    assert result == date(2026, 10, 6)
+
+
+COLUNAS = [
+    "area", "seniority", "title", "company", "source", "location",
+    "workplace_type", "workplace_declared", "published_date", "url", "skills", "area_score",
+    "area_matches", "search_term", "external_id", "description",
+]
+
+
+def _escrever_csv(tmp_path, linhas, nome="vagas_20260731_174407.csv"):
+    caminho = tmp_path / nome
+    with open(caminho, "w", encoding="utf-8-sig", newline="") as fh:
+        escritor = csv.DictWriter(fh, fieldnames=COLUNAS)
+        escritor.writeheader()
+        escritor.writerows(linhas)
+    return caminho
+
+
+def _linha(**kwargs):
+    base = {c: "" for c in COLUNAS}
+    base.update({
+        "area": "Data", "seniority": "Júnior", "title": "Analista de Dados Jr",
+        "company": "ACME", "source": "gupy", "external_id": "1",
+        "published_date": "2026-07-20", "skills": "Python, SQL", "area_score": "12.0",
+    })
+    base.update(kwargs)
+    return base
+
+
+def test_importa_e_vincula_tecnologias(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha()])
+
+    resultado = importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        vaga = db.scalar(select(Vaga))
+        title = vaga.title
+        published_date = vaga.published_date
+        tecnologias = sorted(t.nome for t in vaga.tecnologias)
+        # O vocabulario inteiro de skills.yml e semeado.
+        total_tecnologias = db.scalar(select(func.count()).select_from(Tecnologia))
+
+    assert resultado["criadas"] == 1
+    assert resultado["total"] == 1
+    assert title == "Analista de Dados Jr"
+    assert published_date == date(2026, 7, 20)
+    assert tecnologias == ["Python", "SQL"]
+    assert total_tecnologias > 100
+
+
+@pytest.mark.parametrize(
+    "bruto,esperado",
+    [
+        ("Empresa confidencial", "Confidencial"),
+        ("confidencial", "Confidencial"),
+        ("Confidencial", "Confidencial"),
+        ("Empresa Confidencial", "Confidencial"),
+        ("Confidencial430", "Confidencial"),
+        ("Página de Carreira - Confidencial", "Confidencial"),
+        ("VENHA SER #SANGUELARANJA 🧡🚀", "FCamara"),
+        ("randstad-1", "Randstad"),
+        ("Randstad - Matriz", "Randstad"),
+        ("Nava | Tech for Business", "Nava Technology for Business"),
+        ("MINSAIT BRASIL", "Minsait"),
+        ("Minsait an Indra Company", "Minsait"),
+        ("ACME Tecnologia", "ACME Tecnologia"),  # empresa real passa direto
+        ("E", ""),
+        (" x ", ""),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_canonical_company(bruto, esperado):
+    result = _canonical_company(bruto or "")
+
+    assert result == esperado
+
+
+def test_import_canonicaliza_empresa_confidencial(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha(company="Empresa confidencial")])
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        company = db.scalar(select(Vaga)).company
+
+    assert company == "Confidencial"
+
+
+def test_import_descarta_empresa_com_uma_letra(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha(company="E")])
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        company = db.scalar(select(Vaga)).company
+
+    assert company is None
+
+
+def test_empresa_com_uma_letra_nao_apaga_nome_valido(tmp_path):
+    db_path = tmp_path / "t.db"
+    csv_nome = _escrever_csv(
+        tmp_path,
+        [_linha(company="T-Systems do Brasil")],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_incompleto = _escrever_csv(
+        tmp_path,
+        [_linha(company="E")],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_nome, db_path)
+    importar(csv_incompleto, db_path)
+    with read_session(db_path) as db:
+        company = db.scalar(select(Vaga)).company
+
+    assert company == "T-Systems do Brasil"
+
+
+def test_import_canonicaliza_empresa_legada_ausente_do_csv_atual(tmp_path):
+    db_path = tmp_path / "t.db"
+    csv_antigo = _escrever_csv(
+        tmp_path,
+        [_linha(company="Empresa antiga")],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_novo = _escrever_csv(
+        tmp_path,
+        [_linha(external_id="2", company="Outra empresa")],
+        nome="vagas_20260731_180000.csv",
+    )
+    importar(csv_antigo, db_path)
+    with closing(connect_sqlite(db_path)) as conn, conn:
+        conn.execute("UPDATE vagas SET company = ? WHERE external_id = ?", ("randstad-1", "1"))
+
+    importar(csv_novo, db_path)
+    with read_session(db_path) as db:
+        company = db.scalar(
+            select(Vaga.company).where(Vaga.external_id == "1")
+        )
+
+    assert company == "Randstad"
+
+
+def test_importacao_e_idempotente(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha(), _linha(external_id="2")])
+    db_path = tmp_path / "t.db"
+
+    primeira = importar(csv_path, db_path)
+    segunda = importar(csv_path, db_path)
+
+    assert (primeira["criadas"], primeira["atualizadas"]) == (2, 0)
+    assert (segunda["criadas"], segunda["atualizadas"]) == (0, 2)
+    assert segunda["total"] == 2
+
+
+def test_db_id_do_seed_sobrevive_ao_banco_recriado(tmp_path):
+    """O id do banco persiste via coluna db_id do seed, como o CI precisa.
+
+    O runner do CI recria o banco do zero a cada run; sem o db_id, os ids
+    mudariam para quase todas as vagas a cada coleta.
+    """
+    colunas = COLUNAS + ["db_id"]
+    caminho = tmp_path / "vagas_20260731_174407.csv"
+    with open(caminho, "w", encoding="utf-8-sig", newline="") as fh:
+        escritor = csv.DictWriter(fh, fieldnames=colunas)
+        escritor.writeheader()
+        escritor.writerow(_linha(external_id="1", db_id="42"))
+        escritor.writerow(
+            _linha(external_id="2", title="Dev Backend Jr", db_id="7")
+        )
+
+    db1 = tmp_path / "a.db"
+    db2 = tmp_path / "b.db"
+    csv_novo = _escrever_csv(
+        tmp_path, [_linha(external_id="3", title="QA Jr")],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(caminho, db1)
+    importar(caminho, db2)
+    ids_por_banco = []
+    for db in (db1, db2):
+        with read_session(db) as s:
+            ids = {v.external_id: v.id for v in s.scalars(select(Vaga))}
+        ids_por_banco.append(ids)
+    # Vaga nova (CSV da rodada, sem db_id) continua ganhando autoincrement
+    # depois do maior id importado.
+    importar(csv_novo, db1)
+    with read_session(db1) as s:
+        v3_id = s.scalar(select(Vaga).where(Vaga.external_id == "3")).id
+
+    assert ids_por_banco == [{"1": 42, "2": 7}, {"1": 42, "2": 7}]
+    assert v3_id > 42
+
+
+def test_reimportacao_atualiza_campos_alterados(tmp_path):
+    db_path = tmp_path / "t.db"
+    csv_inicial = _escrever_csv(
+        tmp_path,
+        [_linha(title="Analista de Dados Pleno")],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_atualizado = _escrever_csv(
+        tmp_path,
+        [_linha(title="Cientista de Dados Pleno")],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_inicial, db_path)
+    importar(csv_atualizado, db_path)
+    with read_session(db_path) as db:
+        title = db.scalar(select(Vaga)).title
+
+    assert title == "Cientista de Dados Pleno"
+
+
+def test_snippet_nao_regride_descricao_enriquecida(tmp_path):
+    """O card do Vagas.com traz snippet; a descricao completa ja salva fica."""
+    db_path = tmp_path / "t.db"
+    desc_cheia = "x" * 1200
+    csv_completo = _escrever_csv(
+        tmp_path,
+        [_linha(description=desc_cheia)],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_snippet = _escrever_csv(
+        tmp_path,
+        [_linha(description="trecho curto...")],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_completo, db_path)
+    importar(csv_snippet, db_path)
+    with read_session(db_path) as s:
+        description = s.scalar(select(Vaga)).description
+
+    assert description == desc_cheia
+
+
+def test_snippet_parcial_nao_apaga_skills_da_descricao_preservada(tmp_path):
+    """Skills do card complementam as extraidas da descricao final do banco."""
+    db_path = tmp_path / "t.db"
+    desc_cheia = (
+        "Atuação com n8n e Docker. " + ("contexto técnico " * 80)
+    ).strip()
+    csv_completo = _escrever_csv(
+        tmp_path,
+        [_linha(
+            title="Desenvolvedor de Automação Júnior",
+            description=desc_cheia,
+            skills="n8n, Docker",
+        )],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_snippet = _escrever_csv(
+        tmp_path,
+        [_linha(
+            title="Desenvolvedor de Automação Júnior",
+            description="Card resumido com Python...",
+            skills="Python",
+        )],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_completo, db_path)
+    importar(csv_snippet, db_path)
+    with read_session(db_path) as db:
+        vaga = db.scalar(select(Vaga))
+        description = vaga.description
+        tecnologias = sorted(t.nome for t in vaga.tecnologias)
+
+    assert description == desc_cheia
+    assert tecnologias == ["Docker", "Python", "n8n"]
+
+
+def test_descricao_completa_nova_pode_substituir_skills_antigas(tmp_path):
+    """Uma atualizacao completa nao deixa skill antiga presa ao registro."""
+    db_path = tmp_path / "t.db"
+    desc_antiga = ("Atuação com n8n. " + ("contexto anterior " * 80)).strip()
+    desc_nova = ("Atuação com Python. " + ("contexto atualizado " * 80)).strip()
+    csv_antigo = _escrever_csv(
+        tmp_path,
+        [_linha(description=desc_antiga, skills="n8n")],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_novo = _escrever_csv(
+        tmp_path,
+        [_linha(description=desc_nova, skills="Python")],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_antigo, db_path)
+    importar(csv_novo, db_path)
+    with read_session(db_path) as db:
+        vaga = db.scalar(select(Vaga))
+        description = vaga.description
+        tecnologias = [t.nome for t in vaga.tecnologias]
+
+    assert description == desc_nova
+    assert tecnologias == ["Python"]
+
+
+def test_slug_nao_regride_nome_de_empresa_corrigido(tmp_path):
+    """O slug de URL do coletor (ex.: GeekHunter) nao regride o nome real."""
+    db_path = tmp_path / "t.db"
+    csv_nome = _escrever_csv(
+        tmp_path,
+        [_linha(company="Code Group")],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_slug = _escrever_csv(
+        tmp_path,
+        [_linha(company="code-group")],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_nome, db_path)
+    importar(csv_slug, db_path)
+    with read_session(db_path) as s:
+        company = s.scalar(select(Vaga)).company
+
+    assert company == "Code Group"
+
+
+def test_vaga_fora_do_escopo_tech_nao_entra(tmp_path):
+    db_path = tmp_path / "t.db"
+    resultado = importar(
+        _escrever_csv(tmp_path, [_linha(title="Analista Contábil Jr", external_id="9")]),
+        db_path,
+    )
+
+    assert resultado["criadas"] == 0
+    assert resultado["nao_tech"] == 1
+    assert resultado["total"] == 0
+
+
+def test_importacao_descarta_encanador_de_redes_sem_descricao(tmp_path):
+    db_path = tmp_path / "t.db"
+    csv_path = _escrever_csv(tmp_path, [_linha(
+        source="linkedin", external_id="4473171135",
+        title="Auxiliar de Encanador de Redes (Serviços Comerciais)",
+        company="GS Inima Brasil", location="Ourinhos, SP", description="", skills="",
+    )])
+
+    resultado = importar(csv_path, db_path)
+
+    assert resultado["criadas"] == 0
+    assert resultado["nao_tech"] == 1
+    assert resultado["total"] == 0
+
+
+def test_importacao_descarta_suporte_administrativo_comercial(tmp_path):
+    db_path = tmp_path / "t.db"
+    csv_path = _escrever_csv(tmp_path, [_linha(
+        source="linkedin", external_id="4481182189",
+        title="Estágio em Suporte Administrativo Comercial - Presencial Petrópolis",
+        company="talent's club", location="Petrópolis, RJ",
+        description="Apoiar propostas comerciais e cotações. Curso: Sistemas de Informação.",
+        skills="Pacote Office, ERP, CRM",
+    )])
+
+    resultado = importar(csv_path, db_path)
+
+    assert resultado["criadas"] == 0
+    assert resultado["nao_tech"] == 1
+    assert resultado["total"] == 0
+
+
+@pytest.mark.parametrize(
+    "title,description",
+    [
+        (
+            "Estagiário na área de Administração",
+            "Controlar estoques de materiais, equipamentos, EPIs e uniformes. Apoio à Tecnologia da Informação.",
+        ),
+        (
+            "Estagiário na área de Engenharia Mecânica",
+            "Suporte técnico a produtos, lubrificantes e equipamentos.",
+        ),
+        (
+            "Estagiário na área de Engenharia Elétrica",
+            "Desenvolvimento de chicotes, diagramas e modelamento 3D e 2D. Curso de Engenharia Eletrônica.",
+        ),
+    ],
+)
+def test_importacao_recusa_contextos_nao_tech_recuperados_da_jobbol(tmp_path, title, description):
+    db_path = tmp_path / "t.db"
+    csv_path = _escrever_csv(tmp_path, [_linha(
+        source="jobbol", external_id="123", title=title, description=description,
+        skills="Excel, Pacote Office",
+    )])
+
+    resultado = importar(csv_path, db_path)
+
+    assert resultado["criadas"] == 0
+    assert resultado["nao_tech"] == 1
+    assert resultado["total"] == 0
+
+
+def test_mesma_external_id_em_fontes_diferentes_sao_vagas_distintas(tmp_path):
+    csv_path = _escrever_csv(
+        tmp_path, [_linha(source="gupy"), _linha(source="vagas")]
+    )
+
+    resultado = importar(csv_path, tmp_path / "t.db")
+
+    assert resultado["total"] == 2
+
+
+def test_importacao_funde_urls_com_o_mesmo_id_de_vaga(tmp_path):
+    csv_path = _escrever_csv(
+        tmp_path,
+        [
+            _linha(
+                source="linkedin",
+                external_id="4464615185",
+                url="https://br.linkedin.com/jobs/view/dev-jr-at-acme-4464615185",
+            ),
+            _linha(
+                source="agregador",
+                external_id="9",
+                url="https://www.linkedin.com/jobs/view/4464615185/?tracking=abc",
+            ),
+        ],
+    )
+
+    resultado = importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        vagas = db.scalars(select(Vaga)).all()
+
+    assert resultado["total"] == 1
+    assert (resultado["criadas"], resultado["atualizadas"]) == (1, 1)
+    assert len(vagas) == 1
+
+
+def test_importacao_funde_url_exata_sem_id_extraivel(tmp_path):
+    url = "https://www.geekhunter.com/pt/acme/jobs/dev-junior-1"
+    csv_path = _escrever_csv(
+        tmp_path,
+        [
+            _linha(source="geekhunter", external_id="dev-junior-1", url=url),
+            _linha(source="agregador", external_id="9", url=url),
+        ],
+    )
+
+    resultado = importar(csv_path, tmp_path / "t.db")
+
+    assert resultado["total"] == 1
+    assert (resultado["criadas"], resultado["atualizadas"]) == (1, 1)
+
+
+def test_data_relativa_resolvida_pelo_nome_do_csv(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha(published_date="Ontem")])
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        published_date = db.scalar(select(Vaga)).published_date
+
+    assert published_date == date(2026, 7, 30)
+
+
+def test_linha_sem_identidade_e_ignorada(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [
+        _linha(),
+        _linha(external_id="", source="gupy"),
+        _linha(external_id="9", title=""),
+    ])
+
+    resultado = importar(csv_path, tmp_path / "t.db")
+
+    assert resultado["total"] == 1
+
+
+def test_tecnologia_fora_do_vocabulario_e_ignorada(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha(skills="Python, Fortran-77")])
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        tecnologias = [t.nome for t in db.scalar(select(Vaga)).tecnologias]
+
+    assert tecnologias == ["Python"]
+
+
+def test_campos_vazios_viram_null(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha(company="", location="", skills="")])
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        vaga = db.scalar(select(Vaga))
+        result = (vaga.company, vaga.location, vaga.tecnologias)
+
+    assert result == (None, None, [])
+
+
+def test_importacao_reduz_aviso_de_cidades_proximas(tmp_path):
+    csv_path = _escrever_csv(tmp_path, [_linha(
+        source="vagas",
+        location=(
+            "Praia Grande / SP A empresa aceita candidaturas de "
+            "Praia Grande e cidades próximas"
+        ),
+    )])
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        location = db.scalar(select(Vaga.location))
+
+    assert location == "Praia Grande, SP e Região"
+
+
+def test_linha_sem_skills_nao_apaga_skills_do_banco(tmp_path):
+    # O CSV da coleta roda com --no-enrich: vagas do LinkedIn re-coletadas
+    # chegam SEM skills e nao podem sobrescrever o que o banco acumulou.
+    db_path = tmp_path / "t.db"
+    csv_com_skills = _escrever_csv(
+        tmp_path,
+        [_linha(skills="Python, SQL")],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_sem_skills = _escrever_csv(
+        tmp_path,
+        [_linha(skills="")],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_com_skills, db_path)
+    importar(csv_sem_skills, db_path)
+    with read_session(db_path) as db:
+        tecnologias = sorted(t.nome for t in db.scalar(select(Vaga)).tecnologias)
+
+    assert tecnologias == ["Python", "SQL"]
+
+
+def test_reimportar_com_as_mesmas_skills_nao_duplica_vinculos(tmp_path):
+    # Rodada que re-importa uma vaga com as mesmas skills ja salvas nao
+    # pode tentar inserir o par de novo (UNIQUE de vaga_tecnologia).
+    db_path = tmp_path / "t.db"
+    csv_path = _escrever_csv(tmp_path, [_linha(skills="Python, SQL")])
+
+    importar(csv_path, db_path)
+    importar(csv_path, db_path)
+    with read_session(db_path) as db:
+        tecnologias = sorted(t.nome for t in db.scalar(select(Vaga)).tecnologias)
+
+    assert tecnologias == ["Python", "SQL"]
+
+
+def test_referencia_explicita_vence_o_nome_do_arquivo(tmp_path):
+    """O snapshot versionado depende disso: no deploy o mtime é a data do clone."""
+    csv_path = _escrever_csv(tmp_path, [_linha(published_date="Ontem")])
+
+    importar(csv_path, tmp_path / "t.db", referencia=date(2020, 1, 10))
+    with read_session(tmp_path / "t.db") as db:
+        published_date = db.scalar(select(Vaga)).published_date
+
+    assert published_date == date(2020, 1, 9)
+
+
+def test_referencia_explicita_funciona_sem_timestamp_no_nome(tmp_path):
+    csv_path = _escrever_csv(
+        tmp_path, [_linha(published_date="Há 3 dias")], nome="vagas.csv"
+    )
+
+    importar(csv_path, tmp_path / "t.db", referencia=date(2026, 7, 31))
+    with read_session(tmp_path / "t.db") as db:
+        published_date = db.scalar(select(Vaga)).published_date
+
+    assert published_date == date(2026, 7, 28)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Hoje", date(2026, 10, 6)),
+        ("Ontem", date(2026, 10, 5)),
+        ("Há 4 dias", date(2026, 10, 2)),
+        ("Atualizada há 3 horas", date(2026, 10, 6)),
+        ("2026-10-07", date(2026, 10, 7)),
+        ("07/10/2026", date(2026, 10, 7)),
+    ],
+)
+def test_importacao_usa_dia_brasilia_do_csv_sem_mudar_datas_explicitas(tmp_path, raw, expected):
+    db_path = tmp_path / "vagas.db"
+    csv_path = _escrever_csv(
+        tmp_path, [_linha(published_date=raw)], nome="vagas_20261006_213530.csv",
+    )
+
+    importar(csv_path, db_path)
+    with read_session(db_path) as db:
+        published_date = db.scalar(select(Vaga)).published_date
+
+    assert published_date == expected
+
+
+def test_recriar_limpa_o_banco(tmp_path):
+    db_path = tmp_path / "t.db"
+    csv_duas = _escrever_csv(
+        tmp_path,
+        [_linha(), _linha(external_id="2")],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_uma = _escrever_csv(
+        tmp_path,
+        [_linha()],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_duas, db_path)
+    resultado = importar(csv_uma, db_path, recriar=True)
+
+    assert resultado["total"] == 1
+
+
+def test_linkedin_descricao_remota_corrige_palpite_de_cidade(tmp_path):
+    """O card do LinkedIn lista a cidade e o palpite vira Presencial; a
+    descricao completa ("100% remota") tem que corrigir isso no import."""
+    csv_path = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin",
+            workplace_type="Presencial",
+            location="Goiânia, GO",
+            title="Desenvolvedor Python Junior - Trabalho Remoto",
+            description="Modalidade 100% remota - trabalhe de qualquer lugar.",
+        )],
+    )
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        workplace_type = db.scalar(select(Vaga)).workplace_type
+
+    assert workplace_type == "Remoto"
+
+
+def test_linkedin_sem_sinal_de_modalidade_nao_inventa_presencial(tmp_path):
+    csv_path = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin",
+            workplace_type="Presencial",
+            location="Goiânia, GO",
+            title="Desenvolvedor Python Junior",
+            description="Atuacao na area de back-end com Python e Django.",
+        )],
+    )
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        workplace_type = db.scalar(select(Vaga)).workplace_type
+
+    assert workplace_type == "Não informado"
+
+
+def test_linkedin_rotulo_declarado_vence_descricao_conflitante(tmp_path):
+    csv_path = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin",
+            workplace_type="Híbrido",
+            workplace_declared="1",
+            location="João Pessoa, PB",
+            title="Estágio em Automação",
+            description="MODALIDADE: Home Office. Desenvolvimento de sistemas.",
+        )],
+    )
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        vaga = db.scalar(select(Vaga))
+
+    assert vaga.workplace_type == "Híbrido"
+    assert vaga.workplace_declared is True
+
+
+def test_linkedin_nao_apaga_rotulo_declarado_em_coleta_posterior(tmp_path):
+    db_path = tmp_path / "t.db"
+    csv_declarado = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin", external_id="9999999999",
+            workplace_type="Híbrido", workplace_declared="1",
+            location="São Paulo, SP", title="Estágio em TI",
+        )],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_sem_rotulo = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin", external_id="9999999999",
+            workplace_type="Não informado", workplace_declared="0",
+            location="São Paulo, SP", title="Estágio em TI",
+        )],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_declarado, db_path)
+    importar(csv_sem_rotulo, db_path)
+    with read_session(db_path) as db:
+        vaga = db.scalar(select(Vaga))
+
+    assert vaga.workplace_type == "Híbrido"
+    assert vaga.workplace_declared is True
+
+
+def test_linkedin_suporte_remoto_nao_define_modalidade(tmp_path):
+    csv_path = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin",
+            workplace_type="Remoto",
+            location="Betim, MG",
+            title="Técnico de Suporte de TI",
+            description=(
+                "Atendimento e suporte técnico presencial e remoto. "
+                "Modalidade: Presencial."
+            ),
+        )],
+    )
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        workplace_type = db.scalar(select(Vaga)).workplace_type
+
+    assert workplace_type == "Presencial"
+
+
+def test_linkedin_suporte_remoto_sem_regime_fica_nao_informado(tmp_path):
+    csv_path = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin",
+            external_id="4470534157",
+            workplace_type="Remoto",
+            location="Cuiabá, MT",
+            title="Assistente de TI Indústria Distrito Industrial",
+            description=(
+                "Suporte remoto e presencial aos colaboradores. Atuar em conjunto "
+                "com o time de TI no atendimento aos incidentes, problemas e "
+                "requisições, tanto localmente na unidade de Cuiabá quanto "
+                "remotamente nas demais unidades."
+            ),
+        )],
+    )
+
+    importar(csv_path, tmp_path / "t.db")
+    with read_session(tmp_path / "t.db") as db:
+        vaga = db.scalar(select(Vaga))
+
+    assert vaga.workplace_type == "Não informado"
+    assert vaga.workplace_declared is False
+
+
+def test_csv_sem_descricao_nao_rebaixa_area_nem_apaga_descricao(tmp_path):
+    """O pipeline roda com --no-enrich: a linha da rodada vem com area de
+    fallback e descricao vazia. Nao pode degradar a vaga ja classificada."""
+    db_path = tmp_path / "t.db"
+    csv_completo = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin", workplace_type="Presencial",
+            location="Goiânia, GO", title="Assistente de TI",
+            area="Suporte Técnico", area_score="6.0",
+            description="Suporte tecnico presencial e remoto aos usuarios.",
+        )],
+        nome="vagas_20260731_170000.csv",
+    )
+    csv_sem_descricao = _escrever_csv(
+        tmp_path,
+        [_linha(
+            source="linkedin", workplace_type="Presencial",
+            location="Goiânia, GO", title="Assistente de TI",
+            area="Outros/TI Geral", area_score="0.0", description="",
+        )],
+        nome="vagas_20260731_180000.csv",
+    )
+
+    importar(csv_completo, db_path)
+    importar(csv_sem_descricao, db_path)
+    with read_session(db_path) as db:
+        vaga = db.scalar(select(Vaga))
+        area = vaga.area
+        description = vaga.description or ""
+
+    assert area == "Suporte Técnico"
+    assert "Suporte tecnico" in description

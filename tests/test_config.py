@@ -1,0 +1,96 @@
+"""Testes da configuracao central: Settings e carregamento de .env."""
+
+import os
+from pathlib import Path
+
+from scraper.config import DELAYS_PADRAO, Settings, _load_dotenv, load_source_term_exclusions
+
+
+def test_settings_defaults_do_projeto():
+    s = Settings()
+
+    assert s.delay_seconds == 1.0
+    assert s.page_size == 100
+    assert s.max_pages_per_term == 15
+    assert s.only_junior is True
+    assert s.enrich_linkedin is True
+    assert s.parallel_sources is True
+    assert s.source_delays == DELAYS_PADRAO
+    assert s.source_delays["linkedin"] == 1.0
+    assert s.source_delays["infojobs"] == 2.0
+    assert s.source_delays["vagas"] == 2.0
+    assert s.source_delays["solides"] == 2.0
+    assert s.source_delays["gupy"] == 1.0
+    assert s.source_delays["jobbol"] == 1.5
+    assert "jobbol" in s.sources
+    assert s.jobbol_days_back == 3
+    assert s.advertiser_exclusions == {
+        "Jobbol": "jobbol", "Abler": "abler", "abler Vagas": "abler",
+        "Sólides": "solides", "Vagas.com": "vagas", "InfoJobs": "infojobs",
+        "GeekHunter": "geekhunter", "trampos": "trampos", "trampos.co": "trampos",
+        "Gupy": "gupy", "Recrutei": "recrutei",
+    }
+    assert {"mainframe", "cobol"} <= set(
+        s.term_match_rules["mainframe junior"]
+    )
+
+
+def test_ensure_output_dir_cria_diretorio(tmp_path):
+    output_dir = tmp_path / "saida"
+    s = Settings(output_dir=output_dir)
+    existed_before = output_dir.exists()
+
+    result = s.ensure_output_dir()
+
+    assert not existed_before
+    assert result == output_dir
+    assert output_dir.is_dir()
+
+
+def test_termo_plural_continua_global_mas_so_e_excluido_no_linkedin():
+    settings = Settings()
+
+    linkedin_exclusions = load_source_term_exclusions("linkedin")
+    gupy_exclusions = load_source_term_exclusions("gupy")
+
+    assert "analista de integracoes junior" in settings.search_terms
+    assert "analista de integracao junior" in settings.search_terms
+    assert linkedin_exclusions == {"analista de integracoes junior"}
+    assert gupy_exclusions == set()
+
+
+def test_load_dotenv_sem_arquivo_devolve_nada():
+    env_path = Path("nao/existe/.env")
+
+    result = _load_dotenv(env_path)
+
+    assert result is None
+
+
+def test_load_dotenv_parseia_arquivo_sem_python_dotenv(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text(
+        'CHAVE_SIMPLES=valor1\n'
+        'CHAVE_ASPAS="valor com espaco"\n'
+        "# comentario ignorado\n",
+        encoding="utf-8",
+    )
+
+    import builtins
+
+    import_real = builtins.__import__
+
+    def import_sem_dotenv(name, *args, **kwargs):
+        if name == "dotenv":
+            raise ImportError("python-dotenv nao instalado")
+        return import_real(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_sem_dotenv)
+    monkeypatch.delenv("CHAVE_SIMPLES", raising=False)
+    monkeypatch.delenv("CHAVE_ASPAS", raising=False)
+
+    result = _load_dotenv(env)
+
+    assert result is None
+    assert os.environ["CHAVE_SIMPLES"] == "valor1"
+    assert os.environ["CHAVE_ASPAS"] == "valor com espaco"

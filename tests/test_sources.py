@@ -1,0 +1,789 @@
+"""Testes dos parsers, usando respostas reais capturadas dos portais (offline)."""
+
+from types import SimpleNamespace
+
+import pytest
+
+from scraper.config import Settings
+from scraper.sources.geekhunter import GeekHunterSource
+from scraper.sources.gupy import GupySource
+from scraper.sources.infojobs import FILTROS_NIVEL_ENTRADA as FILTROS_INFOJOBS, InfoJobsSource
+from scraper.sources.linkedin import GEO_ID_BRASIL, LinkedInSource
+from scraper.sources.solides import FILTROS_NIVEL_ENTRADA as FILTROS_SOLIDES, SolidesSource
+from scraper.sources.trampos import TramposSource
+from scraper.sources.vagas_com import VagasComSource, slugify_term
+
+
+# Recorte real da resposta de
+# GET https://employability-portal.gupy.io/api/v1/jobs?jobName=desenvolvedor+junior
+GUPY_JOB = {
+    "id": 11617525,
+    "companyId": 551,
+    "name": "Desenvolvedor de Sistema Junior",
+    "description": "<p>Buscamos um(a) Desenvolvedor(a) Full Stack J&uacute;nior "
+                   "para atuar com Java no back-end.</p>",
+    "careerPageId": 166261,
+    "careerPageName": "Minsait",
+    "careerPageUrl": "https://minsait.gupy.io/",
+    "type": "vacancy_type_effective",
+    "publishedDate": "2026-07-31T14:00:13.962Z",
+    "applicationDeadline": "2026-08-14",
+    "isRemoteWork": False,
+    "city": "São Paulo",
+    "state": "São Paulo",
+    "country": "Brasil",
+    "jobUrl": "https://minsait.gupy.io/job/abc123",
+    "workplaceType": "hybrid",
+    "disabilities": False,
+    "skills": [],
+}
+
+# Recorte real de https://www.vagas.com.br/vagas-de-desenvolvedor-junior
+VAGAS_HTML = """
+<ul>
+<li class="vaga odd ">
+  <header class="clearfix">
+    <div class="informacoes-header">
+      <h2 class="cargo">
+        <a class="link-detalhes-vaga" data-id-vaga="2824782"
+           title="Desenvolvedor de Software Jr" id="v2824782"
+           href="/vagas/v2824782/desenvolvedor-de-software-jr">
+            <mark>Desenvolvedor</mark> de Software Jr
+        </a>
+      </h2>
+      <span class="emprVaga"> HStern </span>
+      <div class="nivelQtdVagas"><span class="nivelVaga">Júnior/Trainee</span></div>
+    </div>
+  </header>
+  <div class="detalhes"><p>Descrição: <mark>Desenvolvedor</mark> Júnior de Software</p></div>
+  <footer>
+    <div class="vaga-local"><i class="bx bx-map"></i> Rio de Janeiro / RJ </div>
+    <span class="data-publicacao"><i class="bx bx-time-five"></i>09/07/2026</span>
+  </footer>
+</li>
+</ul>
+"""
+
+
+def _source(cls):
+    return cls(session=None, settings=Settings())
+
+
+def test_gupy_parse_mapeia_campos():
+    source = _source(GupySource)
+
+    job = source._parse(GUPY_JOB, "desenvolvedor junior")
+
+    assert job is not None
+    assert job.source == "gupy"
+    assert job.external_id == "11617525"
+    assert job.title == "Desenvolvedor de Sistema Junior"
+    assert job.company == "Minsait"
+    assert job.url == "https://minsait.gupy.io/job/abc123"
+    assert job.location == "São Paulo, SP"
+    assert job.workplace_type == "Híbrido"
+    assert job.published_date == "2026-07-31"
+    assert job.search_term == "desenvolvedor junior"
+
+
+def test_gupy_parse_limpa_html_da_descricao():
+    source = _source(GupySource)
+
+    job = source._parse(GUPY_JOB, "x")
+
+    assert "<p>" not in job.description
+    assert "Júnior" in job.description
+
+
+def test_gupy_parse_ignora_registro_incompleto():
+    source = _source(GupySource)
+    registros = [{"id": None, "name": ""}, {"id": 1}]
+
+    results = [source._parse(registro, "x") for registro in registros]
+
+    assert results == [None, None]
+
+
+def test_gupy_usa_country_quando_nao_ha_cidade():
+    raw = dict(GUPY_JOB, city="", state="")
+    source = _source(GupySource)
+
+    job = source._parse(raw, "x")
+
+    assert job.location == "Brasil"
+
+
+def test_vagas_parse_page():
+    source = _source(VagasComSource)
+
+    jobs = source._parse_page(VAGAS_HTML, "desenvolvedor junior")
+    job = jobs[0]
+
+    assert len(jobs) == 1
+    assert job.source == "vagas"
+    assert job.external_id == "2824782"
+    assert job.title == "Desenvolvedor de Software Jr"
+    assert job.company == "HStern"
+    assert job.url == "https://www.vagas.com.br/vagas/v2824782/desenvolvedor-de-software-jr"
+    assert job.location == "Rio de Janeiro, RJ"
+    assert job.published_date == "09/07/2026"
+    # "Júnior/Trainee" (span.nivelVaga) e senioridade, nao modalidade de trabalho.
+    assert job.workplace_type == "Não informado"
+
+
+def test_vagas_parse_page_detecta_home_office():
+    html = VAGAS_HTML.replace("Rio de Janeiro / RJ", "100% Home Office")
+    source = _source(VagasComSource)
+
+    job = source._parse_page(html, "x")[0]
+
+    assert job.workplace_type == "Remoto"
+    assert job.location == "Remoto"
+
+
+@pytest.mark.parametrize(
+    "location,expected",
+    [
+        (
+            "Praia Grande / SP A empresa aceita candidaturas de Praia Grande e cidades próximas",
+            "Praia Grande, SP e Região",
+        ),
+        (
+            "Rio de Janeiro / RJ A empresa aceita candidaturas de qualquer cidade do Brasil",
+            "Rio de Janeiro, RJ",
+        ),
+        (
+            "Brasil A empresa aceita candidaturas de qualquer cidade do Brasil",
+            "Brasil",
+        ),
+    ],
+)
+def test_vagas_parse_page_reduz_aviso_de_candidaturas(location, expected):
+    html = VAGAS_HTML.replace(
+        "Rio de Janeiro / RJ",
+        location,
+    )
+    source = _source(VagasComSource)
+
+    job = source._parse_page(html, "x")[0]
+
+    assert job.location == expected
+
+
+def test_vagas_parse_page_vazia():
+    source = _source(VagasComSource)
+
+    jobs = source._parse_page("<html><body></body></html>", "x")
+
+    assert jobs == []
+
+
+def test_slugify_term():
+    terms = ["desenvolvedor júnior", "Estágio  em TI"]
+
+    slugs = [slugify_term(term) for term in terms]
+
+    assert slugs == ["desenvolvedor-junior", "estagio-em-ti"]
+
+
+# Recorte real de GET https://trampos.co/api/v2/opportunities?tr=desenvolvedor&page=1
+TRAMPOS_JSON = {
+    "id": 773915,
+    "name": "Desenvolvedor(a) .Net C#",
+    "type_name": "Emprego",
+    "type_slug": "emprego",
+    "category_name": "Tecnologia da Informação",
+    "category_slug": "ti",
+    "home_office": None,
+    "hybrid": True,
+    "salary": "NÃO DIVULGADA",
+    "published_at": "2026-08-02T12:00:07.000-03:00",
+    "custom_company_name": None,
+    "company": {
+        "id": 725735,
+        "name": "Artium Soluções",
+        "slug": "artium-solucoes",
+        "description": "Somos uma empresa de tecnologia da inovação.",
+    },
+    "email_share_url":
+        "https://trampos.co/oportunidades/773915-desenvolvedor-a-net-c/share/email",
+}
+
+
+def test_trampos_parse_mapeia_campos():
+    source = _source(TramposSource)
+
+    job = source._parse(TRAMPOS_JSON, "desenvolvedor")
+
+    assert job is not None
+    assert job.source == "trampos"
+    assert job.external_id == "773915"
+    assert job.title == "Desenvolvedor(a) .Net C#"
+    assert job.company == "Artium Soluções"
+    assert job.published_date == "2026-08-02"
+    assert job.search_term == "desenvolvedor"
+
+
+def test_trampos_url_sai_do_link_de_compartilhamento():
+    # A API não devolve a URL da vaga; ela está dentro das de compartilhamento.
+    source = _source(TramposSource)
+
+    job = source._parse(TRAMPOS_JSON, "x")
+
+    assert job.url == "https://trampos.co/oportunidades/773915-desenvolvedor-a-net-c"
+
+
+@pytest.mark.parametrize(
+    "flags,esperado",
+    [
+        ({"home_office": True, "hybrid": False}, "Remoto"),
+        ({"home_office": True, "hybrid": True}, "Remoto"),
+        ({"home_office": None, "hybrid": True}, "Híbrido"),
+        ({"home_office": False, "hybrid": False}, "Presencial"),
+        ({}, "Presencial"),
+    ],
+)
+def test_trampos_modalidade(flags, esperado):
+    # `hybrid` vem sempre; `home_office` às vezes vem nulo.
+    modalidade = TramposSource._modalidade(flags)
+
+    assert modalidade == esperado
+
+
+def test_trampos_estagio_vem_do_tipo_nativo():
+    raw = dict(TRAMPOS_JSON, type_slug="estagio", type_name="Estágio")
+    source = _source(TramposSource)
+
+    job = source._parse(raw, "x")
+
+    assert job.seniority == "Estágio"
+
+
+def test_trampos_emprego_deixa_senioridade_para_o_regex():
+    source = _source(TramposSource)
+
+    job = source._parse(TRAMPOS_JSON, "x")
+
+    assert job.seniority == ""
+
+
+def test_trampos_descricao_usa_a_categoria_nativa():
+    source = _source(TramposSource)
+
+    job = source._parse(TRAMPOS_JSON, "x")
+
+    assert "Tecnologia da Informação" in job.description
+
+
+def test_trampos_descricao_ignora_o_texto_da_empresa():
+    """company.description fala da EMPRESA -- usá-la classificaria errado."""
+    source = _source(TramposSource)
+
+    job = source._parse(TRAMPOS_JSON, "x")
+
+    assert "inovação" not in job.description
+
+
+def test_trampos_salario_nao_divulgado_fica_de_fora():
+    source = _source(TramposSource)
+    raw_com_salario = dict(TRAMPOS_JSON, salary="R$ 5.000")
+
+    sem_salario = source._parse(TRAMPOS_JSON, "x")
+    com_salario = source._parse(raw_com_salario, "x")
+
+    assert "Salário" not in sem_salario.description
+    assert "Salário: R$ 5.000." in com_salario.description
+
+
+def test_trampos_ignora_registro_incompleto():
+    src = _source(TramposSource)
+    registros = [{"id": None, "name": "x"}, {"id": 1, "name": ""}]
+
+    results = [src._parse(registro, "t") for registro in registros]
+
+    assert results == [None, None]
+
+
+# Recorte real da resposta de
+# GET https://apigw.solides.com.br/jobs/v3/portal-vacancies
+SOLIDES_JOB = {
+    "id": 911953,
+    "title": "Desenvolvedor(a) Júnior | Prestação de Serviços (PJ)  em Franca/SP",
+    "description": "<p>Estamos buscando uma pessoa <strong>Desenvolvedora Júnior</strong> "
+                   "para atuar com APIs REST e Python.</p>",
+    "companyName": "Empresa Tech S.A.",
+    "state": {"name": "São Paulo", "code": "SP"},
+    "city": {"name": "FRANCA", "state_id": 0},
+    "redirectLink": "https://empresa.solides.jobs/vacancies/911953?origem=portal",
+    "homeOffice": False,
+    "jobType": "presencial",
+    "createdAt": "2026-08-29",
+}
+
+
+def test_solides_parse_mapeia_campos():
+    src = _source(SolidesSource)
+
+    job = src._parse(SOLIDES_JOB, "Júnior")
+
+    assert job is not None
+    assert job.source == "solides"
+    assert job.external_id == "911953"
+    assert job.title.startswith("Desenvolvedor(a) Júnior")
+    assert job.company == "Empresa Tech S.A."
+    assert job.location == "FRANCA, SP"
+    assert job.workplace_type == "Presencial"
+    assert job.published_date == "2026-08-29"
+    assert job.seniority == "Júnior"
+    # O redirectLink (`empresa.solides.jobs`) foi desativado pela Solides:
+    # a URL salva e a canonica do portal (/vaga/{id}/{titulo-slug}).
+    assert job.url == (
+        "https://vagas.solides.com.br/vaga/911953/"
+        "desenvolvedor-a-junior-prestacao-de-servicos-pj-em-franca-sp"
+    )
+    assert "Desenvolvedora Júnior" in job.description
+
+
+def test_solides_home_office_vira_remoto():
+    raw = dict(SOLIDES_JOB, homeOffice=True, jobType="presencial")
+    source = _source(SolidesSource)
+
+    job = source._parse(raw, "Júnior")
+
+    assert job.workplace_type == "Remoto"
+
+
+def test_solides_ignora_registro_incompleto_e_antigo():
+    src = _source(SolidesSource)
+    antiga = dict(SOLIDES_JOB, createdAt="2025-12-31")
+    registros = [{"id": None, "title": "x"}, {"id": 1, "title": ""}, antiga]
+
+    results = [src._parse(registro, "Júnior") for registro in registros]
+
+    assert results == [None, None, None]
+
+
+def test_solides_filtros_nativos_por_nivel():
+    filtros = FILTROS_SOLIDES
+
+    niveis = set(filtros)
+
+    assert niveis == {"Júnior", "Estágio", "Estagiário", "Trainee", "Aprendiz"}
+    assert filtros["Júnior"]["seniorities"] == "junior"
+    assert filtros["Estágio"]["title"] == "estagio"
+    assert filtros["Estagiário"]["title"] == "estagiario"
+    assert filtros["Aprendiz"]["title"] == "aprendiz"
+
+
+# Recorte real da listagem publica de https://www.geekhunter.com.br/pt/vagas
+# (o card de "Desenvolvedor(a) Fullstack Java Júnior").
+GEEKHUNTER_CARD = """
+<li class="css-1oxv7b7" id="job-desenvolvedor-a--fullstack-java-junior-1"><article>
+<div role="group">
+  <div><p class="chakra-text">Atualizada há 19 horas</p></div>
+  <div>
+    <h3 class="chakra-text"><a href="https://www.geekhunter.com/pt/nava-technology-for-business-1/jobs/desenvolvedor-a--fullstack-java-junior-1">Desenvolvedor(a) Fullstack Java Júnior</a></h3>
+  </div>
+  <div>
+    <div><p class="chakra-text">Júnior</p></div>
+    <div><p class="chakra-text">Híbrido</p></div>
+    <div><p class="chakra-text">São Paulo, SP, Brasil</p></div>
+  </div>
+</div>
+<div>
+  <p class="chakra-text">Tarefas e Responsabilidades</p>
+  <p class="chakra-text">Desenvolvedor(a) Fullstack Java Júnior Modelo de trabalho: Híbrido — 3 dias presenciais e 2 dias em Home Office Local: Santo Amaro e/ou Interlagos — São Paulo/SP Contratação: CLT + pacote de benefícios Sobre a Nava: Na Nava, atuamos no core de empresas líderes em seus segmentos, conectando tecnologia</p>
+</div>
+<div>
+  <p class="chakra-text">Requisitos</p>
+  <div><p class="chakra-text">Angular 8+</p></div>
+  <div><p class="chakra-text">Apis Rest</p></div>
+</div>
+</article></li>
+"""
+
+
+def test_geekhunter_parse_mapeia_campos():
+    src = _source(GeekHunterSource)
+
+    jobs = src._parse_page(GEEKHUNTER_CARD, "todas")
+    job = jobs[0]
+
+    assert len(jobs) == 1
+    assert job.source == "geekhunter"
+    assert job.external_id == "desenvolvedor-a--fullstack-java-junior-1"
+    assert job.title == "Desenvolvedor(a) Fullstack Java Júnior"
+    assert job.company == "nava-technology-for-business-1"
+    assert job.workplace_type == "Híbrido"
+    assert job.location == "São Paulo, SP"
+    assert job.seniority == "Júnior"
+    assert "Fullstack Java Júnior" in job.description
+    assert job.url.startswith("https://www.geekhunter.com/pt/")
+    assert job.published_date == "Atualizada há 19 horas"
+
+
+def test_geekhunter_ignora_card_sem_link():
+    src = _source(GeekHunterSource)
+    html = "<li id='job-x'><article><p>sem link</p></article></li>"
+
+    jobs = src._parse_page(html, "todas")
+
+    assert jobs == []
+
+
+def test_geekhunter_nao_confia_em_nivel_alto_do_portal():
+    """Card que declara 'Pleno' deixa senioridade vazia: o filtro de
+    senioridade decide pelo titulo (titulos mistos 'Júnior/Pleno' seguem
+    aceitando candidatos juniores)."""
+    card = GEEKHUNTER_CARD.replace(">Júnior<", ">Pleno<")
+    source = _source(GeekHunterSource)
+
+    job = source._parse_page(card, "todas")[0]
+
+    assert job.seniority == ""
+
+
+def test_geekhunter_para_na_ultima_pagina_anunciada():
+    paginas_pedidas = []
+    pagina_1 = GEEKHUNTER_CARD + '<a href="/pt/vagas?page=2">2</a>'
+    pagina_2 = GEEKHUNTER_CARD.replace(
+        "fullstack-java-junior-1", "fullstack-java-junior-2"
+    )
+
+    class Session:
+        last_status_code = None
+
+        def get(self, _url, **kwargs):
+            pagina = kwargs["params"]["page"]
+            paginas_pedidas.append(pagina)
+            self.last_status_code = 200
+            return SimpleNamespace(text={1: pagina_1, 2: pagina_2}[pagina])
+
+    source = GeekHunterSource(Session(), Settings(max_pages_per_term=200))
+
+    jobs = source.fetch_term("todas")
+
+    assert paginas_pedidas == [1, 2]
+    assert len(jobs) == 2
+    assert source.session.last_status_code == 200
+
+
+def test_geekhunter_404_depois_de_resultados_e_fim_normal():
+    class Session:
+        last_status_code = None
+
+        def get(self, _url, **kwargs):
+            if kwargs["params"]["page"] == 1:
+                self.last_status_code = 200
+                return SimpleNamespace(text=GEEKHUNTER_CARD)
+            self.last_status_code = 404
+            return None
+
+    source = GeekHunterSource(Session(), Settings(max_pages_per_term=2))
+
+    jobs = source.fetch_term("todas")
+
+    assert len(jobs) == 1
+    assert source.session.last_status_code is None
+
+
+def test_trampos_usa_custom_company_name_quando_existe():
+    raw = dict(TRAMPOS_JSON, custom_company_name="Empresa Confidencial")
+    source = _source(TramposSource)
+
+    job = source._parse(raw, "x")
+
+    assert job.company == "Empresa Confidencial"
+
+
+# Recorte real de
+# GET .../jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=desenvolvedor+junior&geoId=106057199
+LINKEDIN_HTML = """
+<ul>
+<li>
+  <div class="base-card job-search-card"
+       data-entity-urn="urn:li:jobPosting:4422123289">
+    <a class="base-card__full-link"
+       href="https://www.linkedin.com/jobs/view/desenvolvedor-junior-at-acme-4422123289?position=1&amp;pageNum=0">
+      <span class="sr-only">Desenvolvedor Back-end Júnior</span>
+    </a>
+    <div class="base-search-card__info">
+      <h3 class="base-search-card__title">Desenvolvedor Back-end Júnior</h3>
+      <h4 class="base-search-card__subtitle">ACME Tecnologia</h4>
+      <span class="job-search-card__location">São Paulo, São Paulo, Brazil</span>
+      <time datetime="2026-08-01">1 dia atrás</time>
+    </div>
+  </div>
+</li>
+</ul>
+"""
+
+
+def test_linkedin_parse_mapeia_campos():
+    source = _source(LinkedInSource)
+
+    jobs = source._parse_page(LINKEDIN_HTML, "desenvolvedor junior")
+    job = jobs[0]
+
+    assert len(jobs) == 1
+    assert job.source == "linkedin"
+    assert job.external_id == "4422123289"
+    assert job.title == "Desenvolvedor Back-end Júnior"
+    assert job.company == "ACME Tecnologia"
+    assert job.location == "São Paulo, SP"
+    assert job.published_date == "2026-08-01"
+    assert job.search_term == "desenvolvedor junior"
+    assert job.workplace_type == "Não informado"
+    assert job.workplace_declared is False
+
+
+def test_linkedin_url_perde_os_parametros_de_rastreio():
+    source = _source(LinkedInSource)
+
+    job = source._parse_page(LINKEDIN_HTML, "x")[0]
+
+    assert job.url == (
+        "https://www.linkedin.com/jobs/view/desenvolvedor-junior-at-acme-4422123289"
+    )
+    assert "?" not in job.url
+
+
+def test_linkedin_usa_geoid_do_brasil():
+    """`location=Brasil` em português falha em silêncio e traz vagas dos EUA."""
+    geo_id = GEO_ID_BRASIL
+
+    assert geo_id == "106057199"
+
+
+@pytest.mark.parametrize(
+    "local,esperado",
+    [
+        ("São Paulo, São Paulo, Brazil", "Não informado"),
+        ("Rio de Janeiro e Região", "Não informado"),
+        ("Brazil (Remote)", "Remoto"),
+        ("São Paulo (Remoto)", "Remoto"),
+        ("Curitiba (Híbrido)", "Híbrido"),
+        ("Brasil", "Não informado"),
+        ("Brazil", "Não informado"),
+        ("", "Não informado"),
+    ],
+)
+def test_linkedin_modalidade(local, esperado):
+    modalidade = LinkedInSource._modalidade(local)
+
+    assert modalidade == esperado
+
+
+
+
+def test_linkedin_ignora_card_sem_urn_ou_titulo():
+    src = _source(LinkedInSource)
+    sem_urn = '<div class="base-card"><h3>X</h3></div>'
+    sem_titulo = '<div class="base-card" data-entity-urn="urn:li:jobPosting:1"></div>'
+
+    jobs_sem_urn = src._parse_page(sem_urn, "x")
+    jobs_sem_titulo = src._parse_page(sem_titulo, "x")
+
+    assert jobs_sem_urn == []
+    assert jobs_sem_titulo == []
+
+
+def test_linkedin_titulo_com_remoto_vence_cidade_do_card():
+    remoto = LinkedInSource._modalidade(
+        "Goiânia, GO", title="Desenvolvedor Python Junior - Trabalho Remoto"
+    )
+    nao_informado = LinkedInSource._modalidade(
+        "Goiânia, GO", title="Desenvolvedor Python Junior"
+    )
+
+    assert remoto == "Remoto"
+    assert nao_informado == "Não informado"
+
+
+def test_linkedin_rotulo_padrao_tem_prioridade_sobre_titulo_e_localizacao():
+    modalidade = LinkedInSource._modalidade(
+        "São Paulo, SP",
+        title="Analista de Dados Júnior - Remoto",
+        workplace_label="On-site",
+    )
+
+    assert modalidade == "Presencial"
+
+
+def test_linkedin_le_rotulo_padrao_do_card():
+    html = LINKEDIN_HTML.replace(
+        '<span class="job-search-card__location">São Paulo, São Paulo, Brazil</span>',
+        '<span class="job-search-card__location">São Paulo, São Paulo, Brazil</span>'
+        '<span class="job-search-card__workplace-type">Remote</span>',
+    )
+    source = _source(LinkedInSource)
+
+    job = source._parse_page(html, "x")[0]
+
+    assert job.workplace_type == "Remoto"
+    assert job.workplace_declared is True
+
+
+def test_linkedin_aplica_modalidade_curada_quando_card_omite_rotulo():
+    html = LINKEDIN_HTML.replace("4422123289", "4469639853")
+    source = _source(LinkedInSource)
+
+    job = source._parse_page(html, "x")[0]
+
+    assert job.workplace_type == "Presencial"
+    assert job.workplace_declared is True
+
+
+def test_linkedin_pagina_vazia():
+    source = _source(LinkedInSource)
+
+    jobs = source._parse_page("<html></html>", "x")
+
+    assert jobs == []
+
+
+def test_linkedin_sem_descricao_no_card():
+    """A busca não traz descrição; a classificação se apoia no título."""
+    source = _source(LinkedInSource)
+
+    job = source._parse_page(LINKEDIN_HTML, "x")[0]
+
+    assert job.description == ""
+
+
+# Recorte real de
+# GET https://www.infojobs.com.br/vagas-de-emprego.aspx?Palabra=desenvolvedor
+# (dois cards + o contêiner "vacancylistDetail" que NAO e card de vaga).
+INFOJOBS_HTML = """
+<div class="js_vacanciesGridFragment mb-16">
+<div data-typesimilar="" class="card card-shadow card-shadow-hover text-break mb-16 pb-24 grid-row js_rowCard active">
+  <div id="vacancy11985552" data-modelversion="" data-id="11985552" class="pt-24 px-24 cursor-pointer js_vacancyLoad js_rowCard js_cardLink" data-href="/vaga-de-desenvolvedor-devops-backend-senior-em-__11985552.aspx" data-testabbutton="false">
+    <div class="d-flex flex-wrap gap-8">
+      <div hidden class="js_date" data-value="2026/09/03 05:32:00"></div>
+    </div>
+    <div class="d-flex gap-8 justify-content-between">
+      <a class="text-decoration-none" href="/vaga-de-desenvolvedor-devops-backend-senior-em-__11985552.aspx">
+        <h2 class="h3 font-weight-bold text-body mb-2 js_vacancyTitle">Desenvolvedor Devops Backend S&#xEA;nior</h2>
+      </a>
+      <div class="text-medium small text-nowrap">Ontem</div>
+    </div>
+    <div class="d-flex align-items-baseline">
+      <div class="mr-8"><span class="font-weight-bold text-body">4,5</span></div>
+      <div class="text-body"> Empresa <span class="text-nowrap"> confidencial <span class="cursor-pointer"></span></span></div>
+    </div>
+    <div class="mb-8"> Todo Brasil </div>
+    <div class="d-inline-flex flex-wrap mb-8 text-medium" style="gap: 2px 16px">
+      <div><svg class="icon icon-money icon-size-16"></svg> A combinar </div>
+      <div><svg class="icon icon-suitcase icon-size-16"></svg> Entre 1 e 3 anos </div>
+      <div><svg class="icon icon-graduate-hat icon-size-16"></svg> Ensino Superior </div>
+      <div><svg class="icon icon-house-and-building icon-size-16"></svg> H&#xED;brido </div>
+    </div>
+    <div class="text-medium"> Procuramos uma Pessoa Desenvolvedora DevOps Back-End S&#xEA;nior com perfil altamente t&#xE9;cnico ... </div>
+  </div>
+</div>
+<div data-typesimilar="" class="card card-shadow card-shadow-hover text-break mb-16 pb-24 grid-row js_rowCard ">
+  <div id="vacancy11983931" data-modelversion="" data-id="11983931" class="pt-24 px-24 cursor-pointer js_vacancyLoad js_rowCard js_cardLink" data-href="/vaga-de-desenvolvedor-sr-em-sao-paulo__11983931.aspx">
+    <div class="d-flex flex-wrap gap-8">
+      <div hidden class="js_date" data-value="2026/09/03 01:52:00"></div>
+    </div>
+    <div class="d-flex gap-8 justify-content-between">
+      <a class="text-decoration-none" href="/vaga-de-desenvolvedor-sr-em-sao-paulo__11983931.aspx">
+        <h2 class="h3 font-weight-bold text-body mb-2 js_vacancyTitle">Desenvolvedor Sr.</h2>
+      </a>
+      <div class="text-medium small text-nowrap">Ontem</div>
+    </div>
+    <div class="d-flex align-items-baseline">
+      <div class="text-body">
+        <a class="text-body text-decoration-none" href="https://www.infojobs.com.br/gafor-ltda">
+          <span class="text-nowrap"> GAFOR <span class="cursor-pointer"></span></span>
+        </a>
+      </div>
+    </div>
+    <div class="mb-8"> Guarulhos - SP , 0 Km de voc&#xEA;. </div>
+    <div class="d-inline-flex flex-wrap mb-8 text-medium" style="gap: 2px 16px">
+      <div><svg class="icon icon-money icon-size-16"></svg> R$ 6.000,00 </div>
+      <div><svg class="icon icon-house-and-building icon-size-16"></svg> Presencial </div>
+    </div>
+    <div class="text-medium"> Desenvolvimento e manuten&#xE7;&#xE3;o de sistemas ... </div>
+  </div>
+</div>
+<div id="vacancylistDetailContainer" class="col-12 col-lg-auto position-relative detail-container">
+  <div id="vacancylistDetail" class="shadow-loading"></div>
+</div>
+</div>
+"""
+
+
+def test_infojobs_parse_page_mapeia_campos():
+    source = _source(InfoJobsSource)
+
+    jobs = source._parse_page(INFOJOBS_HTML, "desenvolvedor")
+    job = jobs[0]
+
+    assert [j.external_id for j in jobs] == ["11985552", "11983931"]
+    assert job.source == "infojobs"
+    assert job.title == "Desenvolvedor Devops Backend Sênior"
+    assert job.company == "confidencial"
+    assert job.url == (
+        "https://www.infojobs.com.br/vaga-de-desenvolvedor-devops-backend-"
+        "senior-em-__11985552.aspx"
+    )
+    assert job.location == "Brasil"
+    assert job.workplace_type == "Híbrido"
+    assert job.published_date == "2026-09-03"
+    assert "DevOps Back-End" in job.description
+
+
+def test_infojobs_empresa_com_link_e_local_sem_km():
+    source = _source(InfoJobsSource)
+
+    job = source._parse_page(INFOJOBS_HTML, "x")[1]
+
+    assert job.company == "GAFOR"
+    assert job.location == "Guarulhos, SP"
+    assert job.workplace_type == "Presencial"
+
+
+def test_infojobs_ignora_containers_que_nao_sao_cards():
+    # `div[id^=vacancy]` pega tambem os contêineres vacancylistDetail*:
+    # o parse nao pode devolver cards sem data-id.
+    source = _source(InfoJobsSource)
+
+    jobs = source._parse_page(INFOJOBS_HTML, "x")
+
+    assert len(jobs) == 2
+
+
+def test_infojobs_ignora_vaga_anterior_a_2026():
+    html = INFOJOBS_HTML.replace(
+        'data-value="2026/09/03 05:32:00"', 'data-value="2025/12/31 10:00:00"'
+    )
+    source = _source(InfoJobsSource)
+
+    jobs = source._parse_page(html, "x")
+
+    assert [j.external_id for j in jobs] == ["11983931"]
+
+
+def test_infojobs_senioridade_so_nos_filtros_nativos():
+    source = _source(InfoJobsSource)
+
+    jobs_estagio = source._parse_page(INFOJOBS_HTML, "Estágio")
+    jobs_junior = source._parse_page(INFOJOBS_HTML, "desenvolvedor junior")
+
+    assert all(j.seniority == "Estágio" for j in jobs_estagio)
+    assert all(j.seniority == "" for j in jobs_junior)
+
+
+def test_infojobs_filtros_nativos_por_nivel():
+    filtros = FILTROS_INFOJOBS
+
+    niveis = set(filtros)
+
+    assert niveis == {"Estágio", "Estagiário", "Trainee", "Aprendiz"}
+    assert filtros["Estágio"] == {"categoria": "74", "tipocontrato": "4"}
+    assert filtros["Estagiário"] == {"categoria": "74", "im": "1"}
+    assert filtros["Trainee"] == {"categoria": "74", "tipocontrato": "15"}
+    assert filtros["Aprendiz"] == {"categoria": "74", "tipocontrato": "19"}
+
+

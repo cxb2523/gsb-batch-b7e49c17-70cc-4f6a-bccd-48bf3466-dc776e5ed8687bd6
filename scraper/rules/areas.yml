@@ -1,0 +1,1199 @@
+# Regras de classificacao por area de tecnologia.
+#
+# Como funciona:
+#   - Para cada area, cada keyword vale um "peso".
+#   - Keywords encontradas no TITULO valem `title_boost` vezes mais que no corpo
+#     da descricao (o titulo e um sinal muito mais confiavel).
+#   - A area com maior pontuacao vence; se ninguem passar de `min_score`,
+#     a vaga cai em "Outros/TI Geral".
+#
+# Para ajustar: edite as listas abaixo. O texto e comparado sem acentos, em
+# minusculas, com pontuacao virando espaco -- entao escreva as keywords assim
+# ("ci cd" casa com "CI/CD", "banco de dados" casa com "Banco de Dados").
+# Keywords com espaco sao casadas como frase; keywords de uma palavra sao
+# casadas com limite de palavra (nao ha match parcial dentro de outra palavra).
+
+settings:
+  title_boost: 3.0
+  # min_score 3.0 = uma keyword `peso_medio` no titulo. Abaixo disso a vaga cai
+  # em "Outros". Nao baixe para 1.0: um unico "dados" solto no meio de uma
+  # descricao longa passaria a definir a area da vaga.
+  min_score: 3.0
+  fallback_area: "Outros/TI Geral"
+
+# Portao de relevancia: a busca dos portais e "solta" e devolve muita vaga que
+# nao e de tecnologia ("Analista Contábil Jr", "Analista Fiscal Jr"...).
+#
+# O TITULO e o sinal confiavel; a descricao nem sempre e. O Vagas.com, por
+# exemplo, so devolve um trecho de marketing da vaga, cheio de palavra generica
+# ("sistemas", "aplicacao") que apareceria ate em vaga administrativa. Por isso
+# ha duas listas com rigor diferente.
+#
+# Uma vaga passa no portao se:
+#   1. o TITULO casar `tech_gate.titulo`, ou
+#   2. o TITULO casar uma keyword `peso_alto` de qualquer area, ou
+#   3. a DESCRICAO casar `tech_gate.descricao` ou uma keyword `peso_alto`.
+# As demais sao descartadas e contadas como "nao-tech" no relatorio.
+tech_gate:
+  titulo: # sinais amplos -- confiaveis porque vem do titulo da vaga
+    - ti
+    - t i
+    - tecnologia
+    - tecnologia da informacao
+    - sistemas
+    - sistema
+    - software
+    - desenvolvimento
+    - desenvolvedor
+    - desenvolvedora
+    - programador
+    - programadora
+    - programacao
+    - developer
+    - dev
+    - computacao
+    - informatica
+    - engenharia de software
+    - suporte tecnico
+    - help desk
+    - helpdesk
+    - service desk
+    - infraestrutura de ti
+    - redes
+    - servidores
+    - banco de dados
+    - tech
+    - qa
+    - devops
+    - cloud
+    # Linguagem explícita no título é evidência suficiente para o LinkedIn,
+    # cuja listagem não entrega a descrição da vaga.
+    - python
+    - cybersecurity
+    - seguranca da informacao
+    - fullstack
+    - frontend
+    - backend
+    # Vistos em titulos reais de portais de tech que o portao derrubava:
+    # "Web3 Product Tester - Junior" nao casava nenhum sinal.
+    - tester
+    - web3
+    - blockchain
+
+
+  # Contextos onde as palavras acima NAO significam tecnologia. Se o titulo casar
+  # qualquer item daqui, a vaga e descartada mesmo que case `titulo` acima.
+  # ("Pesquisa e Desenvolvimento" = P&D de industria; "Odontologia Digital" idem.)
+  excluir:
+    - pesquisa e desenvolvimento
+    - desenvolvimento humano
+    - desenvolvimento pessoal
+    - desenvolvimento organizacional
+    - desenvolvimento de negocios
+    - desenvolvimento sustentavel
+    - desenvolvimento infantil
+    - desenvolvimento de produtos
+    - desenvolvimento de novos produtos
+    - desenvolvimento de materiais
+    - desenvolvimento de embalagens
+    - desenvolvimento de pessoas
+    - treinamento e desenvolvimento
+    - treinamento desenvolvimento
+    - recursos humanos
+    - programacao de gas
+    - programacao de producao
+    - programacao de manutencao
+    - desenvolvimento de mercado
+    - desenvolvimento comercial
+    - tecnologia educacional
+    - tecnologia de alimentos
+    - tecnologia agricola
+    - tecnologia textil
+    - odontologia digital
+    - marketing digital
+    - redes sociais
+    - midias sociais
+    - social media
+    - seguranca do trabalho
+    - tecnico em enfermagem
+    - pedagogia
+    - arquivologia
+    - biomedicina
+    # Sistemas biomédicos trata de equipamentos e processos de saúde, não de
+    # sistemas de informação. A palavra "sistemas" no título causava entrada
+    # indevida no recorte de TI.
+    - sistemas biomedicos
+    # Títulos que usam uma palavra ampla do portão, mas descrevem atividade
+    # industrial, administrativa, comercial ou de saúde — não uma vaga de TI.
+    - desenvolvimento analitico
+    - sistemas da qualidade
+    - seguranca patrimonial
+    - analista de redes e canais
+    - analista de marketing
+    - analista de e commerce
+    - auxiliar de almoxarifado
+    - assistente de filial
+    - administrativo em ti
+    - administrativo ti
+    - suporte na area administrativa
+    - suporte comercial
+    - suporte administrativo comercial
+    - sistemas eletricos
+    - sistemas de purificacao de agua
+    # Redes de encanamento nao sao redes de computadores.
+    - encanador
+    - encanadora
+    - inspetor de solda
+    - programador de carga
+    - programador de oficina
+    - programador de trafego
+    - analista fiscal tributario
+    - auxiliar de cobranca
+    - jovem auxiliar de loja
+    - tecnologia e celulares
+    - auxiliar de saude digital
+    - laboratorio qualidade
+    - estagio em administracao
+    - especialista de relacionamento com operadoras
+    - consultor comercial de ti
+    - pcd pessoa com deficiencia varias areas
+    - analista administrativo junior
+    - analista administrativo jr
+    - auxiliar administrativo ii ti
+    - compras de medicamentos
+    - analista de laboratorio
+    - atendente de copa
+    - auxiliar de monitoramento de sistemas de seguranca
+    - monitor de sistemas eletronicos de seg interno
+    - suporte automotivo
+    - estagiario de projetos e orcamentos
+    - assistente administrativo tecnico
+    - estagio grupo texo
+    - assistente administrativo de suporte tecnico
+    - tecnico de suporte industrial
+    - auxiliar de programacao
+    - assistente de programacao
+    - nutricao
+    - fisioterapia
+    - arquitetura e urbanismo
+    - tecnologia do concreto
+    - desenvolvimento de produto
+    - engenharia quimica
+    - sistema da qualidade
+    - sistema de gestao da qualidade
+    - sistema de gestao integrado
+    - gestao da qualidade
+    - tecnologia de produto
+    - sistema da gestao
+    - eng quimica
+    - administrativo de vendas
+    - adm pessoal
+    - sistemas de utilidades
+    - sistemas de engenharia
+    - estagiario a administrativo
+    - odontologia
+    # "Programador de Corte a laser" e usinagem CNC: "programador" aqui
+    # significa quem escreve programas de corte de chapa, nao software.
+    - corte a laser
+    - corte laser
+    - programador de corte
+    # "Estagiario para Area de Processos e Qualidade": "analise de sistemas"
+    # aparece so como nome de curso nos requisitos.
+    - area de processos
+    # Recorte da base: so vagas de TECNOLOGIA. Titulos de campo,
+    # vendas, call center e loja saem; suporte de TI continua entrando.
+    - instalador
+    - reparador
+    - fibra optica
+    - fibra otica
+    - promotor de vendas
+    - promotora de vendas
+    - promotor a de vendas
+    - pre vendas
+    - vendas b2b
+    - consultor de vendas
+    - executivo de vendas
+    - planejamento de vendas
+    - vendedor
+    - vendedora
+    - sdr
+    - call center
+    - callcenter
+    - telemarketing
+    - teleatendimento
+    - assistente de loja
+    - atendente de loja
+    - atendimento aos estudantes
+    - gestao de saude
+    - atendente de sac
+    - cobranca retencao
+    - programador de logistica
+    - assistente administrativo controle e processos de ti
+    - tecnologia farmaceutica
+    - analista de cultura e desenvolvimento
+    - analista de gestao de contratos
+    - aprendiz monitoracao redes clientes
+    - operador de programacao logistica
+    # Casos confirmados na revisão de outubro: termos como desenvolvimento,
+    # sistemas, suporte e N1 aparecem também em funções fora de TI.
+    - inspetor de qualidade
+    - inspecao solda
+    - tecnico eletromecanico
+    - tecnico quimico
+    - tecnica quimica
+    - farmacotecnico
+    - farmacotecnica
+    - sous chef
+    - psicologo
+    - psicologa
+    - estagio em educacao fisica
+    - academia de musculacao
+    - assistente de sif
+    - analista de seguranca de alimentos
+    - estagiario de rh
+    - estagio rh
+    - trainee rh
+    - analista de recrutamento e selecao
+    - estagio em comunicacao e marketing
+    - analista de pr
+    - estagio juridico
+    - estagiario a juridico
+    - estagio em direito
+    - assistente juridico operacional
+    - estagiario comercial
+    - analista comercial
+    - assistente financeiro
+    - analista administrativo financeiro
+    - assistente administrativo para imobiliaria
+    - assistente administrativo desenvolvimento agronomico
+    - trainee em desenvolvimento imobiliario
+    - jovem aprendiz desenvolvimento imobiliario
+    - jovem aprendiz administrativo desenvolvimento imobiliario
+    - engenharia desenvolvimento cabines
+    - sistemas mecanicos de instalacoes
+    - assistente tecnico de campo especialidade mecanica
+    - condutor sistemas manufatura
+    - programacao de ferramentas
+    - programador de producao
+    - operador programacao logistica
+    - programacao de veiculos
+    - auxiliar de sistema de biogas
+    - assistente de projetos e vendas
+    - auxiliar de qualidade satisfacao do cliente
+    - estagiario de projetos fabrica
+    - estagio administrativo de infraestrutura
+    - estagiario na area de engenharia de producao
+    - programador de manutencao
+    - programadora de manutencao
+    - assistente rh help desk
+    - helpdesk rh
+    - help desk de rh
+    - help desk rh
+    - gestao de contratos de ti
+    - estagio em revisao de texto
+    - estagio em edicao e criacao de videos
+    - aprendiz administrativo em tecnologia
+
+  # Alguns titulos tambem nomeiam funcoes validas de TI. Nesses casos, a vaga
+  # so e bloqueada quando a descricao confirma o contexto fora do recorte.
+  excluir_contextos:
+    # Casos da revisão da release de 27/10. A combinação protege anúncios
+    # com o mesmo título que descrevem uma atividade técnica.
+    - titulo:
+        - estagio superior computacao ou afins
+      descricao:
+        - direcionar as demandas registradas
+        - apoiar o analista da area em rotinas administrativas
+    - titulo:
+        - designer grafico
+        - assistente de designer grafico
+      descricao:
+        - artes graficas para redes sociais
+        - fechamento tecnico de arquivos para grafica
+        - pecas graficas para midias digitais e impressas
+        - campanhas promocionais
+        - campanhas de midia paga
+        - produzir anuncios para meta ads
+        - pecas para instagram
+    - titulo:
+        - desenvolvimento se e equipamentos
+        - desenvolvimento de linhas de transmissao
+      descricao:
+        - subestacoes
+        - ensaios mecanicos e eletricos de alta tensao
+    - titulo:
+        - aprendiz ti
+        - aprendiz t i
+        - estagio analise e desenvolvimento de sistemas
+      descricao:
+        - fazer o arquivo de documentos
+        - auxiliar em outras atividades administrativas correlatas
+        - apoiar as rotinas administrativas da equipe de ti
+        - encaminhamento de documentos e solicitacoes aos responsaveis
+    - titulo:
+        - tecnico de campo
+      descricao:
+        - manutencao de empilhadeiras
+        - manutencoes preventivas e corretivas em empilhadeiras
+    - titulo:
+        - estagio engenharia eletrica
+        - tecnico em eletronica
+      descricao:
+        - auxiliar na elaboracao de propostas e documentos tecnicos
+        - levantamento de informacoes materiais precos e prazos
+    - titulo:
+        - gerente de negocios
+      descricao:
+        - ciclo de vendas de solucoes de software
+        - gerenciar e expandir uma carteira de clientes corporativos
+    - titulo:
+        - analista de suporte
+      descricao:
+        - realizar verificacoes cadastrais e documentais
+        - analise de novos cadastros
+        - analisar novos cadastros e direcionar para aprovacao ou correcao
+    - titulo:
+        - analista de programacao logistica
+      descricao:
+        - disponibilidade de veiculos e das janelas de atendimento
+        - programacao diaria de atendimento aos clientes
+    - titulo:
+        - assistente de atendimento tecnico
+      descricao:
+        - ensaio de proficiencia
+        - experiencia em laboratorios de analises clinicas
+    - titulo:
+        - analista telecom
+      descricao:
+        - projetos executivos de civil eletrica ar condicionado
+    - titulo:
+        - assistente tecnologia de aplicacao
+        - assistente de tecnologia de aplicacao
+      descricao:
+        - calibracao de pulverizadores
+        - tecnologia de aplicacao e adjuvantes
+    # Recuperacao da Jobbol: apoio administrativo e engenharia industrial
+    # nao viram TI por citar a area de TI, suporte tecnico ou um curso.
+    - titulo:
+        - estagiario na area de administracao
+      descricao:
+        - controlar estoques de materiais equipamentos epis e uniformes
+        - entregas transportes e solicitacoes de plotagem
+    - titulo:
+        - estagiario na area de engenharia mecanica
+      descricao:
+        - suporte tecnico a produtos lubrificantes e equipamentos
+    - titulo:
+        - estagiario na area de engenharia eletrica
+      descricao:
+        - desenvolvimento de chicotes diagramas e modelamento 3d e 2d
+    # Não excluir "suporte administrativo" por título: há vagas válidas de
+    # help desk, infraestrutura e gestão de acessos com esse nome.
+    - titulo:
+        - suporte administrativo
+      descricao:
+        - suporte em processos administrativos
+        - processos financeiros relacionados a pagamentos
+    - titulo:
+        - analista de suporte operacional
+      descricao:
+        - preservacao dos bens patrimoniais
+    - titulo:
+        - analista de engenharia
+      descricao:
+        - centrais de gas
+    - titulo:
+        - analista de programacao
+      descricao:
+        - programacao de materiais
+    - titulo:
+        - desenvolvimento em cad
+      descricao:
+        - processos de usinagem
+    - titulo:
+        - estagio em comunicacao
+      descricao:
+        - relacoes publicas
+    - titulo:
+        - controlador operacao de sistema
+        - controlador a operacao de sistema
+      descricao:
+        - operar o sistema eletrico de potencia
+    - titulo:
+        - estagio em suporte a producao melhoria continua
+      descricao:
+        - processos de usinagem
+    - titulo:
+        - estagio de sistema de gestao
+        - estagiario de sistema de gestao
+        - sistema de gestao integrada
+        - sistema gestao integrada
+        - integrated management system
+      descricao:
+        - rotinas do sistema de gestao industrial
+        - gerenciamento dos residuos da unidade
+        - informacoes relacionadas a produtos quimicos
+        - engenharia todas as modalidades farmacia ou quimica
+    - titulo:
+        - analista de qualidade e melhoria continua
+        - estagiario na area de qualidade
+      descricao:
+        - fecula de mandioca
+        - testes das materias primas
+    - titulo:
+        - estagiario na area de administracao de empresas
+      descricao:
+        - publicacao de anuncios nos marketplaces
+    - titulo:
+        - estagiario na area de arquitetura
+      descricao:
+        - zoneamento e legislacao urbana
+    - titulo:
+        - assistente administrativo
+      descricao:
+        - demandas da assessoria juridica
+    - titulo:
+        - analista de expansao de redes
+      descricao:
+        - expansao comercial
+        - carteira de clientes
+        - prospeccao
+    - titulo:
+        - analista de implantacao junior
+        - analista de implantacao jr
+      descricao:
+        - corretora de seguros
+        - primeiro faturamento
+    - titulo:
+        - auxiliar de tecnologia da informacao
+        - auxiliar de ti
+      descricao:
+        - oportunidade administrativa
+        - legislacao maritima
+    - titulo:
+        - instrutor de nivel superior
+      descricao:
+        - ministrar aulas
+        - metodologia senai
+
+
+  descricao: # sinais estritos -- precisam sobreviver ao boilerplate das descricoes
+    - desenvolvimento de software
+    - desenvolvedor
+    - desenvolvedora
+    - programador
+    - linguagem de programacao
+    - engenharia de software
+    - banco de dados
+    - codigo fonte
+    - tecnologia da informacao
+    - suporte tecnico
+    - help desk
+
+# Exceções à precedência do título. Exigem um sinal no título e todos os
+# trechos de atividade da regra na descrição.
+classificar_contextos:
+  - area: QA
+    titulo:
+      - backend
+      - back end
+    descricao:
+      - foco em qualidade de software
+      - executar testes automatizados
+      - cenarios de testes funcionais
+  - area: Segurança
+    titulo:
+      - devops
+    descricao:
+      - processos de conformidade e seguranca da informacao
+      - inventario de controles pci
+
+areas:
+  Data:
+    peso_alto: # sinais fortes e pouco ambiguos
+      - engenheiro de dados
+      - engenheira de dados
+      - engenharia de dados
+      - data engineer
+      - cientista de dados
+      - data scientist
+      - analista de dados
+      - data analyst
+      - analytics engineer
+      - engenheiro de analytics
+      - business intelligence
+      - analista de bi
+      - etl
+      - data warehouse
+      - databricks
+      - big data
+      - pipeline de dados
+      - data lake
+      - anaplan
+      - data lakehouse
+      - dba
+      - analista dba
+      - administrador de banco de dados
+      - administrador banco de dados
+      - analista de banco de dados
+      - analista banco dados
+    peso_medio:
+      # "data" sozinho NAO entra: em portugues casa com "data de admissao".
+      - dados
+      - bi
+      - sql
+      - power bi
+      - tableau
+      - looker
+      - airflow
+      - spark
+      - pyspark
+      - hadoop
+      - snowflake
+      - redshift
+      - bigquery
+      - dbt
+      - kafka
+      - estatistica
+      - pandas
+      - analytics
+      - modelagem de dados
+      - dataviz
+      - governanca de dados
+
+  Inteligência Artificial:
+    peso_alto:
+      - agentes de ia
+      - ai agents
+      - ia agentica
+      - engenheiro de ia
+      - engenheira de ia
+      - engenharia de ia
+      - engenheiro de inteligencia artificial
+      - engenheira de inteligencia artificial
+      - desenvolvedor de ia
+      - desenvolvedora de ia
+      - desenvolvedor ia
+      - desenvolvedora ia
+      - desenvolvedor de agentes de ia
+      - desenvolvedor de agentes
+      - ai engineer
+      - artificial intelligence engineer
+      - agentic
+      - rag
+      - cientista de machine learning
+      - machine learning engineer
+      - engenheiro de machine learning
+      - prompt engineer
+      - engenheiro de prompts
+      - especialista em ia
+      - especialista em llm
+      - estagio em ia
+      - estagio em inteligencia artificial
+      - estagio ia
+      - estagio inteligencia artificial
+      - visao computacional
+      - nlp
+    peso_medio:
+      - inteligencia artificial
+      - artificial intelligence
+      - machine learning
+      - aprendizado de maquina
+      - deep learning
+      - ia generativa
+      - genai
+      - generative ai
+      - llm
+      - llms
+      - processamento de linguagem natural
+      - langchain
+      - llamaindex
+      - crewai
+      - vector database
+      - bancos vetoriais
+
+
+
+
+  Frontend:
+    peso_alto:
+      - front end
+      - frontend
+      - desenvolvedor front
+      - front-end
+      - desenvolvimento web front
+      - web developer
+      - desenvolvedor web junior
+    peso_medio:
+      - react
+      - reactjs
+      - angular
+      - vue
+      - vuejs
+      - svelte
+      - next js
+      - nextjs
+      - html
+      - css
+      - sass
+      - scss
+      - tailwind
+      - bootstrap
+      - javascript
+      - typescript
+      - jquery
+      - ui
+      - interface do usuario
+      - responsivo
+      - figma
+      - webpack
+      - redux
+
+  Backend:
+    peso_alto:
+      - back end
+      - backend
+      - back-end
+      - desenvolvedor back
+      - desenvolvedor backend
+      - desenvolvedora backend
+      - desenvolvimento de apis
+      - desenvolvedor rpa
+      - engenheiro de rpa
+      - rpa
+      - analista de rpa
+      - power platform
+      - power apps
+      - powerapps
+      - low code
+      - low-code
+      - desenvolvedor delphi
+      - desenvolvedora delphi
+      - programador delphi
+      - programadora delphi
+      - desenvolvedor cobol
+      - programador cobol
+      - desenvolvedor c++
+      - programador c++
+      - desenvolvedor c#
+      - programador c#
+      - desenvolvedor java
+      - programador java
+      - desenvolvedor python
+      - programador python
+      - desenvolvedor php
+      - programador php
+      - desenvolvedor node
+      - desenvolvedor ruby
+      - desenvolvedor golang
+      - desenvolvedor rust
+      - pl sql
+    peso_medio:
+      - api rest
+      - apis
+      - rest
+      - microservicos
+      - microsservicos
+      - iot
+      - delphi
+      - object pascal
+      - pascal
+      - cobol
+      - rust
+      - c++
+      - c/c++
+      - java
+      - spring
+      - spring boot
+      - net
+      - dotnet
+      - c#
+      - csharp
+      - python
+      - django
+      - flask
+      - fastapi
+      - node
+      - nodejs
+      - php
+      - laravel
+      - ruby
+      - rails
+      - golang
+      - go lang
+      - kotlin
+      - scala
+      - servidor
+      - banco de dados
+      - postgresql
+      - mysql
+      - mongodb
+      - oracle
+      - abap
+      - sap
+
+
+
+  Mobile:
+    peso_alto:
+      - mobile
+      - android
+      - ios
+      - desenvolvedor android
+      - desenvolvedor ios
+      - aplicativos moveis
+      - app mobile
+      - flutter
+      - software android
+      - software ios
+      - desenvolvedor de software android
+      - desenvolvedor de software ios
+    peso_medio:
+      - react native
+      - swift
+      - swiftui
+      - objective c
+      - xamarin
+      - kotlin multiplatform
+      - play store
+      - app store
+      - aplicativo
+
+  DevOps:
+    peso_alto:
+      - devops
+      - sre
+      - site reliability
+      - infraestrutura cloud
+      - cloud engineer
+      - plataforma cloud
+    peso_medio:
+      - aws
+      - azure
+      - gcp
+      - google cloud
+      - kubernetes
+      - k8s
+      - docker
+      - container
+      - terraform
+      - ansible
+      - jenkins
+      - ci cd
+      - pipeline
+      - linux
+      - infraestrutura
+      - observabilidade
+      - monitoramento
+      - prometheus
+      - grafana
+      - cloudformation
+      - openshift
+      - helm
+      - nginx
+
+  QA:
+    peso_alto:
+      - qa
+      - quality assurance
+      - qa engineer
+      - analista de qa
+      - software tester
+      - mainframe tester
+      - testador de software
+      - analista de testes
+      - testes automatizados
+      - automacao de testes
+      - qualidade de software
+      - testes de software
+      - estagio em testes
+      - estagio de testes
+    peso_medio:
+      - teste
+      - testes
+      - tester
+      - selenium
+      - cypress
+      - playwright
+      - junit
+      - pytest
+      - jest
+      - postman
+      - casos de teste
+      - regressao
+      - bug
+      - homologacao
+
+  Fullstack:
+    peso_alto:
+      - fullstack
+      - full stack
+      - full-stack
+      - desenvolvedor full
+    peso_medio: []
+
+  Engenharia de Software:
+    peso_alto:
+      - engenharia de software
+      - engenheiro de software
+      - engenheira de software
+      - desenvolvedor de software
+      - desenvolvedora de software
+      - desenvolvimento de software
+      - desenvolvedor de sistemas
+      - desenvolvimento de sistemas
+      - analista de desenvolvimento
+      - analista de sistemas
+      - analise de sistemas
+      - software engineer
+      - software developer
+      - software engineering
+      - desenvolvedor de jogos
+      - game developer
+      - mainframe
+      - analista de integracao
+      - analista de integracoes
+      # Integracao entre sistemas, APIs e software e desenvolvimento. As
+      # frases completas evitam mandar vagas administrativas para esta area.
+      - integracao de sistemas
+      - integracoes de sistemas
+      - integracao entre sistemas
+      - integracoes entre sistemas
+      - integracao de software
+      - integracoes de software
+      - engenheiro a de software
+      - progettista software
+    peso_medio:
+      # Devs genericos sem stack especifica. Peso medio de proposito: no
+      # titulo vale exatamente min_score, entao qualquer area com stack
+      # ("front-end", "python") continua vencendo ("desenvolvedor junior"
+      # nao casa "desenvolvedor java junior" -- e quando casa, cede).
+      - desenvolvedor junior
+      - desenvolvedora junior
+      - desenvolvedor jr
+      - desenvolvedora jr
+      - desenvolvedor a junior
+      - desenvolvedor a jr
+      - desenvolvedor trainee
+      - desenvolvedor a trainee
+      - analista desenvolvedor
+      - estagiario a de desenvolvimento
+      - estagio desenvolvimento
+      - estagio em desenvolvimento
+      - estagiario de desenvolvimento
+      - estagio software
+      - programador
+      - programadora
+      - programacao
+      - algoritmos
+      - estrutura de dados
+      - desenvolvimento web
+      - orientacao a objetos
+      - poo
+      - clean code
+      - arquitetura de software
+      - padroes de projeto
+      - design patterns
+      - solid
+
+
+  Design / UI / UX:
+    peso_alto:
+      - ui ux
+      - ui/ux
+      - ux ui
+      - ux/ui
+      - ui designer
+      - ux designer
+      - product designer
+      - designer de produto
+      - design de interface
+      - designer de interfaces
+      - web designer
+      - web design
+      - designer grafico
+      - designer instrucional
+      - motion designer
+    peso_medio:
+      - figma
+      - adobe xd
+      - photoshop
+      - illustrator
+      - wireframe
+      - wireframes
+      - prototipagem
+      - prototipos
+      - design system
+      - usabilidade
+      - ux research
+      - journey map
+      - sketch
+      - visual design
+
+  Sistemas / ERP:
+    peso_alto:
+      - analista de erp
+      - consultor erp
+      - analista totvs
+      - analista sap
+      - consultor sap
+      - consultor totvs
+      - analista protheus
+      - implantador erp
+      - analista de implantacao
+      - implantacao de sistemas
+      - implantacao de software
+      - analista de negocios de ti
+      - analista de processos de ti
+      - governanca de ti
+      - gestao de ti
+      - pmo de ti
+      # Produtos SAP citados pelo nome no titulo: "Analista de Sistemas
+      # Junior (SAP / MES)" e "SAP Business One" sao vagas de ERP, nao de
+      # desenvolvimento generico.
+      - sap mes
+      - sap business one
+      - business one
+      # Titulos sem preposicao ("analista sistemas" nao casa "analista de sistemas")
+      - analista sistemas
+      - assistente sistemas
+      - estagio sistemas
+      - itsm
+      - servicenow
+      - salesforce
+      - analise de processos e sistemas
+    peso_medio:
+      - erp
+      - sap
+      - totvs
+      - protheus
+      - senior sistemas
+      - sankhya
+      - rm totvs
+      - datasul
+      - dynamics 365
+      - itil
+      - cobit
+      - pmo
+      - scrum master
+      - product owner
+      - business analyst
+      - implantacao
+
+  Service Desk / Help Desk:
+    peso_alto:
+      - service desk
+      - help desk
+      - helpdesk
+      - analista de service desk
+      - analista de help desk
+      - analista de helpdesk
+      - tecnico de help desk
+      - tecnico de helpdesk
+      - suporte n1
+      - suporte n2
+      - suporte nivel 1
+      - suporte nivel 2
+      - atendimento n1
+      - atendimento n2
+      - n1
+      - n2
+      - nivel 1
+      - nivel 2
+      - operador de service desk
+      - operador de helpdesk
+      - analista de suporte n1
+      - analista de suporte n2
+      - estagio em service desk
+      - estagio service desk
+      - estagio help desk
+    peso_medio:
+      - chamados
+      - ticket
+      - tickets
+      - abertura de chamados
+      - atendimento ao usuario
+      - suporte remoto
+      - atendimento telefonico
+      - sla
+      - incidentes
+
+  Field Service / Hardware:
+    peso_alto:
+      - field service
+      - analista de field service
+      - tecnico de field service
+      - suporte de campo
+      - suporte volante
+      - manutencao de computadores
+      - manutencao de micro
+      - manutencao de micros
+      - tecnico de informatica
+      - tecnico a de informatica
+      - suporte a hardware
+      - suporte presencial
+      - tecnico de campo
+      - volante
+      - field dedicado
+      - field service interno
+    peso_medio:
+      - hardware
+      - impressora
+      - impressoras
+      - cftv
+      - cabeamento
+      - cabeamento estruturado
+      - montagem e manutencao
+      - formatacao
+      - ativos de ti
+      - gestao de ativos
+      - perifericos
+      - inventario de ti
+
+  Suporte Técnico:
+    peso_alto:
+      - suporte tecnico
+      - analista de suporte
+      - tecnico de suporte
+      - suporte de ti
+      - analista de suporte ti
+      - suporte de aplicacoes
+      - suporte de sistemas
+      - estagio suporte
+      - estagio em suporte
+      - estagiario de suporte
+      # Titulos genericos que na pratica sao suporte/help desk
+      # (sem preposicao: "tecnico informatica" nao casa "tecnico de informatica").
+      - assistente de ti
+      - auxiliar de ti
+      - tecnico de ti
+      - tecnico em ti
+      - tecnico informatica
+      - tecnico em informatica
+      - estagiario de ti
+      - estagio de ti
+      - estagio ti
+      - aprendiz de ti
+      - jovem aprendiz de ti
+      - aprendiz ti
+      - aprendiz em ti
+      - auxiliar de informatica
+      - assistente de informatica
+      # Variantes com "(a)" e abreviacao "T.I." que o normalize preserva
+      - estagiario a de ti
+      - auxiliar de t i
+      - assistente de tecnologia da informacao
+      - auxiliar de tecnologia da informacao
+      - software support
+      - soporte
+      - operador de suporte
+    peso_medio:
+      - suporte
+      - atendimento tecnico
+      - suporte computacional
+      - atendimento
+
+  Infraestrutura / Redes:
+    peso_alto:
+      - infraestrutura de ti
+      - analista de infraestrutura
+      - analista de infra
+      - analista de redes
+      - administrador de redes
+      - engenheiro de redes
+      - redes de computadores
+      - administracao de redes
+      - operador de noc
+      - noc analyst
+      - sysadmin
+      - administrador de sistemas
+      - tecnico de redes
+      - cabeamento estruturado
+      - telecomunicacoes
+      - analista de telecom
+      - analista telecom
+      - analista noc
+      - analista noc telecom
+    peso_medio:
+      - infra
+      - infraestrutura
+      - redes
+      - windows server
+      - active directory
+      - switch
+      - roteador
+      - roteadores
+      - firewall de rede
+      - telefonia
+      - voip
+      - servidores
+      - virtualizacao
+      - vmware
+      - hyper-v
+      - vpn
+      - mikrotik
+      - cisco
+      - pfsense
+      - dns
+      - dhcp
+
+  Segurança:
+    peso_alto:
+      - seguranca da informacao
+      - cybersecurity
+      - ciberseguranca
+      - seguranca cibernetica
+      - pentest
+      - soc analyst
+      - analista de seguranca
+      - seguranca de redes
+    peso_medio:
+      - vulnerabilidade
+      - firewall
+      - siem
+      - lgpd
+      - iso 27001
+      - criptografia
+
+  Hardware / Eletrônica:
+    peso_alto:
+      - engenharia de hardware
+      - desenvolvimento de hardware
+      - engenheiro de hardware
+      - hardware engineer
+      - tecnico em eletronica
+      - engenharia eletronica
+      - engenharia de telecomunicacoes
+      - desenvolvimento de firmware
+      - firmware
+      # Sistemas embarcados ligam software ao hardware. Mantemos todas as
+      # formas aqui para nao serem vencidas por Backend.
+      - software embarcado
+      - sistemas embarcados
+      - desenvolvedor embarcado
+      - desenvolvedor embarcados
+      - desenvolvedor de sistemas embarcados
+      - tecnologia embarcada
+      - tecnologias embarcadas
+      - desenvolvedor de hardware
+      - engenheiro de automacao
+      - engenharia de automacao
+      - automacao industrial
+    peso_medio:
+      - eletronica
+      - circuitos
+      - microcontrolador
+      - microcontroladores
+      - arduino
+      - esp32
+      - pcb
+      - placas
+      - telecom
+      - telecomunicacoes
+      - sensores
+      - clp
+
+
+weights:
+  peso_alto: 4.0
+  peso_medio: 1.0

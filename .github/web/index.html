@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tech Skills Brasil — Mapeamento de Skills & API Pública</title>
+
+  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="container">
+  <!-- HEADER -->
+  <header>
+    <div class="title-row">
+      <div>
+        <h1>tech-skills-br</h1>
+        <p style="color: var(--text-muted); font-size: 11px; margin-top: 2px;">
+
+          Mapeamento das habilidades citadas em anúncios de vagas de entrada em tecnologia no Brasil
+        </p>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div class="nav-tabs">
+      <button class="nav-btn active" onclick="setTab('resumo')">[1] Visão Geral</button>
+      <button class="nav-btn" onclick="setTab('skills')">[2] Ranking de Habilidades</button>
+      <button class="nav-btn" onclick="setTab('areas')">[3] Explorador por Área</button>
+      <button class="nav-btn" onclick="setTab('vagas')">[4] Explorador de Vagas</button>
+      <button class="nav-btn" onclick="setTab('api')">[5] Endpoints da API JSON</button>
+      <button class="nav-btn" onclick="setTab('sobre')">[6] Sobre</button>
+    </div>
+  </header>
+
+  <div id="data-status" role="status" aria-live="polite" style="color: var(--text-muted); margin-bottom: 12px;">
+    <span id="data-status-message">Carregando dados...</span>
+    <button id="data-retry" class="nav-btn" type="button" onclick="loadData()" hidden>Tentar novamente</button>
+  </div>
+
+  <!-- TAB 1: VISÃO GERAL -->
+  <div id="tab-resumo" class="tab-section active">
+    <div class="grid-kpi">
+      <div class="card">
+        <div class="card-title">Amostra Total de Vagas</div>
+        <div class="card-value" id="kpi-total">--</div>
+        <p style="color: var(--text-muted); font-size: 11px; margin-top: 4px;" id="kpi-periodo">--</p>
+      </div>
+      <div class="card">
+        <div class="card-title">Empresas Contratantes</div>
+        <div class="card-value" id="kpi-empresas">--</div>
+        <p style="color: var(--text-muted); font-size: 11px; margin-top: 4px;">Empresas únicas catalogadas</p>
+      </div>
+      <div class="card">
+        <div class="card-title">Skill com maior presença</div>
+        <div class="card-value" style="color: var(--green);" id="kpi-top-skill">--</div>
+        <p style="color: var(--text-muted); font-size: 11px; margin-top: 4px;" id="kpi-top-skill-count">--</p>
+      </div>
+      <div class="card">
+        <div class="card-title" id="kpi-top-mod-title">Modalidade Dominante</div>
+        <div class="card-value" id="kpi-top-mod-value">--</div>
+        <p style="color: var(--text-muted); font-size: 11px; margin-top: 4px;" id="kpi-top-mod-sub">--</p>
+      </div>
+    </div>
+
+    <div class="summary-grid">
+      <!-- Áreas -->
+      <div class="card">
+        <div class="card-title" style="font-weight: 700;">Distribuição por Área Técnica</div>
+        <table id="table-areas-summary">
+          <thead><tr><th>Área</th><th style="text-align: center;">Vagas</th><th style="text-align: right;">%</th><th class="hide-mobile" style="width: 35%;">Distribuição</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- Regiões e Modalidade -->
+      <div class="card">
+        <div class="card-title" style="font-weight: 700;">Macrorregiões do Brasil</div>
+        <table id="table-regioes-summary">
+          <thead><tr><th>Região</th><th style="text-align: center;">Vagas</th><th style="text-align: right;">%</th><th class="hide-mobile" style="width: 35%;">Distribuição</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        
+        <div class="card-title" style="font-weight: 700; margin-top: 16px;">Modalidade de Trabalho</div>
+        <table id="table-modalidades-summary">
+          <thead><tr><th>Modalidade</th><th style="text-align: center;">Vagas</th><th style="text-align: right;">%</th><th class="hide-mobile" style="width: 35%;">Distribuição</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: RANKING DE HABILIDADES -->
+  <div id="tab-skills" class="tab-section">
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px;">
+        <div>
+          <div class="card-title" style="font-weight: 700;">Tecnologias Mais Citadas nos Anúncios</div>
+          <p style="color: var(--text-muted); font-size: 11px;">Frequência entre os anúncios com ao menos uma habilidade identificada. Uma vaga pode citar várias habilidades.</p>
+        </div>
+        <input type="text" class="search-input" id="search-skills" placeholder="Filtrar tecnologia..." oninput="renderSkillsTable()">
+      </div>
+
+      <div class="scroll-table">
+        <table id="table-skills" class="skills-table">
+          <thead><tr><th class="rank-col">#</th><th class="technology-col">Tecnologia</th><th class="hide-mobile" style="text-align: center; width: 22%;">Categoria</th><th style="text-align: center; width: 14%;">Vagas</th><th style="text-align: right; width: 10%;">Freq. %</th><th class="hide-mobile proportion-col">Proporção</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- TAB 3: EXPLORADOR POR ÁREA -->
+  <div id="tab-areas" class="tab-section">
+    <div class="card" style="margin-bottom: 12px;">
+      <div class="card-title" style="margin-bottom: 8px;">Selecione a Especialidade:</div>
+      <div id="area-pills-container"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="font-weight: 700;" id="area-detail-title">Habilidades em Destaque</div>
+      <p style="color: var(--text-muted); font-size: 11px; margin-bottom: 10px;" id="area-detail-subtitle"></p>
+
+      <div class="scroll-table">
+        <table id="table-area-skills" class="skills-table">
+          <thead><tr><th class="rank-col">#</th><th class="technology-col">Tecnologia</th><th class="hide-mobile" style="text-align: center; width: 22%;">Categoria</th><th style="text-align: center; width: 14%;"><span class="hide-mobile">Vagas na Área</span><span class="show-mobile">Vagas</span></th><th style="text-align: right; width: 10%;">Freq. %</th><th class="hide-mobile proportion-col">Proporção</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 4: EXPLORADOR DE VAGAS -->
+  <div id="tab-vagas" class="tab-section">
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px;">
+        <div>
+          <div class="card-title" style="font-weight: 700;">Navegador de Vagas Recentes</div>
+          <p style="color: var(--text-muted); font-size: 11px;">Consulte anúncios dos últimos 30 dias, modalidade, localidade e links originais.<br>Combine cidade e termos (ex.: qa ourinhos playwright).</p>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; width: 100%; max-width: 520px;">
+          <input type="text" class="search-input" id="search-vagas" placeholder="Buscar por título, empresa, área, tecnologia, cidade ou fonte (ex.: linkedin)..." oninput="renderVagasTable()" style="margin-bottom: 0; flex: 1; min-width: 180px;" title="Combine termos (E lógico) e use o nome da cidade, ex.: qa ourinhos playwright">
+          <select id="filter-modalidade" class="search-input" style="margin-bottom: 0; width: auto; min-width: 140px; cursor: pointer;" onchange="renderVagasTable()">
+            <option value="">Todas modalidades</option>
+            <option value="Presencial">Presencial</option>
+            <option value="Remoto">Remoto</option>
+            <option value="Híbrido">Híbrido</option>
+          </select>
+        </div>
+      </div>
+
+
+      <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;" id="vagas-count-info" role="status"></p>
+      <button class="nav-btn" id="vagas-retry" onclick="loadVagasData()" hidden>Tentar novamente</button>
+
+      <div class="scroll-table" id="vagas-scroll">
+        <table id="table-vagas">
+          <thead><tr><th>Título da Vaga</th><th class="hide-mobile">Empresa</th><th class="hide-mobile" style="text-align: center;">Área</th><th>Local / Mod.</th><th class="job-link-col">Link</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button class="nav-btn" id="vagas-more" onclick="appendVagasRows()" hidden>Mostrar mais vagas</button>
+      </div>
+
+
+    </div>
+  </div>
+
+
+  <!-- TAB 5: API JSON -->
+  <div id="tab-api" class="tab-section">
+    <div class="card space-y-4">
+      <div class="card-title" style="font-weight: 700; color: var(--text-bright);">Endpoints da API JSON Estática (CORS Aberto)</div>
+      <p style="color: var(--text-muted); font-size: 11px; margin-top: 4px;">
+        Os dados consolidados estão disponíveis publicamente em formato JSON para consumo direto no Postman, Python, JavaScript, R ou Power BI:
+      </p>
+
+      <table style="margin: 14px 0;">
+        <thead><tr><th>Endpoint</th><th class="hide-mobile">Descrição</th><th style="text-align: center; width: 45px;">Link</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>GET /api/resumo.json</code></td>
+            <td class="hide-mobile">Metadados gerais, KPIs e distribuições de áreas e regiões</td>
+            <td style="text-align: center;"><a href="api/resumo.json" target="_blank" rel="noopener noreferrer" title="Abrir JSON" style="font-size: 14px; text-decoration: none;">↗</a></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/areas.json</code></td>
+            <td class="hide-mobile">Ranking consolidado de todas as áreas técnicas com contagens e percentuais</td>
+            <td style="text-align: center;"><a href="api/areas.json" target="_blank" rel="noopener noreferrer" title="Abrir JSON" style="font-size: 14px; text-decoration: none;">↗</a></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/tecnologias.json</code></td>
+            <td class="hide-mobile">Ranking de tecnologias e habilidades identificadas nos anúncios</td>
+            <td style="text-align: center;"><a href="api/tecnologias.json" target="_blank" rel="noopener noreferrer" title="Abrir JSON" style="font-size: 14px; text-decoration: none;">↗</a></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/vagas.json</code></td>
+            <td class="hide-mobile">Base completa com todos os anúncios catalogados</td>
+            <td style="text-align: center;"><a href="api/vagas.json" target="_blank" rel="noopener noreferrer" title="Abrir JSON" style="font-size: 14px; text-decoration: none;">↗</a></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/vagas-recentes.json</code></td>
+            <td class="hide-mobile">Anúncios publicados nos últimos 30 dias, no momento da geração</td>
+            <td style="text-align: center;"><a href="api/vagas-recentes.json" target="_blank" rel="noopener noreferrer" title="Abrir JSON" style="font-size: 14px; text-decoration: none;">↗</a></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="card-title" style="font-weight: 700; margin-top: 16px;">Terminal:</div>
+      <pre><code>curl -s https://diasgarcia.github.io/tech-skills-br/api/tecnologias.json | jq .[0:5]</code></pre>
+    </div>
+  </div>
+
+  <!-- TAB 6: SOBRE -->
+  <div id="tab-sobre" class="tab-section">
+    <div class="card">
+      <div class="card-title" style="font-weight: 700; color: var(--text-bright);">Sobre o projeto</div>
+      <div class="about-copy">
+        <p>O Tech Skills Brasil organiza dados sobre habilidades citadas em vagas de entrada na área de tecnologia no Brasil.</p>
+
+        <p>O projeto coleta anúncios públicos, classifica as vagas e identifica as habilidades citadas nos textos disponíveis.</p>
+
+        <p>O estudo considera vagas de estágio, trainee, aprendiz e nível júnior. Ele não inclui profissionais plenos, seniores ou líderes.</p>
+
+        <p>Os números mostram os anúncios encontrados durante a coleta. Eles não representam todas as vagas de tecnologia do Brasil nem o número de contratações. Textos incompletos e termos fora do vocabulário podem deixar habilidades sem registro.</p>
+
+        <p>Este projeto não é um portal de empregos. Os links mostram a origem das informações. O projeto não recomenda vagas e não participa de contratações.</p>
+
+      </div>
+
+      <p class="about-source">
+        <a href="https://github.com/diasgarcia/tech-skills-br/wiki" target="_blank" rel="noopener noreferrer">Leia mais na wiki do projeto ↗</a>
+      </p>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    <div>
+      <span class="hide-mobile">Tech Skills Brasil &middot; <span id="footer-freshness">Dados públicos</span> &middot; 2026</span>
+      <span class="show-mobile">Tech Skills Brasil &middot; 2026</span>
+    </div>
+    <div class="footer-links" aria-label="Links do projeto">
+      <button class="footer-link footer-privacy" id="analytics-preferences" type="button" aria-label="Preferências de privacidade" title="Privacidade" aria-haspopup="dialog">
+        <svg class="privacy-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        </svg>
+        <span class="footer-link-label">Privacidade</span>
+      </button>
+      <a class="footer-link" href="https://github.com/diasgarcia/tech-skills-br" target="_blank" rel="noopener noreferrer" aria-label="Abrir o projeto no GitHub" title="GitHub" data-analytics-link="github">
+        <svg class="footer-icon" viewBox="-0.5 -0.5 17 17" aria-hidden="true">
+          <path fill="currentColor" d="M8 0C3.58 0 0 3.64 0 8.13c0 3.59 2.29 6.64 5.47 7.71.4.07.55-.18.55-.39 0-.19-.01-.83-.01-1.51-2.01.38-2.53-.5-2.69-.96-.09-.23-.48-.96-.82-1.15-.28-.15-.68-.52-.01-.53.63-.01 1.08.59 1.23.83.72 1.23 1.87.88 2.33.67.07-.53.28-.88.51-1.08-1.78-.21-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.2-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.4 7.4 0 0 1 8 3.87a7.4 7.4 0 0 1 2 .27c1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.96.08 2.16.51.57.82 1.3.82 2.19 0 3.12-1.87 3.81-3.65 4.02.29.25.54.74.54 1.5 0 1.08-.01 1.95-.01 2.22 0 .21.15.47.55.39A8.16 8.16 0 0 0 16 8.13C16 3.64 12.42 0 8 0Z"/>
+        </svg>
+        <span class="footer-link-label">GitHub</span>
+      </a>
+      <a class="footer-link footer-link-kaggle" href="https://www.kaggle.com/datasets/rafaeldiasgarcia/tech-skills-br" target="_blank" rel="noopener noreferrer" aria-label="Abrir o dataset no Kaggle" title="Dataset no Kaggle" data-analytics-link="kaggle">
+        <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6.5 3v18M17.5 3 7 13.5M10.8 9.7 18 21" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="footer-link-label">Kaggle</span>
+      </a>
+      <a class="footer-link" href="https://huggingface.co/datasets/diasgarcia/tech-skills-br" target="_blank" rel="noopener noreferrer" aria-label="Abrir o dataset no Hugging Face" title="Dataset no Hugging Face" data-analytics-link="huggingface">
+        <!-- Ícone do Hugging Face via Simple Icons. -->
+        <svg class="footer-icon" viewBox="-0.5 -0.5 25 25" aria-hidden="true">
+          <path fill="currentColor" d="M12.025 1.13c-5.77 0-10.449 4.647-10.449 10.378 0 1.112.178 2.181.503 3.185.064-.222.203-.444.416-.577a.96.96 0 0 1 .524-.15c.293 0 .584.124.84.284.278.173.48.408.71.694.226.282.458.611.684.951v-.014c.017-.324.106-.622.264-.874s.403-.487.762-.543c.3-.047.596.06.787.203s.31.313.4.467c.15.257.212.468.233.542.01.026.653 1.552 1.657 2.54.616.605 1.01 1.223 1.082 1.912.055.537-.096 1.059-.38 1.572.637.121 1.294.187 1.967.187.657 0 1.298-.063 1.921-.178-.287-.517-.44-1.041-.384-1.581.07-.69.465-1.307 1.081-1.913 1.004-.987 1.647-2.513 1.657-2.539.021-.074.083-.285.233-.542.09-.154.208-.323.4-.467a1.08 1.08 0 0 1 .787-.203c.359.056.604.29.762.543s.247.55.265.874v.015c.225-.34.457-.67.683-.952.23-.286.432-.52.71-.694.257-.16.547-.284.84-.285a.97.97 0 0 1 .524.151c.228.143.373.388.43.625l.006.04a10.3 10.3 0 0 0 .534-3.273c0-5.731-4.678-10.378-10.449-10.378M8.327 6.583a1.5 1.5 0 0 1 .713.174 1.487 1.487 0 0 1 .617 2.013c-.183.343-.762-.214-1.102-.094-.38.134-.532.914-.917.71a1.487 1.487 0 0 1 .69-2.803m7.486 0a1.487 1.487 0 0 1 .689 2.803c-.385.204-.536-.576-.916-.71-.34-.12-.92.437-1.103.094a1.487 1.487 0 0 1 .617-2.013 1.5 1.5 0 0 1 .713-.174m-10.68 1.55a.96.96 0 1 1 0 1.921.96.96 0 0 1 0-1.92m13.838 0a.96.96 0 1 1 0 1.92.96.96 0 0 1 0-1.92M8.489 11.458c.588.01 1.965 1.157 3.572 1.164 1.607-.007 2.984-1.155 3.572-1.164.196-.003.305.12.305.454 0 .886-.424 2.328-1.563 3.202-.22-.756-1.396-1.366-1.63-1.32q-.011.001-.02.006l-.044.026-.01.008-.03.024q-.018.017-.035.036l-.032.04a1 1 0 0 0-.058.09l-.014.025q-.049.088-.11.19a1 1 0 0 1-.083.116 1.2 1.2 0 0 1-.173.18q-.035.029-.075.058a1.3 1.3 0 0 1-.251-.243 1 1 0 0 1-.076-.107c-.124-.193-.177-.363-.337-.444-.034-.016-.104-.008-.2.022q-.094.03-.216.087-.06.028-.125.063l-.13.074q-.067.04-.136.086a3 3 0 0 0-.135.096 3 3 0 0 0-.26.219 2 2 0 0 0-.12.121 2 2 0 0 0-.106.128l-.002.002a2 2 0 0 0-.09.132l-.001.001a1.2 1.2 0 0 0-.105.212q-.013.036-.024.073c-1.139-.875-1.563-2.317-1.563-3.203 0-.334.109-.457.305-.454m.836 10.354c.824-1.19.766-2.082-.365-3.194-1.13-1.112-1.789-2.738-1.789-2.738s-.246-.945-.806-.858-.97 1.499.202 2.362c1.173.864-.233 1.45-.685.64-.45-.812-1.683-2.896-2.322-3.295s-1.089-.175-.938.647 2.822 2.813 2.562 3.244-1.176-.506-1.176-.506-2.866-2.567-3.49-1.898.473 1.23 2.037 2.16c1.564.932 1.686 1.178 1.464 1.53s-3.675-2.511-4-1.297c-.323 1.214 3.524 1.567 3.287 2.405-.238.839-2.71-1.587-3.216-.642-.506.946 3.49 2.056 3.522 2.064 1.29.33 4.568 1.028 5.713-.624m5.349 0c-.824-1.19-.766-2.082.365-3.194 1.13-1.112 1.789-2.738 1.789-2.738s.246-.945.806-.858.97 1.499-.202 2.362c-1.173.864.233 1.45.685.64.451-.812 1.683-2.896 2.322-3.295s1.089-.175.938.647-2.822 2.813-2.562 3.244 1.176-.506 1.176-.506 2.866-2.567 3.49-1.898-.473 1.23-2.037 2.16c-1.564.932-1.686 1.178-1.464 1.53s3.675-2.511 4-1.297c.323 1.214-3.524 1.567-3.287 2.405.238.839 2.71-1.587 3.216-.642.506.946-3.49 2.056-3.522 2.064-1.29.33-4.568 1.028-5.713-.624"/>
+        </svg>
+        <span class="footer-link-label">Hugging Face</span>
+      </a>
+    </div>
+  </footer>
+</div>
+
+<dialog id="job-details" class="job-details" aria-labelledby="job-details-title">
+  <div class="job-details-heading">
+    <div class="card-title">Anúncio da amostra</div>
+    <button class="job-details-close nav-btn" type="button" aria-label="Fechar detalhes" onclick="closeJobDetails()">×</button>
+  </div>
+  <h2 id="job-details-title"></h2>
+  <p id="job-details-company"></p>
+  <div id="job-details-tags"></div>
+  <dl id="job-details-fields"></dl>
+  <div class="job-details-skills">
+    <h3>Habilidades identificadas</h3>
+    <div id="job-details-skills"></div>
+  </div>
+  <p class="job-details-note">Consulte a descrição completa e a disponibilidade da vaga no portal de origem.</p>
+  <div id="job-details-link"></div>
+</dialog>
+
+<!-- JAVASCRIPT ROOTS -->
+<dialog id="analytics-consent" class="analytics-consent" aria-labelledby="analytics-title" aria-describedby="analytics-description">
+  <h2 id="analytics-title">Medição de acessos</h2>
+  <p id="analytics-description">Podemos usar o Google Analytics para medir acessos, uso das abas e cliques em links? A medição só começa se você aceitar. O site funciona sem ela.</p>
+  <details>
+    <summary>Sobre os dados</summary>
+    <p>O Google recebe dados de navegação e do dispositivo e pode estimar a localização. A medição usa cookies, sem recursos de publicidade. Não enviamos o texto digitado nas buscas nos eventos do site.</p>
+    <p>Sua escolha fica salva neste navegador por até 180 dias. Você pode mudar em Privacidade, no rodapé. Ao revogar, removemos os cookies desta integração e recarregamos a página para interromper a medição.</p>
+    <a href="https://policies.google.com/privacy?hl=pt-BR" target="_blank" rel="noopener noreferrer">Política de privacidade do Google ↗</a>
+  </details>
+  <p id="analytics-local-note" hidden>Prévia local: nenhum dado de uso é enviado.</p>
+  <div class="analytics-actions">
+    <button class="nav-btn" id="analytics-reject" type="button">Recusar</button>
+    <button class="nav-btn" id="analytics-accept" type="button">Aceitar</button>
+  </div>
+</dialog>
+<script src="analytics.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>

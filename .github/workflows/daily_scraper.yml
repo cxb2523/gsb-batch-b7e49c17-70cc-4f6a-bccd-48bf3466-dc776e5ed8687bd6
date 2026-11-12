@@ -1,0 +1,406 @@
+name: Coleta Diaria de Vagas
+
+on:
+  # Sem crons nativos: o agendador do GitHub atrasava/derrubava as runs
+  # (30min -> 5h -> drop). O gatilho agora e externo (cron-job.org chama a
+  # API de dispatch nos horarios 09:16, 14:16 e 19:16 BRT), e o botao
+  # manual continua disponivel.
+  #
+  # `origem` e `rodada` sao informados pelo cron-job.org no corpo do
+  # dispatch. Somente cron com rodada 1, 2 ou 3 e automatico; qualquer
+  # combinacao sem uma rodada valida e tratada como execucao manual.
+  workflow_dispatch:
+    inputs:
+      origem:
+        description: 'Origem do disparo'
+        required: false
+        default: 'manual'
+        type: choice
+        options:
+          - manual
+          - cron
+      rodada:
+        description: 'Rodada automatica do dia (1=09:16, 2=14:16, 3=19:16 BRT)'
+        required: false
+        default: ''
+        type: string
+      fontes:
+        description: 'Fontes para coletar, separadas por espaco (vazio = todas)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  scrape-and-update:
+    name: Mineracao e Consolidacao de Vagas
+    # Libera o banco ao terminar este job, mesmo se o Pages ficar esperando.
+    concurrency:
+      group: vagas-snapshot-latest
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    permissions:
+      contents: write  # Permite que o bot do GitHub commite as novas vagas
+      pages: write     # Necessario para o artefato do Pages
+      id-token: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    outputs:
+      snapshot_id: ${{ steps.consolidation.outputs.snapshot_id }}
+      has_source_errors: ${{ steps.consolidation.outputs.has_source_errors }}
+      failed_sources: ${{ steps.consolidation.outputs.failed_sources }}
+
+    steps:
+    - name: 1. Baixar repositorio
+      uses: actions/checkout@v7
+
+    - name: 2. Registrar data da rodada
+      run: |
+        TZ=America/Sao_Paulo date +'DATA_HOJE=%d/%m/%Y%nDIA_RESUMO=%Y-%m-%d' >> "$GITHUB_ENV"
+
+    - name: 3. Configurar Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: 4. Instalar dependencias
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+
+    - name: 5. Coletar todas as fontes (limite natural de paginacao de cada uma)
+      run: |
+        set -o pipefail
+        # tee em vez de capturar em variavel: o log aparece ao vivo no
+        # terminal da run (captura so exibiria no final).
+        # Os defaults vivem no codigo (scraper/config.py): coleta paralela
+        # ligada e a matriz de delays por fonte (LinkedIn 1.0s; InfoJobs,
+        # Vagas.com e Solides 2.0s; demais 1.0s - medido em 05/09, ver a
+        # wiki "Limites e Bloqueios"). A CLI so passa o teto de paginas.
+        FLAGS="--max-pages 200 --no-enrich --quality-gate"
+        if [ -n "${{ github.event.inputs.fontes }}" ]; then
+          FLAGS="$FLAGS --sources ${{ github.event.inputs.fontes }}"
+        fi
+        python main.py $FLAGS 2>&1 | tee /tmp/coleta.log
+        echo "BRUTAS=$(grep -oP 'Total bruto: \K[0-9]+' /tmp/coleta.log | tail -1)" >> "$GITHUB_ENV"
+        echo "ELEGIVEIS=$(grep -oP 'RANKING DE AREAS -- \K[0-9]+' /tmp/coleta.log | tail -1)" >> "$GITHUB_ENV"
+      env:
+        PYTHONPATH: .
+
+    - name: 6. Carregar historico, consolidar novas vagas e atualizar snapshot
+      id: consolidation
+      run: |
+        set -o pipefail
+        python scripts/release_snapshot.py download --allow-legacy
+        python scripts/collection_health.py check
+        # Importa todos os CSVs da rodada, do mais antigo para o mais novo.
+        OUT_RODADA=""
+        for csv in $(ls -tr output/vagas_*.csv); do
+          OUT_RODADA=$(python scripts/import_csv.py --csv "$csv")
+          echo "$OUT_RODADA"
+        done
+        NOVAS=$(echo "$OUT_RODADA" | grep -oP 'Criadas[. ]+\K[0-9]+' | tail -1)
+        ATUALIZADAS=$(echo "$OUT_RODADA" | grep -oP 'Atualizadas[. ]+\K[0-9]+' | tail -1)
+        echo "NOVAS=${NOVAS:-0}" >> "$GITHUB_ENV"
+        echo "ATUALIZADAS=${ATUALIZADAS:-0}" >> "$GITHUB_ENV"
+        HASH_ANTES=$(sha256sum data/vagas.db | cut -d' ' -f1)
+        python -u scripts/enrich_outras_fontes.py --summary-json data/enrich-outras.json 2>&1 | tee /tmp/enrich.log
+        python -u scripts/enrich_descriptions.py --summary-json data/enrich-linkedin.json 2>&1 | tee -a /tmp/enrich.log
+        {
+          echo "## Diagnostico do enriquecimento"
+          echo
+          echo '```text'
+          grep -E 'Resumo enriquecimento|Pendencias .* por motivo' /tmp/enrich.log || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        python scripts/reclassify_areas.py
+        HASH_DADOS_DEPOIS=$(sha256sum data/vagas.db | cut -d' ' -f1)
+        if [ "$HASH_ANTES" != "$HASH_DADOS_DEPOIS" ]; then
+          DADOS_MUDARAM=1
+        else
+          DADOS_MUDARAM=0
+        fi
+        python scripts/collection_health.py record
+        # Uma coleta parcial nao renova o frescor global. Isso e um aviso,
+        # nao um motivo para perder os resultados das fontes saudaveis.
+        FRESCOR=$(python scripts/collection_health.py status --max-age-hours 24 --warn-only)
+        {
+          echo "## Frescor da coleta"
+          echo
+          echo "\`$FRESCOR\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+        # A partir daqui o banco nao muda: vagas.db + vagas.csv (release) e
+        # o Parquet das replicas precisam ser o mesmo snapshot da rodada.
+        python scripts/export_seed.py
+        python scripts/release_snapshot.py publish --allow-legacy
+        echo "snapshot_id=$(jq -r '.parent_sha256' data/snapshot-base.json)" >> "$GITHUB_OUTPUT"
+        ORIGEM_INPUT="$ORIGEM"
+        RODADA_INPUT="$RODADA"
+        if [ "$ORIGEM_INPUT" = "cron" ] && { [ "$RODADA_INPUT" = "1" ] || [ "$RODADA_INPUT" = "2" ] || [ "$RODADA_INPUT" = "3" ]; }; then
+          EXECUCAO="cron"
+          RODADA_EXECUCAO="$RODADA_INPUT"
+          echo "RODADA=$RODADA_INPUT" >> "$GITHUB_ENV"
+        else
+          EXECUCAO="manual"
+          RODADA_EXECUCAO="manual"
+          echo "RODADA=manual" >> "$GITHUB_ENV"
+        fi
+        echo "EXECUCAO=$EXECUCAO" >> "$GITHUB_ENV"
+        echo "RODADA_EXECUCAO=$RODADA_EXECUCAO" >> "$GITHUB_ENV"
+
+        # O relatorio e os graficos do README sao atualizados na rodada 3
+        # (19:16 BRT) ou quando a coleta e tratada como manual.
+        if [ "$EXECUCAO" = "manual" ] || [ "$RODADA_INPUT" = "3" ]; then
+          python scripts/report_db.py --dia "$DIA_RESUMO"
+          echo "ATUALIZAR_RESUMOS=1" >> "$GITHUB_ENV"
+        else
+          echo "ATUALIZAR_RESUMOS=0" >> "$GITHUB_ENV"
+        fi
+        python scripts/export_pages_data.py
+        MUDOU=0
+        [ "${NOVAS:-0}" -gt 0 ] && MUDOU=1
+        [ "${ATUALIZADAS:-0}" -gt 0 ] && MUDOU=1
+        [ "$DADOS_MUDARAM" = "1" ] && MUDOU=1
+        echo "mudou=$MUDOU" >> "$GITHUB_OUTPUT"
+        python scripts/resumo_commit.py \
+          --dia "$DIA_RESUMO" \
+          --brutas "$BRUTAS" --elegiveis "$ELEGIVEIS" \
+          --novas "$NOVAS" --atualizadas "$ATUALIZADAS" \
+          --summary-json data/enrich-outras.json --summary-json data/enrich-linkedin.json > /tmp/corpo_commit.txt
+      env:
+        PYTHONPATH: .
+        ORIGEM: ${{ github.event.inputs.origem }}
+        RODADA: ${{ github.event.inputs.rodada }}
+        DATA_HOJE: ${{ env.DATA_HOJE }}
+
+    - name: Exportar Parquet compartilhado
+      id: export_parquet
+      if: steps.consolidation.outputs.mudou == '1'
+      continue-on-error: true
+      run: |
+        python -m pip install -e '.[export]'
+        python scripts/export_dataset.py
+
+    - name: Publicar snapshot no Hugging Face
+      id: huggingface
+      if: steps.export_parquet.outcome == 'success' && vars.HF_REPO_ID != ''
+      continue-on-error: true
+      timeout-minutes: 6
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        HF_REPO_ID: ${{ vars.HF_REPO_ID }}
+        SNAPSHOT_ID: ${{ steps.consolidation.outputs.snapshot_id }}
+      run: python scripts/publish_huggingface.py kaggle/vagas.parquet --snapshot-id "$SNAPSHOT_ID"
+
+    - name: Publicar snapshot no Kaggle
+      id: kaggle
+      if: steps.export_parquet.outcome == 'success'
+      continue-on-error: true
+      timeout-minutes: 12
+      env:
+        KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      run: |
+        python -m pip install -e '.[publish]'
+        python scripts/export_kaggle.py --publish-only
+
+    - name: Registrar falhas nas réplicas
+      if: steps.export_parquet.outcome == 'failure' || steps.huggingface.outcome == 'failure' || steps.kaggle.outcome == 'failure'
+      run: |
+        MENSAGEM="A release latest foi atualizada. Uma réplica não foi confirmada. Use o workflow Publicar Snapshot no Kaggle e Hugging Face para tentar de novo sem coleta."
+        echo "::warning title=Publicação de Parquet::$MENSAGEM"
+        echo "$MENSAGEM" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: 7. Atualizar notebook diario no Kaggle
+      if: env.EXECUCAO == 'cron' && env.RODADA_EXECUCAO == '3' && (steps.consolidation.outputs.mudou == '0' || steps.kaggle.outcome == 'success')
+      continue-on-error: true
+      run: |
+        python -m pip install -e '.[publish]'
+        kaggle kernels push --path notebooks/kaggle --timeout 900
+        for tentativa in {1..90}; do
+          ESTADO=$(kaggle kernels status rafaeldiasgarcia/tech-skills-brasil-analise-diaria 2>&1)
+          echo "$ESTADO"
+
+          if echo "$ESTADO" | grep -Eqi 'status "[^"]*(complete|completed)[^"]*"'; then
+            exit 0
+          fi
+
+          if echo "$ESTADO" | grep -Eqi 'status "[^"]*(error|failed|cancel)[^"]*"'; then
+            kaggle kernels logs rafaeldiasgarcia/tech-skills-brasil-analise-diaria || true
+            exit 1
+          fi
+
+          sleep 10
+        done
+
+        echo "::error title=Notebook sem confirmacao::O Kaggle nao concluiu o notebook em 15 minutos."
+        exit 1
+      env:
+        KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    - name: 8. Comitar e enviar dados atualizados para o GitHub
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+        # O estado operacional vive no asset vagas.db do release "latest";
+        # no git entra so o relatorio .md da rodada 3 ou de uma coleta manual (#24).
+        if [ "$ATUALIZAR_RESUMOS" = "1" ]; then
+          git add docs/relatorios/*.md
+        fi
+
+        # So importa o que foi staged: nas rodadas automaticas 1/2 nao ha
+        # arquivo do relatorio para commitar.
+        git diff --staged --quiet && exit 0
+
+        # Somente cron com rodada valida recebe o rotulo automatico.
+        # Cron sem rodada (ou com valor invalido) usa o fluxo manual.
+        if [ "$EXECUCAO" = "cron" ]; then
+          MENSAGEM="chore(data): coleta automatizada de vagas [${DATA_HOJE}] - ${RODADA_EXECUCAO}"
+        else
+          N=$(git log --format='%s' | grep -c "coleta automatizada de vagas \[${DATA_HOJE}\] - manual" || true)
+          MENSAGEM="chore(data): coleta automatizada de vagas [${DATA_HOJE}] - manual $((N + 1))"
+        fi
+        # O corpo destaca as vagas novas do dia e separa as contagens da
+        # ultima rodada (coleta, importacao e enriquecimento).
+        { echo "${MENSAGEM}"; echo; cat /tmp/corpo_commit.txt; } > /tmp/commit_msg.txt
+        # Sem [skip ci]: o push em api/web/** precisa disparar o
+        # deploy_pages.yml (o marcador suprimiria todos os workflows do push).
+        git commit -F /tmp/commit_msg.txt
+        COMMIT_BOT=$(git rev-parse HEAD)
+        # Em caso de corrida com outro push, rebaseia e tenta de novo.
+        # Se o rebase conflitar no relatorio, a versao do bot e a mais
+        # nova - vem do banco da propria run.
+        for tentativa in 1 2 3; do
+          if git pull --rebase origin main; then
+            if git push; then
+              exit 0
+            fi
+          else
+            git rebase --abort 2>/dev/null || true
+            git reset --hard origin/main
+            if [ "$ATUALIZAR_RESUMOS" = "1" ]; then
+              git checkout "${COMMIT_BOT}" -- docs/relatorios/*.md
+              git add docs/relatorios/*.md
+            fi
+            git commit -F /tmp/commit_msg.txt
+          fi
+          sleep 10
+        done
+        exit 1
+
+    - name: 9. Montar artefato do GitHub Pages
+      run: |
+        python scripts/build_pages.py
+        if [ "$ATUALIZAR_RESUMOS" = "1" ]; then
+          python scripts/export_readme_charts.py --output-dir _site/assets --dia "$DIA_RESUMO"
+        else
+          # O Pages e publicado em toda rodada para atualizar a API JSON.
+          # Preserve os graficos publicados ate a rodada 3.
+          for arquivo in vagas-habilidades-30d.svg areas-habilidades.svg skills-presenca-vagas.svg; do
+            if ! curl --fail --silent --show-error --location --retry 3 \
+              "https://diasgarcia.github.io/tech-skills-br/assets/${arquivo}" \
+              --output "_site/assets/${arquivo}"; then
+              # O terceiro grafico pode ainda nao ter sido publicado.
+              if [ "$arquivo" != "skills-presenca-vagas.svg" ]; then
+                exit 1
+              fi
+              python scripts/export_readme_charts.py --output-dir "$RUNNER_TEMP/readme-charts" --dia "$DIA_RESUMO"
+              cp "$RUNNER_TEMP/readme-charts/${arquivo}" "_site/assets/${arquivo}"
+            fi
+          done
+        fi
+
+    - name: 10. Preparar artefato do GitHub Pages
+      uses: actions/upload-pages-artifact@v5
+      with:
+        path: '_site'
+
+    - name: Preservar dados para recuperacao em caso de falha
+      if: failure() || steps.consolidation.outputs.has_source_errors == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: recuperacao-coleta-${{ github.run_id }}
+        path: |
+          data/
+          output/*.csv
+          output/collection_metrics.json
+          seed/vagas.csv
+        retention-days: 7
+        if-no-files-found: warn
+
+  deploy-pages:
+    # Deploy interno: o push do bot usa GITHUB_TOKEN e NAO dispara o
+    # deploy_pages.yml (eventos do GITHUB_TOKEN nao criam novos workflows),
+    # entao a publicacao precisa acontecer aqui, no mesmo run.
+    name: Publicar Dashboard no GitHub Pages
+    needs: scrape-and-update
+    concurrency:
+      # Substitui somente o deploy anterior; o snapshot ja foi salvo.
+      group: vagas-pages-deploy
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Conferir se o snapshot ainda e atual
+        id: snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SNAPSHOT_ESPERADO: ${{ needs.scrape-and-update.outputs.snapshot_id }}
+        run: |
+          if [[ ! "$SNAPSHOT_ESPERADO" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::O artefato nao informou um snapshot valido."
+            exit 1
+          fi
+          gh release download latest --repo "$GITHUB_REPOSITORY" --pattern snapshot.json --dir "$RUNNER_TEMP/pages-snapshot"
+          SNAPSHOT_ATUAL=$(jq -er '.snapshot_id | select(type == "string" and test("^[0-9a-f]{64}$"))' "$RUNNER_TEMP/pages-snapshot/snapshot.json")
+          if [ "$SNAPSHOT_ESPERADO" = "$SNAPSHOT_ATUAL" ]; then
+            echo "atual=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "atual=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy antigo ignorado::A release mudou desde a montagem deste artefato. O snapshot antigo nao sera publicado."
+            echo "## Pages: artefato antigo ignorado; a release ja recebeu outro snapshot." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Deploy no GitHub Pages
+        id: deployment
+        if: steps.snapshot.outputs.atual == 'true'
+        uses: actions/deploy-pages@v5
+
+  report-source-errors:
+    name: Sinalizar falhas e anomalias das fontes apos as publicacoes
+    needs: [scrape-and-update, deploy-pages]
+    # A falha intencional fica neste job, depois das entregas. Nao coloque
+    # exit 1 no coletor: isso impediria o job dependente de publicar o Pages.
+    if: >-
+      ${{ !cancelled() && needs.scrape-and-update.result == 'success'
+          && needs.scrape-and-update.outputs.has_source_errors == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      FAILED_SOURCES: ${{ needs.scrape-and-update.outputs.failed_sources }}
+    steps:
+      - name: Encerrar rodada parcial como falha
+        run: |
+          printf '::error title=Coleta parcial::Falha ou anomalia nas fontes: %s. As entregas dos dados validos foram processadas antes desta verificacao.\n' "$FAILED_SOURCES"
+          {
+            echo "## Rodada encerrada com falha ou anomalia de fonte"
+            echo
+            printf 'Fontes com falha ou anomalia: %s\n' "$FAILED_SOURCES"
+            echo
+            echo "Esta verificacao ocorre depois da consolidacao e das publicacoes."
+            echo "Ela nao desfaz os dados salvos nem as entregas que tiveram sucesso."
+            echo "Consulte os jobs anteriores para conferir cada entrega."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

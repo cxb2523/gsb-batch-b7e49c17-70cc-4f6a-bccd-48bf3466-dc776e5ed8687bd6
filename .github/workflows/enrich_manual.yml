@@ -1,0 +1,171 @@
+name: Enriquecimento Manual de Vagas
+
+on:
+  # Roda so quando o responsavel dispara pelo botao "Run workflow".
+  # Usado para testar/limpar pendentes de descricao sem esperar a coleta
+  # diaria: busca descricoes vazias, sinteticas ou truncadas (500 chars)
+  # e re-extrai skills e areas.
+  workflow_dispatch:
+
+jobs:
+  enrich:
+    name: Enriquecimento de Descricoes
+    concurrency:
+      group: vagas-snapshot-latest
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    permissions:
+      contents: write  # Permite que o bot do GitHub commite as vagas atualizadas
+      pages: write     # Necessario para o artefato do Pages
+      id-token: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    outputs:
+      snapshot_id: ${{ steps.snapshot.outputs.snapshot_id }}
+
+    steps:
+    - name: 1. Baixar repositorio
+      uses: actions/checkout@v7
+
+    - name: 2. Configurar Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: 3. Instalar dependencias
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 4. Carregar historico no SQLite
+      run: |
+        python scripts/release_snapshot.py download --allow-legacy
+
+    - name: 5. Enriquecer descricoes pendentes
+      run: |
+        python -u scripts/enrich_outras_fontes.py --summary-json data/enrich-outras.json 2>&1 | tee /tmp/enrich.log
+        python -u scripts/enrich_descriptions.py --summary-json data/enrich-linkedin.json 2>&1 | tee -a /tmp/enrich.log
+        {
+          echo "## Diagnostico do enriquecimento"
+          echo
+          echo '```text'
+          grep -E 'Resumo enriquecimento|Pendencias .* por motivo' /tmp/enrich.log || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+      env:
+        PYTHONPATH: .
+
+    - name: 6. Reclassificar areas pendentes
+      run: |
+        python scripts/reclassify_areas.py
+      env:
+        PYTHONPATH: .
+
+    - name: 7. Exportar snapshot, relatorio e JSON do Pages
+      id: snapshot
+      run: |
+        python scripts/export_seed.py
+        python scripts/report_db.py
+        python scripts/export_pages_data.py
+        python scripts/resumo_commit.py --summary-json data/enrich-outras.json --summary-json data/enrich-linkedin.json > /tmp/corpo_commit.txt
+        python scripts/release_snapshot.py publish --allow-legacy
+        echo "snapshot_id=$(jq -r '.parent_sha256' data/snapshot-base.json)" >> "$GITHUB_OUTPUT"
+      env:
+        PYTHONPATH: .
+
+    - name: 8. Comitar e enviar o relatorio atualizado para o GitHub
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+        git add docs/relatorios/*.md
+        git diff --staged --quiet && exit 0
+
+        DATA_HOJE=$(TZ=America/Sao_Paulo date +'%d/%m/%Y')
+        { echo "chore(data): enriquecimento manual de vagas [${DATA_HOJE}]"; echo; cat /tmp/corpo_commit.txt; } > /tmp/commit_msg.txt
+        git commit -F /tmp/commit_msg.txt
+        COMMIT_BOT=$(git rev-parse HEAD)
+
+        # Em caso de corrida com outro push, rebaseia e tenta de novo.
+        for tentativa in 1 2 3; do
+          if git pull --rebase origin main; then
+            if git push; then
+              exit 0
+            fi
+          else
+            git rebase --abort 2>/dev/null || true
+            git reset --hard origin/main
+            git checkout "${COMMIT_BOT}" -- docs/relatorios/*.md
+            git add docs/relatorios/*.md
+            git commit -F /tmp/commit_msg.txt
+          fi
+          sleep 10
+        done
+        exit 1
+
+    - name: 9. Montar artefato do GitHub Pages
+      run: |
+        python scripts/build_pages.py
+        python scripts/export_readme_charts.py --output-dir _site/assets
+
+    - name: 10. Preparar artefato do GitHub Pages
+      uses: actions/upload-pages-artifact@v5
+      with:
+        path: '_site'
+
+    - name: Preservar dados para recuperacao em caso de falha
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: recuperacao-enriquecimento-${{ github.run_id }}
+        path: data/
+        retention-days: 7
+        if-no-files-found: warn
+
+  deploy-pages:
+    # O push do bot usa GITHUB_TOKEN e nao dispara o deploy_pages.yml.
+    # Por isso a publicacao acontece dentro deste mesmo workflow.
+    name: Publicar Dashboard no GitHub Pages
+    needs: enrich
+    concurrency:
+      # Substitui somente o deploy anterior; o snapshot ja foi salvo.
+      group: vagas-pages-deploy
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Conferir se o snapshot ainda e atual
+        id: snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SNAPSHOT_ESPERADO: ${{ needs.enrich.outputs.snapshot_id }}
+        run: |
+          if [[ ! "$SNAPSHOT_ESPERADO" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::O artefato nao informou um snapshot valido."
+            exit 1
+          fi
+          gh release download latest --repo "$GITHUB_REPOSITORY" --pattern snapshot.json --dir "$RUNNER_TEMP/pages-snapshot"
+          SNAPSHOT_ATUAL=$(jq -er '.snapshot_id | select(type == "string" and test("^[0-9a-f]{64}$"))' "$RUNNER_TEMP/pages-snapshot/snapshot.json")
+          if [ "$SNAPSHOT_ESPERADO" = "$SNAPSHOT_ATUAL" ]; then
+            echo "atual=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "atual=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy antigo ignorado::A release mudou desde a montagem deste artefato. O snapshot antigo nao sera publicado."
+            echo "## Pages: artefato antigo ignorado; a release ja recebeu outro snapshot." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Deploy no GitHub Pages
+        id: deployment
+        if: steps.snapshot.outputs.atual == 'true'
+        uses: actions/deploy-pages@v5

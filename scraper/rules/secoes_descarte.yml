@@ -1,0 +1,74 @@
+# Secoes tipicas de beneficios/termos nas descricoes de vagas.
+#
+# O extrator ignora o texto dessas secoes ate um novo titulo de conteudo.
+# Assim, um bloco de beneficios pode aparecer antes dos requisitos.
+#
+# O corte vale SO para o extrator: a descricao completa continua sendo
+# salva no banco/CSV. As strings sao comparadas no texto normalizado
+# (minusculas, sem acento).
+secoes_descarte:
+  - beneficios
+  - benefits
+  - informacoes adicionais
+  - o que oferecemos
+  - what we offer
+  - o que voce pode esperar
+  - what to expect from us
+  - como tornamos seu trabalho
+  - remuneracao e beneficios
+  - etapas do processo
+  - sobre o processo seletivo
+  - e os beneficios
+  - conheca nossos beneficios
+  - conheca os beneficios
+  - beneficios para voce
+  - beneficios oferecidos
+
+# Titulos de conteudo que retomam a extracao depois de uma secao de descarte.
+# O extrator confere os delimitadores e a caixa no texto original.
+secoes_conteudo:
+  - requisitos
+  - qualificacoes
+  - responsabilidades
+  - principais atividades
+  - atividades
+  - o que voce vai fazer
+  - o que voce fara
+  - o que voce ira fazer
+  - o que esperamos de voce
+  - o que buscamos
+  - o que procuramos
+  - o que voce precisa ter ou saber
+  - esperamos que voce
+  - e importante que voce
+  - e legal que voce
+  - sobre a vaga
+  - para se destacar nessa posicao
+  - para se destacar nesta posicao
+  - voce ira se diferenciar se tiver
+  - buscamos profissional
+  - conhecimento em ferramentas
+  - conhecimentos desejaveis
+  - conhecimentos tecnicos
+  - desejavel conhecimento
+  - competencias tecnicas essenciais
+  - competencias tecnicas desejaveis
+  - o que voce pode esperar do seu dia
+  - requisitos e qualificacoes
+  - requisitos obrigatorios
+  - requisitos desejaveis
+  - conhecimentos necessarios
+  - conhecimentos e habilidades
+  - responsabilidades e atribuicoes
+  - diferencial
+  - diferenciais
+  - idiomas
+  - skills
+  - what you will do
+  - what you ll do
+  - what we are looking for
+  - responsibilities
+  - responsibilities and assignments
+  - requirements
+  - requirements and qualifications
+  - qualifications

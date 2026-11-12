@@ -1,0 +1,227 @@
+"""CLI do tech-skills-br - Mapeamento de Skills em Tecnologia no Brasil.
+
+Exemplos:
+    python main.py                          # coleta padrao gratuita (Gupy, LinkedIn, etc.)
+    python main.py --sources gupy           # coleta isolada so na Gupy
+    python main.py --terms "estagio ti" "engenheiro de dados junior"
+    python main.py --max-pages 2 --delay 2  # coleta menor e mais lenta
+    python main.py --strict                 # descarta titulos "Junior/Pleno"
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+from scraper.config import DELAYS_PADRAO, Settings, _load_dotenv, load_search_terms
+from scraper.pipeline import run
+from scraper.quality import has_blocking_alerts
+from scraper.sources import AVAILABLE_SOURCES, DEFAULT_SOURCES
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tech-skills-br",
+        description="Mineracao e mapeamento de habilidades tecnicas citadas em anuncios de vagas de tecnologia no Brasil.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+
+    parser.add_argument(
+        "--sources", nargs="+", default=list(DEFAULT_SOURCES),
+        choices=AVAILABLE_SOURCES,
+        help=f"Portais a consultar (padrão: {' '.join(DEFAULT_SOURCES)}).",
+    )
+
+    parser.add_argument(
+        "--terms", nargs="+", default=None,
+        help=f"Termos de busca (padrao: {len(load_search_terms())} termos de coletores.yml).",
+    )
+    parser.add_argument(
+        "--start-page", type=int, default=1,
+        help="Pagina inicial da busca por portal (padrao: 1). Util para pular paginas iniciais.",
+    )
+    parser.add_argument(
+        "--max-pages", type=int, default=15,
+        help="Maximo de paginas por termo, por portal (padrao: 15).",
+    )
+
+    parser.add_argument(
+        "--page-size", type=int, default=100,
+        help="Vagas por pagina (padrao: 100); Gupy limita a 100 e Jobbol a 50.",
+    )
+
+    parser.add_argument(
+        "--abler-days", type=int, default=1,
+        help="Abler: janela de dias do sitemap (lastmod). Padrao 1 (ultimas "
+             "24h); use um valor grande para a coleta completa.",
+    )
+
+    parser.add_argument(
+        "--recrutei-full", action="store_true",
+        help="Recrutei: coleta completa via paginacao SSR da listagem "
+             "(todas as vagas ativas). Sem a flag, o padrao diario usa o "
+             "sitemap das ultimas 24h.",
+    )
+
+    parser.add_argument(
+        "--jobbol-days", type=int, default=3,
+        help="Jobbol: janela de publicacao em dias (padrao: 3). "
+             "Use um valor maior para a carga inicial dos anuncios ativos.",
+    )
+
+    parser.add_argument(
+        "--sequencial", action="store_true",
+        help="Desativa a coleta paralela (que e o padrao da rodada): volta a "
+             "coletar fonte a fonte, uma apos a outra.",
+    )
+
+    parser.add_argument(
+        "--source-delay", nargs=2, action="append", metavar=("FONTE", "SEGUNDOS"),
+        default=[],
+        help="Delay por fonte (ex.: --source-delay linkedin 1.0). Sobrescreve "
+             "o delay padrao da matriz para a fonte indicada.",
+    )
+
+    parser.add_argument(
+        "--delay", type=float, default=1.0,
+        help="Delay padrao entre requests para fontes fora da matriz "
+             "(padrao: 1.0).",
+    )
+    parser.add_argument(
+        "--output", type=Path, default=None,
+        help="Diretorio de saida (padrao: ./output).",
+    )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="Descarta titulos mistos como 'Desenvolvedor Junior/Pleno'.",
+    )
+    parser.add_argument(
+        "--all-levels", action="store_true",
+        help="Nao filtra por senioridade (coleta tudo que os portais devolverem).",
+    )
+    parser.add_argument(
+        "--keep-non-tech", action="store_true",
+        help="Mantem vagas fora de tecnologia (Contabil, Fiscal...) que a busca "
+             "solta dos portais devolve. Por padrao elas sao descartadas.",
+    )
+    parser.add_argument(
+        "--no-enrich", action="store_true",
+        help="Nao busca descricoes do LinkedIn durante a coleta (o enriquecimento "
+             "fica para scripts/enrich_descriptions.py, so para vagas pendentes).",
+    )
+    parser.add_argument(
+        "--quality-gate", action="store_true",
+        help="Ativa as protecoes de qualidade usadas pela coleta automatica.",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Log detalhado (DEBUG)."
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    _load_dotenv()
+    for name in ("start_page", "max_pages", "page_size", "abler_days", "jobbol_days"):
+        if getattr(args, name) < 1:
+            parser.error(f"--{name.replace('_', '-')} deve ser maior que zero.")
+    overrides = {}
+    for source, seconds in args.source_delay:
+        if source not in AVAILABLE_SOURCES:
+            parser.error(f"Fonte desconhecida em --source-delay: {source}")
+        try:
+            overrides[source] = float(seconds)
+        except ValueError:
+            parser.error(f"Atraso invalido para {source}: {seconds}")
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s  %(levelname)-7s %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stdout,
+    )
+
+    try:
+        settings = _settings_from_args(args, overrides)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if args.output:
+        settings.output_dir = args.output
+
+    result = run(
+        settings,
+        strict_seniority=args.strict,
+        keep_non_tech=args.keep_non_tech,
+    )
+    return _print_result(result, settings)
+
+
+def _settings_from_args(args, overrides) -> Settings:
+    return Settings(
+        search_terms=args.terms or load_search_terms(),
+        sources=args.sources,
+        delay_seconds=args.delay,
+        page_size=min(args.page_size, 100),
+        start_page=args.start_page,
+        max_pages_per_term=args.max_pages,
+        only_junior=not args.all_levels,
+        enrich_linkedin=not args.no_enrich,
+        abler_days_back=args.abler_days,
+        recrutei_full=args.recrutei_full,
+        jobbol_days_back=args.jobbol_days,
+        parallel_sources=not args.sequencial,
+        quality_gate=args.quality_gate,
+        source_delays={
+            **DELAYS_PADRAO,
+            **overrides,
+        },
+    )
+
+
+def _print_result(result, settings) -> int:
+    if not result.jobs:
+        print("\nNenhuma vaga encontrada. Verifique conexao e termos de busca.")
+        return 1
+
+    tipo_vagas = "junior/estagio/trainee" if settings.only_junior else "todos os niveis"
+    print("\n" + "=" * 62)
+    print(f"  RANKING DE AREAS -- {len(result.jobs)} vagas ({tipo_vagas})")
+    print("=" * 62)
+    for row in result.ranking:
+        bar = "#" * round(row["percentual"] / 2)
+        print(f"  {row['posicao']:>2}. {row['area']:<18} {row['vagas']:>4} vagas "
+              f"({row['percentual']:>5.1f}%) {bar}")
+    print("=" * 62)
+    print(f"\n  Area com mais anuncios coletados: {result.top_area}")
+
+
+    print("\n  Arquivos gerados:")
+    for label, path in result.files.items():
+        print(f"    - {label:<12} {path}")
+
+    errors = [e for s in result.stats for e in s.errors]
+    if errors:
+        print(f"\n  Avisos ({len(errors)}):")
+        for err in errors[:10]:
+            print(f"    ! {err}")
+
+    alerts = result.meta.get("quality_alerts", [])
+    if alerts:
+        print(f"\n  Qualidade ({len(alerts)} alerta(s)):")
+        for alert in alerts:
+            marker = "ERRO" if alert["severity"] == "high" else "AVISO"
+            print(f"    ! {marker}: {alert['message']}")
+
+    if result.meta.get("quality_gate") and has_blocking_alerts({"alerts": alerts}):
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

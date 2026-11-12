@@ -1,0 +1,203 @@
+# Execução local
+
+Use Python 3.12 ou mais recente. Execute os comandos na raiz do repositório.
+O [Manual de Uso](https://github.com/diasgarcia/tech-skills-br/wiki/Manual-de-Uso) descreve as opções de coleta.
+
+## Preparar o ambiente
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev,export,publish]"
+```
+
+Para coletar, basta instalar `python -m pip install -e .`. Os grupos opcionais são `dev` (testes e lint), `export` (Parquet) e `publish` (Kaggle). Os testes da interface também usam Node.js.
+
+## Validar sem coleta real
+
+```powershell
+python -m ruff check .
+python -m pytest -q
+python -m pytest --cov --cov-report=term-missing --cov-report=html
+```
+
+O relatório de cobertura fica em `htmlcov/index.html`. Os testes usam bases temporárias e respostas simuladas. Cobertura não substitui a conferência dos resultados.
+
+Para conferir a mesma versão de Python usada na CI sem substituir seu ambiente atual, crie um ambiente separado na pasta local ignorada `data`:
+
+```powershell
+py -3.12 -m venv data/venv-validacao-py312
+.\data\venv-validacao-py312\Scripts\python.exe -m pip install -e ".[dev,export,publish]"
+.\data\venv-validacao-py312\Scripts\python.exe -m ruff check .
+.\data\venv-validacao-py312\Scripts\python.exe -m pytest -q --cov --cov-report=term --cov-report=html -W error::ResourceWarning
+```
+
+A instalação baixa dependências; os testes seguintes usam respostas simuladas. É necessário ter Python 3.12 e Node.js instalados. Se a criação do ambiente ou a instalação falhar, corrija essa etapa antes de continuar.
+
+## Fazer uma coleta curta
+
+```powershell
+python main.py --sources gupy --terms "desenvolvedor junior" --max-pages 1 --page-size 20 --no-enrich --output output-teste-rapido
+```
+
+Este comando faz chamadas reais à Gupy. Limita a busca a um termo e uma página, mas não garante um tempo máximo. Os filtros podem remover parte dos resultados. A saída fica separada da coleta normal. O comando não importa vagas no SQLite nem publica arquivos. `--no-enrich` desativa os detalhes do LinkedIn; não é um bloqueio geral de rede.
+
+## Jobbol e anunciantes intermediários
+
+A Jobbol está entre as fontes padrão. A coleta consulta sua listagem JSON e busca a descrição completa nas páginas públicas, sem login ou navegador. A janela padrão é de três dias. Anúncios antigos promovidos não encerram a paginação. O teto de `--max-pages` ainda limita a cobertura da listagem.
+
+Para um teste curto, sem importar no banco nem publicar:
+
+```powershell
+python main.py --sources jobbol --terms "desenvolvedor junior" --max-pages 1 --page-size 5 --jobbol-days 30 --no-enrich --output output/test-jobbol
+```
+
+Para ampliar a janela na carga inicial, use `--jobbol-days 365`. A listagem contém anúncios ativos; esse comando não recupera anúncios encerrados. A descrição já entra na coleta, inclusive a seção técnica `Observações`; `--no-enrich` não desativa os detalhes da Jobbol.
+
+Em `scraper/rules/coletores.yml`, `anunciantes_intermediarios` associa o nome exato do anunciante à sua fonte própria. A lista vale para todas as fontes e inclui Jobbol, Abler (também `abler Vagas`), Sólides, Vagas.com, InfoJobs, GeekHunter, trampos (também `trampos.co`), Gupy e Recrutei. A comparação ignora diferenças de caixa e acentos, mas não bloqueia trechos de nomes, menções ou links na descrição.
+
+O fluxo comum exclui a republicação antes do enriquecimento e da exportação, somente quando a fonte própria também está selecionada. Assim, uma vaga da Abler coletada pela Jobbol é excluída numa rodada com as duas fontes. Uma rodada apenas de Jobbol mantém esse anúncio. Anúncios coletados na própria fonte também são mantidos. BuscarVagas, Jobgether e demais anunciantes sem fonte própria ficam fora da lista. Os logs e o relatório informam os descartes. Os registros históricos não são removidos.
+
+O filtro não garante cobertura idêntica entre portais: uma falha na fonte própria pode deixar anúncios sem coleta naquela rodada. Falhas de listagem ou de detalhes são registradas como erros, não como respostas vazias válidas. Confira os diagnósticos antes de decidir remover qualquer registro antigo.
+
+## Baixar a base de trabalho
+
+O banco não está no Git. `git pull` atualiza o código, não os dados. Antes de baixar a base, feche o DBeaver e preserve qualquer alteração local ainda não publicada: o download substitui o arquivo de destino.
+
+```powershell
+git pull --ff-only origin main
+python scripts/release_snapshot.py download --allow-legacy
+```
+
+O script usa o GitHub CLI (`gh`), que deve estar autenticado. Ele valida o snapshot e registra seu hash de origem em `data/snapshot-base.json`. Use `--allow-legacy` apenas durante a transição de releases antigas sem manifesto. Se houver manifesto, ele é obrigatório e validado mesmo com essa opção.
+
+Quantidade de vagas e maior ID ajudam a conferir a base, mas não provam que ela está atualizada. Uma correção de descrição ou skill pode manter ambos iguais.
+
+## Coletar e consolidar
+
+Uma coleta normal pode demorar. Execute somente quando quiser consultar os portais:
+
+```powershell
+python main.py --no-enrich
+python scripts/import_csv.py
+python scripts/enrich_outras_fontes.py --summary-json data/enrich-outras.json
+python scripts/enrich_descriptions.py --summary-json data/enrich-linkedin.json
+python scripts/reclassify_areas.py
+```
+
+O importador sem `--csv` usa o CSV mais recente em `output`. Para importar um arquivo específico, use `--csv caminho.csv`. Importação e enriquecimento aplicam as migrações internas quando necessário. Faça a primeira migração em uma cópia antes de adotá-la na base de trabalho. A importação não regenera os JSONs automaticamente; use o exportador explícito abaixo.
+
+Se também houver saídas de testes em `output`, informe o CSV exato para não
+importar uma rodada diferente. Não use `--recriar` para atualizar o banco:
+essa opção apaga as tabelas, e o CSV não guarda todos os estados internos.
+
+A reextração global continua sendo uma manutenção deliberada. Ela não foi adicionada à rotina diária. Para avaliar mudanças sem gravar:
+
+```powershell
+python scripts/reextract_all_skills.py --db data/vagas.db --dry-run
+```
+
+Quando a regra de modalidade do LinkedIn mudar, reavalie a base sem fazer chamadas:
+
+```powershell
+python scripts/reclassify_workplaces.py --db data/vagas.db
+```
+
+O workflow usa `--quality-gate`, compara `output/collection_metrics.json` com o
+histórico da release e só registra a rodada depois das validações. Não use
+`collection_health.py record` para uma correção manual: frescor representa uma
+coleta real.
+
+Se uma fonte registrar falha, a rodada pode publicar os resultados das demais
+fontes como coleta parcial. As vagas anteriores são preservadas. O aviso aparece
+no resumo do Actions, e o frescor global continua ligado à última coleta completa.
+Depois das etapas de publicação na release, nas réplicas e no Pages, um job final
+marca a rodada como falha se alguma fonte registrou erro ou anomalia alta de volume. As entregas concluídas
+não são desfeitas. O artefato de recuperação também é guardado nas rodadas parciais.
+Fonte zerada sem erro e queda anormal de volume também seguem esse fluxo parcial.
+O aviso mostra a fonte e os valores observados. A queda usa a última rodada
+anterior da mesma fonte e perfil, sem erro de consulta nessa fonte. Só um volume
+abaixo de 10% do anterior gera alerta de queda. A referência pode vir de uma
+rodada parcial; isso não a transforma em coleta completa. Coleta totalmente vazia, modalidade
+inválida e outros alertas altos continuam impedindo a publicação.
+
+## Gerar saídas locais
+
+```powershell
+python scripts/export_seed.py
+python scripts/report_db.py
+python scripts/export_pages_data.py
+python scripts/build_pages.py
+python scripts/export_readme_charts.py --output-dir _site/assets
+python scripts/export_kaggle.py --export-only
+```
+
+Estes comandos não publicam nada. Os leitores exigem um banco existente. Os comandos de banco aceitam `--db`; sem ele, usam `DATABASE_URL`, depois `VAGAS_DB` e, por fim, `data/vagas.db`.
+
+O relatório consolida a base em Markdown. Ele não gera os gráficos nem exporta
+JSON. Para definir o dia da contagem de vagas novas, use
+`python scripts/report_db.py --dia AAAA-MM-DD`, substituindo a data.
+Essa contagem usa a entrada no banco, no horário de Brasília, não a publicação
+do anúncio.
+
+O gráfico de 30 dias usa a data de publicação: barras de anúncios e linha de
+habilidades distintas desses anúncios. O mapa de calor usa dez áreas e quinze
+habilidades, com ordem dinâmica. O terceiro gráfico usa as vinte habilidades
+mais citadas, ordenadas pela presença média em todas as áreas. As colunas
+mostram a média; a linha mostra vagas com a habilidade. As escalas se ajustam
+aos valores. Os três SVG ficam em `_site/assets`; não entram no Git.
+
+### Calendário das saídas automáticas
+
+- Rodadas 1 e 2: publicam banco, JSON e site; preservam relatório e gráficos.
+- Rodada 3, às 19:16 de Brasília: também atualiza relatório e gráficos.
+- Coleta manual: também atualiza relatório e gráficos.
+- Kaggle e Hugging Face: recebem o mesmo Parquet quando os dados mudam.
+- Notebook no Kaggle: roda automaticamente apenas na rodada 3 com origem
+  cron e dataset confirmado. Para executar fora desse fluxo, use o workflow
+  **Publicar Notebook de Analise no Kaggle**.
+
+Uma execução com `origem=cron` e rodada vazia ou inválida usa o fluxo manual.
+Atualizar o dataset não executa o notebook sozinho. As atualizações automáticas
+não alteram o código versionado do notebook.
+
+## Publicar e recuperar falhas
+
+Não publique localmente enquanto um Action estiver trabalhando sobre a mesma release. A trava dos workflows não bloqueia um comando iniciado no computador.
+
+```powershell
+python scripts/release_snapshot.py publish --allow-legacy
+python scripts/export_kaggle.py
+```
+
+O primeiro comando prepara DB e CSV da mesma cópia consistente, verifica o hash da base remota e confirma os artefatos após o envio. Não use `gh release upload --clobber` no fluxo normal, pois ele ignora essas verificações. Para usar outra base, passe também um `--state` separado nos comandos de download e publicação.
+
+O workflow **Publicar Snapshot no Kaggle e Hugging Face** permite repetir cada entrega sem nova coleta. Uma falha em uma réplica preserva a release e permite o envio à outra. Cada destino confirma o SHA-256 do Parquet publicado. Use o destino `hugging-face-v2026.10.27` para publicar a versão fixa de 10.099 vagas.
+
+### Atualizar gráficos sem coletar
+
+Depois de subir uma alteração no gerador, execute:
+
+```powershell
+gh workflow run deploy_pages.yml --ref main -f atualizar_graficos=true
+```
+
+Esse comando publica o site e regenera os três gráficos com o banco da release.
+Ele não coleta vagas, não substitui a base, não envia o Kaggle e não regenera
+o relatório Markdown. Um deploy comum preserva os SVG publicados.
+
+O GitHub pode continuar mostrando uma imagem antiga no README pelo cache do
+Camo. Confira primeiro o SVG no Pages e o resultado do deploy. Limpar o cache
+da imagem não exige nova coleta. O procedimento está na
+[documentação do GitHub](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-anonymized-urls#removing-an-image-from-camos-cache).
+
+### Recuperar uma publicação
+
+Se o upload da release falhar, preserve `data/snapshots/<hash>/`. Nos Actions, os arquivos disponíveis são guardados no artefato de recuperação por sete dias. Uma publicação confirmada remove somente sua cópia temporária de recuperação.
+
+O artefato também guarda `output/collection_metrics.json`. Use as métricas da
+rodada ao recuperar seu CSV. Não registre uma rodada parcial como coleta completa.
+
+O upload de vários assets não é atômico: uma interrupção pode deixar uma release incompleta. Nesse caso, não force uma nova coleta nem baixe por cima do banco de trabalho. Preserve a cópia de recuperação, pare os escritores e confira os hashes e a origem antes de restaurar os assets do mesmo snapshot. Se outro snapshot já foi publicado, reconcilie as mudanças; não restaure uma base antiga por cima dele.
+
+Consulte também a [organização do código](arquitetura.md).

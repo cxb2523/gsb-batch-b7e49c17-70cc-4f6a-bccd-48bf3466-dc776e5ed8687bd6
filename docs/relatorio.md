@@ -1,0 +1,511 @@
+### 20/08/2026
+
+Comecei a trabalhar no projeto a partir da base existente. Criei o mapeamento de 14 polos e 5 macrorregiões. Implementei a inferência de modalidade de trabalho no modelo Job. Melhorei a sessão HTTP, que agora aceita POST e GET JSON.
+
+---
+
+### 21/08/2026
+
+Implementei o coletor SerpApi para busca estruturada no Google Jobs. Implementei o coletor TheirStack com enriquecimento de tecnologias. Refinei a detecção de modalidade do LinkedIn. Expandi a taxonomia de skills para 217 tecnologias.
+
+---
+
+### 22/08/2026
+
+Separei as fontes com cota da execução padrão. Adicionei a opção --start-page. Integrei novas opções de linha de comando. Criei gráficos analíticos estratificados. Adicionei os campos regiao e polo ao modelo ORM. Enriqueci a importação idempotente. Adicionei o relatório estatístico da base consolidada.
+
+---
+
+### 23/08/2026
+
+Criei o exportador de snapshot versionado. A base consolidada chegou a 1540 vagas. Atualizei os metadados da API e reescrevi o README. Criei o manual de uso detalhado. Criei a especificação técnica da arquitetura.
+
+---
+
+### 24/08/2026
+
+Alinhei a identificação do projeto para tech-skills-br. Removi dados legados. Ajustei as licenças. Adicionei CI no GitHub Actions. Organizei relatórios e gráficos em docs/relatorios.
+
+---
+
+### 25/08/2026
+
+Adicionei a automação de coleta diária no GitHub Actions. Refinei a taxonomia de senioridade. Desmembrei as áreas de Suporte, Infraestrutura e Engenharia de Software. Aumentei a paginação padrão de 5 para 15 páginas por termo. Expandi o catálogo geográfico para 27 capitais. Expandi a taxonomia para 14 áreas. Adicionei deduplicação por URL canônica. Implementei o site minimalista e a API JSON estática. Defini a data de corte em 01/01/2026. Eliminei vagas inativas legadas. Criei o workflow de deploy no GitHub Pages.
+
+Testei várias abordagens contra o Cloudflare do ProgramaThor. Usei User-Agent atualizado, curl_cffi com impersonate do Chrome e Playwright Chromium headless. Criei a busca de descrição completa do LinkedIn. Expandi os termos de busca. Desmembrei Service Desk, Hardware e Segurança da Informação em subáreas. Criei a área de Inteligência Artificial, separada de Data. Adicionei Copilots e LLMs à taxonomia. A base chegou a 2057 vagas.
+
+---
+
+### 26/08/2026
+
+Adicionei aliases case-sensitive às skills. Mantive a descrição completa no CSV. Melhorei o enriquecimento do LinkedIn com retry. Configurei 3 rodadas diárias com enriquecimento só de pendentes.
+
+---
+
+### 27/08/2026
+
+Adicionei a janela de 30 dias ao enriquecimento. Recuperei descrições truncadas da Gupy. Cobri http_client, pipeline, paginação e config com testes. Corrigi a modalidade do LinkedIn usando o título. Sincronizei o push do bot com retry. Troquei os crons nativos por gatilho externo via API de dispatch. Criei o enriquecimento de Vagas.com, Trampos e ProgramaThor. Recuperei 5 descrições truncadas da Gupy. Removi 98 vagas da Gupy de vez.
+
+---
+
+### 28/08/2026
+
+Corrigi o import: linha sem descrição não rebaixa a área. Marquei vaga com 404 como encerrada. Criei a regra de ignorar seções de benefícios na extração de skills. Criei a reclassificação retroativa de áreas. Removi 28 vagas fora do escopo. Reclassifiquei 170 áreas. Removi a API REST FastAPI, os containers e o deploy dedicado. O projeto ficou só com JSON estáticos. Fiz a limpeza de comentários do código. Revisei o README e os documentos. Mudei o site para a pasta site/, depois para api/web e .github/web. Removi o SerpApi e o TheirStack. O projeto ficou só com fontes públicas. Adicionei meu nome à licença.
+
+---
+
+### 29/08/2026
+
+Corrigi o campo enrich_encerrada para booleano. Achei um bug: o import marcava todas as vagas como encerradas. Corrigi. Travei as dependências nas versões do Python 3.12. O CI passou a testar só no 3.12. Adicionei o workflow manual de enriquecimento. Expandi a taxonomia com GPO, Fortigate, Antivírus, Bitdefender, Ubiquiti, Backup, Hyper-V, Windows Server, Power Automate e Word.
+
+Implementei o coletor Solides via endpoint público do portal. Usei os filtros nativos de nível. A fonte trouxe 84% de vagas inéditas no piloto. Implementei o coletor GeekHunter via SSR público. O enriquecimento extrai empresa e data do JSON-LD. Criei o avaliador de contribuição marginal de fonte. Mudei o Trampos para varredura completa. Adicionei o filtro de aprendiz na Solides. Separei estagio de estagiario. Movi os filtros de coleta para o YAML. Removi o ProgramaThor e o Playwright, pois a fonte bloqueava o runner e rendia pouco.
+
+Também fiz correções e melhorias na interface web do projeto.
+
+---
+
+### 30/08/2026
+
+Melhorei a busca do explorador de vagas. A busca detecta cidade, polo e região na query. Os termos combinam com E lógico. O casamento usa prefixo enquanto se digita; por exemplo, "sao p" já filtra São Paulo. Numerei os commits do bot por rodada: 09h16 - 1, 14h16 - 2, 19h16 - 3, e fora disso manual N, usando a hora de início do job.
+
+Descobri e corrigi três bugs ao re-verificar 50% da base, com 1355 vagas ao vivo e 44 lidas na mão. Seções de "Benefícios" no meio do texto cortavam os requisitos: uma vaga da Camisaria FMW perdia Hardware e Windows. A janela de 30 dias deixava 35 vagas do LinkedIn órfãs de descrição. O snippet do Vagas.com ficava fora do gate de enriquecimento. O enrich da GeekHunter gravava data antiga do JSON-LD e furava o corte de 2026. O cliente HTTP respeitava Retry-After sem teto: o Cloudflare mandou 429 com 23h e a coleta dormiria tudo.
+
+Adicionei o modo navegador ao PoliteSession via curl_cffi, com impersonate do Chrome. O modo passou no bot-check do Cloudflare, onde o requests puro tomava ban. O enriquecimento do Vagas.com passou a parar no primeiro 429 e a persistir o progresso a cada 10 preenchimentos. A base caiu de 2795 para 2787 vagas ao cortar 8 zumbis de 2025 que o enriquecimento re-injetava.
+
+---
+
+### 31/08/2026
+
+Achei mais um bug sério na importação: linha sem skills sobrescrevia as tecnologias do banco com lista vazia. O CSV da coleta roda com --no-enrich, e o LinkedIn re-coletado chegava sem skills. A cada rodada o enriquecimento perdia o que acumulou: os vínculos caíram de 14896 para 9603. Corrigi para preservar quando a linha vem vazia. Re-extraí a base inteira: 14833 vínculos, 2387 vagas com skills.
+
+Corrigi o stop do primeiro 429 para parar de verdade, pois as futures enfileiradas martelavam o IP banido. Rodei uma coleta manual do GitHub para validar. Criei o board Tech Skills BR no GitHub Projects com as pendências em issues. Restam 58 descrições truncadas do Vagas.com, que as rodadas noturnas preenchem em lotes por causa do rate limit do Cloudflare.
+
+---
+
+### 01/09/2026
+
+Rodei as três coletas automáticas do dia e um enriquecimento manual. Sem mudanças de código.
+
+---
+
+### 02/09/2026
+
+Corrigi os ids instáveis das vagas entre as runs do CI. O seed passou a exportar a coluna db_id, e o import restaura o id original. O vagas.json parou de mudar inteiro a cada coleta. Simulei duas runs com banco do zero: zero ids diferentes nas 3067 vagas.
+
+Melhorei a classificação por área. Título específico vence o genérico. Suporte disfarçado de "Analista de Sistemas" vira Suporte Técnico. Movi 26 vagas e revisei uma a uma. Removi psycopg e httpx. O projeto ficou SQLite-only.
+
+Corrigi o import: snippet novo não regride descrição enriquecida. A fila de pendentes drenou de verdade. O enriquecimento passou a parar o lote da fonte no primeiro 429. O LinkedIn ganhou a proteção que não tinha. Os commits de dados ganharam resumo da rodada no corpo, e o rótulo do commit veio dos inputs do dispatch. Removi o critério "500 caracteres exatos" da fila do LinkedIn. Busca com sucesso marca a vaga como resolvida. Silenciei avisos repetidos do matplotlib no runner.
+
+---
+
+### 03/09/2026
+
+Corrigi as URLs do Solides. O redirectLink antigo usava subdomínios que não resolvem mais em DNS, então o coletor passou a gravar a URL canônica do portal. Corrigi 678 URLs na base.
+
+Criei o portão novo. Vagas de campo, vendas, call center e loja saem da base; medido em 61 vagas não-tech a menos. Mudei a classificação: Suporte Técnico virou área genérica e título específico vence. "Analista de Suporte N1" vai para Service Desk, e "Técnico Suporte Volante" vai para Field Service. Reclassifiquei 139 vagas e removi 6 não-tech.
+
+Testei dois experimentos contra o 429 do Cloudflare no Vagas.com: fingerprint Safari e warm-up de sessão. Nenhum mudou o resultado; o limite é por IP. Reverti o Safari. Os logs da coleta e do enriquecimento passaram a aparecer ao vivo no runner.
+
+Corrigi a senioridade: "N1.5" é tier de suporte, não nível de entrada, e três vagas pleno/sênior saíram da base. Criei contextos de descarte para "eletrônica" como adjetivo, tirando dois falsos positivos. Corrigi a empresa da Gupy em páginas compartilhadas: o nome vem do subdomínio, não do careerPageName. Adicionei ferramentas de suporte ao vocabulário: Suporte Remoto, Clonezilla, VirtualBox, SharePoint, Microsoft Teams e ITSM. Re-extraí as skills na base inteira. Revalidei 59 empresas do GeekHunter com o JSON-LD. A busca do dashboard ganhou filtro por fonte, e a cidade vence o polo regional no display. Limpei comentários redundantes do código.
+
+---
+
+### 04/09/2026
+
+Implementei o coletor do InfoJobs. A busca pública é renderizada no servidor. Júnior entra pela busca textual; estágio, trainee e aprendiz entram pelos filtros nativos de contrato. A primeira coleta completa trouxe 378 vagas novas, e a fonte virou a quarta maior da base.
+
+O enriquecimento do InfoJobs busca a descrição completa no detalhe da vaga. O teaser da listagem tem 153 caracteres fixos. Vaga encerrada vira 404. O bloqueio suave não marca vaga como encerrada.
+
+Revisei 38 vagas do InfoJobs uma a uma. Corrigi aliases que não casavam. Adicionei Pacote Office, ServiceNow, Storage, Google Sheets, DAX, AutoCAD, PABX e Robótica ao vocabulário. Fibra óptica virou alias de Redes de Computadores. A cobertura subiu de 55% para 99%.
+
+Canonicalizei a senioridade: "Estagiário" virou "Estágio" no import, e dez vagas da base foram re-rotuladas. Canonicalizei nomes de empresa: variantes de "Confidencial" e sufixos societários deixaram de criar empresas duplicadas. Normalizei as empresas da base e corrigi 62 slugs do GeekHunter.
+
+Adicionei o CITATION.cff (formato 1.2.0) no main e na branch do congresso. Alinhei o README ao Python 3.12 e registrei o InfoJobs no execucao-rapida. Os gráficos e o relatório consolidado passaram a ser gerados só na rodada das 09h16; as outras duas rodadas só coletam, importam e enriquecem.
+
+Implementei o coletor da Abler via sitemap público com checkpoint incremental. Rodada interrompida retoma sem refazer GET. A primeira coleta trouxe 96 vagas novas. Implementei o coletor do Recrutei. Ele usa o sitemap com lastmod (janela de 24h) ou varredura completa da listagem SSR. O detalhe traz JSON-LD com descrição integral, então a fonte não entra na fila de enriquecimento. A primeira coleta trouxe 56 vagas novas.
+
+Comecei o experimento de paralelismo. As 9 fontes coletam ao mesmo tempo, cada uma com delay próprio. O LinkedIn passou a 100 páginas por termo. O workflow ganhou inputs de dispatch para controlar o experimento sem mexer no código.
+
+---
+
+### 05/09/2026
+
+Rodei a coleta manual do experimento de paralelismo. Resultado: 43.743 vagas brutas em 1h15, com as 9 fontes ao mesmo tempo. O LinkedIn entregou 37.210 vagas em 3.733 requests a 1.0s, sem um único bloqueio. O teto de 1.000 vagas por termo foi confirmado nos 40 termos. Nenhuma outra fonte bloqueou. A Solides ficou fora com 500 na API; à noite descobri que não era outage, e sim o endpoint renomeado (veja abaixo).
+
+Medi o throttle suave do LinkedIn no meu IP. Depois de ~330 requests acumulados as páginas voltam vazias, sem 429. É limite por volume e por IP, não por ritmo. O IP do Actions passou com 3.700+ requests em linha reta.
+
+A deduplicação comeu quase tudo. Das 37 mil brutas do LinkedIn sobraram 2.207 elegíveis, e apenas 356 viraram novas na base. O ganho do 1000/termo é largura de cobertura, não explosão da base, que foi de 3.864 para 4.213 vagas, com o LinkedIn em 57,9%. Verifiquei as datas: nenhuma vaga pré-2026 está no banco, pois o import descarta em silêncio, sem mostrar no log. 65 vagas sem data passam pelo portão, sendo 63 da GeekHunter. O enriquecimento do LinkedIn drenou 335 pendentes em 6,5 minutos, sem bloqueio.
+
+Corrigi a modalidade do Recrutei. O JSON-LD do detalhe não traz address para vagas remotas, e a modalidade fica no bloco do header da página. A regra tem três camadas e protege contra falsos positivos: "Auxílio Home Office" é benefício e "suporte remoto a clientes" é atividade, não modalidade. Re-parseei as 56 vagas ao vivo e corrigi 9 no snapshot. Regeneirei a API estática localmente, e o deploy saiu só pelo push (deploy_pages.yml), sem rodada de coleta.
+
+O paralelismo virou o padrão da rodada. As medições viraram a matriz de delays por fonte: LinkedIn 1.0s, InfoJobs 2.0s, Vagas.com 2.0s e Solides 2.0s; as demais 1.0s. Tudo ficou como default no código (config), sem flags na CLI nem no workflow. A tela de dispatch manual ficou só com origem e rodada, que é o que o cron-job.org usa.
+
+Medi os limites de cada fonte (issue #21) e encontrei o piso seguro para todas. Recrutei, Abler, Trampos, Gupy, GeekHunter e Solides aguentaram 30 requests a 0.5s sem bloqueio. O LinkedIn tem 1.0s como ponto doce; a 0.5s a API segura as respostas e o ritmo cai de 50 para 33 req/min. O Vagas.com detalhe é o único ban real: ~16-20 requests por IP por dia, com ban de 24h. É limite por volume, não por ritmo. O bloqueio suave do InfoJobs não se reproduziu. Criei a página "Limites e Bloqueios" na wiki (#22) e fechei as issues #20, #21 e #22.
+
+Caçando as 11 pendentes eternas do Vagas.com, descobri que eram vagas removidas. O portal responde 200 com uma página genérica ("Vagas de emprego para {id}") sem descrição, e o enriquecimento não marcava como encerrada. Corrigi: página genérica agora conta como 404, e a fila zerou.
+
+Corrigi a Solides. Os 500 de três dias eram o endpoint renomeado: v3/portal-vacancies-new virou v3/portal-vacancies, e as variantes v4 exigem auth. Validei a coleta ao vivo.
+
+O monitor da coleta paralela virou tabela de verdade. Tem cores por status, coluna de termo sem corte, status code nos erros e percentual geral de conclusão. Durante a coleta o log mostra só a tabela; o restante sai no log geral do fim.
+
+---
+
+### 06/09/2026
+
+Tirei os dados do git. O plano #24 virou realidade. Os JSON do site e os gráficos saíram do histórico. O estado operacional passou a viver como asset da release `latest` no GitHub. Cada rodada baixa o `vagas.db` no início e sobe o novo no fim. O git guarda só código, regras e documentação.
+
+O seed CSV também foi para a release. O commit da rodada ficou reduzido ao relatório em texto. O `deploy_pages.yml` passou a gerar os JSON a partir do banco da release.
+
+Criei o dataset no Kaggle (`rafaeldiasgarcia/tech-skills-br`). Cada rodada envia uma versão em Parquet. A nota registra a data, a rodada e a quantidade de vagas. Versões vazias não sobem. O workflow usa o token novo da Kaggle.
+
+Completei os metadados do dataset. A licença ficou MIT. A frequência ficou diária. A descrição ficou em um parágrafo no estilo STE. As colunas do Parquet foram reordenadas. A coluna skills ficou no início. O Data Explorer mostra as tecnologias na tabela padrão.
+
+Limpei o histórico com `filter-repo`. Removi `seed/vagas.csv`, `api/web`, `docs/api`, `.github/pages`, `site/api` e todos os gráficos de todas as versões. O repositório caiu de 105 MB para menos de 1 MB. Guardei um backup espelho do histórico antigo.
+
+Corrigi problemas que a mudança revelou. O runner não tinha o `gh` autenticado. Adicionei o `GH_TOKEN` explícito. A rodada das 14:16 quebrou no commit porque o relatório regenerado ficava fora do stage. O guard passou a olhar só o que foi staged.
+
+Revalidei as empresas do GeekHunter. 62 vagas guardavam o slug da URL em vez do nome real. O JSON-LD do detalhe corrigiu 57. As outras 5 não tinham nome no detalhe. Usei o nome resolvido das vagas irmãs. Zero slugs restantes.
+
+Achei churn nas vagas da GeekHunter. Sete vagas antigas de 2025 entram na base toda rodada e saem no corte de 2026 do enriquecimento. O total não muda. As mesmas sete entram e saem sempre.
+
+Perdi e recuperei três vagas do LinkedIn no bootstrap da release. O banco local estava defasado. O merge do seed completo devolveu as três. A lição ficou no plano: conferir a contagem antes de subir o asset.
+
+Atualizei a wiki. A Home ganhou o Kaggle e a release no diagrama de contexto. A Arquitetura ganhou a nova persistência. A página de Automação ganhou o fluxo novo. A jornada da vaga ganhou um diagrama vertical. Criei as issues #23, #24 e #25.
+
+---
+
+### 07/09/2026
+
+Revisei as 454 vagas com descrição e sem skill extraída. Retirei 75 vagas fora do recorte de Computação, como qualidade industrial, laboratório, logística, vendas, atividades administrativas e saúde operacional. Restaram 379 vagas de TI, software, infraestrutura, suporte técnico ou telecom sem tecnologia nomeada no anúncio.
+
+Também refinei o portão de relevância. Ele agora bloqueia títulos ambíguos que entravam pela palavra “sistemas”, como sistemas biomédicos, e evita tratar qualidade industrial como QA de software.
+
+Ampliei a cobertura de funções de entrada da issue #23. O coletor passou a buscar DBA, RPA, telecom, mainframe, sistemas embarcados, jogos, suporte de aplicações e integrações. O classificador ganhou sinais para essas funções e testes de título e descrição. Sistemas embarcados agora ficam em Hardware / Eletrônica. Integrações entre sistemas ficam em Engenharia de Software.
+
+No piloto sem LinkedIn e InfoJobs, a coleta retornou 158 vagas brutas e 40 vagas técnicas de entrada. Entraram resultados de suporte de aplicações, sistemas embarcados, telecom e integrações. RPA, mainframe e jogos não tiveram resultado final no piloto. A regra seguirá em observação por três dias antes do fechamento da issue.
+
+Importei o CSV do piloto no banco local. Foram duas vagas novas e 38 atualizações de registros existentes. O snapshot ficou com 4.353 vagas.
+
+Após nove rodadas concluídas entre 8 e 10 de setembro, confirmei que os termos ampliaram a cobertura, mas alguns portais devolveram resultados sem relação com a função pesquisada. Adicionei uma validação local para os nove termos específicos. O resultado agora precisa citar um alias da função no título ou na descrição. Também retirei 11 vagas fora do recorte e adicionei bloqueios por título ou contexto para impedir que elas voltem.
+
+---
+
+### 12/09/2026
+
+Reescrevi o README para dar uma visão direta do projeto. Adicionei um gráfico de vagas e habilidades por dia. Adicionei um mapa de calor com as seis principais áreas e habilidades. O GitHub Pages gera os dois gráficos como arquivos SVG. O processo substitui os arquivos existentes e não aumenta o histórico do git.
+
+Mudei o horário de atualização dos gráficos e do relatório consolidado. A rodada 3, às 19h16, atualiza esses resultados. As rodadas 1 e 2 preservam os resultados anteriores. A coleta manual e o enriquecimento manual atualizam todos os resultados. Uma execução com origem `cron` e sem uma rodada válida usa a configuração manual. As três rodadas atualizam a API JSON e o painel.
+
+Corrigi o nome da Randstad. A GeekHunter guardou `randstad-1`, pois o nome veio do endereço da vaga. O enriquecimento não corrigiu o nome porque 28 anúncios já estavam encerrados. A normalização agora reúne essas vagas com as 16 vagas do InfoJobs. O relatório mostra 44 vagas da Randstad. O importador também revisa nomes antigos que não aparecem na coleta atual.
+
+Atualizei o rodapé do site. Adicionei os links do GitHub e do dataset no Kaggle. A versão para celular mostra somente os ícones. A versão para computador mostra os ícones e os nomes. Os ícones usam uma cor discreta. Os ícones ficam azuis quando o ponteiro passa sobre o link ou quando o link recebe foco.
+
+Atualizei o relatório consolidado com 4.992 vagas. Adicionei testes para os gráficos, para os workflows, para a normalização de empresas e para o rodapé.
+
+---
+
+### 13/09/2026
+
+Separei responsabilidades de coleta, persistência, enriquecimento e publicação. Centralizei conexões e migrações do SQLite. Reforcei os testes de retomada, transações e validação dos snapshots. Documentei a arquitetura e a operação local.
+
+Separei a montagem do site estático da configuração usada na coleta. Corrigi dependências que impediam o deploy no GitHub Pages.
+
+---
+
+### 15/09/2026
+
+Revisei a apresentação pública do projeto e os metadados. Mantive o foco nos anúncios coletados e nas habilidades identificadas. Preservei as tags do dataset no Kaggle.
+
+---
+
+### 16/09/2026
+
+Ajustei a classificação da modalidade de trabalho. O campo declarado pelo LinkedIn passou a ter prioridade sobre a inferência do texto. Adicionei sua persistência no banco para preservar essa informação nas próximas atualizações.
+
+Corrigi o espaço da visão geral para evitar rolagem da página.
+
+---
+
+### 17/09/2026
+
+Corrigi o enriquecimento do InfoJobs para aceitar descrições curtas que contêm informação útil. Ampliei o diagnóstico das tentativas e das pendências, com motivos por fonte.
+
+---
+
+### 18/09/2026
+
+Unifiquei a busca do explorador de vagas. Os termos passaram a considerar também empresa e localização, sem limitar a pesquisa à lista de sugestões.
+
+---
+
+### 21/09/2026
+
+Reforcei a deduplicação entre fontes. A comparação textual passou a exigir título e empresa compatíveis, a mesma cidade e datas próximas. Mantive identificadores e links como evidências mais fortes.
+
+Adicionei controles de qualidade e de frescor da coleta. Reforcei a proteção dos workflows e atualizei os ambientes das ações.
+
+---
+
+### 23/09/2026
+
+Limitei a busca diária do LinkedIn às últimas 24 horas. Configurei o InfoJobs para os últimos três dias. Mantive os tetos de paginação e ajustei a referência de qualidade ao perfil da coleta.
+
+---
+
+### 24/09/2026
+
+Refinei os sinais explícitos de modalidade. Menções a suporte remoto, benefícios ou atividades presenciais não bastam para definir o regime de trabalho. Preservei modalidades já confirmadas. Sem evidência suficiente no LinkedIn, o valor fica como Não informado.
+
+---
+
+### 27/09/2026
+
+Compactei os avisos de localidades próximas do Vagas.com. O local passou a usar o formato Cidade / UF e Região. Ajustei os controles de qualidade para a variação da janela diária e removi outra dependência desnecessária do deploy estático.
+
+---
+
+### 30/09/2026
+
+Corrigi o endpoint público da Gupy e o tratamento de erros HTTP. A publicação passou a preservar os dados válidos das fontes que concluíram, mesmo quando outra fonte falha. Adicionei recuperação para saídas de coleta parcial.
+
+Avisos de candidaturas nacionais deixaram de alterar o local de trabalho da vaga.
+
+---
+
+### 01/10/2026
+
+Ajustei o encerramento do workflow. Os dados válidos são publicados primeiro. Depois, uma falha de fonte deixa a execução com erro. Assim, a entrega parcial não oculta o problema.
+
+---
+
+### 02/10/2026
+
+Mudei a contagem do relatório e da mensagem do commit diário. Eles passaram a destacar as vagas novas do dia, e não apenas as da última rodada. A contagem usa a entrada no banco no horário de Brasília.
+
+---
+
+### 05/10/2026
+
+Bloqueei funções de encanamento que entravam por termos ligados a redes. Retirei a vaga fora do recorte e regenerei o relatório.
+
+---
+
+### 07/10/2026
+
+Padronizei o horário dos arquivos e a interpretação de datas relativas em Brasília. O gráfico passou a respeitar a data de referência da rodada, sem avançar por causa de anúncios com data futura.
+
+---
+
+### 08/10/2026
+
+Revisei anúncios sem habilidades identificadas e ampliei as regras a partir dos casos observados. Preservei trechos de requisitos. Evitei extrair habilidades de benefícios e links sem relação com os requisitos da vaga.
+
+---
+
+### 10/10/2026
+
+Ampliei o mapa de calor para as dez principais áreas e habilidades. Separei a trava de publicação do Pages da trava do snapshot. Uma espera no deploy deixou de bloquear a atualização do banco.
+
+Adicionei uma opção para regenerar os gráficos no Pages sem executar outra coleta.
+
+---
+
+### 12/10/2026
+
+Adicionei a coleta direta da Jobbol. Ela usa páginas públicas, uma janela de três dias e buscas para TI, estágio, trainee e aprendiz. Incluí uma lista de anunciantes intermediários do LinkedIn. A exclusão só ocorre quando a fonte direta também está selecionada.
+
+Adicionei um painel simples de detalhes no explorador de vagas. No computador, o ponteiro abre uma prévia sem botão de fechar. Clique ou toque abre o modal. O painel não cobre o título e usa os dados já carregados. Mantive o link direto na última coluna, também no celular.
+
+Ampliei o mapa de calor para dez áreas e quinze habilidades. Aumentei a altura e as fontes para melhorar a leitura no README. Os rankings continuam dinâmicos e as células sem ocorrência mostram 0,0%.
+
+Adicionei o indicador Skill com maior presença no site e um ranking por presença entre áreas no notebook. O cálculo usa a média dos percentuais em cada área, com o mesmo peso para todas. Áreas sem menção entram com zero e a base inclui vagas sem habilidades. O quadrinho mostra a quantidade de áreas com menção. Mantive o ranking por total de citações.
+
+Depois, troquei o texto do quadrinho por Presença média por área, com percentual e uma casa decimal. A quantidade de áreas ficou na explicação ao passar o ponteiro e no notebook. O cálculo não mudou.
+
+Documentei o indicador na página Site e indicadores da wiki. Comparei o site e o notebook com a base local: ambos apontaram Inglês, presente nas 18 áreas. Os 985 testes passaram e o lint não apontou problemas. A validação não alterou o banco.
+
+Revisei a wiki e os documentos locais de arquitetura e execução. Completei este histórico com as mudanças registradas nos commits. Atualizei o relatório consolidado com a base local de 8.771 vagas, sem executar uma coleta.
+
+Corrigi a fila de publicação do Pages nos três workflows. Mantive o nome Deploy GitHub Pages, o ambiente github-pages e o grupo original. Um novo deploy passa a cancelar somente o deploy anterior. A coleta e a atualização do banco continuam sem cancelamento automático. Atualizei os testes e a documentação dessa regra. Os 986 testes passaram e o lint não apontou problemas.
+
+Adicionei um terceiro gráfico ao README, sem link de destino. As colunas mostram a presença média por área das quinze habilidades mais citadas. A linha mostra vagas com cada habilidade. A ordem, os valores e as escalas mudam com a base. Mantive os nomes em uma linha e retirei valores de dentro do gráfico. Integrei a geração e a preservação do novo SVG ao calendário existente. Os arquivos gerados continuam fora do Git.
+
+Validei os três gráficos com a base local, sem alterar o banco. Os 1.000 testes passaram, o lint não apontou problemas e a sintaxe dos workflows foi conferida. A validação não executou uma coleta.
+
+Ajustei o espaço entre o mapa de calor e o terceiro gráfico. Troquei o título por Quais habilidades têm maior presença entre áreas e movi a legenda de colunas e linha para baixo do gráfico. O cálculo e o calendário de atualização não mudaram.
+
+Deixei o corte inferior do mapa de calor automático. A imagem termina após o nome mais comprido, com uma pequena margem. A largura, as fontes e os dados não mudaram.
+
+Ampliei o terceiro gráfico do README para vinte habilidades e movi a legenda para perto do topo do gráfico. Mantive a seleção por total de citações e a ordem por presença média. O mapa de calor continua com quinze habilidades.
+
+Incluí os três gráficos do README no notebook do Kaggle. Eles são calculados com o dataset da execução. Mantive as tabelas e os gráficos anteriores. A mudança não altera o banco nem o calendário de atualização.
+
+Ampliei o filtro de anunciantes intermediários para todas as fontes. A lista passou ao fluxo comum, antes do enriquecimento e da exportação. Mantive a comparação pelo nome inteiro e a exigência de selecionar a fonte própria. Os anúncios da própria fonte são preservados. Incluí os descartes nos logs e no relatório da coleta. Baixei e validei a release com 8.778 vagas e identifiquei 13 anúncios da Abler na Jobbol, sem apagar o histórico. Os 1.120 testes passaram e o lint não apontou problemas. Não executei uma coleta real.
+
+Depois, apliquei a regra ao histórico autorizado. Removi 307 anúncios de intermediários: 13 da Abler na Jobbol e 294 no LinkedIn. O banco ficou com 8.471 vagas. Preservei um backup local do banco anterior e atualizei o relatório consolidado. Conferi a integridade e os vínculos do SQLite e a exportação do Parquet. Não fiz novas chamadas de coleta nem alterei o esquema do banco.
+
+---
+
+### 13/10/2026
+
+Ajustei o fluxo de anomalias de volume. Fonte zerada sem erro e queda anormal de vagas passaram a seguir o caminho das falhas de fonte: mostram um aviso, permitem tentar as publicações dos dados válidos e encerram a rodada com erro no job final. Mantive o bloqueio para coleta totalmente vazia, modalidade inválida e outros alertas altos.
+
+Essas rodadas são registradas como parciais. Elas não renovam o frescor global nem entram no histórico de coletas completas usado como referência. Atualizei os testes, o guia de execução, a arquitetura e a página de automação da wiki.
+
+Os 1.138 testes passaram e o lint não apontou problemas. Validei o caso de InfoJobs com uma cópia dos arquivos da run que falhou: 41 vagas brutas e referência de 245. A validação permitiu seguir como parcial e preservou o frescor anterior. Não executei uma coleta real nem alterei a base de trabalho.
+
+Enxuguei a página de escopo e limitações da wiki. Mantive a validação manual pendente, os termos fora do vocabulário e os rótulos indisponíveis. Retirei repetições e referências a issues. Separei correções já feitas de limites atuais e esclareci que salvamos a descrição obtida sem truncamento. Mantive uma ressalva curta sobre cobertura e duplicatas. Não alterei código nem dados.
+
+Depois, simplifiquei o alerta de queda de volume. A comparação passou a usar a última rodada anterior da mesma fonte e perfil, sem erro de consulta nessa fonte. Menos de 10% do volume bruto anterior gera erro depois das publicações. Resultados de fontes sem erro podem servir de referência mesmo em rodadas parciais. Mantive os demais controles de qualidade e o registro separado do frescor global. Atualizei a documentação e os testes. Os 1.153 testes passaram e o lint não apontou problemas. Não executei coleta real nem alterei o banco de trabalho.
+
+Retirei a busca analista de integracoes junior apenas do LinkedIn. Mantive a variante no singular e a lista das outras fontes. A exclusão fica no YAML dos coletores. Atualizei o perfil de coleta para separar o novo conjunto de buscas na comparação de volume. Os testes simulados confirmaram a exclusão sem chamadas reais e a preservação da busca na Gupy. Atualizei a arquitetura e a página de limites da wiki. Os 1.157 testes passaram e o lint não apontou problemas. Não alterei o banco.
+
+---
+
+### 18/10/2026
+
+Preparei a integração do Google Analytics no site. A tag só carrega após o aceite. Incluí as opções Aceitar e Recusar e o botão Privacidade no rodapé. A escolha fica salva por até 180 dias. Ao revogar, a integração bloqueia eventos, remove seus cookies e recarrega a página. Os cookies usam escopo próprio para não misturar o projeto com o portfólio.
+
+Adicionei eventos de uso das abas e cliques em links de vagas, GitHub e Kaggle, sem texto das buscas ou dados dos anúncios. Desativei a medição no localhost e fora do endereço publicado. O build passou a incluir o script de analytics. Atualizei a arquitetura e a página do site na wiki.
+
+Os 1.159 testes passaram e o lint não apontou problemas. Conferi a interface no computador e no celular, sem erros de JavaScript ou rolagem horizontal. Na prévia local, aceitar não carregou a tag do Google. Não enviei dados de teste ao Analytics nem alterei o banco.
+
+Padronizei as localidades no normalizador comum. Cidade e estado explícitos passam a usar Cidade, UF. Mantive a indicação e Região. Variações como 100% Home Office viram Remoto, e abrangência nacional usa Brasil. Sem UF, preservei a cidade e o país informado, sem adivinhar estado. A lista do site mantém Brasil em vez de trocar pelo polo Nacional. Não mudei as regras de modalidade.
+
+Validei a mudança em uma cópia da release mais recente, com 9.148 vagas. A normalização alterou a escrita de 2.784 localidades e preservou todos os outros campos, IDs e vínculos. Gerei uma prévia do site e do Parquet. Os 1.197 testes passaram e o lint não apontou problemas. Atualizei a arquitetura e a cópia local da wiki. Não alterei o banco principal, não executei coleta real e não publiquei os ajustes.
+
+Depois da autorização, baixei novamente o snapshot verificado e apliquei a normalização no banco principal. Mantive as 9.148 vagas e alterei somente o texto de 2.784 localidades. Preservei um backup do banco local anterior. Publiquei o banco e o CSV na release latest, com manifesto e confirmação do snapshot. Repeti os testes focados: 218 passaram e o lint não apontou problemas. O envio ao Kaggle segue pelo workflow diário. Não executei uma coleta local.
+
+---
+
+### 22/10/2026
+
+Atualizei o código e a cópia local da wiki. Baixei a release verificada com 9.678 vagas e sincronizei o banco local, preservando um backup. Fiz uma triagem das 1.499 vagas que entraram de 9 a 22 de outubro, pela data de criação no banco. Li os casos suspeitos e separei 84 anúncios para exclusão: 82 cobertos pelas novas regras, um já recusado pelo filtro anterior e um reservado para decisão pontual. Mantive os casos mistos ou com informação insuficiente, sem descartá-los só pelo título.
+
+Incluí exclusões específicas no YAML para suporte administrativo/comercial e outras funções fora de TI observadas na revisão. Nos títulos ambíguos, a descrição precisa confirmar o contexto. Preservei suporte de TI com nome administrativo, configuração de SAP, qualidade de software e manutenção de hardware. Adicionei testes de classificação e importação. Os 1.279 testes passaram e o lint não apontou problemas.
+
+Atualizei a cópia local da página de classificação da wiki com essa distinção. Corrigi também o trecho de localidade que ainda mostrava o separador antigo, sem mudar as regras já implantadas.
+
+Salvei a revisão detalhada em data/auditoria-escopo-20261022, fora do Git. Não apaguei vagas, não executei coleta real e não fiz commit ou publicação. Esta triagem não substitui uma validação independente da classificação.
+
+Depois da autorização, removi os 84 anúncios revisados e seus 182 vínculos de habilidades. A base passou de 9.678 para 9.594 vagas. Preservei um backup anterior à limpeza. Comparei as tabelas e confirmei que os demais registros não mudaram, sem vínculos órfãos ou falhas de integridade. Atualizei os dados locais do site e publiquei o novo snapshot na release, com confirmação dos arquivos enviados. Não executei uma nova coleta.
+
+Validei o Parquet local com as mesmas 9.594 vagas do SQLite, sem os anúncios excluídos. Acionei a publicação no Kaggle pelo workflow existente e a atualização do site e dos gráficos com a nova release. Publiquei a revisão da página de classificação da wiki. Separei as regras, os testes e este registro em commits distintos.
+
+---
+
+### 24/10/2026
+
+Corrigi a leitura do status do Kaggle. O cliente passou a escrever um aviso de versão antes do JSON, e isso impedia o envio do dataset. O script agora separa apenas os avisos iniciais, registra cada aviso no log e valida a resposta restante como JSON completo. Falhas do comando e respostas inválidas continuam bloqueadas. Mantive a confirmação da versão pelo hash do Parquet.
+
+Adicionei testes para o aviso observado, vários avisos iniciais, JSON formatado, resposta inválida e erro do comando. Os 23 testes focados e os 1.294 testes da suíte completa passaram. O lint não apontou problemas. Publiquei a correção e acionei o workflow de réplica da release para o Kaggle, sem executar coleta nem alterar o banco.
+
+O Kaggle confirmou a versão 179 com as 9.821 vagas da release. O arquivo baixado dessa versão teve o mesmo hash do Parquet enviado. Os metadados e as tags foram reaplicados. O workflow terminou com sucesso, mesmo com o aviso de versão do cliente.
+
+---
+
+### 25/10/2026
+
+Atualizei o código, a cópia local da wiki e o banco a partir da release verificada com 9.849 vagas. Preservei um backup do banco local anterior. Revisei a issue 23 com os resultados das coletas já feitas, sem iniciar outra coleta.
+
+Completei as variantes de embarcados e tecnologia embarcada no YAML. Sustentação de sistemas e aplicações passou a ter evidência própria de título para Suporte Técnico, inclusive sem descrição. Mantive essa regra fora dos sinais da descrição, para não alterar a área de vagas de desenvolvimento que citam sustentação nas atividades. Uma área específica, como Backend, continua com prioridade no título.
+
+Adicionei testes de título puro para as funções aprovadas na issue e testes de proteção contra mudanças indevidas em desenvolvimento. Atualizei a cópia local da página de classificação da wiki. Não fiz commit, push ou publicação dos ajustes.
+
+Os 1.313 testes passaram e o lint não apontou problemas. Comparei as regras com a versão anterior nos 13 registros candidatos da release e encontrei quatro mudanças de área, sem mudança de aceite no filtro de TI. Li as quatro descrições. Não apliquei essas mudanças ao banco; ele permanece com os dados da release. A comparação não mede a cobertura completa da coleta.
+
+Atualizei a conclusão da issue 23 com as contagens observadas, as decisões de escopo e os limites da análise. Fechei a issue por autorização do responsável, pela entrega funcional. Registrei que os últimos ajustes estão somente locais e dependem de autorização para publicação.
+
+Depois da autorização para publicar, preservei outro backup e apliquei somente as quatro mudanças de área revisadas. Mantive as 9.849 vagas, os vínculos de habilidades, o histórico de coletas e os demais campos. Validei a integridade e comparei os registros antes e depois. Publiquei e confirmei o snapshot da release, atualizei os dados locais do site e gerei novamente o relatório consolidado. Acionei o workflow de réplica no Kaggle e publiquei a página de classificação da wiki. Separei regras, testes, dados e este registro em commits distintos. Os 242 testes focados passaram novamente e o lint não apontou problemas. Não executei coleta nem reextração de habilidades.
+
+---
+
+### 02/11/2026
+
+Corrigi a validação dos detalhes da Jobbol após a migração das páginas. A listagem mantém o ID antigo, mas o detalhe redireciona para outra URL e usa um novo ID no JSON-LD. O coletor agora valida esse vínculo pelo domínio, HTTPS, ID da URL final, título equivalente e histórico do redirecionamento. O ID salvo continua sendo o da listagem, para preservar a identidade dos anúncios existentes. Detalhes divergentes continuam bloqueados; o diagnóstico informa o ID e a URL recebidos.
+
+Adicionei testes simulados para os formatos antigo e migrado, IDs divergentes, domínio externo, título incorreto, ausência de redirecionamento e reutilização do detalhe entre buscas. Os testes também conferem a preservação da descrição e das habilidades. Não executei coleta nem fiz chamadas reais à Jobbol nesta implementação.
+
+Os 1.329 testes passaram e o lint não apontou problemas. Validei o comando de recuperação no parser da aplicação e o cálculo de dias em PowerShell, sem executar o coletor. Esses testes verificam a lógica com respostas simuladas; a coleta de recuperação fará a conferência real do portal.
+
+Atualizei a arquitetura e a cópia local da página de arquitetura da wiki. Preparei o comando de recuperação desde 30/10/2026, com janela arredondada para cobrir o dia inteiro. O comando consulta apenas anúncios ainda disponíveis e grava a saída em uma pasta separada, sem importar no banco nem publicar. Nesta etapa inicial, não alterei o banco nem publiquei os ajustes.
+
+O responsável executou a recuperação da Jobbol. A coleta retornou 186 registros, 153 após deduplicação e 12 após o filtro de TI. Houve um detalhe indisponível com HTTP 404; o resultado foi registrado como parcial. Revisei as descrições e acrescentei três exclusões por título e contexto: apoio administrativo com EPIs e plotagens, suporte a lubrificantes e desenho de chicotes. Preservei atividades técnicas nos mesmos cursos e adicionei testes de classificação e importação.
+
+Para a consolidação, mantive o recorte solicitado a partir de 30/10. Separei quatro anúncios de 29/10 que vieram na margem da janela, três fora de TI e uma republicação da Abler, conforme o filtro existente de fontes próprias. Restaram quatro anúncios: três já presentes na release verificada com 10.525 vagas e um novo. Identifiquei também na base a vaga de Engenharia Mecânica fora do recorte. Preparei uma branch separada para revisão por PR, sem iniciar outra coleta.
+
+Importei os quatro anúncios revisados numa cópia da release: uma inclusão e três atualizações. Removi a vaga de Engenharia Mecânica já confirmada como fora do recorte e seus três vínculos de habilidades. A base permaneceu com 10.525 vagas. Preservei a release anterior como backup e confirmei que os registros não relacionados, o vocabulário e o histórico de coletas completas não mudaram. Publiquei e verifiquei o novo snapshot da release, sincronizei a base local e atualizei o relatório, os dados e os gráficos do site. O CSV original foi preservado.
+
+Os 1.338 testes passaram e o lint não apontou problemas. O primeiro envio ao Kaggle falhou porque o cliente não encontrou a dependência six numa instalação limpa. Declarei essa dependência no grupo publish, em commit separado. Testei uma instalação Python 3.12 apenas com export e publish: pip check e a ajuda do CLI passaram. Acionei novamente a réplica pelo workflow da branch de recuperação. As alterações foram separadas em commits na branch codex/jobbol-recovery-20261030; não fiz merge na main. A atualização da wiki está preparada localmente para acompanhar a correção após o merge.
+
+---
+
+### 04/11/2026
+
+Registrei o resultado da revisão manual de 370 anúncios da release de 10 mil vagas. A revisão encontrou 11 anúncios com erro (2,97%) nos critérios de escopo de TI e registro de habilidades. O método e as fichas estão no [documento de revisão manual](validacao/revisao-manual.md).
+
+Separei os anúncios recentes em vagas-recentes.json, gerado junto com os demais arquivos do site. O recorte inclui o dia da geração em Brasília e os 29 dias anteriores, pela data de publicação. Preservei vagas.json com a base completa. O explorador carrega o arquivo recente apenas ao abrir a aba e monta a tabela em lotes de 50 linhas durante a rolagem. A busca consulta todos os anúncios do recorte. Adicionei nova tentativa em caso de falha no carregamento e um botão para mostrar mais linhas pelo teclado.
+
+Os 1.354 testes passaram e o lint não apontou problemas. Conferi no navegador a carga sob demanda, o cache, os filtros, os detalhes e a rolagem em computador e celular. A página permaneceu sem rolagem externa nas telas verificadas. Três verificações HTTP locais também passaram. Atualizei a arquitetura e a cópia local das páginas de arquitetura e uso da wiki. Não executei coleta, não alterei o banco nem fiz commit ou publicação.
+
+Depois da autorização, separei a geração do recorte e o carregamento do explorador nas branches codex/api-vagas-recentes e codex/performance-explorador-vagas. Os commits incluem as descrições e os testes de cada mudança. A segunda branch depende da primeira. Separei a documentação em outro commit e registrei a revisão da wiki em uma branch local própria. Não fiz push nem publiquei dados ou o site.
+
+---
+
+### 05/11/2026
+
+Corrigi a leitura dos detalhes da Jobbol que exibem os dados no HTML e publicam apenas a navegação no JSON-LD. O coletor agora lê título, empresa e seções da descrição nesse formato. A URL canônica, o título e o redirecionamento precisam confirmar o vínculo com a vaga solicitada. As observações técnicas continuam antes dos benefícios na extração de habilidades. O diagnóstico passou a distinguir falha da requisição de ausência de descrição válida.
+
+Conferi a página e o registro da listagem do anúncio 29387174287. Reproduzi a coleta desse registro com a resposta salva, sem nova chamada durante a reprodução. A leitura recuperou empresa, atividades e benefícios, e o filtro normal descartou o anúncio por ser de atendimento fora de TI. Adicionei testes para o HTML, extração de habilidades, identidade divergente, conteúdo incompleto e reutilização dos detalhes entre buscas. Atualizei a arquitetura e a cópia local da página de arquitetura da wiki.
+
+Os 1.370 testes passaram e o lint não apontou problemas. A correção está local na branch codex/jobbol-detalhe-html. Não executei uma coleta completa nem alterei o banco. Os ajustes ainda não foram commitados ou publicados.
+
+Depois da autorização, registrei a correção e seus testes em um commit na branch codex/jobbol-detalhe-html. Separei a arquitetura e este relatório em outro commit para revisão por PR. A revisão da wiki recebeu um commit em sua própria branch de mesmo nome.
+
+Investiguei os HTTP 404 dos anúncios 29387177006 e 29387176985 na coleta manual. Na consulta de diagnóstico, a API forneceu links atuais com IDs 149513 e 149490, enquanto o coletor construía os endereços antigos usando o jobkey. Corrigi a consulta para usar o link da listagem, conferindo domínio, HTTPS, id_vaga e título, e incluindo a cidade indicada pelo portal. O jobkey continua identificando o registro salvo. Os dois links atuais responderam HTTP 200 no teste local, com uma chamada de detalhe por anúncio e descrições extraídas.
+
+Retirei a tentativa extra de 404 proposta inicialmente. Os logs antigos não guardam a URL final nem os redirecionamentos, então não permitem identificar a causa interna da resposta recebida no runner. Acrescentei esses dados ao diagnóstico de erros HTTP. Atualizei a arquitetura e a cópia local da página afetada na wiki.
+
+Os 1.389 testes passaram e o lint não apontou problemas. A revisão da PR 32 passou a tratar o endereço de consulta e o diagnóstico HTTP, com preservação do erro quando a resposta é 404. A conferência real ficou restrita aos dois anúncios investigados, sem coleta completa ou alteração do banco.
+
+---
+
+### 06/11/2026
+
+Separei a exportação do Parquet das etapas de publicação. As três rodadas usam o mesmo arquivo para o Kaggle e o Hugging Face quando os dados mudam. A release continua a ser publicada primeiro. A rotina do Hugging Face confere a release atual, mantém um commit na branch principal e verifica o SHA-256 depois do envio.
+
+Conferi as 10.099 vagas e as 16 colunas da versão 191 do Kaggle com o SQLite da release de 27/10. Preparei o envio do arquivo original como a tag v2026.10.27, com a origem e o hash no Dataset Card. A publicação no Hugging Face ainda depende da configuração do dataset e do token de escrita.
+
+Confirmei o cadastro do dataset público e do secret de escrita. Configurei o endereço da réplica no Actions. Separei a trava da tag histórica da trava da base atual, pois a tag usa um arquivo validado da versão 191 e pode ser publicada durante uma coleta.
+
+Os 1.390 testes passaram. O lint de Python e o actionlint passaram. O teste com Git LFS local verificou a atualização da branch principal, a preservação da tag, a repetição sem mudança e a recusa de um snapshot antigo. A simulação HTTP confirmou a verificação dos bytes e a rejeição de hash divergente e resposta 404. Atualizei a documentação e preparei a revisão das páginas de automação e fluxo da wiki.
+
+Publiquei a tag v2026.10.27 e confirmei o SHA-256 do Parquet remoto. O primeiro envio da branch principal parou ao consultar o manifesto da release. Corrigi a consulta para usar o repositório explícito e baixar o manifesto em um diretório temporário, conforme o fluxo do Pages. O erro do comando de consulta agora fica visível no log.
+
+Confirmei que a branch principal do Hugging Face recebeu as 11.049 vagas e o mesmo Parquet da versão 216 do Kaggle. Integrei o envio automático na PR 33. Adicionei o link do dataset ao README, à página inicial da wiki e à página sobre o modelo de dados.
+
+Adicionei o ícone do Hugging Face ao rodapé do site. O link usa o mesmo estilo do Kaggle e tem um rótulo acessível. O site registra o clique quando a pessoa aceita a análise de uso. Conferi o rodapé no navegador em quatro larguras e os dez testes do site passaram.
+
+Integrei os links e o ícone na PR 34. Conferi as duas execuções recentes com falha. Uma era a consulta ao manifesto do Hugging Face já corrigida; a repetição publicou o arquivo. A outra sinalizou os bloqueios do LinkedIn depois de concluir a release, o Kaggle e o Pages.
+
+Limitei as chamadas de uma sessão após dois HTTP 429 seguidos. Uma espera informada acima de 30 segundos interrompe já na primeira resposta. A coleta preserva as vagas recebidas, registra o erro e deixa as outras fontes continuarem. Os termos restantes da fonte bloqueada aparecem como não tentados no log.
+
+Os 1.403 testes passaram e o lint não apontou problemas. A simulação HTTP local confirmou a preservação de resultados e a continuidade da outra fonte nos modos sequencial e paralelo. Também conferiu as esperas longas e a recuperação de um 429 isolado nos dois transportes HTTP.
+
+Troquei o nome do conjunto exibido no Hugging Face de train para vagas. A configuração versionada passa a usar esse nome nas publicações seguintes.
+
+---
+
+### 07/11/2026
+
+Registrei o micro-F1 de **97,40%** na extração de habilidades das 370 vagas. A documentação inclui o catálogo, os dados por vaga e o SQLite de origem. A revisão manual de escopo e cobertura ficou em um documento separado.
+
+Refinei os cortes de benefícios e formação, a leitura de títulos de seção e o reconhecimento de atividades técnicas. Separei menções que geravam vínculos adicionais, como API REST e APIs e SQL Server e SQL. Os 1.453 testes e o lint passaram.
+
+Atualizei a documentação de classificação e do endpoint de vagas recentes na cópia local da wiki. Centralizei o cartão do Hugging Face no script de publicação.
+
+---
+
+### 11/11/2026
+
+Corrigi a leitura de vagas da Jobbol quando o portal redireciona o detalhe para `www.jobbol.com.br`. Mantive a verificação do ID e do título. As buscas da mesma rodada reutilizam o resultado da consulta de cada vaga, inclusive após uma falha. Confirmei a recuperação da descrição de uma vaga rejeitada no Actions. Atualizei a documentação de arquitetura e preparei a revisão da página correspondente na wiki.
