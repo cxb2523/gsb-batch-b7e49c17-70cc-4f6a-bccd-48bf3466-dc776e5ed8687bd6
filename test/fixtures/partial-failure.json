@@ -1,0 +1,254 @@
+{
+  "CityOfEdmonton": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "cityofgreatersudbury": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "cityofkamloops": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "CityOfLangford": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "cityofottawa": {
+    "repos": "not-an-array"
+  },
+  "CityofRichmond": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "CityOfSarnia": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "cityofsurrey": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "CityofToronto": {
+    "error": "404 error making request GET /orgs/CityofToronto/repos: \"Not Found\""
+  },
+  "cityofvancouver": {
+    "followers": 3,
+    "repos": []
+  },
+  "CityOfVictoria": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "cityssm": {
+    "followers": 42,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 10,
+        "forks": 2,
+        "open_issues": 5,
+        "language": "TypeScript",
+        "updated_at": "2026-10-01T00:00:00Z",
+        "pushed_at": "2026-10-02T00:00:00Z"
+      },
+      {
+        "private": true,
+        "stargazers_count": 99,
+        "forks": 99,
+        "open_issues": 99,
+        "language": "SecretLang",
+        "updated_at": "2026-10-03T00:00:00Z",
+        "pushed_at": "2026-10-04T00:00:00Z"
+      },
+      {
+        "private": false,
+        "stargazers_count": 5,
+        "forks": 1,
+        "open_issues": 0,
+        "language": null,
+        "updated_at": "2026-09-01T00:00:00Z",
+        "pushed_at": "2026-09-02T00:00:00Z"
+      }
+    ]
+  },
+  "Clearwater-County": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "rocky-view-county": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "RegionofPeel": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "soreltracy": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "Ville-La-Tuque": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "villelaval": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "VilledeMontreal": {
+    "followers": 2,
+    "repos": [
+      {
+        "private": false,
+        "stargazers_count": 1,
+        "forks": 1,
+        "open_issues": 1,
+        "language": "JavaScript",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "pushed_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  }
+}

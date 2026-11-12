@@ -5,7 +5,8 @@
   "type": "module",
   "exports": "./build.js",
   "scripts": {
-    "build": "node build.js"
+    "build": "node build.js",
+    "test": "node --test test/rankingBuilder.test.js test/fixtureDataSource.test.js test/build.test.js test/pageRender.test.js test/mapRender.test.js"
   },
   "repository": {
     "type": "git",

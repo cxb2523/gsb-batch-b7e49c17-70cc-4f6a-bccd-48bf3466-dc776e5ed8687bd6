@@ -61,17 +61,72 @@
   </footer>
   <script src="https://cdn.jsdelivr.net/npm/axios@0.26.1/dist/axios.min.js" integrity="sha256-iSkNRnKsHORmMCNgQIxzyW0QzHrWeko/lyVjyI78G2c=" crossorigin="anonymous"></script>
   <script>
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
     axios.get("./data.json")
       .then((response) => {
         return response.data;
       })
       .then((data) => {
 
+        const organizations = Array.isArray(data.organizations)
+          ? data.organizations
+          : [];
+        const failedOrganizations = Array.isArray(data.failedOrganizations)
+          ? data.failedOrganizations
+          : [];
+
+        const containerElement = document.querySelector("#table-container");
+        containerElement.innerHTML = "";
+
+        // If every municipality failed this run, show a prominent
+        // failure notice instead of an empty table.
+        if (organizations.length === 0) {
+          const allFailedElement = document.createElement("div");
+          allFailedElement.className = "notification is-danger";
+          allFailedElement.setAttribute("role", "alert");
+
+          let allFailedHtml =
+            "<p class=\"has-text-weight-bold\">All municipality data fetches failed this run.</p>" +
+            "<p>No ranking data is available. Please try again later.</p>";
+
+          if (failedOrganizations.length > 0) {
+            allFailedHtml += "<ul class=\"mt-2\">";
+            for (const failedOrganization of failedOrganizations) {
+              allFailedHtml += "<li>" +
+                escapeHtml(failedOrganization.municipality) +
+                " (" + escapeHtml(failedOrganization.handle) + ")" +
+                (failedOrganization.error
+                  ? " &mdash; " + escapeHtml(failedOrganization.error)
+                  : "") +
+                "</li>";
+            }
+            allFailedHtml += "</ul>";
+          }
+
+          allFailedElement.innerHTML = allFailedHtml;
+          containerElement.append(allFailedElement);
+
+          const failedRefreshElement = document.createElement("p");
+          failedRefreshElement.className = "has-text-centered";
+          failedRefreshElement.innerHTML =
+            "Last Updated<br />" + new Date(data.refreshMillis).toLocaleString();
+          containerElement.append(failedRefreshElement);
+          return;
+        }
+
         let maxStars = 0;
         let maxRepos = 0;
         let maxRatio = 0;
 
-        for (const organization of data.organizations) {
+        for (const organization of organizations) {
           maxStars = Math.max(maxStars, organization.stars);
           maxRepos = Math.max(maxRepos, organization.repositories);
 
@@ -92,7 +147,7 @@
           "</tr></thead>" +
           "<tbody></tbody>";
 
-        for (const organization of data.organizations) {
+        for (const organization of organizations) {
 
           const trElement = document.createElement("tr");
 
@@ -116,15 +171,44 @@
             "<td class=\"has-text-right" + (organization.repositories !== 0 && (organization.stars / organization.repositories) >= maxRatio ? " has-background-success-light" : "") + "\">" +
               (organization.repositories === 0
               ? ""
-              : (organization.stars / organization.repositories).toPrecision(2)) + 
+              : (organization.stars / organization.repositories).toPrecision(2)) +
             "</td>";
 
           tableElement.querySelector("tbody").append(trElement);
         }
 
-        const containerElement = document.querySelector("#table-container");
-        containerElement.innerHTML = "";
         containerElement.append(tableElement);
+
+        // List the municipalities whose data could not be fetched this run.
+        // Municipalities with zero public repositories stay in the table
+        // and must never appear in this failure list.
+        if (failedOrganizations.length > 0) {
+          const failureElement = document.createElement("div");
+          failureElement.className = "notification is-warning mt-4";
+          failureElement.setAttribute("role", "status");
+
+          let failureHtml =
+            "<p class=\"has-text-weight-bold\">" +
+            failedOrganizations.length +
+            (failedOrganizations.length === 1
+              ? " municipality could not be fetched this run:"
+              : " municipalities could not be fetched this run:") +
+            "</p><ul>";
+
+          for (const failedOrganization of failedOrganizations) {
+            failureHtml += "<li>" +
+              escapeHtml(failedOrganization.municipality) +
+              " (" + escapeHtml(failedOrganization.handle) + ")" +
+              (failedOrganization.error
+                ? " &mdash; " + escapeHtml(failedOrganization.error)
+                : "") +
+              "</li>";
+          }
+
+          failureHtml += "</ul>";
+          failureElement.innerHTML = failureHtml;
+          containerElement.append(failureElement);
+        }
 
         const refreshElement = document.createElement("p");
         refreshElement.className = "has-text-centered";
@@ -132,6 +216,16 @@
         refreshElement.innerHTML = "Updated Twice Daily<br />Last Updated<br />" + new Date(data.refreshMillis).toLocaleString();
 
         containerElement.append(refreshElement);
+      })
+      .catch((error) => {
+        console.error("Error loading data:", error);
+        const containerElement = document.querySelector("#table-container");
+        containerElement.innerHTML = "";
+        const errorElement = document.createElement("div");
+        errorElement.className = "notification is-danger";
+        errorElement.setAttribute("role", "alert");
+        errorElement.textContent = "Error loading ranking data. Please try again later.";
+        containerElement.append(errorElement);
       });
   </script>
 </body>

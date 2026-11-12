@@ -269,22 +269,57 @@
         return response.data;
       })
       .then((data) => {
+        const organizations = Array.isArray(data.organizations)
+          ? data.organizations
+          : [];
+        const failedOrganizations = Array.isArray(data.failedOrganizations)
+          ? data.failedOrganizations
+          : [];
+
+        // If every municipality failed this run, show a prominent
+        // failure notice instead of an empty map.
+        if (organizations.length === 0) {
+          const mapElement = document.getElementById('map');
+          const allFailedElement = document.createElement('div');
+          allFailedElement.className = 'notification is-danger';
+          allFailedElement.setAttribute('role', 'alert');
+          allFailedElement.innerHTML =
+            '<p class="has-text-weight-bold">All municipality data fetches failed this run.</p>' +
+            '<p>No map data is available. Please try again later.</p>';
+          mapElement.appendChild(allFailedElement);
+
+          const failedRefreshInfo = document.createElement("div");
+          failedRefreshInfo.className = "notification is-light mt-4";
+          failedRefreshInfo.innerHTML =
+            '<p class="has-text-centered"><strong>Data Updated:</strong> ' +
+            new Date(data.refreshMillis).toLocaleString() +
+            '<br><small class="has-text-warning-dark">' +
+            failedOrganizations.length +
+            (failedOrganizations.length === 1
+              ? ' municipality was'
+              : ' municipalities were') +
+            ' not mapped because the data fetch failed this run</small></p>';
+          document.querySelector("main").appendChild(failedRefreshInfo);
+          return;
+        }
+
         let cityssmMarker = null;
-        
-        // Add markers for each organization
-        data.organizations.forEach((organization) => {
+
+        // Add markers for each successfully fetched organization.
+        // Failed municipalities are never plotted.
+        organizations.forEach((organization) => {
           // Only add markers for organizations with valid coordinates
           if (organization.latitude && organization.longitude) {
             const markerStyle = getMarkerStyle(organization.stars);
             const customIcon = createCustomMarker(organization, markerStyle);
             const popupContent = createPopupContent(organization);
-            
+
             try {
               if (customIcon && L.Marker) {
                 const marker = new L.Marker([organization.latitude, organization.longitude], { icon: customIcon });
                 map.addLayer(marker);
                 marker.bindPopup(popupContent);
-                
+
                 // Keep reference to cityssm marker to open its popup automatically
                 if (organization.handle === 'cityssm') {
                   cityssmMarker = marker;
@@ -297,22 +332,32 @@
             }
           }
         });
-        
+
         // Automatically open the cityssm popup when map loads
         if (cityssmMarker) {
           cityssmMarker.openPopup();
         }
 
-        // Add refresh info
+        const plottedCount = organizations.filter(org => org.latitude && org.longitude).length;
+
+        // Add refresh info, including the number of failed fetches
         const refreshInfo = document.createElement("div");
         refreshInfo.className = "notification is-light mt-4";
-        refreshInfo.innerHTML = `
+
+        let refreshHtml = `
           <p class="has-text-centered">
             <strong>Data Updated:</strong> ${new Date(data.refreshMillis).toLocaleString()}<br>
-            <small>Map shows ${data.organizations.filter(org => org.latitude && org.longitude).length} municipalities with location data</small>
-          </p>
-        `;
-        
+            <small>Map shows ${plottedCount} municipalities with location data</small>`;
+
+        if (failedOrganizations.length > 0) {
+          refreshHtml += `<br>
+            <small class="has-text-warning-dark">${failedOrganizations.length} ${failedOrganizations.length === 1 ? 'municipality was' : 'municipalities were'} not mapped because the data fetch failed this run</small>`;
+        }
+
+        refreshHtml += `
+          </p>`;
+        refreshInfo.innerHTML = refreshHtml;
+
         const main = document.querySelector("main");
         main.appendChild(refreshInfo);
       })

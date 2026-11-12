@@ -1,0 +1,59 @@
+{
+  "CityOfEdmonton": {
+    "error": "Simulated API failure for CityOfEdmonton"
+  },
+  "cityofgreatersudbury": {
+    "repos": null
+  },
+  "cityofkamloops": {
+    "error": "Simulated API failure for cityofkamloops"
+  },
+  "CityOfLangford": {
+    "repos": null
+  },
+  "cityofottawa": {
+    "error": "Simulated API failure for cityofottawa"
+  },
+  "CityofRichmond": {
+    "repos": null
+  },
+  "CityOfSarnia": {
+    "error": "Simulated API failure for CityOfSarnia"
+  },
+  "cityofsurrey": {
+    "repos": null
+  },
+  "CityofToronto": {
+    "error": "Simulated API failure for CityofToronto"
+  },
+  "cityofvancouver": {
+    "repos": null
+  },
+  "CityOfVictoria": {
+    "error": "Simulated API failure for CityOfVictoria"
+  },
+  "cityssm": {
+    "repos": null
+  },
+  "Clearwater-County": {
+    "error": "Simulated API failure for Clearwater-County"
+  },
+  "rocky-view-county": {
+    "repos": null
+  },
+  "RegionofPeel": {
+    "error": "Simulated API failure for RegionofPeel"
+  },
+  "soreltracy": {
+    "repos": null
+  },
+  "Ville-La-Tuque": {
+    "error": "Simulated API failure for Ville-La-Tuque"
+  },
+  "villelaval": {
+    "repos": null
+  },
+  "VilledeMontreal": {
+    "error": "Simulated API failure for VilledeMontreal"
+  }
+}

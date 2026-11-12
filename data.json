@@ -23,7 +23,8 @@
         "SCSS": 10,
         "ASP": 1,
         "Classic ASP": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "VilledeMontreal",
@@ -54,7 +55,8 @@
         "CSS": 1,
         "Swift": 1,
         "Dockerfile": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "CityOfEdmonton",
@@ -79,7 +81,8 @@
         "HTML": 1,
         "Java": 1,
         "C": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "CityofToronto",
@@ -105,7 +108,8 @@
         "Vue": 1,
         "Java": 1,
         "Shell": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "cityofottawa",
@@ -126,7 +130,8 @@
         "null": 5,
         "Java": 1,
         "CSS": 4
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "cityofsurrey",
@@ -143,7 +148,8 @@
         "null": 3,
         "JavaScript": 7,
         "Makefile": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "cityofkamloops",
@@ -159,7 +165,8 @@
       "languages": {
         "Python": 1,
         "Dockerfile": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "cityofgreatersudbury",
@@ -174,7 +181,8 @@
       "lastUpdate": "2013-01-03T18:26:46Z",
       "languages": {
         "null": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "CityOfLangford",
@@ -190,7 +198,8 @@
       "languages": {
         "TypeScript": 2,
         "null": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "CityOfVictoria",
@@ -206,7 +215,8 @@
       "languages": {
         "JavaScript": 2,
         "null": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "villelaval",
@@ -222,7 +232,8 @@
       "languages": {
         "C#": 1,
         "HTML": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "CityofRichmond",
@@ -239,7 +250,8 @@
         "null": 1,
         "Go": 1,
         "Java": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "CityOfSarnia",
@@ -256,7 +268,8 @@
         "Hack": 1,
         "PHP": 1,
         "HTML": 1
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "RegionofPeel",
@@ -271,7 +284,8 @@
       "lastUpdate": "2022-09-19T14:18:17Z",
       "languages": {
         "null": 2
-      }
+      },
+      "status": "success"
     },
     {
       "handle": "cityofvancouver",
@@ -284,7 +298,8 @@
       "forks": 0,
       "issues": 0,
       "lastUpdate": "",
-      "languages": {}
+      "languages": {},
+      "status": "success"
     },
     {
       "handle": "Clearwater-County",
@@ -297,7 +312,8 @@
       "forks": 0,
       "issues": 0,
       "lastUpdate": "",
-      "languages": {}
+      "languages": {},
+      "status": "success"
     },
     {
       "handle": "rocky-view-county",
@@ -310,7 +326,8 @@
       "forks": 0,
       "issues": 0,
       "lastUpdate": "",
-      "languages": {}
+      "languages": {},
+      "status": "success"
     },
     {
       "handle": "soreltracy",
@@ -323,7 +340,8 @@
       "forks": 0,
       "issues": 0,
       "lastUpdate": "",
-      "languages": {}
+      "languages": {},
+      "status": "success"
     },
     {
       "handle": "Ville-La-Tuque",
@@ -336,8 +354,10 @@
       "forks": 0,
       "issues": 0,
       "lastUpdate": "",
-      "languages": {}
+      "languages": {},
+      "status": "success"
     }
   ],
-  "refreshMillis": 1794426914051
+  "refreshMillis": 1794426914051,
+  "failedOrganizations": []
 }
