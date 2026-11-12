@@ -1,0 +1,18 @@
+[gd_scene load_steps=4 format=3 uid="uid://bu0qx87mjicku"]
+
+[ext_resource type="Material" uid="uid://c4mbfud2xkkn4" path="res://Materials/cubemat.tres" id="1_74lno"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_fhpad"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_8p68f"]
+
+[node name="Cube" type="RigidBody3D"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(0.393739, 0.0511273, 0.0485347, -0.0520676, 0.39657, 0.00464708, -0.0475244, -0.010892, 0.397017, 0, 0, 0)
+shape = SubResource("BoxShape3D_fhpad")
+
+[node name="CubeMesh" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.4, 5.96048e-09, -1.49012e-08, -5.96048e-09, 0.4, -1.19209e-08, 1.49012e-08, 1.19209e-08, 0.4, 0, 0, 0)
+material_override = ExtResource("1_74lno")
+mesh = SubResource("BoxMesh_8p68f")

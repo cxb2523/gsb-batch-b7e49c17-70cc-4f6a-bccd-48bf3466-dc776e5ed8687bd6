@@ -1,0 +1,177 @@
+name: Build Godot project & deploy to server
+
+on:
+  push:
+    tags:
+      - '*'
+    branches:
+      - main
+
+jobs:
+  variables:
+    name: Define variables 🔗
+    runs-on: ubuntu-latest
+    outputs:
+      GODOT_VERSION: ${{ steps.set_godot_version.outputs.VERSION }}
+      TAG: ${{ steps.set_tag.outputs.VERSION }}
+      BUILD_NAME: ${{ steps.set_build_name.outputs.VERSION }}
+      OPTIMIZE_WASM: ${{ steps.set_optimize_wasm.outputs.VALUE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Set godot version
+        id: set_godot_version
+        run: |
+          echo "Full project line with version"
+          grep 'config/features=PackedStringArray' godot/project.godot
+
+          GODOT_VERSION=$(grep 'config/features=PackedStringArray' godot/project.godot | grep -o '"4\.[0-9]*"' | head -n 1 | tr -d '"')
+          echo "VERSION=$GODOT_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set tag
+        id: set_tag
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF/refs\/tags\//}
+          else
+            VERSION="${{ steps.set_godot_version.outputs.VERSION }}"
+            VERSION="$VERSION-webgl-main-debug"
+          fi
+
+          # Add .0 patch version if needed for both tagged and untagged builds
+          BASE_VERSION=${VERSION%%-*}  # Get everything before the first dash
+          if [[ $BASE_VERSION =~ ^[0-9]+\.[0-9]+$ ]]; then
+            VERSION="${VERSION//$BASE_VERSION/$BASE_VERSION.0}"
+          fi
+
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set target name
+        id: set_build_name
+        run: echo "VERSION=WebGL-${{ steps.set_tag.outputs.VERSION }}" >> $GITHUB_OUTPUT
+
+      - name: Set wasm optimization
+        id: set_optimize_wasm
+        run: |
+          if [[ $GITHUB_REF == "refs/heads/main" ]]; then
+            echo "VALUE=false" >> $GITHUB_OUTPUT
+          else
+            echo "VALUE=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log variables
+        run: |
+          echo "GODOT_VERSION -> ${{ steps.set_godot_version.outputs.VERSION }}"
+          echo "TAG -> ${{ steps.set_tag.outputs.VERSION }}"
+          echo "BUILD_NAME -> ${{ steps.set_build_name.outputs.VERSION }}"
+          echo "OPTIMIZE_WASM -> ${{ steps.set_optimize_wasm.outputs.VALUE }}"
+
+  buildProject:
+    name: Create Godot WebGL Build 🏗
+    needs: [ variables ]
+    if: ${{ !startsWith(needs.variables.outputs.TAG, 'v') }}
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:${{ needs.variables.outputs.GODOT_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Move export templates to user directory
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/
+          mv /root/.local/share/godot/export_templates/${{ needs.variables.outputs.GODOT_VERSION }}.stable ~/.local/share/godot/export_templates/${{ needs.variables.outputs.GODOT_VERSION }}.stable
+
+      - name: Check export templates directory
+        run: |
+          echo "Checking if export templates directory exists..."
+          if [ -d ~/.local/share/godot/export_templates ]; then
+            echo "Directory exists. Contents:"
+            ls -la ~/.local/share/godot/export_templates/*/
+          else
+            echo "Directory does not exist"
+          fi
+
+      - name: Build project
+        shell: bash
+        run: |
+          chmod +x Scripts/build-webgl.sh
+          if [[ "${{ needs.variables.outputs.TAG }}" == *"debug"* ]]; then
+            ./Scripts/build-webgl.sh --debug
+          else
+            ./Scripts/build-webgl.sh
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.variables.outputs.BUILD_NAME }}-raw
+          path: build/web
+
+  optimizeAssets:
+    name: Optimize and compress assets 🗜️
+    needs: [ variables, buildProject ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.variables.outputs.BUILD_NAME }}-raw
+          path: build/web
+
+      - name: Optimize Wasm
+        if: ${{ needs.variables.outputs.OPTIMIZE_WASM == 'true' }}
+        uses: JohannesDeml/binaryen-wasm-opt@v1
+        with:
+          file: build/web/*.wasm
+          optimize_all: true
+          options: -all --post-emscripten -Oz
+
+      - name: Compress assets
+        run: |
+          # Install compression tools
+          sudo apt-get update && sudo apt-get install -y brotli gzip
+
+          # Find and compress all .js and .wasm files
+          find build -type f \( -name "*.js" -o -name "*.wasm" \) -exec sh -c '
+            brotli -k "$1"
+            gzip -k "$1"
+          ' sh {} \;
+
+      - name: Display structure of root files
+        run: ls -Rlh
+        working-directory: build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.variables.outputs.BUILD_NAME }}
+          path: build/web
+
+  deployOnServer:
+    name: Deploy on server 🚀
+    needs: [ variables, optimizeAssets ]
+    if: ${{ github.repository_owner == 'JohannesDeml' }}  # Replace with your username
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.variables.outputs.BUILD_NAME }}
+          path: build
+
+      - name: Deploy ⤴
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USER }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          port: 21
+          protocol: ftps
+          local-dir: ./build/
+          server-dir: ./${{ needs.variables.outputs.TAG }}/
+          dangerous-clean-slate: true

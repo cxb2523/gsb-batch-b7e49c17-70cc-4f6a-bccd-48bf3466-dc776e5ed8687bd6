@@ -1,0 +1,41 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Godot-WebGL-LoadingTest"
+config/version="1.1.0"
+run/main_scene="res://Scenes/main.tscn"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+boot_splash/show_image=false
+config/icon="res://Textures/icon.svg"
+
+[autoload]
+
+WebToolPlugins="*res://Scripts/WebToolPlugins.gd"
+WebCommands="*res://Scripts/WebCommands.gd"
+
+[dotnet]
+
+project/assembly_name="GodotWebGL-LoadingTest"
+
+[physics]
+
+common/physics_ticks_per_second=50
+3d/physics_engine="Jolt Physics"
+3d/solver/solver_iterations=6
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+lights_and_shadows/directional_shadow/size=2048
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=0
+environment/defaults/default_clear_color=Color(1, 1, 1, 1)
