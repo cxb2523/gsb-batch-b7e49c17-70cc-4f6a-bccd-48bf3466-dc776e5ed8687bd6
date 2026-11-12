@@ -283,6 +283,61 @@ def split_statements(cleaned):
     return parts
 
 
+_PROC_BOUNDARY = re.compile(r"\b(?:BEGIN|END(?:\s+(?:IF|LOOP|CASE|REPEAT|WHILE))?)\b",
+                            re.IGNORECASE)
+
+
+def split_procedural(cleaned):
+    """Like split_statements for a procedural body (PL/pgSQL, PL/SQL,
+    T-SQL, Snowflake Scripting), but also cut at top-level BEGIN / END
+    keywords. Without these cuts a body's first statement stays fused to
+    its opening `BEGIN` (`BEGIN\n SELECT …;`) and the last one to `END`,
+    so neither parses on its own and its real findings are lost. The
+    keyword pieces themselves do not parse; callers discard those. The
+    pieces keep their absolute (start, end) offsets, so the whitespace
+    between cuts never desyncs the caller's position map."""
+    cuts, depth, i, n = [0], 0, 0, len(cleaned)
+    squote = False
+    while i < n:
+        ch = cleaned[i]
+        if ch == "'":
+            squote = not squote
+            i += 1
+            continue
+        if not squote:
+            if ch == "$" and (end := _dollar_end(cleaned, i)) is not None:
+                i = end
+                continue
+            if ch in "([":
+                depth += 1
+            elif ch in ")]":
+                depth -= 1
+            elif depth == 0:
+                if ch == ";":
+                    cuts.append(i + 1)
+                    i += 1
+                    continue
+                m = _PROC_BOUNDARY.match(cleaned, i)
+                if m and (i == 0 or not (cleaned[i - 1].isalnum()
+                                          or cleaned[i - 1] in "_$")):
+                    cuts.extend((i, m.end()))
+                    i = m.end()
+                    continue
+        i += 1
+    cuts.append(n)
+    cuts = sorted(set(cuts))
+    parts = []
+    for lo, hi in zip(cuts, cuts[1:]):
+        piece = cleaned[lo:hi]
+        if piece.strip():
+            # The line of the first real character: a piece can open with
+            # the whitespace gap between two cuts, so count newlines
+            # through the piece's leading trivia, not just up to `lo`.
+            first = lo + len(piece) - len(piece.lstrip())
+            parts.append((piece, 1 + cleaned.count("\n", 0, first), lo, hi))
+    return parts
+
+
 ANCHORS = {
     "sql/not-in-nullable-subquery": [r"\bNOT\s+IN\s*\(", r"\bNOT\s*\("],
     "sql/unguarded-update-delete": [r"\bDELETE\b", r"\bUPDATE\b"],
@@ -942,6 +997,8 @@ class _Pass:
                 self._sql_body(text, pos, lo, hi, quoted, line)
             return hi
         if lang in _PROCEDURAL_LANGUAGES:
+            # The body's text is not in this chunk (or does not match
+            # what sqlglot kept): the control flow is still not checked.
             self._procedural(line, _PROCEDURAL_LANGUAGES[lang])
         else:
             self._diagnose(line, "the body of this function could not be "
@@ -955,7 +1012,7 @@ class _Pass:
         the rest (control flow, variables) is not understood."""
         if body is not None:
             keep = len(self.diagnostics)
-            self._pieces(*body)
+            self._pieces(*body, procedural=True)
             del self.diagnostics[keep:]  # the body is reported once, below
         self._diagnose(
             line, f"TrueQuery doesn't look inside procedural code yet: the "
@@ -974,20 +1031,30 @@ class _Pass:
             return
         self._pieces(text, pos, lo, hi, quoted)
 
-    def _pieces(self, text, pos, lo, hi, quoted):
+    def _pieces(self, text, pos, lo, hi, quoted, procedural=False):
         """Parse and check each statement of a body; one that doesn't
-        parse is a diagnostic at its own line."""
+        parse is a diagnostic at its own line. For a procedural body the
+        BEGIN / END keywords are cut out too, so a statement between them
+        parses on its own; its failures are discarded by _procedural
+        (the body is reported once, as not fully checked)."""
         raw = text[lo:hi]
         body, idx = _unquote(raw) if quoted else (raw, None)
         bpos = self._sub(pos, lo, hi, idx)
         cleaned = strip_comments(body, self.dialect or "generic")
-        at = 0
-        for part, _ in split_statements(cleaned):
-            lo2, at = at, at + len(part)
+        if procedural:
+            spans = [(p, a, b) for p, _, a, b in split_procedural(cleaned)]
+        else:
+            # split_statements yields contiguous (text, start-line) pairs;
+            # derive their absolute offsets the same way.
+            spans, run = [], 0
+            for part, _ in split_statements(cleaned):
+                spans.append((part, run, run + len(part)))
+                run += len(part)
+        for part, lo2, hi2 in spans:
             if not part.strip().strip(";").strip():
                 continue
-            err = self._parse_piece(cleaned, bpos, lo2, at)
-            if err is not None:
+            err = self._parse_piece(cleaned, bpos, lo2, hi2)
+            if err is not None and not procedural:
                 detail = _ANSI.sub("", str(err)).replace("\n", " ")
                 self._diagnose(self._first_line(part, bpos[lo2:]),
                                re.sub(r"\s+", " ", detail).strip())

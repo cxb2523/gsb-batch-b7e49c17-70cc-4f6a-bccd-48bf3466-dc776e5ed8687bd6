@@ -176,6 +176,44 @@ def test_wrapper_in_a_shared_chunk_and_after_other_statements():
     assert res["verified"] and found(res) == [at(sql, "a = NULL")]
 
 
+def test_explain_not_in_subquery_points_at_the_inner_query_line():
+    """The wrapper is not the location: an EXPLAIN-wrapped NOT IN fires on
+    the inner query's own line and column, exactly as a bare query would."""
+    sql = ("EXPLAIN\n"
+           "SELECT * FROM t\n"
+           " WHERE id NOT IN (SELECT id FROM u);\n")
+    res = check(sql)
+    assert res["verified"], res["diagnostics"]
+    assert found(res, NOT_IN) == [at(sql, "id NOT IN")]
+    assert found(res, NOT_IN)[0][0] == 3  # the inner predicate's line, not EXPLAIN
+    # A bare form of the same inner query anchors at the same column.
+    bare = "SELECT * FROM t\n WHERE id NOT IN (SELECT id FROM u);\n"
+    assert found(check(bare), NOT_IN) == [(2, at(sql, "id NOT IN")[1])]
+
+
+def test_create_view_as_unguarded_delete_is_found():
+    """CREATE VIEW … AS keeps its inner data change opaque to sqlglot; the
+    unguarded DELETE inside is still found, at the DELETE's own line."""
+    sql = "CREATE VIEW v AS\nDELETE FROM t;\n"
+    res = check(sql)
+    assert res["verified"], res["diagnostics"]
+    assert found(res, UNGUARDED) == [at(sql, "DELETE")]
+    # An inline form maps the column inside the same line.
+    inline = "CREATE VIEW v AS DELETE FROM t;\n"
+    res = check(inline)
+    assert res["verified"] and found(res, UNGUARDED) == [at(inline, "DELETE")]
+
+
+def test_an_inner_query_that_fails_to_parse_is_never_clean():
+    """A wrapper whose inner query does not parse marks the whole file
+    unverified with a diagnostic instead of silently passing."""
+    sql = "EXPLAIN SELECT FROM WHERE = ;\n"
+    res = check(sql)
+    assert not res["verified"] and res["findings"] == []
+    [diag] = res["diagnostics"]
+    assert "not checked" in diag["message"]
+
+
 # -- SQL function and procedure bodies ------------------------------------------
 @pytest.mark.parametrize("open_, close", [("$$", "$$"), ("$body$", "$body$"),
                                           ("$f_1$", "$f_1$")])
@@ -211,6 +249,39 @@ def test_sql_body_single_line_and_procedure():
     assert res["verified"]
     assert found(res, UNGUARDED) == [at(sql, "DELETE")]
     assert found(res, NOT_IN) == [at(sql, "a NOT IN")]
+
+
+def test_sql_body_findings_keep_their_true_file_lines_and_columns():
+    """Every statement of a plain-SQL body is checked on its own, and the
+    finding's line/column is the position in the CREATE FUNCTION file —
+    not a line reset to 1 inside the body."""
+    sql = ("CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$\n"       # line 1
+           "  SELECT a FROM t;\n"                                        # line 2
+           "  DELETE FROM t;\n"                                          # line 3
+           "  SELECT b FROM t\n"                                         # line 4
+           "   WHERE b = NULL;\n"                                        # line 5
+           "$$;\n")
+    res = check(sql)
+    assert res["verified"], res["diagnostics"]
+    assert found(res, UNGUARDED) == [at(sql, "DELETE")]
+    assert found(res, NULL_EQ) == [at(sql, "b = NULL")]
+    # Explicit true-file positions, guarding against any body-relative reset.
+    assert found(res, UNGUARDED) == [(3, 3)]
+    assert found(res, NULL_EQ) == [(5, 10)]
+
+
+def test_sql_body_parse_failure_and_a_good_sibling_coexist():
+    """One unparsable statement in a SQL body does not silence the
+    others: the good statement reports and the file stays unverified."""
+    sql = ("CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$\n"
+           "  SELECT a FROM t WHERE a = NULL;\n"
+           "  SELECT FROM WHERE = ;\n"
+           "$$;\n")
+    res = check(sql)
+    assert not res["verified"]
+    assert found(res, NULL_EQ) == [at(sql, "a = NULL")]
+    assert [d["message"] for d in res["diagnostics"]] == [
+        "line 3: could not parse (not checked)"]
 
 
 def test_sql_body_that_doesnt_parse_is_not_checked_at_its_line():
@@ -321,6 +392,65 @@ def test_plain_statements_inside_procedural_code_still_report():
     assert [d["message"] for d in res["diagnostics"]] == [
         "line 1: procedural code in PL/pgSQL (not checked)"]
     assert found(res, NULL_EQ) == [at(sql, "a = NULL")]
+
+
+def test_plpgsql_function_is_unverified_but_its_plain_sql_still_reports():
+    """A procedural FUNCTION (not just a DO block) says its control flow
+    was not checked and is unverified, while a statement between BEGIN
+    and END that parses on its own still reports a real finding at its
+    true file line."""
+    sql = ("CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$\n"
+           "BEGIN\n"
+           "  SELECT a FROM t WHERE a = NULL;\n"
+           "END;\n"
+           "$$;\n")
+    res = check(sql)
+    assert not res["verified"]
+    assert [d["message"] for d in res["diagnostics"]] == [
+        "line 1: procedural code in PL/pgSQL (not checked)"]
+    assert found(res, NULL_EQ) == [at(sql, "a = NULL")]
+    assert found(res, NULL_EQ)[0][0] == 3
+
+
+def test_plpgsql_body_several_statements_and_a_broken_sibling():
+    """Diagnostic and findings coexist: every independently parseable
+    statement in a procedural body is checked; the unparseable control
+    flow adds only the single procedural diagnostic."""
+    sql = ("CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$\n"
+           "BEGIN\n"
+           "  DELETE FROM t;\n"
+           "  SELECT a FROM t WHERE a NOT IN (SELECT b FROM u);\n"
+           "  PERFORM something_that_is_not_sql();\n"
+           "END;\n"
+           "$$;\n")
+    res = check(sql)
+    assert not res["verified"]
+    assert [d["message"] for d in res["diagnostics"]] == [
+        "line 1: procedural code in PL/pgSQL (not checked)"]
+    assert found(res, UNGUARDED) == [at(sql, "DELETE")]
+    assert found(res, NOT_IN) == [at(sql, "a NOT IN")]
+
+
+def test_procedural_splitter_cuts_begin_and_end_into_their_own_pieces():
+    """The opening BEGIN and closing END must not stay fused to the SQL
+    between them, or that SQL never parses on its own. Offsets are
+    absolute so the caller's position map stays aligned."""
+    body = "\nBEGIN\n  SELECT a FROM t WHERE a = NULL;\nEND;\n"
+    pieces = analyzer.split_procedural(body)
+    # The SELECT stands alone, spanning exactly its source offsets.
+    sel = next(((p, lo, hi) for p, _, lo, hi in pieces
+                if p.strip().startswith("SELECT")), None)
+    assert sel is not None
+    text, lo, hi = sel
+    assert body[lo:hi] == text
+    assert "SELECT a FROM t WHERE a = NULL;" in text
+    # BEGIN and END are separate pieces, never attached to the SELECT.
+    assert any(p.strip() == "BEGIN" for p, _, _, _ in pieces)
+    assert any(p.strip().startswith("END") for p, _, _, _ in pieces)
+    # The pieces' offsets are non-decreasing and stay inside the body.
+    offsets = [(lo, hi) for _, _, lo, hi in pieces]
+    assert all(0 <= lo < hi <= len(body) for lo, hi in offsets)
+    assert offsets == sorted(offsets)
 
 
 def test_procedural_file_exit_3_and_allow_unverified(tmp_path):
