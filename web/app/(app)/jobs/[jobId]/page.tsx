@@ -1,0 +1,278 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import type { Metadata } from "next";
+import { cache } from "react";
+import { getJobById } from "@/lib/query";
+import ScoreBadge from "@/components/ScoreBadge";
+import StatusButton from "@/components/StatusButton";
+import SourceTag from "@/components/SourceTag";
+import { hasContent } from "@/lib/content";
+import AdsenseScript from "@/components/AdsenseScript";
+
+// Scraper runs daily, so a day-old render is at most one scrape behind — and
+// crawlers re-fetching within the day hit the cache instead of a render.
+export const revalidate = 86400;
+
+// Without this, a dynamic segment ignores `revalidate` and renders on every
+// request (ƒ). Empty list = nothing prebuilt, each job cached on first visit.
+export function generateStaticParams() {
+  return [];
+}
+
+// generateMetadata and the page both need the job — one DB query per render, not two.
+const getJob = cache(getJobById);
+
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://ashbyhq-scraper.vercel.app";
+
+// Defense in depth for rows scraped before the ingestion-side URL sanitization
+// existed — only http(s) may ever reach an <a href>, never `javascript:`.
+function safeHref(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ jobId: string }>;
+}): Promise<Metadata> {
+  const { jobId } = await params;
+  const job = await getJob(jobId);
+  if (!job) return {};
+
+  const title = `${job.title} at ${job.company}`;
+  const rawDesc = job.description?.replace(/\s+/g, " ").trim() ?? "";
+  const description = rawDesc.length > 155
+    ? rawDesc.slice(0, 152) + "…"
+    : rawDesc || `${job.title} opening at ${job.company}. Apply now.`;
+  const url = `${siteUrl}/jobs/${job.jobId}`;
+
+  return {
+    title,
+    description,
+    openGraph: {
+      type: "article",
+      title,
+      description,
+      url,
+      publishedTime: job.publishedAt || undefined,
+      images: [{ url: "/og.png", width: 1200, height: 630 }],
+    },
+    twitter: { card: "summary", title, description },
+    alternates: { canonical: url },
+    // Expired or description-less: keep crawlers following links, out of the index.
+    ...(!hasContent(job) && { robots: { index: false, follow: true } }),
+  };
+}
+
+// JobPosting schema requires validThrough; ATS sources don't expose a real
+// expiry, so we estimate one 45 days out from the best date we have.
+function estimateValidThrough(publishedAt: string): string {
+  const anchorMs = publishedAt ? new Date(publishedAt).getTime() : Date.now();
+  return new Date(anchorMs + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export default async function JobDetailPage({
+  params,
+}: {
+  params: Promise<{ jobId: string }>;
+}) {
+  const { jobId } = await params;
+  const job = await getJob(jobId);
+
+  if (!job) notFound();
+
+  const employmentTypeMap: Record<string, string> = {
+    FullTime: "FULL_TIME",
+    PartTime: "PART_TIME",
+    Contract: "CONTRACTOR",
+    Intern: "INTERN",
+    Temporary: "TEMPORARY",
+  };
+
+  const jobSchema: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    title: job.title,
+    description: job.description || `${job.title} at ${job.company}`,
+    identifier: { "@type": "PropertyValue", name: job.company, value: job.jobId },
+    hiringOrganization: { "@type": "Organization", name: job.company },
+    datePosted: job.publishedAt ? new Date(job.publishedAt).toISOString().slice(0, 10) : undefined,
+    validThrough: estimateValidThrough(job.publishedAt),
+    directApply: true,
+    url: `${siteUrl}/jobs/${job.jobId}`,
+    ...(job.employmentType && {
+      employmentType: employmentTypeMap[job.employmentType] ?? "FULL_TIME",
+    }),
+    ...(job.remote
+      ? {
+        jobLocationType: "TELECOMMUTE",
+        applicantLocationRequirements: { "@type": "Country", name: "Anywhere" },
+      }
+      : job.location && {
+        jobLocation: {
+          "@type": "Place",
+          address: { "@type": "PostalAddress", addressLocality: job.location },
+        },
+      }),
+    // Only emit baseSalary when we have structured currency+value (Ashby/Lever
+    // expose this; Greenhouse's public board API doesn't). A MonetaryAmount
+    // missing those subfields is what GSC was flagging, so we still omit it
+    // for jobs where all we have is the free-text compensationSummary.
+    ...(job.compensationCurrency && (job.compensationMin != null || job.compensationMax != null) && {
+      baseSalary: {
+        "@type": "MonetaryAmount",
+        currency: job.compensationCurrency,
+        value: {
+          "@type": "QuantitativeValue",
+          ...(job.compensationMin != null && { minValue: job.compensationMin }),
+          ...(job.compensationMax != null && { maxValue: job.compensationMax }),
+          unitText: job.compensationInterval || "YEAR",
+        },
+      },
+    }),
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto">
+      {/* Ads only where there's something to read (AdSense policy: no ads on
+          screens without publisher content). The feed is navigation, so none there. */}
+      {hasContent(job) && <AdsenseScript />}
+      <script
+        type="application/ld+json"
+        // job.title/description/company come from externally-scraped, employer-controlled
+        // job boards — escape "<" so a "</script>" in that data can't break out of this tag.
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jobSchema).replace(/</g, "\\u003c") }}
+      />
+      {/* Breadcrumb */}
+      <Link
+        href="/"
+        className="inline-flex items-center gap-1 text-xs text-ink-muted hover:text-ink transition-colors mb-6"
+      >
+        <span>&larr;</span>
+        <span>Back to feed</span>
+      </Link>
+
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="font-display text-2xl font-bold tracking-tight leading-tight mb-1">
+            {job.title}
+          </h1>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm font-medium text-ink-secondary">{job.company}</span>
+            <span className="text-edge-strong">&middot;</span>
+            <span className="text-sm text-ink-muted">{job.location}</span>
+            <span className="text-edge-strong">&middot;</span>
+            <SourceTag source={job.source} />
+            {job.remote && (
+              <>
+                <span className="text-edge-strong">&middot;</span>
+                <span className="text-xs font-mono text-ink-muted">REMOTE</span>
+              </>
+            )}
+          </div>
+        </div>
+        <ScoreBadge score={job.score} />
+      </div>
+
+      {!job.isActive && (
+        <div className="mb-6 px-4 py-3 rounded-md border border-edge bg-surface text-sm text-ink-secondary">
+          This job is no longer available — it was removed on a later scrape. Showing the last known listing.
+        </div>
+      )}
+
+      {/* Meta grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 bg-surface rounded-lg mb-6">
+        <MetaCell label="Department" value={job.department} />
+        <MetaCell label="Team" value={job.team} />
+        <MetaCell label="Type" value={formatEmploymentType(job.employmentType)} />
+        <MetaCell label="Posted" value={formatDate(job.publishedAt)} />
+        {job.compensationSummary && (
+          <div className="col-span-2 sm:col-span-4">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted mb-0.5">
+              Compensation
+            </p>
+            <p className="text-sm font-mono text-positive font-medium">{job.compensationSummary}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Matched keywords */}
+      {job.matchedKeywords.length > 0 && (
+        <div className="mb-6">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted mb-2">
+            Matched Signals
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {job.matchedKeywords.map((kw) => (
+              <span
+                key={kw}
+                className="text-xs font-mono px-2 py-0.5 rounded bg-signal-soft text-signal"
+              >
+                {kw}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center justify-start gap-2.5 mb-8 pb-6 border-b border-edge">
+        {job.isActive && safeHref(job.applyUrl) && (
+          <a
+            href={safeHref(job.applyUrl)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center gap-1.5 h-9 px-5 bg-signal text-white text-sm font-medium rounded-md hover:bg-signal-muted transition-colors"
+          >
+            Apply &rarr;
+          </a>
+        )}
+        <StatusButton jobId={job.jobId} targetStatus="applied" label="Mark Applied" />
+        <StatusButton jobId={job.jobId} targetStatus="ignored" label="Ignore" />
+      </div>
+
+      {/* Description */}
+      <div className="prose-custom">
+        <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted mb-3">
+          Description
+        </p>
+        <div
+          className="text-sm leading-relaxed text-ink-secondary whitespace-pre-wrap"
+          style={{ maxHeight: "60vh", overflowY: "auto" }}
+        >
+          {job.description}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetaCell({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div>
+      <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted mb-0.5">
+        {label}
+      </p>
+      <p className="text-sm text-ink">{value || "—"}</p>
+    </div>
+  );
+}
+
+function formatEmploymentType(t: string | null): string {
+  if (!t) return "—";
+  return t.replace(/([A-Z])/g, " $1").trim();
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}

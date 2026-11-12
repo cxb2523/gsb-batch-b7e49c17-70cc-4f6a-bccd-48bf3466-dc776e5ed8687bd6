@@ -1,0 +1,34 @@
+{
+  "name": "ashby-job-scraper",
+  "version": "1.0.0",
+  "description": "Production-grade scraper for public Ashby, Lever, and Greenhouse job listings with change tracking, crawl-based company discovery, and intelligent filtering",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js start",
+    "run": "node index.js run",
+    "report": "node index.js report",
+    "test": "node --test test/*.test.js",
+    "lint": "eslint ."
+  },
+  "keywords": [
+    "ashby",
+    "lever",
+    "greenhouse",
+    "job-scraper",
+    "job-tracker"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cities.json": "^1.1.65",
+    "commander": "^14.0.3",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^10.1.0",
+    "pg": "^8.23.1",
+    "sanitize-html": "^2.18.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0"
+  }
+}

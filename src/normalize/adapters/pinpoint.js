@@ -1,0 +1,72 @@
+const { contentHash } = require('../../utils');
+const { sanitizeDescription, sanitizeUrl, normalizeLocation } = require('../shared');
+
+function formatCompensation(raw) {
+  if (raw.compensation_minimum == null && raw.compensation_maximum == null) return null;
+  const currency = raw.compensation_currency || '';
+  const min = raw.compensation_minimum != null ? Number(raw.compensation_minimum).toLocaleString() : null;
+  const max = raw.compensation_maximum != null ? Number(raw.compensation_maximum).toLocaleString() : null;
+  const range = min && max ? `${currency} ${min}–${max}`.trim() : `${currency} ${min || max}`.trim();
+  return raw.compensation_frequency ? `${range} / ${raw.compensation_frequency}` : range;
+}
+
+function normalizeInterval(frequency) {
+  if (!frequency) return null;
+  const f = frequency.toUpperCase();
+  if (f.includes('HOUR')) return 'HOUR';
+  if (f.includes('DAY')) return 'DAY';
+  if (f.includes('WEEK')) return 'WEEK';
+  if (f.includes('MONTH')) return 'MONTH';
+  if (f.includes('YEAR') || f.includes('ANNUAL')) return 'YEAR';
+  return null;
+}
+
+function normalizeJob(raw, company) {
+  const jobId = raw.id != null ? String(raw.id) : null;
+  if (!jobId) return null;
+
+  const normalizedLocation = normalizeLocation(
+    raw.location?.name || raw.location?.city,
+    /remote/i.test(raw.workplace_type_text || raw.workplace_type || '')
+  );
+  const description = sanitizeDescription(raw.description);
+  // An object ({ id, name }), not a string: passed through as-is it crashed
+  // scoring's .toLowerCase() and failed every Pinpoint board.
+  const department = raw.job?.department?.name || null;
+  // No explicit remote boolean — Pinpoint expresses it via workplace_type_text.
+
+  return {
+    jobId,
+    company,
+    source: 'pinpoint',
+    title: raw.title || 'Untitled',
+    location: normalizedLocation.location,
+    team: null,
+    department,
+    employmentType: raw.employment_type_text || raw.employment_type || null,
+    remote: normalizedLocation.remote,
+    description,
+    applyUrl: sanitizeUrl(raw.url),
+    jobUrl: sanitizeUrl(raw.url),
+    // Pinpoint's public postings.json has no posted-date field — falls back to
+    // scrape time, same as every other adapter does when a source omits one.
+    publishedAt: new Date().toISOString(),
+    scrapedAt: new Date().toISOString(),
+    compensationSummary: formatCompensation(raw),
+    compensationMin: raw.compensation_minimum ?? null,
+    compensationMax: raw.compensation_maximum ?? null,
+    compensationCurrency: raw.compensation_currency ?? null,
+    compensationInterval: normalizeInterval(raw.compensation_frequency),
+    contentHash: contentHash(
+      raw.title,
+      normalizedLocation.location,
+      description,
+      raw.employment_type,
+      String(normalizedLocation.remote),
+      department
+    ),
+  };
+}
+
+// No filterRaw: postings.json only ever lists live postings.
+module.exports = { normalizeJob };

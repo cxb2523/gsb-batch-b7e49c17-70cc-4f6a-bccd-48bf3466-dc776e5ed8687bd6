@@ -1,0 +1,271 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { getPool, initDb, closeDb } = require('../src/store/db');
+const { upsertJob } = require('../src/store/jobs');
+const config = require('../src/config');
+
+// These tests write to the database: test rows, a temporary trigger, and a
+// re-score of every active job with fake rules. CI points DATABASE_URL at a
+// throwaway postgres container, but a local .env points at production — run
+// there, this file once wiped the scores and tags of ~20K live jobs.
+const dbTest = /@(localhost|127\.0\.0\.1)(:\d+)?\//.test(config.db.url) ? test : test.skip;
+
+dbTest('getPool().query executes a simple query against the configured database', async () => {
+  const pool = getPool();
+  const { rows } = await pool.query('SELECT 1 AS one');
+  assert.equal(rows[0].one, 1);
+});
+
+dbTest('getPool().query surfaces real SQL errors (does not swallow them as connection failures)', async () => {
+  const pool = getPool();
+  await assert.rejects(() => pool.query('SELECT * FROM this_table_does_not_exist'));
+});
+
+dbTest('search_tsv: words match in any order, title hits rank first, unrelated updates keep it', async () => {
+  await initDb();
+  const pool = getPool();
+  const insert = (jobId, title, description) =>
+    pool.query(
+      `INSERT INTO jobs (job_id, company, title, description, scraped_at, content_hash)
+       VALUES ($1, 'SearchTestCo', $2, $3, NOW(), 'h')`,
+      [jobId, title, description]
+    );
+  await pool.query(`DELETE FROM jobs WHERE company = 'SearchTestCo'`);
+  await insert('fts-1', 'Office Manager', 'Some remote work, we also use Python.');
+  await insert('fts-2', 'Senior Python Developer', 'Fully remote role.');
+  // Mirrors upsertJob: every column rewritten, searchable text unchanged.
+  await pool.query(`UPDATE jobs SET scraped_at = NOW(), updated_at = NOW() WHERE company = 'SearchTestCo' AND job_id = 'fts-1'`);
+
+  // Same shape as web/lib/query.ts: match via job_search_ids, rank by title_tsv
+  // against the OR'd terms (the AND form scored this partial title hit 1e-20,
+  // the same as no title hit, so the order below was a coin flip).
+  const q = `websearch_to_tsquery('english', split_compound_words($1))`;
+  const { rows } = await pool.query(
+    `SELECT job_id FROM jobs
+     WHERE company = 'SearchTestCo' AND id IN (SELECT job_search_ids(${q}))
+     ORDER BY ts_rank(title_tsv, replace(${q}::text, ' & ', ' | ')::tsquery) DESC`,
+    ['remote python']
+  );
+  assert.deepEqual(rows.map((r) => r.job_id), ['fts-2', 'fts-1']);
+
+  const inTitle = async () =>
+    (await pool.query(
+      `SELECT title_tsv @@ to_tsquery('english', 'python') AS hit FROM jobs WHERE company = 'SearchTestCo' AND job_id = 'fts-1'`
+    )).rows[0].hit;
+  assert.equal(await inTitle(), false);
+  await pool.query(`UPDATE jobs SET title = 'Python Office Manager' WHERE company = 'SearchTestCo' AND job_id = 'fts-1'`);
+  assert.equal(await inTitle(), true, 'title_tsv must follow title changes');
+  await pool.query(`DELETE FROM jobs WHERE company = 'SearchTestCo'`);
+});
+
+dbTest('search_tsv splits dotted compound words so a bare search still matches "Node.js"', async () => {
+  await initDb();
+  const pool = getPool();
+  await pool.query(`DELETE FROM jobs WHERE company = 'CompoundTestCo'`);
+  await pool.query(
+    `INSERT INTO jobs (job_id, company, title, description, scraped_at, content_hash)
+     VALUES ('cw-1', 'CompoundTestCo', 'Node.js Engineer', '', NOW(), 'h')`
+  );
+
+  // Same query shape as web/lib/search-terms.ts tsquerySql: split on both sides.
+  const matches = async (term) =>
+    (await pool.query(
+      `SELECT job_id FROM jobs
+       WHERE company = 'CompoundTestCo'
+         AND id IN (SELECT job_search_ids(websearch_to_tsquery('english', split_compound_words($1))))`,
+      [term]
+    )).rows.map((r) => r.job_id);
+
+  assert.deepEqual(await matches('node'), ['cw-1'], 'bare "node" must match a "Node.js" title');
+  assert.deepEqual(await matches('js'), ['cw-1'], 'the split must also leave a separate "js" lexeme');
+  assert.deepEqual(await matches('Node.js'), ['cw-1'], 'the dotted query itself must still match');
+  assert.deepEqual(await matches('"node.js engineer"'), ['cw-1'], 'and so must a quoted phrase containing it');
+  await pool.query(`DELETE FROM jobs WHERE company = 'CompoundTestCo'`);
+});
+
+dbTest('upsertJob reports insert vs. update correctly, not "unchanged" for every real update', async () => {
+  await initDb();
+  const pool = getPool();
+  await pool.query(`DELETE FROM jobs WHERE company = 'UpsertTestCo'`);
+
+  const baseJob = {
+    jobId: 'up-1', company: 'UpsertTestCo', source: 'ashby', title: 'Engineer',
+    location: 'Remote', team: null, department: null, employmentType: 'FullTime',
+    remote: true, description: 'v1', applyUrl: 'https://x', jobUrl: 'https://x',
+    publishedAt: new Date().toISOString(), scrapedAt: new Date().toISOString(),
+    compensationSummary: null, compensationMin: null, compensationMax: null,
+    compensationCurrency: null, compensationInterval: null, contentHash: 'hash-v1',
+  };
+
+  assert.equal(await upsertJob(baseJob), 'inserted');
+  // RETURNING used to compare content_hash against the row's own just-written
+  // value, so this always came back 'unchanged' — JOB_UPDATED never fired.
+  assert.equal(
+    await upsertJob({ ...baseJob, description: 'v2', contentHash: 'hash-v2' }),
+    'updated'
+  );
+
+  await pool.query(`DELETE FROM jobs WHERE company = 'UpsertTestCo'`);
+});
+
+dbTest('initDb survives a schema statement that runs longer than the pool timeout', { timeout: 120000 }, async () => {
+  // Production incident: the search GIN index build ran for minutes and was
+  // cancelled by the pool's 30s statement timeout, failing every pipeline run.
+  // Reproduce a long-running (not lock-waiting) statement: make initDb's
+  // search backfill UPDATE hit one row whose trigger sleeps 31s.
+  const pool = getPool();
+  await initDb();
+  await pool.query(`DELETE FROM jobs WHERE company = 'SlowTestCo'`);
+  await pool.query(`ALTER TABLE jobs DISABLE TRIGGER jobs_search_tsv`);
+  await pool.query(
+    `INSERT INTO jobs (job_id, company, title, scraped_at, content_hash)
+     VALUES ('slow-1', 'SlowTestCo', 'Slow', NOW(), 'h')`
+  );
+  await pool.query(`ALTER TABLE jobs ENABLE TRIGGER jobs_search_tsv`);
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION slow_test_sleep() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.company = 'SlowTestCo' THEN PERFORM pg_sleep(31); END IF;
+      RETURN NEW;
+    END $$
+  `);
+  await pool.query(
+    `CREATE OR REPLACE TRIGGER slow_test_sleep BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION slow_test_sleep()`
+  );
+  try {
+    await initDb();
+    const { rows } = await pool.query(`SELECT search_tsv IS NOT NULL AS filled FROM jobs WHERE job_id = 'slow-1'`);
+    assert.equal(rows[0].filled, true);
+  } finally {
+    await pool.query(`DROP TRIGGER IF EXISTS slow_test_sleep ON jobs`);
+    await pool.query(`DROP FUNCTION IF EXISTS slow_test_sleep()`);
+    await pool.query(`DELETE FROM jobs WHERE company = 'SlowTestCo'`);
+  }
+});
+
+dbTest('job_search_ids reaches rows only through the search index', async () => {
+  // Evaluating search_tsv @@ on a row reads its ~2.6KB tsvector from TOAST;
+  // the planner doesn't cost that, and in production chose seq/index-walk
+  // plans doing it for all ~75k rows (7-15s searches).
+  const client = await getPool().connect();
+  const stats = async () =>
+    (await client.query(
+      `SELECT
+         (SELECT coalesce(sum(seq_scan), 0) FROM pg_stat_xact_user_tables WHERE relname = 'jobs')::int AS seq,
+         pg_stat_get_xact_numscans('idx_jobs_search'::regclass)::int AS gin`
+    )).rows[0];
+  const q = `websearch_to_tsquery('english', 'engineer')`;
+  try {
+    await client.query('BEGIN');
+    // Control: prove the counters see a seq scan when one happens.
+    await client.query('SET LOCAL enable_indexscan = off');
+    await client.query('SET LOCAL enable_bitmapscan = off');
+    let before = await stats();
+    await client.query(`SELECT count(*) FROM jobs WHERE search_tsv @@ ${q}`);
+    assert.ok((await stats()).seq > before.seq, 'control: forced seq scan must register');
+    await client.query('RESET enable_indexscan');
+    await client.query('RESET enable_bitmapscan');
+
+    before = await stats();
+    await client.query(`SELECT count(*) FROM job_search_ids(${q})`);
+    const after = await stats();
+    assert.equal(after.seq, before.seq, 'job_search_ids must not seq-scan jobs');
+    assert.ok(after.gin > before.gin, 'job_search_ids must use idx_jobs_search');
+  } finally {
+    await client.query('ROLLBACK');
+    client.release();
+  }
+});
+
+dbTest('a scrape query survives the Node process stalling like production did', { timeout: 120000 }, async () => {
+  // Production incident: the scraper's event loop stalled ~41s on CPU-heavy
+  // parsing, and the pool's 30s client-side query_timeout (a wall-clock
+  // timer) then failed queries the server had long since answered.
+  const client = await getPool().connect();
+  try {
+    const query = client.query('SELECT 1 AS one'); // any client-side timer starts here
+    query.catch(() => {}); // awaited below; don't let an early rejection go unhandled
+    const until = Date.now() + 45000;
+    while (Date.now() < until) {
+      // Busy-wait: block the event loop like the scraper's stall did.
+    }
+    const { rows } = await query;
+    assert.equal(rows[0].one, 1);
+  } finally {
+    client.release();
+  }
+});
+
+dbTest('rescoreJobsIfRulesChanged re-tags stored jobs once per rules version', async () => {
+  await initDb();
+  const pool = getPool();
+  const { rescoreJobsIfRulesChanged } = require('../src/store/jobs');
+  await pool.query(`DELETE FROM jobs WHERE company = 'RescoreTestCo'`);
+  await pool.query(`DELETE FROM app_state WHERE key = 'rules_version'`);
+  // Scored under old rules: no tags. Unchanged content, so a scrape would only touch it.
+  await pool.query(
+    `INSERT INTO jobs (job_id, company, title, description, scraped_at, content_hash, base_score, matched_keywords)
+     VALUES ('rescore-1', 'RescoreTestCo', 'Senior iOS Engineer', 'We run Kubernetes.', NOW(), 'h', 0, '{}')`
+  );
+  try {
+    const rules = { keywords: { kubernetes: 2 }, niches: { mobile: ['ios'] }, tags: ['kubernetes'] };
+    assert.ok((await rescoreJobsIfRulesChanged(rules)) >= 1);
+    const { rows } = await pool.query(`SELECT base_score, matched_keywords FROM jobs WHERE company = 'RescoreTestCo'`);
+    assert.equal(rows[0].base_score, 2);
+    assert.deepEqual(rows[0].matched_keywords, ['mobile', 'kubernetes']);
+    assert.equal(await rescoreJobsIfRulesChanged(rules), 0, 'same rules: no second pass');
+  } finally {
+    await pool.query(`DELETE FROM jobs WHERE company = 'RescoreTestCo'`);
+    await pool.query(`DELETE FROM app_state WHERE key = 'rules_version'`);
+  }
+});
+
+dbTest('digest jobs: only fresh postings on boards tracked before the window', async () => {
+  await initDb();
+  const pool = getPool();
+  const { collectDigestData } = require('../src/digest');
+  const cleanup = async () => {
+    await pool.query(`DELETE FROM jobs WHERE company IN ('DigestOldCo', 'DigestNewCo')`);
+    await pool.query(`DELETE FROM companies WHERE name IN ('DigestOldCo', 'DigestNewCo')`);
+    await pool.query(`DELETE FROM scrape_runs WHERE company IN ('DigestOldCo', 'DigestNewCo')`);
+  };
+  await cleanup();
+  await pool.query(
+    `INSERT INTO companies (name, slug, source, created_at) VALUES
+       ('DigestOldCo', 'digestoldco', 'ashby', NOW() - INTERVAL '2 days'),
+       ('DigestNewCo', 'digestnewco', 'workday', NOW())`
+  );
+  const job = (jobId, company, created, published) => pool.query(
+    `INSERT INTO jobs (job_id, company, title, scraped_at, content_hash, created_at, published_at)
+     VALUES ($1, $2, 'Engineer', NOW(), 'h', NOW() - $3::interval, NOW() - $4::interval)`,
+    [jobId, company, created, published]
+  );
+  try {
+    await job('dg-fresh', 'DigestOldCo', '0 hours', '0 hours');
+    // A board discovered in this window: its backlog, stamped with the scrape time.
+    await job('dg-backlog', 'DigestNewCo', '0 hours', '0 hours');
+    // New to us, but posted days ago.
+    await job('dg-stale', 'DigestOldCo', '0 hours', '5 days');
+    // In an earlier digest already.
+    await job('dg-seen', 'DigestOldCo', '2 days', '2 days');
+    await pool.query(
+      `INSERT INTO scrape_runs (company, status, jobs_inserted, jobs_updated, jobs_removed) VALUES
+         ('DigestOldCo', 'success', 2, 0, 0), ('DigestNewCo', 'success', 50, 0, 0)`
+    );
+    const since = new Date(Date.now() - 60 * 60 * 1000);
+    const data = await collectDigestData(pool, { since });
+    const ours = data.candidates.filter((c) => c.company.startsWith('Digest')).map((c) => c.jobId);
+    assert.deepEqual(ours, ['dg-fresh']);
+    // The new board's 50-job backlog isn't counted as new jobs (CI's database
+    // has no other scrape runs).
+    assert.equal(data.run.new, 2);
+    assert.ok(data.newCompanies.some((c) => c.name === 'DigestNewCo'), 'the new board is still listed as a new company');
+  } finally {
+    await cleanup();
+  }
+});
+
+test.after(async () => {
+  await closeDb();
+});

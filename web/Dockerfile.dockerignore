@@ -1,0 +1,17 @@
+# Used instead of the root .dockerignore (which excludes web/ for the scraper image).
+**/node_modules
+**/.next
+**/.env*
+.git
+.github
+.claude
+.cursor
+.playwright-mcp
+graphify-out
+data
+reports
+md
+test
+scripts
+deploy
+web/.vercel

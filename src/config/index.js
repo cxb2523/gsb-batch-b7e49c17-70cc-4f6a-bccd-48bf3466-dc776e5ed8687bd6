@@ -1,0 +1,51 @@
+const path = require('path');
+try {
+  process.loadEnvFile(path.resolve(__dirname, '../../.env'));
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+}
+
+const rules = require('./rules.json');
+
+const config = {
+  schedule: {
+    cron: process.env.CRON_SCHEDULE || '0 0 * * *',
+    jitterMaxMinutes: parseInt(process.env.JITTER_MAX_MINUTES, 10) || 5,
+  },
+
+  db: {
+    url: (process.env.DATABASE_URL || '').trim(),
+  },
+
+  fetch: {
+    sources: {
+      ashby: { baseUrl: 'https://api.ashbyhq.com/posting-api/job-board' },
+      lever: { baseUrl: 'https://api.lever.co/v0/postings' },
+      greenhouse: { baseUrl: 'https://boards-api.greenhouse.io/v1/boards' },
+      workable: { baseUrl: 'https://apply.workable.com/api/v1/widget/accounts' },
+      smartrecruiters: { baseUrl: 'https://api.smartrecruiters.com/v1/companies' },
+    },
+    maxRetries: 3,
+    retryBaseMs: 1000,
+    // Covers the whole download. Foveaassocies' 109 MB feed takes 34-37 s from
+    // the VM; the 2026-10-26 run had no timeouts at all, so the slack is free.
+    timeoutMs: 90000,
+    // Counted after inline base64 images are dropped (see fetch/client.js), so
+    // it only trips on real job text. The biggest board (Bjak) is ~34 MB.
+    maxBodyBytes: 50 * 1024 * 1024,
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  },
+
+  intelligence: {
+    rules,
+    minScore: parseInt(process.env.MIN_RELEVANCE_SCORE, 10) || rules.minScore || 5,
+  },
+
+  notify: {
+    cli: process.env.ENABLE_CLI_OUTPUT !== 'false',
+    markdown: process.env.ENABLE_MARKDOWN_REPORT !== 'false',
+    reportsDir: process.env.REPORTS_DIR || './reports',
+  },
+};
+
+module.exports = config;

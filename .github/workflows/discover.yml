@@ -1,0 +1,51 @@
+name: Discover Companies
+
+on:
+    schedule:
+        - cron: '37 14 * * *' # daily, 14:37 UTC — Common Crawl snapshots refresh ~monthly, but
+          # re-runs are cheap since already-tracked slugs are skipped, so daily just catches
+          # newly-listed companies sooner. GitHub starts these runs hours late (03:00 ran at
+          # 08:50-09:58), which landed after the scraper's 00:00 UTC run; an afternoon slot
+          # off the top of the hour still finishes before it, so new companies get scraped
+          # the same night.
+    workflow_dispatch: # manual trigger button
+
+permissions:
+    contents: read
+
+jobs:
+    discover:
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+        environment: Production
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 20
+            - run: npm ci
+
+            # The database has no public port: DATABASE_URL points at 127.0.0.1:5432, which this
+            # forwards through Cloudflare (db.whatrunsindia.com), where only the Access service token gets through.
+            - name: Open the database tunnel
+              env:
+                  TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+                  TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+              run: |
+                  docker run -d --network host -e TUNNEL_SERVICE_TOKEN_ID -e TUNNEL_SERVICE_TOKEN_SECRET \
+                    cloudflare/cloudflared:2026.10.0 access tcp --hostname db.whatrunsindia.com --url 127.0.0.1:5432
+                  for _ in $(seq 1 20); do (: > /dev/tcp/127.0.0.1/5432) 2>/dev/null && exit 0; sleep 1; done
+                  echo "::error::the database tunnel never started listening"; exit 1
+
+            # One source failing doesn't block the rest. Sequential, not a matrix:
+            # parallel jobs would trip Common Crawl's rate limit.
+            # Workday boards average ~90 jobs (capped at 200), so a few hundred of
+            # them would double the jobs table on the 1 GB VM. 25 checks a day
+            # grows it gradually; raise this once the VM has room.
+            - name: Discover companies
+              run: |
+                  for s in ashby greenhouse workable smartrecruiters recruitee teamtailor pinpoint "workday --verify-limit 25" keka; do
+                      node index.js discover --source $s || echo "::warning::discover --source $s failed"
+                  done
+              env:
+                  DATABASE_URL: ${{ secrets.DATABASE_URL }}

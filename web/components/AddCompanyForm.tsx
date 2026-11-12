@@ -1,0 +1,278 @@
+"use client";
+
+import { useState, useRef, type FormEvent } from "react";
+import Link from "next/link";
+import { matchBoardUrl, type Source } from "@/lib/providers";
+
+type Phase = "idle" | "scraping" | "success" | "error";
+
+interface Result {
+  company: string;
+  slug: string;
+  source: Source;
+  alreadyExisted: boolean;
+  jobs: { total: number; inserted: number; updated: number; unchanged: number; removed: number };
+}
+
+const SOURCE_META: Record<Source, { label: string; domain: string; placeholder: string }> = {
+  ashby: { label: "Ashby", domain: "jobs.ashbyhq.com", placeholder: "https://jobs.ashbyhq.com/company  or  company-slug" },
+  lever: { label: "Lever", domain: "jobs.lever.co", placeholder: "https://jobs.lever.co/company  or  company-slug" },
+  greenhouse: { label: "Greenhouse", domain: "job-boards.greenhouse.io", placeholder: "https://job-boards.greenhouse.io/company  or  company-slug" },
+  workable: { label: "Workable", domain: "apply.workable.com", placeholder: "https://apply.workable.com/company  or  company-slug" },
+  recruitee: { label: "Recruitee", domain: "recruitee.com", placeholder: "https://company.recruitee.com  or  company-slug" },
+  teamtailor: { label: "Teamtailor", domain: "teamtailor.com", placeholder: "https://company.teamtailor.com  or  company-slug" },
+  pinpoint: { label: "Pinpoint", domain: "pinpointhq.com", placeholder: "https://company.pinpointhq.com  or  company-slug" },
+  smartrecruiters: { label: "SmartRecruiters", domain: "jobs.smartrecruiters.com", placeholder: "https://jobs.smartrecruiters.com/Company  or  Company (case-sensitive)" },
+  workday: { label: "Workday", domain: "myworkdayjobs.com", placeholder: "https://company.wd5.myworkdayjobs.com/en-US/Site" },
+  keka: { label: "Keka", domain: "keka.com", placeholder: "https://company.keka.com/careers  or  company-slug" },
+};
+
+export default function AddCompanyForm() {
+  const [input, setInput] = useState("");
+  const [source, setSource] = useState<Source>("ashby");
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [result, setResult] = useState<Result | null>(null);
+  const [error, setError] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
+
+  const board = matchBoardUrl(input);
+  const bare = input.trim();
+  const slug = board?.slug ?? (/^[a-zA-Z0-9_-]+$/.test(bare) ? bare : null);
+  const isValid = slug !== null && slug.length > 0;
+  const effectiveSourceForHint = board?.source || source;
+  const busy = phase === "scraping";
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!isValid || busy) return;
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setError("");
+    setResult(null);
+    setPhase("scraping");
+
+    try {
+      // `source` only applies to a bare slug; for a URL the route detects it.
+      const res = await fetch("/api/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: input, source }),
+        signal: controller.signal,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || `Request failed (${res.status})`);
+        setPhase("error");
+        return;
+      }
+
+      setResult(data);
+      setPhase("success");
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setError((err as Error).message || "Network error");
+      setPhase("error");
+    }
+  }
+
+  function reset() {
+    setInput("");
+    setPhase("idle");
+    setResult(null);
+    setError("");
+  }
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="mb-8">
+        <h1 className="font-display text-xl font-bold tracking-tight mb-1">
+          Add Company
+        </h1>
+        <p className="text-sm text-ink-secondary leading-relaxed">
+          Paste a job board URL (or company slug) from any supported ATS
+          to start tracking their listings. The system will validate the board
+          exists, then scrape and index all open positions.
+        </p>
+      </div>
+
+      {phase === "success" && result ? (
+        <div className="rounded-lg border border-positive/30 bg-positive-soft p-5">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-positive text-white text-xs font-bold">
+              ✓
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="font-display font-semibold text-sm text-ink">
+                {result.alreadyExisted ? "Updated" : "Added"}{" "}
+                <span className="text-positive">{result.company}</span>
+              </p>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-ink-secondary">
+                <span>
+                  {result.jobs.total} job{result.jobs.total !== 1 ? "s" : ""}{" "}
+                  found
+                </span>
+                {result.jobs.inserted > 0 && (
+                  <span className="text-positive">
+                    +{result.jobs.inserted} new
+                  </span>
+                )}
+                {result.jobs.updated > 0 && (
+                  <span className="text-signal">
+                    {result.jobs.updated} updated
+                  </span>
+                )}
+                {result.jobs.unchanged > 0 && (
+                  <span>{result.jobs.unchanged} unchanged</span>
+                )}
+                {result.jobs.removed > 0 && (
+                  <span>{result.jobs.removed} removed</span>
+                )}
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <Link
+                  href={`/?company=${encodeURIComponent(result.company)}`}
+                  className="h-8 px-4 inline-flex items-center justify-center rounded-md text-xs font-medium
+                             bg-ink text-paper hover:bg-ink/90 transition-colors"
+                >
+                  View jobs
+                </Link>
+                <button
+                  onClick={reset}
+                  className="h-8 px-4 inline-flex items-center justify-center rounded-md text-xs font-medium
+                             border border-edge text-ink-secondary hover:border-edge-strong hover:text-ink
+                             transition-colors cursor-pointer"
+                >
+                  Add another
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <span className="block text-xs font-medium text-ink-secondary mb-1.5 font-mono uppercase tracking-wider">
+              ATS
+            </span>
+            <div className="flex gap-1.5">
+              {(Object.keys(SOURCE_META) as Source[]).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSource(s)}
+                  disabled={busy}
+                  className={`h-8 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer
+                              disabled:opacity-60 disabled:cursor-not-allowed
+                              ${source === s
+                      ? "bg-ink text-paper"
+                      : "border border-edge text-ink-secondary hover:border-edge-strong hover:text-ink"
+                    }`}
+                >
+                  {SOURCE_META[s].label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label
+              htmlFor="ats-url"
+              className="block text-xs font-medium text-ink-secondary mb-1.5 font-mono uppercase tracking-wider"
+            >
+              {SOURCE_META[source].label} URL or Slug
+            </label>
+            <div className="relative">
+              <input
+                id="ats-url"
+                type="text"
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  if (phase === "error") {
+                    setPhase("idle");
+                    setError("");
+                  }
+                }}
+                placeholder={SOURCE_META[source].placeholder}
+                disabled={busy}
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full h-10 px-3 text-sm bg-surface border border-edge rounded-md
+                           placeholder:text-ink-muted focus:outline-none focus:border-edge-strong
+                           focus:ring-1 focus:ring-edge-strong font-mono
+                           disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+              />
+              {input.length > 0 && (
+                <span
+                  className={`absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono ${isValid ? "text-positive" : "text-signal"
+                    }`}
+                >
+                  {isValid ? slug : "invalid"}
+                </span>
+              )}
+            </div>
+            {input.length > 0 && isValid && (
+              <p className="mt-1.5 text-xs text-ink-muted">
+                Will check{" "}
+                <span className="font-mono text-ink-secondary">
+                  {SOURCE_META[effectiveSourceForHint].domain}/{slug}
+                </span>
+              </p>
+            )}
+          </div>
+
+          {phase === "error" && error && (
+            <div className="rounded-md border border-signal/30 bg-signal-soft px-4 py-3">
+              <p className="text-sm text-signal font-medium">{error}</p>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={!isValid || busy}
+            className="h-9 px-5 rounded-md text-sm font-medium transition-colors cursor-pointer
+                       bg-ink text-paper hover:bg-ink/90
+                       disabled:opacity-40 disabled:cursor-not-allowed
+                       flex items-center gap-2"
+          >
+            {busy && (
+              <span className="inline-block w-3.5 h-3.5 border-2 border-paper/30 border-t-paper rounded-full animate-spin" />
+            )}
+            {busy ? "Scraping jobs..." : "Add & Scrape"}
+          </button>
+        </form>
+      )}
+
+      <div className="mt-8 pt-6 border-t border-edge">
+        <h2 className="font-display text-sm font-semibold mb-2">How it works</h2>
+        <ol className="space-y-1.5 text-xs text-ink-secondary leading-relaxed list-decimal list-inside">
+          <li>
+            Pick an ATS, then paste a URL like{" "}
+            <code className="font-mono text-ink bg-surface px-1 py-0.5 rounded">
+              jobs.ashbyhq.com/stripe
+            </code>{" "}
+            or just the slug{" "}
+            <code className="font-mono text-ink bg-surface px-1 py-0.5 rounded">
+              stripe
+            </code>
+          </li>
+          <li>
+            The system validates the board exists via that platform&apos;s public API
+          </li>
+          <li>
+            All open positions are scraped, normalized, and scored in real time
+          </li>
+          <li>
+            The company appears in your feed immediately &mdash; future scrapes
+            pick it up automatically
+          </li>
+        </ol>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,85 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Sans+3:wght@300;400;500;600&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Source Sans 3", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --color-paper: #FAFAF9;
+  --color-surface: #F5F5F4;
+  --color-ink: #0C0A09;
+  --color-ink-secondary: #57534E;
+  --color-ink-muted: #A8A29E;
+  --color-edge: #E7E5E4;
+  --color-edge-strong: #D6D3D1;
+  --color-signal: #473bce;
+  --color-signal-soft: #F0EEFF;
+  --color-signal-muted: #9B93E8;
+  --color-positive: #16A34A;
+  --color-positive-soft: #F0FDF4;
+}
+
+/* Dark theme (class on html) */
+.dark {
+  --color-paper: #0C0A09;
+  --color-surface: #1C1917;
+  --color-ink: #FAFAF9;
+  --color-ink-secondary: #A8A29E;
+  --color-ink-muted: #78716C;
+  --color-edge: #292524;
+  --color-edge-strong: #44403C;
+  --color-signal: #9B93EE;
+  --color-signal-soft: #1A1640;
+  --color-signal-muted: #7B70DC;
+  --color-positive: #22C55E;
+  --color-positive-soft: #14532D;
+}
+
+html {
+  font-family: var(--font-body);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100dvh;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  letter-spacing: -0.025em;
+}
+
+::selection {
+  background: var(--color-signal);
+  color: white;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-row {
+  animation: fade-in 0.3s ease-out both;
+}
+
+@keyframes menu-in {
+  from { opacity: 0; transform: scaleY(0.96) translateY(-4px); }
+  to { opacity: 1; transform: scaleY(1) translateY(0); }
+}
+
+.animate-menu-in {
+  animation: menu-in 0.15s ease-out both;
+}
+
+@utility container-main {
+  max-width: 72rem;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}

@@ -1,0 +1,198 @@
+// Single source of truth for the "What's new" page and the notification stack
+// (components/NotificationStack.tsx) — newest first.
+export interface ChangelogEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  title: string;
+  description: string;
+}
+
+export const CHANGELOG: ChangelogEntry[] = [
+  {
+    id: "privacy-and-ads",
+    date: "2026-10-30",
+    title: "A privacy policy, and ads on job pages",
+    description:
+      "There's now a privacy policy (linked at the bottom of every page) that says what we store and how to remove it. Job pages with a full description may show a Google ad; the feed and empty listings won't.",
+  },
+  {
+    id: "for-you-link",
+    date: "2026-10-22",
+    title: "A For you link to your matched jobs",
+    description:
+      "After you match your resume once, a For you link in the menu takes you back to the jobs that fit it, from any page. It lives in this browser; empty the box on Match resume to remove it.",
+  },
+  {
+    id: "resume-kept",
+    date: "2026-10-22",
+    title: "Match resume remembers your resume",
+    description:
+      "The resume you paste on Match resume stays in your browser, so next time it's already there and one click finds your jobs again. We don't keep a copy. Empty the box to forget it. When your experience has to be read by an AI model and the first one is busy, a second one (Google's Gemini) now tries before asking you to pick.",
+  },
+  {
+    id: "resume-years-in-browser",
+    date: "2026-10-21",
+    title: "Resume match counts your experience in your browser",
+    description:
+      "Match resume now adds up the dates in your resume's Experience section itself, instantly and without sending your resume anywhere. It only asks an AI model when there are no dates it can read. There's also a Fresher / new grad level, here and in the feed's Experience filter: jobs asking for at most a year, with new grad, junior and intern roles counted as fits.",
+  },
+  {
+    id: "experience-filter",
+    date: "2026-10-21",
+    title: "Resume match now fits your experience level",
+    description:
+      "Match resume reads your years of work experience from your resume and hides jobs that ask for more, so early-career engineers stop seeing senior roles. There's also a new Experience filter on the feed. Jobs' required years come from their title and description.",
+  },
+  {
+    id: "resume-match",
+    date: "2026-10-21",
+    title: "Match your resume to jobs",
+    description:
+      "Paste your resume on the new Match resume page to see the jobs that share the most skills with it. Your resume stays in your browser and is never uploaded or saved.",
+  },
+  {
+    id: "open-source-library",
+    date: "2026-10-19",
+    title: "The scraping code is now a free library: ats-jobs",
+    description:
+      "The code that reads all ten job boards is published on npm as ats-jobs, so anyone can use it in their own projects. See the new Open source page in the menu.",
+  },
+  {
+    id: "add-workday-fix",
+    date: "2026-10-15",
+    title: "Adding Workday companies works again, and job scores match",
+    description:
+      "Pasting a Workday careers link (or a North American Teamtailor one) into Add a company no longer fails. A job's own page now shows the same match score as the job list.",
+  },
+  {
+    id: "new-home",
+    date: "2026-10-13",
+    title: "Ashby Jobs has a new home: jobs.whatrunsindia.com",
+    description:
+      "The old address redirects here, so links and bookmarks keep working. You'll need to sign in once more, and your applied and ignored jobs are still on your account. If you track jobs without signing in, those marks live in your browser at the old address and don't carry over.",
+  },
+  {
+    id: "more-providers",
+    date: "2026-10-06",
+    title: "Keka jobs, and more companies from four job boards",
+    description:
+      "Keka is now the 10th job board we read, with many companies in India. Companies hiring on Workday, Teamtailor, Recruitee and Pinpoint are now found automatically every day, not only when someone adds them.",
+  },
+  {
+    id: "department-groups",
+    date: "2026-10-06",
+    title: "Pick several departments at once",
+    description:
+      "The department filter now has 16 clear groups, like Engineering, Data & AI, Product, Design and Sales, instead of thousands of raw names. You can search it and select more than one. Locations like \"(canada)\" are cleaned up too.",
+  },
+  {
+    id: "sponsors",
+    date: "2026-10-06",
+    title: "Ashby Jobs is on GitHub Sponsors",
+    description:
+      "The site is free, open source and ad-free. If it helped your job search, you can now support it on GitHub Sponsors.",
+  },
+  {
+    id: "role-and-tech-tags",
+    date: "2026-10-05",
+    title: "Filter by role and tech stack",
+    description:
+      "New tags for AI/ML, DevOps/SRE, mobile, data, security, QA, embedded and web3 roles, plus tech like Go, Rust, Java, AWS, Kubernetes, PyTorch and GraphQL.",
+  },
+  {
+    id: "community-bug-fixes",
+    date: "2026-09-27",
+    title: "10 community-reported bugs fixed",
+    description:
+      "Thanks to @regalleo: every page of results is reachable again, searches for C++, C# and Node.js work, Workday links open, and Applied/Ignored lists keep closed jobs instead of dropping them.",
+  },
+  {
+    id: "fast-search",
+    date: "2026-09-25",
+    title: "Search got much faster",
+    description: "Searches for common words like \"AI\" used to take 7 to 15 seconds. They now return in under a second.",
+  },
+  {
+    id: "full-text-search",
+    date: "2026-09-24",
+    title: "Smarter search",
+    description:
+      "Words now match in any order across titles, companies, locations and descriptions. Use \"quotes\" for an exact phrase and -word to exclude one.",
+  },
+  {
+    id: "workday",
+    date: "2026-09-22",
+    title: "Workday support added",
+    description: "Jobs posted on Workday now show up in the feed alongside every other supported ATS.",
+  },
+  {
+    id: "more-providers",
+    date: "2026-09-21",
+    title: "5 new job boards added",
+    description: "Workable, Recruitee, Teamtailor, Pinpoint, and SmartRecruiters jobs now show up in the feed.",
+  },
+  {
+    id: "auth",
+    date: "2026-09-21",
+    title: "Sign in with Google, GitHub, or email",
+    description: "Create an account to track applied and ignored jobs across every device.",
+  },
+];
+
+export const SPONSOR_URL = "https://github.com/sponsors/rishilahoti";
+export const SPONSOR_ID = "sponsor";
+
+export interface AppNotification {
+  id: string;
+  kicker: string;
+  title: string;
+  description: string;
+  action: { label: string; href: string; external?: boolean };
+}
+
+// Changelog entries that also get a notification, newest first. Not every
+// entry deserves one: add an id here when a feature should be announced.
+const ANNOUNCED_IDS = ["resume-match", "more-providers", "department-groups", "role-and-tech-tags", "auth"];
+
+const shortDate = (iso: string) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+// The notification stack, top first. The sponsor card goes last and never
+// fully disappears: once dismissed it lives on as the nav bar's Sponsor button.
+export const NOTIFICATIONS: AppNotification[] = [
+  ...ANNOUNCED_IDS.map((id) => {
+    const entry = CHANGELOG.find((e) => e.id === id)!;
+    return {
+      id,
+      kicker: `What's new · ${shortDate(entry.date)}`,
+      title: entry.title,
+      description: entry.description,
+      action: { label: "See what's new", href: "/changelog" },
+    };
+  }),
+  {
+    id: SPONSOR_ID,
+    kicker: "Free & open source",
+    title: "Like Ashby Jobs? Sponsor it",
+    description: "No ads, no paywall. Sponsors keep the daily scraper and the servers running.",
+    action: { label: "Sponsor ♥", href: SPONSOR_URL, external: true },
+  },
+];
+
+// Dismissed ids as stored in localStorage. legacySeenId is the old
+// single-toast "changelog-seen" value: whatever it announced counts as seen.
+export function parseDismissed(stored: string | null, legacySeenId: string | null): Set<string> {
+  let ids: unknown = [];
+  try {
+    ids = JSON.parse(stored ?? "[]");
+  } catch {
+    // Corrupt value: treat it as nothing dismissed.
+  }
+  const dismissed = new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []);
+  if (legacySeenId) dismissed.add(legacySeenId);
+  return dismissed;
+}
+
+export function visibleNotifications(dismissed: Set<string>): AppNotification[] {
+  return NOTIFICATIONS.filter((n) => !dismissed.has(n.id));
+}

@@ -1,0 +1,11 @@
+node_modules/
+certs/
+data/
+reports/
+.env
+*.db
+*.db-journal
+md
+.cursor
+graphify-out/
+.playwright-mcp/
