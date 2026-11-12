@@ -1,0 +1,147 @@
+from Global import Flags, Domains
+import Global
+import sys
+import threading
+import time
+
+from Scan.CommandRun import check_installed_tools
+from Scan.Helpers import create_run_directory, get_domains_for_enumeration
+from Scan.Discovery import launch_subfinder_dnsx_naabu, launch_httpx, check_dns_wildcards
+from Scan.Crawl import launch_katana, launch_uro, delete_assets_with_waf, delete_urls_with_waf, check_social_networks
+from Scan.HostChecks import launch_waf_bypass, launch_hidden_hosts_scan, send_urls_to_burp
+from Scan.SecurityTrails import launch_securitytrails_scan
+from Scan.Postleaks import launch_postleaks, set_postleaks_waiting
+from Scan.Leakix import check_leakix
+from Scan.Qualys import sync_qualys_was
+from Scan.SecurityAgent import sync_security_agent
+from Scan.NucleiScan import launch_nuclei, check_subdomains_takeover
+from Scan.Fuzzing import launch_feroxbuster, launch_byp4xx
+from Scan.DependencyCheck import collect_dependency_files, analyze_dependency_files
+
+
+def scanning():
+    try:
+        wildcard_thread = None
+        if '-ds' not in Flags and '-i' not in Flags:  # Needs only the system DNS resolver, so it runs while the utilities are being checked
+            wildcard_thread = threading.Thread(target=check_dns_wildcards, name="WildcardCheckThread", daemon=True)
+            wildcard_thread.start()
+        if check_installed_tools() != 0:
+            print("[e] Not all required utilities are installed. Terminating.")
+            sys.exit(1)
+        if wildcard_thread:
+            wildcard_thread.join()
+        print("[N] Note: you can stop any current check with Ctrl+C")
+        Global.RunDir = create_run_directory(Domains[0])
+        print(f"[*] Logs and temporary files for this run will be stored in: {Global.RunDir}")
+        if '-ds' in Flags or '-i' in Flags or not get_domains_for_enumeration():  # Nothing left to enumerate => scan the root domains only
+            launch_subfinder_dnsx_naabu(scan_subdomains=False)
+        else:
+            launch_subfinder_dnsx_naabu(scan_subdomains=True)
+            try:
+                launch_subfinder_dnsx_naabu(scan_subdomains=False, console_output=False)  # Fixing strange Naabu bug where a root domain
+                # is not in the results when there are a lot of subdomains with it. When the bug is fixed, just remove this line
+            except SystemExit:
+                pass  # This supplementary run can fail (e.g. naabu "no valid ipv4 or ipv6 targets") without aborting the scan
+        if '-dp' not in Flags and '-i' not in Flags:
+            postleaks_thread = threading.Thread(target=launch_postleaks, name="PostleaksThread", daemon=True)
+            postleaks_thread.start()
+            time.sleep(1)  # To avoid problems with console output
+        launch_httpx()
+        delete_assets_with_waf()  # And add them to AssetsWithWAF
+        if '-dc' not in Flags:
+            amount_of_processed_domains = len(Global.HTTPAssets)
+            launch_katana()
+            launch_uro()
+            delete_assets_with_waf(amount_of_processed_domains)  # Again because Katana can add some new domains
+        else:
+            Global.CrawledURLs = Global.HTTPAssets
+        delete_urls_with_waf()  # And add them to URLsWithWAF
+        dep_thread = None
+        if '-dcf' not in Flags:
+            collect_dependency_files()
+            dep_thread = threading.Thread(target=analyze_dependency_files, name="DependencyCheckThread", daemon=True)
+            dep_thread.start()
+        if '-dw' not in Flags:
+            launch_waf_bypass()
+        if '-di' not in Flags:
+            launch_hidden_hosts_scan()
+        if '-dst' not in Flags:
+            launch_securitytrails_scan()
+        if '-dl' not in Flags:
+            leakix_thread = threading.Thread(target=check_leakix, name="LeakixThread", daemon=True)
+            leakix_thread.start()
+            time.sleep(1)  # To avoid problems with console output
+        if '-q' in Flags:
+            qualys_thread = threading.Thread(target=sync_qualys_was, name="QualysThread", daemon=True)
+            qualys_thread.start()
+            time.sleep(1)  # To avoid problems with console output
+        if '-asa' in Flags:
+            security_agent_thread = threading.Thread(target=sync_security_agent, name="SecurityAgentThread", daemon=True)
+            security_agent_thread.start()
+            time.sleep(1)  # To avoid problems with console output
+        if '-ba' in Flags or '-bw' in Flags or '-bf' in Flags:
+            burp_sending_thread = threading.Thread(target=send_urls_to_burp, name="BurpSendingThread", daemon=True)
+            burp_sending_thread.start()
+            time.sleep(1)  # To avoid problems with console output
+        if '-dm' not in Flags:
+            social_networks_thread = threading.Thread(target=check_social_networks, name="CheckSocialNetworksThread", daemon=True)
+            social_networks_thread.start()
+            time.sleep(1)  # To avoid problems with console output
+        if '-dt' not in Flags and Global.RawSubdomains:
+            check_subdomains_takeover()
+        if '-dn' not in Flags:
+            launch_nuclei()
+        if '-df' not in Flags:
+            launch_feroxbuster()
+        if '-db' not in Flags:
+            launch_byp4xx()
+
+        if 'postleaks_thread' in locals() and postleaks_thread.is_alive():
+            print("[*] Waiting until postleaks finishes working...")
+            set_postleaks_waiting(True)
+            postleaks_thread.join()
+        if 'burp_sending_thread' in locals() and burp_sending_thread.is_alive():
+            print("[*] Waiting until all requests sending to Burp...")
+            try:
+                while burp_sending_thread.is_alive():
+                    burp_sending_thread.join(timeout=1)
+            except KeyboardInterrupt:
+                print("[*] Finishing sending requests to Burp...")
+        if 'leakix_thread' in locals() and leakix_thread.is_alive():
+            print("[*] Waiting until leakix information collection finishes...")
+            try:
+                while leakix_thread.is_alive():
+                    leakix_thread.join(timeout=1)
+            except KeyboardInterrupt:
+                print("[*] Finishing leakix check...")
+        if 'qualys_thread' in locals() and qualys_thread.is_alive():
+            print("[*] Waiting until Qualys WAS sync finishes...")
+            try:
+                while qualys_thread.is_alive():
+                    qualys_thread.join(timeout=1)
+            except KeyboardInterrupt:
+                print("[*] Finishing Qualys WAS sync...")
+        if 'security_agent_thread' in locals() and security_agent_thread.is_alive():
+            print("[*] Waiting until AWS Security Agent sync finishes...")
+            try:
+                while security_agent_thread.is_alive():
+                    security_agent_thread.join(timeout=1)
+            except KeyboardInterrupt:
+                print("[*] Finishing AWS Security Agent sync...")
+        if 'social_networks_thread' in locals() and social_networks_thread.is_alive():
+            print("[*] Waiting until social media takeover checks finishes...")
+            try:
+                while social_networks_thread.is_alive():
+                    social_networks_thread.join(timeout=1)
+            except KeyboardInterrupt:
+                print("[*] Finishing social networks check...")
+        if dep_thread is not None and dep_thread.is_alive():
+            print("[*] Waiting until dependency check finishes...")
+            try:
+                while dep_thread.is_alive():
+                    dep_thread.join(timeout=1)
+            except KeyboardInterrupt:
+                print("[*] Finishing dependency check...")
+    except KeyboardInterrupt:
+        print("[!] Ctrl+C detected, exiting...")
+        sys.exit(1)

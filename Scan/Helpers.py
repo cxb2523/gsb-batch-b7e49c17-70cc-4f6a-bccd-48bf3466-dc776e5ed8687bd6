@@ -1,0 +1,214 @@
+from urllib.parse import urlparse
+import os
+import shutil
+import re
+from dataclasses import dataclass
+from datetime import datetime
+import random
+import requests
+import Global
+
+
+def delete_http_duplicates(urls):
+    def normalize_netloc(netloc):
+        if netloc.startswith("www."):
+            return netloc[4:]
+        return netloc
+
+
+    def deduplicate_urls(urls):
+        domain_dict = {}
+
+        for url in urls:
+            parsed = urlparse(url)
+            scheme = parsed.scheme.lower()
+            netloc = parsed.netloc.lower()
+            normalized_netloc = normalize_netloc(netloc)
+
+            if normalized_netloc in domain_dict:
+                existing_scheme = domain_dict[normalized_netloc]['scheme']
+                if scheme == 'https' and existing_scheme == 'http':
+                    domain_dict[normalized_netloc] = {'scheme': scheme, 'url': url}
+            else:
+                domain_dict[normalized_netloc] = {'scheme': scheme, 'url': url}
+
+        deduplicated_urls = [info['url'] for info in domain_dict.values()]
+        return deduplicated_urls
+
+    return deduplicate_urls(urls)
+
+
+def delete_postleaks_junk(run_dir):
+    for entry in os.listdir(run_dir):
+        full_path = os.path.join(run_dir, entry)
+        if os.path.isdir(full_path) and entry.startswith("postleaks_"):
+            shutil.rmtree(full_path)
+
+
+def create_run_directory(first_domain):
+    safe_domain = re.sub(r'[^A-Za-z0-9._-]', '_', first_domain)[:50] or "scan"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = "Logs/" + f"{timestamp}_{safe_domain}"
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
+
+
+def remove_ansi_escape_codes(text):
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
+
+def remove_non_links(urls):
+    return [url for url in urls if url.startswith(('http://', 'https://'))]
+
+
+def get_host_from_url(url, remove_port=False, keep_protocol=False):
+    # urlparse needs a scheme to populate netloc, so prepend '//' when it is missing.
+    parsed = urlparse(url if '://' in url else '//' + url)
+    host = parsed.netloc
+    if remove_port:
+        host = host.split(':', 1)[0]
+    if keep_protocol and parsed.scheme:
+        return f"{parsed.scheme}://{host}"
+    return host
+
+
+def get_host_from_url_list(urls, remove_ports=False):
+    result = []
+    for url in urls:
+        result.append(get_host_from_url(url, remove_ports))
+    return result
+
+
+def get_domains_for_enumeration():  # Root domains whose subdomains are worth enumerating (the ones with a DNS wildcard are not)
+    return [domain for domain in Global.Domains if domain not in Global.WildcardDomains]
+
+
+def get_random_string(length):
+    return ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', k=length))
+
+
+def get_shuffled_wordlist(dictionary):
+    # Fuzzing is cut off by a time limit, so an alphabetically sorted wordlist means the same first
+    # part of it is checked every run. The first line must stay first: it is the non-existing
+    # directory used to detect hosts answering the same status code to everything.
+    with open(dictionary, "r", encoding="utf-8") as file:
+        lines = file.read().splitlines()
+    words = lines[1:]
+    random.shuffle(words)
+    shuffled_path = Global.RunDir + "/fuzz_shuffled.txt"
+    with open(shuffled_path, "w", encoding="utf-8") as file:
+        file.write('\n'.join(lines[:1] + words) + '\n')
+    return shuffled_path
+
+
+def is_site_available(url):
+    try:
+        user_agent_headers = {
+            "User-Agent": Global.UserAgent}
+        requests.get(url, verify=False, headers=user_agent_headers, timeout=5, allow_redirects=False)
+        return True
+    except requests.RequestException:
+        return False
+
+@dataclass(frozen=True)
+class LeakixVulnerability:
+    event_source: str
+    host: str
+    time: str
+    severity: str
+    url: str
+
+
+@dataclass(frozen=True)
+class QualysWebAppResult:  # One record per asset processed by the Qualys WAS sync (-q flag)
+    host: str
+    parent: str
+    action: str          # "skipped" | "created" | "scheduled" | "scanned" | "error" (or "would-..." in dry-run)
+    webapp_id: str = ""
+    scan_id: str = ""
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class SecurityAgentResult:  # One record per host processed by the AWS Security Agent sync (-asa flag)
+    host: str
+    parent: str
+    action: str          # "added" | "already-in-pentest" | "excluded" | "skipped-not-verified" | "error" (or "would-..." in dry-run)
+    pentest: str = ""
+    message: str = ""
+
+
+def extract_leakix_vulnerability(entry: dict) -> LeakixVulnerability:
+    event_source = entry.get('event_source', '').strip()
+    host = entry.get('host', '').strip()
+    time = entry.get('time', '').strip()
+    leak = entry.get('leak', {})
+    severity = leak.get('severity', '').strip()
+    http = entry.get('http', {})
+    url = entry.get('protocol', '').strip() + "://" + host + http.get('url', '').strip()
+
+    return LeakixVulnerability(
+        event_source=event_source,
+        host=host,
+        time=time,
+        severity=severity,
+        url=url
+    )
+
+
+def is_date_actual(date_string):  # "2024-12-03T01:49:40.4933153Z"
+    input_date = datetime.fromisoformat(date_string.rstrip("Z").split(".")[0])
+    current_date = datetime.now()
+
+    input_date = input_date.date()
+    current_date = current_date.date()
+    delta = abs(current_date - input_date)
+
+    if delta.days <= 31:
+        return True
+    else:
+        return False
+
+
+def is_WAF_signatures_in_response(response):
+    keywords = ('cloudflare', 'akamai', 'incap_ses')
+    headers_contains_keyword = any(any(keyword in value.lower() for keyword in keywords)
+                                   for value in response.headers.values())
+    body_contains_keyword = 'Cloudflare' in response.text
+    return headers_contains_keyword or body_contains_keyword
+
+
+def is_site_real_by_response(response):
+    body_contains_keyword = 'href="http://adm.tools/support/">' in response.text or\
+                            '<p>This site is currently under construction.</p' in response.text or\
+                            '">This site is currently suspended<' in response.text
+    return not body_contains_keyword
+
+
+def is_http_to_https_redirect(response, request_url):
+    # HTTP→HTTPS redirects are not exploitable on their own: either HTTPS already works on this
+    # host (and would be found by the HTTPS probe / the https:// asset) or it doesn't, so the
+    # client is sent to a URL that never answers on this IP.
+    if not request_url.startswith("http://"):
+        return False
+    if response.status_code not in (301, 302, 303, 307, 308):
+        return False
+    location = response.headers.get("Location") or response.headers.get("location") or ""
+    return location.lower().startswith("https://")
+
+
+def replace_last_colon(s: str) -> str:  # For 403 bypass results reporing
+    idx = s.rfind(':')
+    if idx == -1:
+        return s
+    return s[:idx] + ' -' + s[idx+1:]
+
+
+def katana_has_jsluice():
+    # Official Windows Katana still ships without the jsluice parser. Patched builds embed gotreesitter.
+    path = shutil.which("katana")
+    if not path:
+        return None
+    with open(path, "rb") as f:
+        return b"gotreesitter" in f.read()
