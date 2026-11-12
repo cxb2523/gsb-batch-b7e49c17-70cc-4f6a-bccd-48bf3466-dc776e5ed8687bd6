@@ -5,9 +5,24 @@
 """
 
 import argparse
+import html
 import json
 import os
 import sys
+
+
+def _json_for_script(obj):
+    """序列化 JSON 并转义可突破 <script> 块的字符。
+
+    json.dumps 不会转义 ``<``、``>``、``&``，用户文本若包含 ``</script>``
+    会直接终止脚本块造成注入。统一用 Unicode 转义形式输出，
+    JS 解析回字符串后内容不变。
+    """
+    escaped = json.dumps(obj, ensure_ascii=False)
+    for ch, code in (("<", "003c"), (">", "003e"), ("&", "0026"),
+                     (chr(0x2028), "2028"), (chr(0x2029), "2029")):
+        escaped = escaped.replace(ch, '\\' + "u" + code)
+    return escaped
 
 
 def generate_html(stats, items=None, title="我的微信收藏报告"):
@@ -28,16 +43,16 @@ def generate_html(stats, items=None, title="我的微信收藏报告"):
             "thumb": it.get("thumb", "") or "",
             "tags": it.get("tags", []),
         })
-    items_json = json.dumps(browse_items, ensure_ascii=False)
+    items_json = _json_for_script(browse_items)
 
-    type_dist_json = json.dumps(stats["type_dist"], ensure_ascii=False)
-    source_top_json = json.dumps(stats["source_top"][:15], ensure_ascii=False)
-    monthly_json = json.dumps(stats["monthly_trend"], ensure_ascii=False)
-    hour_json = json.dumps(stats["hour_dist"], ensure_ascii=False)
-    weekday_json = json.dumps(stats["weekday_dist"], ensure_ascii=False)
-    keywords_json = json.dumps(stats["keywords"][:60], ensure_ascii=False)
-    heatmap_json = json.dumps(stats["heatmap"], ensure_ascii=False)
-    tag_json = json.dumps(stats.get("tag_dist", []), ensure_ascii=False)
+    type_dist_json = _json_for_script(stats["type_dist"])
+    source_top_json = _json_for_script(stats["source_top"][:15])
+    monthly_json = _json_for_script(stats["monthly_trend"])
+    hour_json = _json_for_script(stats["hour_dist"])
+    weekday_json = _json_for_script(stats["weekday_dist"])
+    keywords_json = _json_for_script(stats["keywords"][:60])
+    heatmap_json = _json_for_script(stats["heatmap"])
+    tag_json = _json_for_script(stats.get("tag_dist", []))
     has_tags = stats.get("has_tags", False)
 
     # 计算亮点
@@ -46,12 +61,21 @@ def generate_html(stats, items=None, title="我的微信收藏报告"):
     top_type = stats["type_dist"][0]["name"] if stats["type_dist"] else "无"
     top_type_pct = round(stats["type_dist"][0]["value"] / max(stats["total"], 1) * 100) if stats["type_dist"] else 0
 
-    html = f"""<!DOCTYPE html>
+    # 所有写入静态 HTML 文本节点/属性的用户可控字符串都要按纯文本转义
+    esc = html.escape
+    title_esc = esc(str(title))
+    first_date_esc = esc(str(stats["first_date"]))
+    last_date_esc = esc(str(stats["last_date"]))
+    busiest_day_esc = esc(str(stats["busiest_day"]))
+    top_source_esc = esc(str(top_source))
+    top_type_esc = esc(str(top_type))
+
+    report_html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title}</title>
+<title>{title_esc}</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2/dist/echarts-wordcloud.min.js"></script>
 <style>
@@ -510,6 +534,30 @@ def generate_html(stats, items=None, title="我的微信收藏报告"):
     min-width: 100px;
     text-align: center;
   }}
+  .empty-state {{
+    grid-column: 1 / -1;
+    text-align: center;
+    color: #6b7394;
+    padding: 60px 20px;
+    border: 1px dashed rgba(255,255,255,0.1);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.02);
+  }}
+  .empty-state .empty-icon {{
+    font-size: 2em;
+    display: block;
+    margin-bottom: 10px;
+    opacity: 0.6;
+  }}
+  .empty-state .empty-title {{
+    font-size: 1em;
+    color: #8b95c9;
+    margin-bottom: 6px;
+  }}
+  .empty-state .empty-hint {{
+    font-size: 0.85em;
+    color: #4a5280;
+  }}
 
   /* Footer */
   .footer {{
@@ -532,8 +580,8 @@ def generate_html(stats, items=None, title="我的微信收藏报告"):
 <body>
 
 <div class="header">
-  <h1>{title}</h1>
-  <p class="subtitle">{stats['first_date']} ~ {stats['last_date']}</p>
+  <h1>{title_esc}</h1>
+  <p class="subtitle">{first_date_esc} ~ {last_date_esc}</p>
 </div>
 
 <!-- 数字卡片 -->
@@ -562,17 +610,17 @@ def generate_html(stats, items=None, title="我的微信收藏报告"):
   <div class="highlights">
     <div class="highlight">
       <div class="hl-label">收藏最多的一天</div>
-      <div class="hl-value">{stats['busiest_day']}</div>
+      <div class="hl-value">{busiest_day_esc}</div>
       <div class="hl-detail">共收藏 {stats['busiest_count']} 条</div>
     </div>
     <div class="highlight">
       <div class="hl-label">最爱的来源</div>
-      <div class="hl-value">{top_source}</div>
+      <div class="hl-value">{top_source_esc}</div>
       <div class="hl-detail">贡献了 {top_source_count} 条收藏</div>
     </div>
     <div class="highlight">
       <div class="hl-label">最多的类型</div>
-      <div class="hl-value">{top_type}</div>
+      <div class="hl-value">{top_type_esc}</div>
       <div class="hl-detail">占比 {top_type_pct}%</div>
     </div>
   </div>
@@ -971,15 +1019,54 @@ const darkTheme = {{
 
 // ===== 分类浏览区 =====
 (function() {{
-  const allItems = {items_json};
-  if (allItems.length === 0) return;
+  const rawItems = {items_json};
 
   const PAGE_SIZE = 24;
-  let currentType = '全部';
-  let currentTag = '全部';
-  let currentSearch = '';
-  let currentSort = 'time-desc';
-  let currentPage = 1;
+  const ALL = '全部';
+
+  // 纯文本转义：用户文本只能进入文本节点或属性文本，绝不作为 HTML 解析
+  function escHtml(value) {{
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }}
+
+  // 只放行 http(s)/mailto 链接，javascript: 等危险协议退化为纯文本
+  function safeUrl(value) {{
+    const url = String(value === null || value === undefined ? '' : value).trim();
+    return /^(https?|mailto):/i.test(url) ? url : '';
+  }}
+
+  // 归一化数据并分配稳定 uid（数组下标）。
+  // 输入记录的 id 可能重复或缺失，卡片与详情之间一律用 uid 对应
+  const allItems = (Array.isArray(rawItems) ? rawItems : []).map(function(raw, index) {{
+    const it = raw || {{}};
+    return {{
+      uid: index,
+      id: it.id,
+      type_name: it.type_name ? String(it.type_name) : '其他',
+      source: it.source === null || it.source === undefined ? '' : String(it.source),
+      timestamp: it.timestamp === null || it.timestamp === undefined ? '' : String(it.timestamp),
+      title: it.title === null || it.title === undefined ? '' : String(it.title),
+      desc: it.desc === null || it.desc === undefined ? '' : String(it.desc),
+      link: it.link === null || it.link === undefined ? '' : String(it.link),
+      thumb: it.thumb === null || it.thumb === undefined ? '' : String(it.thumb),
+      tags: Array.isArray(it.tags) ? it.tags.map(String) : [],
+    }};
+  }});
+  const itemByUid = new Map(allItems.map(function(it) {{ return [it.uid, it]; }}));
+
+  // 单一状态源：类型 / 标签 / 搜索 / 排序 / 页码
+  const state = {{
+    type: ALL,
+    tag: ALL,
+    search: '',
+    sort: 'time-desc',
+    page: 1,
+  }};
 
   const badgeClassMap = {{
     '文章/链接': 'badge-article',
@@ -995,210 +1082,201 @@ const darkTheme = {{
     '其他': 'badge-other',
   }};
 
-  // 统计各类型数量
+  // 类型 / 标签计数（基于全量数据，与筛选状态无关）
   const typeCounts = {{}};
-  allItems.forEach(it => {{
+  allItems.forEach(function(it) {{
     typeCounts[it.type_name] = (typeCounts[it.type_name] || 0) + 1;
   }});
-  const typeOrder = Object.entries(typeCounts).sort((a,b) => b[1] - a[1]);
+  const typeOrder = Object.keys(typeCounts).map(function(name) {{
+    return [name, typeCounts[name]];
+  }}).sort(function(a, b) {{ return b[1] - a[1]; }});
 
-  // 渲染 tabs（用 event delegation 代替 inline onclick，兼容 file:// 协议）
-  function renderTabs() {{
-    const tabBar = document.getElementById('type-tabs');
-    let html = `<button class="tab-btn ${{currentType === '全部' ? 'active' : ''}}"
-                  data-type="全部">全部<span class="tab-count">${{allItems.length}}</span></button>`;
-    typeOrder.forEach(([name, count]) => {{
-      html += `<button class="tab-btn ${{currentType === name ? 'active' : ''}}"
-                 data-type="${{name}}">
-                 ${{name}}<span class="tab-count">${{count}}</span></button>`;
-    }});
-    tabBar.innerHTML = html;
-  }}
-  document.getElementById('type-tabs').addEventListener('click', function(e) {{
-    const btn = e.target.closest('.tab-btn');
-    if (btn && btn.dataset.type) {{
-      window._browseSetType(btn.dataset.type);
-    }}
-  }});
-
-  // 标签统计
   const tagCounts = {{}};
   allItems.forEach(function(it) {{
-    (it.tags || []).forEach(function(t) {{
-      tagCounts[t] = (tagCounts[t] || 0) + 1;
+    it.tags.forEach(function(tag) {{
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
     }});
   }});
-  const tagOrder = Object.entries(tagCounts).sort(function(a,b) {{ return b[1] - a[1]; }});
+  const tagOrder = Object.keys(tagCounts).map(function(name) {{
+    return [name, tagCounts[name]];
+  }}).sort(function(a, b) {{ return b[1] - a[1]; }});
   const hasAnyTags = tagOrder.length > 0;
 
-  function renderTagTabs() {{
-    var tagGroup = document.getElementById('tag-group');
-    var tagBar = document.getElementById('tag-tabs');
-    if (!hasAnyTags) {{ tagGroup.style.display = 'none'; return; }}
-    var html = '<button class="tab-btn ' + (currentTag === '全部' ? 'active' : '') + '" data-tag="全部">全部</button>';
-    tagOrder.forEach(function(pair) {{
-      var name = pair[0], count = pair[1];
-      html += '<button class="tab-btn ' + (currentTag === name ? 'active' : '') + '" data-tag="' + name.replace(/"/g, '&quot;') + '">' + name + '<span class="tab-count">' + count + '</span></button>';
-    }});
-    tagBar.innerHTML = html;
+  // 稳定排序：缺失的时间/来源排到末尾，主键相同时按 uid 兜底，结果确定且不抛错
+  function compareItems(a, b) {{
+    if (state.sort === 'source') {{
+      if (!a.source && b.source) return 1;
+      if (a.source && !b.source) return -1;
+      const bySource = a.source.localeCompare(b.source);
+      return bySource !== 0 ? bySource : a.uid - b.uid;
+    }}
+    if (!a.timestamp && b.timestamp) return 1;
+    if (a.timestamp && !b.timestamp) return -1;
+    const byTime = a.timestamp.localeCompare(b.timestamp);
+    if (byTime !== 0) {{
+      return state.sort === 'time-asc' ? byTime : -byTime;
+    }}
+    return a.uid - b.uid;
   }}
-  document.getElementById('tag-tabs').addEventListener('click', function(e) {{
-    var btn = e.target.closest('.tab-btn');
-    if (btn && btn.dataset.tag !== undefined) {{
-      currentTag = btn.dataset.tag;
-      currentPage = 1;
-      renderTagTabs();
-      renderItems();
-    }}
-  }});
 
-  // 过滤 + 排序
+  // 过滤 + 排序始终从 allItems 派生新数组，不修改源数据
   function getFiltered() {{
-    let items = allItems;
-    if (currentType !== '全部') {{
-      items = items.filter(it => it.type_name === currentType);
+    let items = allItems.slice();
+    if (state.type !== ALL) {{
+      items = items.filter(function(it) {{ return it.type_name === state.type; }});
     }}
-    if (currentTag !== '全部') {{
-      items = items.filter(function(it) {{ return (it.tags || []).indexOf(currentTag) >= 0; }});
+    if (state.tag !== ALL) {{
+      items = items.filter(function(it) {{ return it.tags.indexOf(state.tag) !== -1; }});
     }}
-    if (currentSearch) {{
-      const q = currentSearch.toLowerCase();
-      items = items.filter(it =>
-        (it.title || '').toLowerCase().includes(q) ||
-        (it.desc || '').toLowerCase().includes(q) ||
-        (it.source || '').toLowerCase().includes(q) ||
-        (it.tags || []).some(t => t.toLowerCase().includes(q))
-      );
+    if (state.search) {{
+      const q = state.search.toLowerCase();
+      items = items.filter(function(it) {{
+        return it.title.toLowerCase().indexOf(q) !== -1 ||
+               it.desc.toLowerCase().indexOf(q) !== -1 ||
+               it.source.toLowerCase().indexOf(q) !== -1 ||
+               it.tags.some(function(tag) {{ return tag.toLowerCase().indexOf(q) !== -1; }});
+      }});
     }}
-    if (currentSort === 'time-desc') {{
-      items.sort((a,b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-    }} else if (currentSort === 'time-asc') {{
-      items.sort((a,b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
-    }} else if (currentSort === 'source') {{
-      items.sort((a,b) => (a.source || '').localeCompare(b.source || ''));
-    }}
+    items.sort(compareItems);
     return items;
   }}
 
-  // 渲染卡片
+  function renderTypeTabs() {{
+    let html = '<button type="button" class="tab-btn ' + (state.type === ALL ? 'active' : '') +
+      '" data-type="' + escHtml(ALL) + '">全部<span class="tab-count">' + allItems.length + '</span></button>';
+    typeOrder.forEach(function(pair) {{
+      const name = pair[0];
+      const count = pair[1];
+      html += '<button type="button" class="tab-btn ' + (state.type === name ? 'active' : '') +
+        '" data-type="' + escHtml(name) + '">' + escHtml(name) +
+        '<span class="tab-count">' + count + '</span></button>';
+    }});
+    document.getElementById('type-tabs').innerHTML = html;
+  }}
+
+  function renderTagTabs() {{
+    const tagGroup = document.getElementById('tag-group');
+    const tagBar = document.getElementById('tag-tabs');
+    if (!hasAnyTags) {{
+      tagGroup.style.display = 'none';
+      return;
+    }}
+    tagGroup.style.display = '';
+    let html = '<button type="button" class="tab-btn ' + (state.tag === ALL ? 'active' : '') +
+      '" data-tag="' + escHtml(ALL) + '">全部</button>';
+    tagOrder.forEach(function(pair) {{
+      const name = pair[0];
+      const count = pair[1];
+      html += '<button type="button" class="tab-btn ' + (state.tag === name ? 'active' : '') +
+        '" data-tag="' + escHtml(name) + '">' + escHtml(name) +
+        '<span class="tab-count">' + count + '</span></button>';
+    }});
+    tagBar.innerHTML = html;
+  }}
+
+  function cardHtml(it) {{
+    const badge = badgeClassMap[it.type_name] || 'badge-other';
+    const date = it.timestamp ? it.timestamp.slice(0, 10) : '';
+    const title = it.title || '(无标题)';
+    const thumbUrl = safeUrl(it.thumb);
+    const thumbHtml = thumbUrl
+      ? '<img class="card-thumb" src="' + escHtml(thumbUrl) + '" alt="" loading="lazy" ' +
+        'style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:8px;">'
+      : '';
+    const descHtml = it.desc ? '<div class="item-desc">' + escHtml(it.desc) + '</div>' : '';
+    const sourceHtml = it.source
+      ? '<span class="item-source">' + escHtml(it.source) + '</span>'
+      : '';
+    const tagsHtml = it.tags.map(function(tag) {{
+      return '<span class="item-tag">' + escHtml(tag) + '</span>';
+    }}).join('');
+    return '<div class="item-card" data-uid="' + it.uid + '" role="button" tabindex="0">' +
+      '<div class="item-top">' +
+        '<span class="item-type-badge ' + badge + '">' + escHtml(it.type_name) + '</span>' +
+        '<span class="item-date">' + escHtml(date) + '</span>' +
+      '</div>' +
+      thumbHtml +
+      '<div class="item-title">' + escHtml(title) + '</div>' +
+      descHtml +
+      '<div class="item-bottom">' + sourceHtml + tagsHtml + '</div>' +
+    '</div>';
+  }}
+
+  function emptyStateHtml() {{
+    return '<div class="empty-state">' +
+      '<span class="empty-icon">🔍</span>' +
+      '<div class="empty-title">没有匹配的收藏</div>' +
+      '<div class="empty-hint">试试更换类型或标签筛选，或清空搜索词</div>' +
+    '</div>';
+  }}
+
   function renderItems() {{
     const filtered = getFiltered();
     const total = filtered.length;
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    if (currentPage > totalPages) currentPage = totalPages;
+    if (state.page > totalPages) state.page = totalPages;
+    if (state.page < 1) state.page = 1;
 
-    const start = (currentPage - 1) * PAGE_SIZE;
+    const start = (state.page - 1) * PAGE_SIZE;
     const pageItems = filtered.slice(start, start + PAGE_SIZE);
 
-    // info
+    // “共 N 条”与卡片、分页共用同一份 filtered，保证三者永远一致
+    const conditions = [];
+    if (state.type !== ALL) conditions.push('类型: ' + state.type);
+    if (state.tag !== ALL) conditions.push('标签: ' + state.tag);
+    if (state.search) conditions.push('搜索: "' + state.search + '"');
     document.getElementById('browse-info').textContent =
-      `共 ${{total}} 条${{currentType !== '全部' ? '（' + currentType + '）' : ''}}${{currentSearch ? '，搜索: "' + currentSearch + '"' : ''}}`;
+      '共 ' + total + ' 条' + (conditions.length ? '（' + conditions.join('，') + '）' : '');
 
-    // cards
     const grid = document.getElementById('items-grid');
-    if (pageItems.length === 0) {{
-      grid.innerHTML = '<p style="text-align:center;color:#4a5280;padding:60px 0;grid-column:1/-1;">没有匹配的收藏</p>';
-    }} else {{
-      grid.innerHTML = pageItems.map(it => {{
-        const badge = badgeClassMap[it.type_name] || 'badge-other';
-        const date = it.timestamp ? it.timestamp.slice(0, 10) : '';
-        const title = it.title || '(无标题)';
-        const desc = it.desc || '';
-        const tags = (it.tags || []).map(t => `<span class="item-tag">${{t}}</span>`).join('');
-        const source = it.source ? `<span class="item-source">${{it.source}}</span>` : '';
-        var thumbHtml = it.thumb ? '<img src="' + it.thumb + '" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:8px;" loading="lazy" onerror="this.style.display=&quot;none&quot;">' : '';
-        return `<div class="item-card" data-id="${{it.id}}">
-          <div class="item-top">
-            <span class="item-type-badge ${{badge}}">${{it.type_name}}</span>
-            <span class="item-date">${{date}}</span>
-          </div>
-          ${{thumbHtml}}
-          <div class="item-title">${{title}}</div>
-          ${{desc ? `<div class="item-desc">${{desc}}</div>` : ''}}
-          <div class="item-bottom">${{source}}${{tags}}</div>
-        </div>`;
-      }}).join('');
-    }}
+    grid.innerHTML = total === 0 ? emptyStateHtml() : pageItems.map(cardHtml).join('');
 
-    // pagination
-    const pag = document.getElementById('pagination');
+    const pagination = document.getElementById('pagination');
     if (totalPages <= 1) {{
-      pag.innerHTML = '';
+      pagination.innerHTML = '';
     }} else {{
-      pag.innerHTML = `
-        <button class="page-btn" ${{currentPage <= 1 ? 'disabled' : ''}}
-                data-page="${{currentPage - 1}}">上一页</button>
-        <span class="page-info">${{currentPage}} / ${{totalPages}}</span>
-        <button class="page-btn" ${{currentPage >= totalPages ? 'disabled' : ''}}
-                data-page="${{currentPage + 1}}">下一页</button>
-      `;
+      pagination.innerHTML =
+        '<button type="button" class="page-btn" ' + (state.page <= 1 ? 'disabled' : '') +
+          ' data-page="' + (state.page - 1) + '">上一页</button>' +
+        '<span class="page-info">' + state.page + ' / ' + totalPages + '</span>' +
+        '<button type="button" class="page-btn" ' + (state.page >= totalPages ? 'disabled' : '') +
+          ' data-page="' + (state.page + 1) + '">下一页</button>';
     }}
   }}
 
-  // 全局回调
-  window._browseSetType = function(type) {{
-    currentType = type;
-    currentPage = 1;
-    renderTabs();
+  // 任一状态变化后统一重渲染；条件变化时页码由调用方重置为 1
+  function render() {{
+    renderTypeTabs();
+    renderTagTabs();
     renderItems();
-  }};
-  window._browsePage = function(page) {{
-    currentPage = page;
-    renderItems();
-    document.getElementById('browse').scrollIntoView({{ behavior: 'smooth' }});
-  }};
-
-  // 翻页事件委托
-  document.getElementById('pagination').addEventListener('click', function(e) {{
-    const btn = e.target.closest('.page-btn');
-    if (btn && btn.dataset.page && !btn.disabled) {{
-      window._browsePage(parseInt(btn.dataset.page));
-    }}
-  }});
-
-  // 搜索
-  document.getElementById('search-input').addEventListener('input', function(e) {{
-    currentSearch = e.target.value.trim();
-    currentPage = 1;
-    renderItems();
-  }});
-
-  // 排序
-  document.getElementById('sort-select').addEventListener('change', function(e) {{
-    currentSort = e.target.value;
-    currentPage = 1;
-    renderItems();
-  }});
-
-  // 详情弹窗
-  function escHtml(s) {{
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
   }}
 
-  function showDetail(itemId) {{
-    var item = allItems.find(function(it) {{ return it.id === itemId; }});
+  function showDetail(uid) {{
+    const item = itemByUid.get(uid);
     if (!item) return;
-    var badge = badgeClassMap[item.type_name] || 'badge-other';
-    var tags = (item.tags || []).map(function(t) {{
-      return '<span class="item-tag">' + escHtml(t) + '</span>';
+
+    const badge = badgeClassMap[item.type_name] || 'badge-other';
+    const dateText = item.timestamp ? item.timestamp.slice(0, 19).replace('T', ' ') : '';
+    const tagsHtml = item.tags.map(function(tag) {{
+      return '<span class="item-tag">' + escHtml(tag) + '</span>';
     }}).join('');
 
-    var html = '<div class="detail-meta">' +
+    let html = '<div class="detail-meta">' +
       '<span class="item-type-badge ' + badge + '">' + escHtml(item.type_name) + '</span>' +
-      '<span class="item-date">' + escHtml(item.timestamp ? item.timestamp.slice(0, 19).replace('T', ' ') : '') + '</span>' +
+      '<span class="item-date">' + escHtml(dateText) + '</span>' +
       '</div>' +
       '<div class="detail-title">' + escHtml(item.title || '(无标题)') + '</div>';
 
-    if (item.thumb) {{
-      html += '<img src="' + escHtml(item.thumb) + '" style="width:100%;max-height:300px;object-fit:contain;border-radius:8px;margin-bottom:16px;background:#1a1f4e;" onerror="this.style.display=&quot;none&quot;">';
+    const thumbUrl = safeUrl(item.thumb);
+    if (thumbUrl) {{
+      html += '<img class="detail-thumb" src="' + escHtml(thumbUrl) + '" alt="" ' +
+        'style="width:100%;max-height:300px;object-fit:contain;border-radius:8px;margin-bottom:16px;background:#1a1f4e;">';
     }}
 
-    var mediaTypes = ['图片', '视频', '文件', '语音'];
-    if (mediaTypes.indexOf(item.type_name) >= 0 && !item.thumb) {{
+    const mediaTypes = ['图片', '视频', '文件', '语音'];
+    if (mediaTypes.indexOf(item.type_name) !== -1 && !thumbUrl) {{
       html += '<div style="padding:20px;text-align:center;background:rgba(96,165,250,0.06);border:1px dashed rgba(96,165,250,0.2);border-radius:8px;margin-bottom:16px;color:#4a5280;font-size:0.85em;">' +
-        item.type_name + '内容存储在微信 CDN，本地缓存已加密，暂无法直接预览</div>';
+        escHtml(item.type_name) + '内容存储在微信 CDN，本地缓存已加密，暂无法直接预览</div>';
     }}
 
     if (item.desc) {{
@@ -1206,62 +1284,121 @@ const darkTheme = {{
     }}
 
     if (item.link) {{
-      html += '<div class="detail-field">' +
-        '<div class="detail-label">链接</div>' +
-        '<div class="detail-value"><a href="' + escHtml(item.link) + '" target="_blank" style="color:#60a5fa;word-break:break-all;">' + escHtml(item.link.length > 80 ? item.link.slice(0,80) + '...' : item.link) + '</a></div>' +
-        '</div>';
+      const url = safeUrl(item.link);
+      const valueHtml = url
+        ? '<a href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer" style="color:#60a5fa;word-break:break-all;">' +
+          escHtml(url.length > 80 ? url.slice(0, 80) + '...' : url) + '</a>'
+        : escHtml(item.link);
+      html += '<div class="detail-field"><div class="detail-label">链接</div>' +
+        '<div class="detail-value">' + valueHtml + '</div></div>';
     }}
 
     if (item.source) {{
-      html += '<div class="detail-field">' +
-        '<div class="detail-label">来源</div>' +
-        '<div class="detail-value">' + escHtml(item.source) + '</div>' +
-        '</div>';
+      html += '<div class="detail-field"><div class="detail-label">来源</div>' +
+        '<div class="detail-value">' + escHtml(item.source) + '</div></div>';
     }}
 
-    if (tags) {{
-      html += '<div class="detail-field">' +
-        '<div class="detail-label">标签</div>' +
-        '<div class="detail-tags">' + tags + '</div>' +
-        '</div>';
+    if (tagsHtml) {{
+      html += '<div class="detail-field"><div class="detail-label">标签</div>' +
+        '<div class="detail-tags">' + tagsHtml + '</div></div>';
     }}
 
     document.getElementById('detail-content').innerHTML = html;
     document.getElementById('detail-overlay').classList.add('open');
   }}
 
-  // 卡片点击（事件委托）
-  document.getElementById('items-grid').addEventListener('click', function(e) {{
-    var card = e.target.closest('.item-card');
-    if (card && card.dataset.id) {{
-      showDetail(parseInt(card.dataset.id));
+  // 图片加载失败：事件委托（capture 阶段 error 不冒泡），替代内联 onerror
+  function hideBrokenImage(event) {{
+    if (event.target && event.target.tagName === 'IMG') {{
+      event.target.style.display = 'none';
     }}
+  }}
+  document.getElementById('items-grid').addEventListener('error', hideBrokenImage, true);
+  document.getElementById('detail-content').addEventListener('error', hideBrokenImage, true);
+
+  // 类型筛选（事件委托，兼容 file://）
+  document.getElementById('type-tabs').addEventListener('click', function(event) {{
+    const btn = event.target.closest('.tab-btn');
+    if (!btn || btn.dataset.type === undefined) return;
+    if (state.type === btn.dataset.type) return;
+    state.type = btn.dataset.type;
+    state.page = 1;
+    render();
+  }});
+
+  // 标签筛选
+  document.getElementById('tag-tabs').addEventListener('click', function(event) {{
+    const btn = event.target.closest('.tab-btn');
+    if (!btn || btn.dataset.tag === undefined) return;
+    if (state.tag === btn.dataset.tag) return;
+    state.tag = btn.dataset.tag;
+    state.page = 1;
+    render();
+  }});
+
+  // 翻页
+  document.getElementById('pagination').addEventListener('click', function(event) {{
+    const btn = event.target.closest('.page-btn');
+    if (!btn || btn.disabled) return;
+    const page = parseInt(btn.dataset.page, 10);
+    if (!Number.isFinite(page)) return;
+    state.page = page;
+    renderItems();
+    document.getElementById('browse').scrollIntoView({{ behavior: 'smooth' }});
+  }});
+
+  // 搜索：每次输入都回到第 1 页
+  document.getElementById('search-input').addEventListener('input', function(event) {{
+    state.search = event.target.value.trim();
+    state.page = 1;
+    renderItems();
+  }});
+
+  // 排序：切换后回到第 1 页
+  document.getElementById('sort-select').addEventListener('change', function(event) {{
+    state.sort = event.target.value;
+    state.page = 1;
+    renderItems();
+  }});
+
+  // 卡片点击：按被点击卡片的 uid 打开对应记录，id 重复也不会点错
+  document.getElementById('items-grid').addEventListener('click', function(event) {{
+    const card = event.target.closest('.item-card');
+    if (!card || card.dataset.uid === undefined) return;
+    showDetail(parseInt(card.dataset.uid, 10));
+  }});
+
+  // 键盘可访问性：卡片聚焦时 Enter / 空格打开详情
+  document.getElementById('items-grid').addEventListener('keydown', function(event) {{
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const card = event.target.closest('.item-card');
+    if (!card || card.dataset.uid === undefined) return;
+    event.preventDefault();
+    showDetail(parseInt(card.dataset.uid, 10));
   }});
 
   // 关闭弹窗
   document.getElementById('detail-close').addEventListener('click', function() {{
     document.getElementById('detail-overlay').classList.remove('open');
   }});
-  document.getElementById('detail-overlay').addEventListener('click', function(e) {{
-    if (e.target === this) {{
+  document.getElementById('detail-overlay').addEventListener('click', function(event) {{
+    if (event.target === this) {{
       this.classList.remove('open');
     }}
   }});
-  document.addEventListener('keydown', function(e) {{
-    if (e.key === 'Escape') {{
+  document.addEventListener('keydown', function(event) {{
+    if (event.key === 'Escape') {{
       document.getElementById('detail-overlay').classList.remove('open');
     }}
   }});
 
-  renderTabs();
-  renderTagTabs();
-  renderItems();
+  render();
 }})();
 </script>
 
 </body>
 </html>"""
-    return html
+    return report_html
 
 
 def main():

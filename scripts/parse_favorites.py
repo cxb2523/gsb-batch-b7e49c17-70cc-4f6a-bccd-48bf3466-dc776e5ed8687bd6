@@ -337,6 +337,8 @@ def parse_csv(csv_path):
                 "timestamp": row.get("timestamp", None),
                 "title": row.get("title", ""),
                 "desc": row.get("desc", ""),
+                "link": row.get("link", "") or "",
+                "thumb": row.get("thumb", "") or "",
                 "search_key": row.get("search_key", ""),
                 "tags": [t.strip() for t in row.get("tags", "").split(",") if t.strip()],
             })
@@ -358,6 +360,8 @@ def parse_json(json_path):
             "timestamp": row.get("timestamp", None),
             "title": row.get("title", ""),
             "desc": row.get("desc", ""),
+            "link": row.get("link", "") or "",
+            "thumb": row.get("thumb", "") or "",
             "search_key": row.get("search_key", ""),
             "tags": row.get("tags", []),
         })
