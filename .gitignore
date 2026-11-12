@@ -1,0 +1,15 @@
+# Editors / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Lokale omgeving
+.env
+*.log
+
+# Tests
+node_modules/
+test-results/
+playwright-report/
+blob-report/

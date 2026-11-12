@@ -1,0 +1,102 @@
+# Clickfarm
+Clickfarm is een gratis idle- en klikspel dat helemaal in je browser draait. Je begint met één veld graan en bouwt via molens, kippen, pasta, olie, staal en kernenergie een industrieel imperium op, door tot koper, elektronica, goud, diamant, een datacenter dat de munt Akkercoin oplevert en een isotopenlab dat uranium nuttig houdt.
+
+**Spelen:** [clickfarm.nl](https://clickfarm.nl) · **Nieuwste onderdelen uitproberen:** [clickfarm.nl/beta](https://clickfarm.nl/beta/) · **Spelinformatie:** [clickfarm.nl/info.html](https://clickfarm.nl/info.html) · **Privacy:** [clickfarm.nl/privacy](https://clickfarm.nl/privacy) · **Support:** [clickfarm.nl/support](https://clickfarm.nl/support)
+
+Geen account en geen advertenties: je spel staat in je eigen browser. Op clickfarm.nl worden bezoeken anoniem en zonder cookies geteld met een eigen [Umami](https://umami.is); de code in deze repository bevat zelf geen tracking (zie [Bezoekersstatistieken](#bezoekersstatistieken-optioneel)).
+
+![Clickfarm op level 10: financiën, voorraden, energie, landbouw, molens en olie](docs/screenshots/overzicht.jpg)
+
+![De productieketen: lijnen tonen hoe grondstoffen tussen mijnen, hoogovens en staal stromen](docs/screenshots/productieketen.jpg)
+
+# Hoe is het begonnen
+Ik wilde graag weten hoe ver ik zou komen als ik zelf iets in HTML/CSS/Javascript zou schrijven, en dat pakte uiteindelijk iets uitgebreider uit dan ik verwacht had moet ik zeggen.
+
+Wat werd opgevolgd met deze forumpost en de ruim 2.000 reacties die daar op volgden: https://gathering.tweakers.net/forum/list_messages/1834443
+
+Het spel is open source. Bijdragen, bugmeldingen en ideeën zijn welkom via de [issues](https://github.com/HermanRonk/Clickfarm/issues) of in het topic op Tweakers.
+
+# Wat moet er gebeuren
+De actuele lijst staat in de [issues](https://github.com/HermanRonk/Clickfarm/issues). De grote lijnen:
+
+- nieuwe onderdelen eerst in de beta testen met spelers;
+- bugfixing en documentatie;
+- de startcapaciteit van de olieopslag is te groot.
+
+# Hoe werkt het
+Clickfarm draait volledig in de browser, er is geen backend of database (meer) nodig:
+
+- De voortgang wordt opgeslagen in de `localStorage` van de browser.
+- Marktprijzen (olie, graan, meel) en de voorraad op de markt (eieren, staal, splijtstofstaven) worden in de browser bepaald.
+- Via *Game opties → Exporteer save-code* kopieer je je savegame naar het klembord. Met *Importeer save-code* zet je hem weer terug, ook in een andere browser.
+
+## Beta
+Nieuwe onderdelen en balanswijzigingen komen eerst in de beta (`/beta/`, via *Game opties → Probeer de beta*). Het is hetzelfde spel: `inc/base.js` herkent de beta aan het pad (`BETA`), en `/beta/spel.html` serveert gewoon `index.html` (zie `nginx.conf`).
+
+- De beta bewaart zijn spel los van het gewone spel: alle sleutels krijgen `beta:` ervoor (`store` in `inc/base.js`). Een reset of save-code raakt alleen het eigen spel.
+- Op de keuzepagina neem je je huidige spel mee (een kopie) of begin je opnieuw.
+- Statistieken voor de speler (`objStats`, *Game opties → Statistieken*) bewaren speeltijd, mijlpalen, totale productie en een geschiedenis met een vaste omvang (per minuut voor 1 uur, per kwartier voor 24 uur, en "alles" in maximaal 120 punten die worden samengevoegd). Samen zijn dat hooguit zo'n 20 kB in `localStorage` (sleutels `statsPlay`, `statsTotals`, `statsLevels` en `statsHistory`), en ze gaan mee in de save-code.
+- Wijzigingen staan achter `if (BETA)`. Gaat een wijziging naar het gewone spel, dan haal je die voorwaarde weg. Op 24 oktober 2026 is alles uit de beta (level 12 tot en met 16 en de balanswijzigingen) naar het gewone spel gegaan (#84); er staat nu niets achter `BETA` behalve de eigen save en het label.
+- Een beta-spel neem je mee naar het gewone spel met de save-code: exporteren in de beta, importeren in het gewone spel.
+
+De bestanden:
+
+| Pad | Inhoud |
+| --- | --- |
+| `index.html` | De pagina, inclusief de iconen (geen externe bibliotheken of CDN) |
+| `info.html` | Spelinformatie: hoe het spel werkt en wat ieder level brengt |
+| `privacy.html`, `support.html` | Privacyverklaring en support (Nederlands en Engels), op `/privacy` en `/support` (zie `nginx.conf`); ook voor de iOS-app en de App Store. Contact: `support@clickfarm.nl` |
+| `img/delen.jpg` | Afbeelding (1200×630) voor de preview als iemand een link deelt |
+| `robots.txt`, `sitemap.xml` | Voor zoekmachines: alles mag worden geïndexeerd, met de openbare pagina's |
+| `beta/index.html` | Keuzepagina van de beta: je huidige spel meenemen of opnieuw beginnen |
+| `inc/base.js` | Alle spellogica |
+| `css/style.css` | Alle opmaak, met automatisch donker thema |
+| `Dockerfile`, `nginx.conf` | Container die de statische bestanden serveert |
+| `docker/40-umami.sh` | Zet bij het starten van de container optioneel de bezoekersstatistieken aan |
+| `tests/`, `package.json`, `playwright.config.js` | End-to-end tests (gaan niet mee in de container) |
+| `docs/screenshots/` | Schermafbeeldingen voor deze README (gaan niet mee in de container) |
+
+# Zelf draaien
+Zonder installatie: open `index.html` in je browser, of start een simpele webserver in de map, bijvoorbeeld:
+
+```
+python3 -m http.server 8080
+```
+
+De beta (`/beta/spel.html`) bestaat niet als bestand: nginx serveert er `index.html` voor. Net zo zijn `/privacy` en `/support` de bestanden `privacy.html` en `support.html`. Lokaal werken die adressen met Docker (hieronder) of met de testserver: `node tests/helpers/serve.js` (http://localhost:8081).
+
+Met Docker:
+
+```
+docker build -t clickfarm .
+docker run --rm -p 8080:8080 clickfarm
+```
+
+Ga daarna naar http://localhost:8080. De container luistert op poort `8080`, draait niet als root en heeft een health check op `/healthz`.
+
+## Bezoekersstatistieken (optioneel)
+De container laadt standaard geen enkel extern script. Zet je de volgende omgevingsvariabelen (bijvoorbeeld in Coolify), dan voegt nginx bij het serveren een [Umami](https://umami.is)-script toe aan iedere pagina en staat de host toe in de Content-Security-Policy:
+
+| Variabele | Voorbeeld | |
+| --- | --- | --- |
+| `UMAMI_HOST` | `https://stats.example.org` | Verplicht, alleen `https://` met een hostnaam |
+| `UMAMI_WEBSITE_ID` | `00000000-1111-2222-3333-444444444444` | Verplicht, de website-ID uit Umami |
+| `UMAMI_DOMAINS` | `clickfarm.nl` | Optioneel: alleen op deze domeinen tellen (komma-gescheiden) |
+
+```
+docker run --rm -p 8080:8080 -e UMAMI_HOST=https://stats.example.org -e UMAMI_WEBSITE_ID=... clickfarm
+```
+
+Ontbreekt een variabele of is een waarde ongeldig, dan staan de statistieken uit (met een melding in de containerlog). Do Not Track wordt gerespecteerd. Wil je bijhouden waar bezoekers vandaan komen, gebruik dan per plek een eigen link met `utm_source`, bijvoorbeeld `https://clickfarm.nl/?utm_source=tweakers`.
+
+# Testen
+De tests bespelen het spel in een echte browser (Playwright): levelen, welke onderdelen per level zichtbaar worden, spelverloop, opslaan/laden en eerder opgeloste bugs.
+
+```
+npm ci
+npx playwright install chromium
+npm test              # tegen een lokale server
+npm run test:docker   # tegen de gebouwde productie-container
+```
+
+Bij iedere pull request en push naar `master` draaien de tests automatisch in GitHub Actions; het rapport staat als artifact bij de run. Zie [`tests/README.md`](tests/README.md) voor alle details.
