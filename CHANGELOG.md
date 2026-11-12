@@ -8,6 +8,17 @@ Pre-release history (0.1.0, 0.2.0) was reconstructed from the git log.
 
 ## [Unreleased]
 
+### Fixed
+- `pycodemath lint` cache consistency. A cache hit now produces exactly the same
+  `FileReport` as a cold run — the suppressed finding count, the retained findings,
+  the function count and the analysis counters — and the SARIF results array
+  (ruleId, location, `partialFingerprints`, witness properties) is identical before
+  and after caching. The on-disk payload carries a format version and is validated
+  as a whole (including every finding's `suppress_lines`); a legacy, partial or
+  corrupt entry is rebuilt from source instead of being silently completed with
+  defaults, which was how a second scan could report a different suppressed count.
+  The engine version is bumped, so existing caches are rebuilt once.
+
 ## [0.5.1] - 2026-11-04
 
 Fixes from a hands-on test session against 0.5.0 (49 CLI calls), plus a

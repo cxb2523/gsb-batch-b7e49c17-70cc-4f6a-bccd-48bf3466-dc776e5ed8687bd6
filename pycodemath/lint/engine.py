@@ -60,8 +60,13 @@ from .witness import Fix, Witness, WitnessError
 __all__ = ["Finding", "LintResult", "FileReport", "lint_source", "lint_paths", "iter_python_files",
            "spec_functions", "check_spec", "SpecTarget", "ENGINE_VERSION"]
 
-#: Bumped whenever results may change for the same input (invalidates the cache).
-ENGINE_VERSION = "1"
+#: Bumped whenever results may change for the same input (invalidates the cache:
+#: the cache directory name includes it, so an old cache is simply never read).
+ENGINE_VERSION = "2"
+
+#: Version of the on-disk cache PAYLOAD. A payload carrying another version — or no
+#: version — is rejected and rebuilt, never partially interpreted with defaults.
+CACHE_FORMAT = 2
 
 
 # --------------------------------------------------------------------------- #
@@ -1795,6 +1800,43 @@ def _digest(source: str, config: Config, path: str) -> str:
     return h.hexdigest()
 
 
+def _load_cache(cache: Path, shown: str) -> "tuple[list[Finding], int, dict[str, int]] | None":
+    """Read a cache entry, or ``None`` when anything about it is not exactly what
+    the current engine would have written.
+
+    A cache hit must be indistinguishable from a fresh analysis: the payload is
+    therefore validated as a whole — format version, every finding's full shape
+    (including ``suppress_lines``, which drives the suppression decision), and the
+    function/analysis counters. A partial or legacy payload is never silently
+    completed with defaults, since that would change the suppressed count even
+    though the source and configuration did not change.
+    """
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, Mapping) or data.get("version") != CACHE_FORMAT:
+        return None
+    findings_raw = data.get("findings")
+    functions = data.get("functions")
+    analysed = data.get("analysed")
+    if not isinstance(findings_raw, list) or not isinstance(functions, int) \
+            or not isinstance(analysed, Mapping):
+        return None
+    if not all(isinstance(n, int) for n in analysed.values()):
+        return None
+    findings: list[Finding] = []
+    for d in findings_raw:
+        if not isinstance(d, Mapping) or not isinstance(d.get("suppress_lines"), list) \
+                or not all(isinstance(n, int) for n in d["suppress_lines"]):
+            return None
+        try:
+            findings.append(Finding.from_dict(d, shown))
+        except (KeyError, TypeError, ValueError):
+            return None
+    return findings, functions, dict(analysed)
+
+
 def lint_file(path: "str | Path", config: Config) -> FileReport:
     """Lint one file on disk, through the cache."""
     t0 = time.perf_counter()
@@ -1811,12 +1853,9 @@ def lint_file(path: "str | Path", config: Config) -> FileReport:
     functions = 0
     analysed: dict[str, int] = {}
     if config.cache and cache.is_file():
-        try:
-            data = json.loads(cache.read_text(encoding="utf-8"))
-            raw = [Finding.from_dict(d, shown) for d in data["findings"]]
-            functions, analysed, cached = data.get("functions", 0), data.get("analysed", {}), True
-        except (OSError, ValueError, KeyError, TypeError):
-            raw = None
+        loaded = _load_cache(cache, shown)
+        if loaded is not None:
+            raw, functions, analysed, cached = loaded[0], loaded[1], loaded[2], True
     if raw is None:
         all_on = replace(config, select=("PCM",), extend_select=(), ignore=(), per_file_ignores=())
         try:
@@ -1830,7 +1869,8 @@ def lint_file(path: "str | Path", config: Config) -> FileReport:
                 marker = Path(config.root) / config.cache_dir / ".gitignore"
                 if not marker.exists():  # as ruff's .ruff_cache: the cache never shows up in git
                     marker.write_text("# created by pycodemath lint\n*\n", encoding="utf-8")
-                payload = {"findings": [dict(f.to_dict(), suppress_lines=list(f.suppress_lines)) for f in raw],
+                payload = {"version": CACHE_FORMAT,
+                           "findings": [dict(f.to_dict(), suppress_lines=list(f.suppress_lines)) for f in raw],
                            "functions": functions, "analysed": analysed}
                 tmp = cache.with_suffix(".tmp")
                 tmp.write_text(json.dumps(payload), encoding="utf-8")
