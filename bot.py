@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import os
 import re
+import secrets
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -97,9 +98,61 @@ URL_PATTERN = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 TRAILING_URL_CHARS = ".,!?;:'\""
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
+# (user id, source url) pairs that are currently being processed.  Keeping this
+# global prevents one user from starting the same download twice at once.
+INFLIGHT_DOWNLOADS: set[tuple[Any, str]] = set()
+
+FAILURE_MESSAGES = {
+    "unsupported": "平台不支持：未收录该域名。",
+    "resolve": "解析失败：无法从该链接获取可下载的媒体地址。",
+    "size": "文件超过 49MB 上限，无法上传到 Telegram。",
+    "download": "下载中断：媒体文件未能完整下载。",
+    "upload": "上传失败：媒体文件无法发送到 Telegram。",
+    "internal": "下载处理失败，请稍后重试。",
+}
+
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".wav"}
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov"}
+
 
 class DownloaderError(Exception):
-    pass
+    """A user-safe failure.  The original exception is only logged.
+
+    ``category`` is one of the keys in ``FAILURE_MESSAGES`` and lets the
+    download handler pick a short, stable message for the user.
+    """
+
+    def __init__(self, message: str, category: str = "internal") -> None:
+        super().__init__(message)
+        self.category = category
+
+
+def new_request_id() -> str:
+    """Return a short, non-guessable identifier for one download request."""
+    return secrets.token_hex(3)
+
+
+def request_tag(request_id: str) -> str:
+    return f"#{request_id}"
+
+
+def failure_text(tag: str, category: str) -> str:
+    return f"❌ {tag} {FAILURE_MESSAGES.get(category, FAILURE_MESSAGES['internal'])}"
+
+
+def success_caption(tag: str, platform: str, filename: str, size: int) -> str:
+    return (
+        "╭── [ 🎁 ᴅ ᴏ ᴡ ɴ ʟ ᴏ ᴀ ᴅ  ᴄ ᴏ ᴍ ᴘ ʟ ᴇ ᴛ ᴇ 🎁 ]\n"
+        "│\n"
+        f"├── 🆔 ⇛ ʀ ᴇ ǫ ᴜ ᴇ ꜱ ᴛ : {tag}\n"
+        f"├── 🌐 ⇛ ᴘ ʟ ᴀ ᴛ ꜰ ᴏ ʀ ᴍ : {platform}\n"
+        f"├── 📄 ⇛ ꜰ ɪ ʟ ᴇ ɴ ᴀ ᴍ ᴇ : {filename}\n"
+        f"├── 📦 ⇛ ꜱ ɪ ᴢ ᴇ : {size} ʙʏᴛᴇꜱ\n"
+        "│\n"
+        "├── ✨ ⇛ ᴇ ɴ ᴊ ᴏ ʏ ʏ ᴏ ᴜ ʀ ᴍ ᴇ ᴅ ɪ ᴀ !\n"
+        "│\n"
+        "╰── ᴘ σ ᴡ ᴇ ʀ ᴇ ᴅ  ʙ ʏ  ꜱ ɪ ꜰ ᴀ ᴛ"
+    )
 
 
 def extract_url(text: str | None) -> str | None:
@@ -174,7 +227,7 @@ async def response_json(response: aiohttp.ClientResponse) -> Any:
     try:
         return json.loads(await response.text())
     except json.JSONDecodeError as exc:
-        raise DownloaderError(styled("The API returned invalid data.")) from exc
+        raise DownloaderError(FAILURE_MESSAGES["resolve"], "resolve") from exc
 
 
 async def resolve_media(session: aiohttp.ClientSession, source_url: str) -> tuple[str, Any]:
@@ -182,11 +235,13 @@ async def resolve_media(session: aiohttp.ClientSession, source_url: str) -> tupl
         async with session.get(DOWNLOADER_API_URL, params={"q": source_url}) as response:
             response.raise_for_status()
             payload = await response_json(response)
+    except DownloaderError:
+        raise
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-        raise DownloaderError(styled("The downloader API is currently unavailable.")) from exc
+        raise DownloaderError(FAILURE_MESSAGES["resolve"], "resolve") from exc
     media_url = first_media_url(payload)
     if not media_url:
-        raise DownloaderError(styled("No downloadable media was found for this link."))
+        raise DownloaderError(FAILURE_MESSAGES["resolve"], "resolve")
     return media_url, payload
 
 
@@ -223,9 +278,22 @@ async def search_videos(session: aiohttp.ClientSession, query: str) -> list[dict
         async with session.get(SEARCH_API_URL, params={"q": query}) as response:
             response.raise_for_status()
             payload = await response_json(response)
+    except DownloaderError:
+        raise
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         raise DownloaderError(styled("The search API is currently unavailable.")) from exc
     return search_items(payload)
+
+
+def announced_content_length(response: aiohttp.ClientResponse) -> int | None:
+    """Best-effort Content-Length lookup that also tolerates simple fakes."""
+    value = getattr(response, "content_length", None)
+    if value is None:
+        value = response.headers.get("Content-Length")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def download_to_file(
@@ -236,9 +304,10 @@ async def download_to_file(
         async with session.get(media_url) as response:
             response.raise_for_status()
             content_type = response.headers.get("Content-Type", "")
-            announced_size = response.content_length
-            if announced_size and announced_size > MAX_DOWNLOAD_BYTES:
-                raise DownloaderError(styled("This file is larger than Telegram's upload limit."))
+            announced_size = announced_content_length(response)
+            if announced_size is not None and announced_size > MAX_DOWNLOAD_BYTES:
+                # No temporary file has been created yet.
+                raise DownloaderError(FAILURE_MESSAGES["size"], "size")
 
             extension = choose_extension(media_url, content_type)
             temporary_file = tempfile.NamedTemporaryFile(
@@ -251,16 +320,19 @@ async def download_to_file(
                     async for chunk in response.content.iter_chunked(64 * 1024):
                         downloaded += len(chunk)
                         if downloaded > MAX_DOWNLOAD_BYTES:
-                            raise DownloaderError(styled("This file is larger than Telegram's upload limit."))
+                            raise DownloaderError(FAILURE_MESSAGES["size"], "size")
                         temporary_file.write(chunk)
-            except Exception:
-                Path(temporary_path).unlink(missing_ok=True)
+            except BaseException:
+                try:
+                    Path(temporary_path).unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Could not remove temporary file %s", temporary_path, exc_info=True)
                 raise
             return temporary_path, extension
     except DownloaderError:
         raise
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-        raise DownloaderError(styled("The media file could not be downloaded.")) from exc
+        raise DownloaderError(FAILURE_MESSAGES["download"], "download") from exc
 
 
 def message_url(update: Update) -> str | None:
@@ -353,10 +425,8 @@ async def select_search_result(update: Update, context: ContextTypes.DEFAULT_TYP
 
     selected = results[index]
     url = selected.get("url", "")
-    if not is_supported_url(url):
-        await message.reply_text(styled("❌ This search result platform is not supported."))
-        return
-
+    # The download handler owns the whitelist check so the rejection carries a
+    # request id and a stable, categorized message.
     await download_handler(update, context, source_url=url)
 
 
@@ -371,6 +441,158 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception:
         members = "—"
     await message.reply_text(welcome_text(name, members))
+
+
+async def update_status(status_message: Any, text: str) -> bool:
+    """Edit a status message, never letting Telegram failures escape."""
+    try:
+        await status_message.edit_text(text)
+        return True
+    except Exception:
+        logger.debug("Failed to update a status message", exc_info=True)
+        return False
+
+
+async def finish_status(
+    status_message: Any,
+    text: str | None = None,
+    *,
+    fallback_text: str | None = None,
+) -> None:
+    """Ensure a status message does not stay on the initial "preparing" text.
+
+    With ``text=None`` the message is deleted; if deletion fails it is edited
+    to ``fallback_text`` instead.  With a ``text`` the message is edited; if
+    editing fails it is deleted.  Every branch makes a best effort to leave no
+    stale "preparing" message behind.
+    """
+    if text is None:
+        try:
+            await status_message.delete()
+            return
+        except Exception:
+            logger.debug("Failed to delete a status message", exc_info=True)
+        if fallback_text:
+            await update_status(status_message, fallback_text)
+        return
+
+    if await update_status(status_message, text):
+        return
+    try:
+        await status_message.delete()
+    except Exception:
+        logger.debug("Failed to remove a stale status message", exc_info=True)
+
+
+async def send_uploading_action(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    bot = getattr(context, "bot", None)
+    if bot is None:
+        return
+    try:
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_VIDEO)
+    except Exception:
+        logger.debug("Failed to send the upload chat action", exc_info=True)
+
+
+async def upload_media(
+    message: Any,
+    temporary_path: str,
+    extension: str,
+    filename: str,
+    caption: str,
+) -> None:
+    """Deliver the downloaded file, turning every Telegram error into an
+    "upload failure" so internal exception text never reaches the user."""
+    try:
+        if extension in AUDIO_EXTENSIONS:
+            with open(temporary_path, "rb") as media_file:
+                await message.reply_audio(
+                    audio=InputFile(media_file, filename=filename), caption=caption
+                )
+        elif extension in VIDEO_EXTENSIONS:
+            with open(temporary_path, "rb") as media_file:
+                await message.reply_video(
+                    video=InputFile(media_file, filename=filename),
+                    caption=caption,
+                    supports_streaming=True,
+                )
+        else:
+            with open(temporary_path, "rb") as media_file:
+                await message.reply_document(
+                    document=InputFile(media_file, filename=filename), caption=caption
+                )
+    except DownloaderError:
+        raise
+    except Exception as exc:
+        raise DownloaderError(FAILURE_MESSAGES["upload"], "upload") from exc
+
+
+def request_owner_key(update: Update, message: Any, url: str) -> tuple[Any, str]:
+    user = getattr(update, "effective_user", None)
+    owner_id = getattr(user, "id", None)
+    if owner_id is None:
+        chat = getattr(update, "effective_chat", None)
+        owner_id = getattr(chat, "id", None) or message.chat_id
+    return owner_id, url
+
+
+async def perform_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    session: aiohttp.ClientSession,
+    message: Any,
+    status_message: Any,
+    url: str,
+    tag: str,
+) -> None:
+    temporary_path: str | None = None
+    waiting = DOWNLOAD_SEMAPHORE.locked()
+    try:
+        if waiting:
+            await update_status(
+                status_message,
+                f"⏳ {tag} 当前已有 {MAX_CONCURRENT_DOWNLOADS} 个下载在进行，正在等待空闲位置…",
+            )
+        async with DOWNLOAD_SEMAPHORE:
+            if waiting:
+                await update_status(
+                    status_message,
+                    f"📥 {tag} 已获得下载位置，开始处理链接…",
+                )
+            await send_uploading_action(context, message.chat_id)
+            media_url, payload = await resolve_media(session, url)
+            await update_status(status_message, f"📥 {tag} 正在下载媒体…")
+            temporary_path, extension = await download_to_file(session, media_url)
+            size = os.path.getsize(temporary_path)
+            title = safe_filename(
+                payload_title(payload) or f"{platform_name(url)}_media", "downloaded_media"
+            )
+            filename = f"{title}{extension}"
+            caption = success_caption(tag, platform_name(url), filename, size)
+            await update_status(status_message, f"📤 {tag} 正在上传到 Telegram…")
+            await upload_media(message, temporary_path, extension, filename, caption)
+            await finish_status(
+                status_message,
+                fallback_text=f"✅ {tag} 媒体已成功发送。",
+            )
+    except DownloaderError as exc:
+        logger.warning("Download %s failed (%s)", tag, exc.category)
+        await finish_status(status_message, failure_text(tag, exc.category))
+    except asyncio.CancelledError:
+        logger.warning("Download %s was cancelled", tag)
+        await finish_status(status_message, failure_text(tag, "download"))
+        raise
+    except Exception:
+        logger.exception("Unexpected download error for %s", tag)
+        await finish_status(status_message, failure_text(tag, "internal"))
+    finally:
+        if temporary_path:
+            try:
+                Path(temporary_path).unlink(missing_ok=True)
+            except OSError:
+                logger.debug(
+                    "Could not remove temporary file %s", temporary_path, exc_info=True
+                )
 
 
 async def download_handler(
@@ -389,54 +611,37 @@ async def download_handler(
         if message.text and message.text.startswith("/"):
             await message.reply_text(styled("📥 Please send a complete https:// media link."))
         return
-    if not is_supported_url(url):
-        await message.reply_text(styled("❌ This platform is not supported."))
-        return
 
-    session: aiohttp.ClientSession = context.application.bot_data["http_session"]
-    status_message = await message.reply_text(styled("⏳ Checking your link and preparing the media..."))
-    temporary_path: str | None = None
+    request_id = new_request_id()
+    tag = request_tag(request_id)
+    status_message = await message.reply_text(f"⏳ {tag} 正在检查链接并准备媒体…")
 
-    async with DOWNLOAD_SEMAPHORE:
-        try:
-            await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_VIDEO)
-            media_url, payload = await resolve_media(session, url)
-            temporary_path, extension = await download_to_file(session, media_url)
-            title = safe_filename(payload_title(payload) or f"{platform_name(url)}_media", "downloaded_media")
-            filename = f"{title}{extension}"
-            caption = (
-                "╭── [ 🎁 ᴅ ᴏ ᴡ ɴ ʟ ᴏ ᴀ ᴅ  ᴄ ᴏ ᴍ ᴘ ʟ ᴇ ᴛ ᴇ 🎁 ]\n"
-                "│\n"
-                f"├── 🌐 ⇛ ᴘ ʟ ᴀ ᴛ ꜰ ᴏ ʀ ᴍ : {styled(platform_name(url))}\n"
-                "├── ✅ ⇛ ꜱ ᴛ ᴀ ᴛ ᴜ ꜱ : ꜱ ᴜ ᴄ ᴄ ᴇ ꜱ ꜱ\n"
-                "│\n"
-                "├── ✨ ⇛ ᴇ ɴ ᴊ ᴏ ʏ ʏ ᴏ ᴜ ʀ ᴍ ᴇ ᴅ ɪ ᴀ !\n"
-                "│\n"
-                "╰── ᴘ σ ᴡ є ʀ є ᴅ  ʙ ʏ  ꜱ ɪ ꜰ ᴀ ᴛ"
+    try:
+        if not is_supported_url(url):
+            await finish_status(status_message, failure_text(tag, "unsupported"))
+            return
+
+        inflight_key = request_owner_key(update, message, url)
+        if inflight_key in INFLIGHT_DOWNLOADS:
+            await finish_status(
+                status_message,
+                f"⚠️ {tag} 相同链接正在处理中，请等待当前下载完成。",
             )
-            await status_message.edit_text(styled("📤 Media found. Uploading it to Telegram..."))
-            if extension in {".mp3", ".m4a", ".aac", ".ogg", ".wav"}:
-                with open(temporary_path, "rb") as media_file:
-                    await message.reply_audio(audio=InputFile(media_file, filename=filename), caption=caption)
-            elif extension in {".mp4", ".webm", ".mov"}:
-                with open(temporary_path, "rb") as media_file:
-                    await message.reply_video(
-                        video=InputFile(media_file, filename=filename),
-                        caption=caption,
-                        supports_streaming=True,
-                    )
-            else:
-                with open(temporary_path, "rb") as media_file:
-                    await message.reply_document(document=InputFile(media_file, filename=filename), caption=caption)
-            await status_message.delete()
-        except DownloaderError as exc:
-            await status_message.edit_text(f"❌ {exc}")
-        except Exception:
-            logger.exception("Unexpected download error")
-            await status_message.edit_text(styled("❌ Something went wrong. Please try again later."))
+            return
+
+        INFLIGHT_DOWNLOADS.add(inflight_key)
+        try:
+            session: aiohttp.ClientSession = context.application.bot_data["http_session"]
+            await perform_download(update, context, session, message, status_message, url, tag)
         finally:
-            if temporary_path:
-                Path(temporary_path).unlink(missing_ok=True)
+            INFLIGHT_DOWNLOADS.discard(inflight_key)
+    except asyncio.CancelledError:
+        logger.warning("Download %s was cancelled before processing", tag)
+        await finish_status(status_message, failure_text(tag, "download"))
+        raise
+    except Exception:
+        logger.exception("Unexpected download error for %s", tag)
+        await finish_status(status_message, failure_text(tag, "internal"))
 
 
 async def post_init(application: Application) -> None:
