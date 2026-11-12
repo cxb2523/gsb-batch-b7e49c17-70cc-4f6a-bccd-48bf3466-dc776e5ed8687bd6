@@ -17,6 +17,7 @@ import {
 } from '../domain/rangeStats.js';
 import { HttpError, parseCompare, parseDate, parseEnum, parseIntBounded, parseRange, parseYear } from './query.js';
 import { toCsv } from './csv.js';
+import { ERROR_CODES } from './errorCodes.js';
 
 const MAX_SEGMENT_DAYS = 62;
 const MAX_TOTALS_DAYS = 3660;
@@ -159,7 +160,7 @@ export const resources = {
   /** Up to 31 completed local days of electrical telemetry, summarized before leaving the server. */
   async electrical(repo, query, ctx) {
     const { from, to } = parseRange(query, { maxDays: 31 });
-    if (to >= ctx.todayKey) throw new HttpError(400, 'electrical range must contain completed days only', 'invalid_range');
+    if (to >= ctx.todayKey) throw new HttpError(400, 'electrical range must contain completed days only', ERROR_CODES.INVALID_RANGE);
     return { body: summarizeElectricalRange(await repo.telemetryRange(from, to), from, to) };
   },
 
@@ -285,7 +286,9 @@ export const RESOURCE_NAMES = Object.keys(resources);
 
 export function resolveResource(name) {
   if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(resources, name)) {
-    throw new HttpError(404, 'Unknown resource', 'not_found');
+    // Distinct from the 400 invalid_* validation codes: the resource itself is not on the
+    // allowlist, so the caller cannot reach a database table through a typo'd name.
+    throw new HttpError(404, 'Unknown resource', ERROR_CODES.NOT_FOUND);
   }
   return resources[name];
 }

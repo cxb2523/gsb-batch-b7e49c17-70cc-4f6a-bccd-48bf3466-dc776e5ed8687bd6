@@ -15,6 +15,7 @@
 // so `abnormalOffline` (stateExceptionFlag === 1) is what signals a real problem.
 
 import { HttpError } from '../../../shared/data/query.js';
+import { ERROR_CODES } from '../../../shared/data/errorCodes.js';
 import { energyToKwh, powerToKw, toNum } from '../../../shared/domain/solisNormalize.js';
 import { peakOfDay } from '../../../shared/domain/dayPeak.js';
 import { normalizeDayPoints } from '../../../shared/domain/solisNormalize.js';
@@ -131,7 +132,7 @@ export function createLiveProvider({ fetchInverter, fetchDay = null, fetchSaved 
         const memory = cached ? { ...cached, source: 'memory' } : null;
         const newest = [memory, saved].filter(Boolean).sort((a, b) => readingTime(b) - readingTime(a))[0];
         if (newest) return { ...newest, stale: true, upstream: 'unavailable' };
-        throw new HttpError(502, 'Live data is temporarily unavailable', 'upstream_unavailable');
+        throw new HttpError(502, 'Live data is temporarily unavailable', ERROR_CODES.UPSTREAM_UNAVAILABLE);
       } finally {
         inFlight = null;
       }

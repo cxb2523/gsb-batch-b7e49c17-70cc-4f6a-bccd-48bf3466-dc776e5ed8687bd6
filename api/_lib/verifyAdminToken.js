@@ -14,6 +14,7 @@
 
 import { createClerkClient, verifyToken } from '@clerk/backend';
 import { accessLevelFromMetadata, satisfiesLevel } from '../../shared/domain/access.js';
+import { ERROR_CODES } from '../../shared/data/errorCodes.js';
 
 const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY;
 
@@ -57,13 +58,15 @@ export async function authenticate(req, res) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     console.error('authenticate: missing bearer token');
-    res.status(401).json({ error: 'Unauthorized - No token provided' });
+    res.status(401).json({ error: 'Unauthorized - No token provided', code: ERROR_CODES.MISSING_TOKEN });
     return null;
   }
 
   if (!CLERK_SECRET_KEY) {
+    // A deployment fault, not a caller fault: 500 with its own code so "the server can't verify
+    // tokens" is never confused with "this token is bad" (which stays 401 invalid_token).
     console.error('authenticate: CLERK_SECRET_KEY is not configured');
-    res.status(500).json({ error: 'Server auth is not configured' });
+    res.status(500).json({ error: 'Server auth is not configured', code: ERROR_CODES.AUTH_NOT_CONFIGURED });
     return null;
   }
 
@@ -76,16 +79,18 @@ export async function authenticate(req, res) {
       authorizedParties: getAuthorizedParties()
     });
   } catch (err) {
-    // A failure here is a failure — do not fall through to a weaker check.
+    // A failure here is a failure — do not fall through to a weaker check. The upstream error
+    // text (it can name Clerk internals) is logged, never returned: the body only says the token
+    // was not accepted, and never echoes the token itself.
     console.warn('authenticate: token verification failed', err?.message);
-    res.status(401).json({ error: 'Unauthorized - Invalid token' });
+    res.status(401).json({ error: 'Unauthorized - Invalid token', code: ERROR_CODES.INVALID_TOKEN });
     return null;
   }
 
   const userId = payload?.sub;
   if (!userId) {
     console.error('authenticate: verified token carried no subject');
-    res.status(401).json({ error: 'Unauthorized - Invalid token' });
+    res.status(401).json({ error: 'Unauthorized - Invalid token', code: ERROR_CODES.INVALID_TOKEN });
     return null;
   }
 
@@ -95,7 +100,7 @@ export async function authenticate(req, res) {
     return await clerkClient.users.getUser(userId);
   } catch (err) {
     console.error('authenticate: failed to load user', err?.message);
-    res.status(401).json({ error: 'Unauthorized - Could not resolve user' });
+    res.status(401).json({ error: 'Unauthorized - Could not resolve user', code: ERROR_CODES.INVALID_TOKEN });
     return null;
   }
 }
@@ -110,7 +115,10 @@ export async function verifyAccess(req, res, required = 'viewer') {
 
   const level = accessLevelFromMetadata(user.publicMetadata);
   if (!satisfiesLevel(level, required)) {
-    res.status(403).json({ error: required === 'admin' ? 'Forbidden - Admins only' : 'Forbidden - Dashboard access required' });
+    res.status(403).json({
+      error: required === 'admin' ? 'Forbidden - Admins only' : 'Forbidden - Dashboard access required',
+      code: ERROR_CODES.FORBIDDEN
+    });
     return null;
   }
 

@@ -8,8 +8,9 @@
 // bitten this project twice: once in GitHub Actions (five-month outage) and once on Vercel
 // (bill upload 500). These tests pin the check that turns it into a clear message.
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readKeyRole, describeConfigProblem } from '../api/_lib/supabaseServer.js';
+import { ERROR_CODES } from '../shared/data/errorCodes.js';
 
 // Structurally real Supabase JWTs, signed with nothing — only the payload matters here,
 // and the code never verifies the signature (Supabase does that).
@@ -66,6 +67,24 @@ describe('describeConfigProblem', () => {
     expect(problem.details).toMatch(/role "anon"/);
   });
 
+  it('gives each configuration fault a distinct stable machine-readable code', () => {
+    expect(describeConfigProblem(undefined, SERVICE_JWT).code).toBe(ERROR_CODES.CONFIG_MISSING_URL);
+    expect(describeConfigProblem(URL, undefined).code).toBe(ERROR_CODES.CONFIG_MISSING_KEY);
+    expect(describeConfigProblem(URL, ANON_JWT).code).toBe(ERROR_CODES.CONFIG_KEY_NOT_SERVICE_ROLE);
+  });
+
+  it('never echoes the configured key value back in the problem body', () => {
+    // The body names the ENV VAR to fix; the secret itself must not appear.
+    for (const problem of [
+      describeConfigProblem(URL, ANON_JWT),
+      describeConfigProblem(URL, 'sb_publishable_leaked-value-123')
+    ]) {
+      const serialized = JSON.stringify(problem);
+      expect(serialized).not.toContain(ANON_JWT);
+      expect(serialized).not.toContain('leaked-value-123');
+    }
+  });
+
   it('tells you where to set it — both places', () => {
     // Vercel and GitHub Actions are configured separately. Fixing one and assuming the other
     // followed is precisely how this was missed.
@@ -91,6 +110,43 @@ describe('describeConfigProblem', () => {
     // If we cannot read the role we must not guess — a future key format should not take
     // the whole API down.
     expect(describeConfigProblem(URL, 'some-future-key-format')).toBeNull();
+  });
+});
+
+describe('blockOnConfigProblem', () => {
+  // The module binds SUPABASE_URL / SUPABASE_SERVICE_KEY once on import, so each case imports a
+  // fresh module with the env it wants.
+  async function freshModule() {
+    vi.resetModules();
+    return import('../api/_lib/supabaseServer.js');
+  }
+  const mockRes = () => ({ statusCode: null, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } });
+  const original = { url: process.env.SUPABASE_URL, key: process.env.SUPABASE_SERVICE_KEY };
+
+  afterEach(() => {
+    if (original.url === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = original.url;
+    if (original.key === undefined) delete process.env.SUPABASE_SERVICE_KEY; else process.env.SUPABASE_SERVICE_KEY = original.key;
+  });
+
+  it('answers 500 itself with the stable code, and tells the handler to stop', async () => {
+    process.env.SUPABASE_URL = URL;
+    process.env.SUPABASE_SERVICE_KEY = ANON_JWT;
+    const { blockOnConfigProblem: block } = await freshModule();
+    const res = mockRes();
+    expect(block(res)).toBe(true);
+    expect(res.statusCode).toBe(500);
+    expect(res.body.code).toBe(ERROR_CODES.CONFIG_KEY_NOT_SERVICE_ROLE);
+    expect(JSON.stringify(res.body)).not.toContain(ANON_JWT);
+  });
+
+  it('returns false (and sends nothing) when configuration is fine', async () => {
+    process.env.SUPABASE_URL = URL;
+    process.env.SUPABASE_SERVICE_KEY = SERVICE_JWT;
+    const { blockOnConfigProblem: block } = await freshModule();
+    const res = mockRes();
+    expect(block(res)).toBe(false);
+    expect(res.statusCode).toBeNull();
+    expect(res.body).toBeNull();
   });
 });
 

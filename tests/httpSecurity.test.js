@@ -145,6 +145,7 @@ describe('handlePreflightAndMethod', () => {
     expect(stop).toBe(true);
     expect(res.statusCode).toBe(405);
     expect(res.headers.Allow).toContain('POST');
+    expect(res.body.code).toBe('method_not_allowed');
   });
 
   it('lets an accepted method through', () => {

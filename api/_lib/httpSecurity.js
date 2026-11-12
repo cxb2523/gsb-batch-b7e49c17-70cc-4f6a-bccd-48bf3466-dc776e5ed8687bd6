@@ -12,6 +12,8 @@
 //
 // This replaces it with an explicit allowlist, reflected back only on a match.
 
+import { ERROR_CODES } from '../../shared/data/errorCodes.js';
+
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://solaredge.anujajay.com',
   'http://localhost:5173',
@@ -95,7 +97,10 @@ export function handlePreflightAndMethod(req, res, methods = ['POST']) {
 
   if (!methods.includes(req.method)) {
     res.setHeader('Allow', [...methods, 'OPTIONS'].join(','));
-    res.status(405).json({ error: `Method not allowed. Use ${methods.join(' or ')}.` });
+    res.status(405).json({
+      error: `Method not allowed. Use ${methods.join(' or ')}.`,
+      code: ERROR_CODES.METHOD_NOT_ALLOWED
+    });
     return true;
   }
 

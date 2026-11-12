@@ -33,22 +33,36 @@ than adding to them.
 **Method gating.** `handlePreflightAndMethod(req, res, [...])` answers `OPTIONS` and rejects
 anything outside the declared list with `405`.
 
-**Errors.** JSON, shaped `{ error: string, details?: string | string[] }`.
+**Errors.** JSON, shaped `{ error: string, code: string, details?: string | string[] }`.
+Every failure carries a **stable machine-readable `code`** — the full catalogue lives in
+`shared/data/errorCodes.js`, and a code, once shipped, is never renamed or reused. The code tells
+the caller **which pipeline layer failed**; the table lists them in pipeline order.
 
-| Status | Meaning |
-|---|---|
-| `400` | Malformed request — missing field, bad type, unparseable body |
-| `401` | No token, expired token, or verification failed |
-| `403` | Valid token, but the access level is too low (not an admin / not a viewer) |
-| `404` | Referenced row does not exist |
-| `405` | Method not in the endpoint's allowlist |
-| `409` | Conflict — currently only duplicate-bill detection |
-| `429` | Rate limited (`/api/solis/explore`; `/api/data/*`, 120 requests/min/user, `Retry-After` set) |
-| `502` | `/api/data/live` only: SolisCloud unavailable and nothing cached (never a fabricated reading) |
-| `500` | Unhandled — or a configuration problem, which says so explicitly |
-| `503` | `/ready` only: a dependency is down |
+| Status | `code` | Layer / meaning |
+|---|---|---|
+| `405` | `method_not_allowed` | Transport — method outside the endpoint's allowlist (`Allow` header says which) |
+| `401` | `missing_token` | Authentication — no `Bearer` token, or the header is not a bearer |
+| `401` | `invalid_token` | Authentication — verification failed, no usable subject, or the user could not be resolved |
+| `403` | `forbidden` | Authorisation — valid token, but the access level is too low |
+| `500` | `auth_not_configured` | Server config — `CLERK_SECRET_KEY` is missing, so tokens cannot be verified |
+| `500` | `config_missing_url` | Server config — `SUPABASE_URL` is not set |
+| `500` | `config_missing_key` | Server config — neither `SUPABASE_SERVICE_KEY` nor `SUPABASE_SERVICE_ROLE_KEY` is set |
+| `500` | `config_key_not_service_role` | Server config — the key's role is not `service_role` (e.g. an anon key) |
+| `400` | `missing_param` | Request shape — a required parameter is absent |
+| `400` | `invalid_param`, `invalid_date`, `invalid_range` | Request shape — malformed parameter value |
+| `400` | `range_too_large` | Request shape — well-formed range, but over the endpoint's day cap |
+| `404` | `not_found` | Routing — the resource name (or referenced row) does not exist; distinct from a `400 invalid_*` so a typo'd path is distinguishable from a bad parameter |
+| `409` | — | Conflict — currently only duplicate-bill detection |
+| `429` | `rate_limited` | Rate limit (`/api/solis/explore`; `/api/data/*`, 120 requests/min/user) with `Retry-After` and `X-RateLimit-Remaining` |
+| `502` | `upstream_unavailable` | `/api/data/live` only: SolisCloud unavailable and nothing cached (never a fabricated reading) |
+| `500` | `internal` | Unhandled — a generic body; the original error is logged, never returned |
+| `503` | — | `/ready` only: a dependency is down |
 
-> A `500` whose body names `SUPABASE_SERVICE_KEY` is a **configuration** error, not a bug.
+Failure bodies **never** echo a bearer token, a secret key, upstream error text or database
+details — only the `code`, a short human-readable `error`, and (for config failures) a `details`
+string that names the *environment variable* to fix, never its value.
+
+> A `500` whose `code` starts with `config_` is a **configuration** error, not a bug.
 > See [§ Config errors](#config-errors).
 
 ---
@@ -292,9 +306,11 @@ read, authorised at **viewer** level. The browser never queries the real tables 
 reads use the service-role key server-side. Responses are `Cache-Control: private, max-age=30`
 with `Vary: Authorization`, so a shared cache can never serve one user's data to another.
 
-Errors are `{ error, code }` where `code` is a stable machine-readable string
-(`invalid_range`, `range_too_large`, `missing_param`, `invalid_param`, `not_found`, `rate_limited`,
-`upstream_unavailable`, `internal`). A 500 never contains upstream or database error text.
+Errors are `{ error, code }` where `code` is a stable machine-readable string from the
+[contract catalogue](#errors) (`missing_token`, `invalid_token`, `forbidden`, `not_found`,
+`invalid_range`, `range_too_large`, `missing_param`, `invalid_param`, `rate_limited`,
+`upstream_unavailable`, `internal`, and the `config_*` family). A 500 never contains upstream or
+database error text, and config failures name the environment variable to fix but never its value.
 
 **Null is not zero.** An unknown value is `null` in JSON and an **empty cell** in CSV. A day with
 no data is *missing*, and every aggregate reports `presentDays`/`completeness` so a partial range
@@ -395,6 +411,7 @@ A misconfigured deployment answers with an explanation rather than a bare `500`:
 ```json
 {
   "error": "Supabase server key is not a service_role key",
+  "code": "config_key_not_service_role",
   "details": "SUPABASE_SERVICE_KEY carries role \"anon\". Server endpoints write to tables whose RLS policies only permit the service role, so every write will be rejected. Set the service_role (secret) key from Supabase → Project Settings → API — on Vercel AND as the GitHub Actions secret; they are configured separately."
 }
 ```

@@ -27,6 +27,7 @@
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
+import { ERROR_CODES } from '../../shared/data/errorCodes.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 
@@ -70,6 +71,7 @@ export function describeConfigProblem(url = SUPABASE_URL, key = SUPABASE_SERVICE
   if (!url) {
     return {
       error: 'Missing Supabase server configuration',
+      code: ERROR_CODES.CONFIG_MISSING_URL,
       details: 'SUPABASE_URL is not set on this deployment.'
     };
   }
@@ -77,6 +79,7 @@ export function describeConfigProblem(url = SUPABASE_URL, key = SUPABASE_SERVICE
   if (!key) {
     return {
       error: 'Missing Supabase server configuration',
+      code: ERROR_CODES.CONFIG_MISSING_KEY,
       details:
         'Neither SUPABASE_SERVICE_KEY nor SUPABASE_SERVICE_ROLE_KEY is set on this ' +
         'deployment. It must be the service_role ' +
@@ -90,6 +93,7 @@ export function describeConfigProblem(url = SUPABASE_URL, key = SUPABASE_SERVICE
   if (role && role !== 'service_role') {
     return {
       error: 'Supabase server key is not a service_role key',
+      code: ERROR_CODES.CONFIG_KEY_NOT_SERVICE_ROLE,
       details:
         `SUPABASE_SERVICE_KEY carries role "${role}". Server endpoints write to tables whose ` +
         'RLS policies only permit the service role, so every write will be rejected. Set the ' +
