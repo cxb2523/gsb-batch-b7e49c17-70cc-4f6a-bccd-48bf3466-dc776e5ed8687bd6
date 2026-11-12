@@ -244,3 +244,40 @@ def test_interrupcao_e_retomada_equivalem_a_coleta_completa(tmp_path):
 
     assert restored_jobs == complete_jobs
     assert resumed.session.request_count == 2
+
+
+class FakeSessionComLimite(FakeSession):
+    """Sessao que fica rate_limited depois de N requests (bloqueio no meio da coleta)."""
+
+    def __init__(self, responses, limitar_apos):
+        super().__init__(responses)
+        self.rate_limited = False
+        self._limitar_apos = limitar_apos
+
+    def get(self, url, params=None):
+        response = super().get(url, params=params)
+        if self.request_count >= self._limitar_apos:
+            self.rate_limited = True
+        return response
+
+
+def test_rate_limit_interrompe_coleta_e_preserva_checkpoint(tmp_path):
+    session = FakeSessionComLimite(
+        [FakeResponse(SITEMAP_XML), FakeResponse(VAGA_HTML), FakeResponse(VAGA_HTML)],
+        limitar_apos=2,  # sitemap + primeira vaga; o limite cai antes da segunda
+    )
+    src = AblerSource(
+        session=session,
+        settings=Settings(output_dir=tmp_path, abler_days_back=1),
+    )
+
+    jobs = src._coletar()
+    checkpoint = tmp_path / CHECKPOINT_NAME
+    with open(checkpoint, encoding="utf-8-sig", newline="") as fh:
+        linhas = list(csv.DictReader(fh))
+
+    # A segunda vaga do sitemap nao foi nem tentada; a primeira ficou no checkpoint.
+    assert [j.external_id for j in jobs] == ["134508"]
+    assert [linha["external_id"] for linha in linhas] == ["134508"]
+    assert session.request_count == 2
+    assert src.stats.raw_jobs == 1

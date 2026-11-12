@@ -377,6 +377,43 @@ def test_retry_after_longo_interrompe_sem_espera(impersonate, retry_after, monke
         sleep.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "backoff_factor,retry_after,esperado",
+    [
+        (4.0, "2", 4.0),   # backoff exponencial domina o Retry-After curto
+        (1.0, "10", 10.0), # Retry-After (dentro do teto) domina o backoff
+    ],
+)
+def test_espera_e_o_maior_entre_backoff_e_retry_after(
+    polite, monkeypatch, backoff_factor, retry_after, esperado
+):
+    sleep = MagicMock()
+    monkeypatch.setattr(time, "sleep", sleep)
+    polite.backoff_factor = backoff_factor
+    polite.session.get = MagicMock(side_effect=[
+        MagicMock(status_code=429, headers={"Retry-After": retry_after}, text="limite"),
+        MagicMock(status_code=200),
+    ])
+
+    result = polite.get("https://example.com/job")
+
+    assert result is not None
+    assert not polite.rate_limited
+    sleep.assert_called_once_with(esperado)
+
+
+def test_get_recupera_de_timeout_transitorio(polite):
+    resposta = MagicMock(status_code=200)
+    polite.session.get = MagicMock(side_effect=[requests.Timeout(), resposta])
+
+    result = polite.get("https://example.com/job")
+
+    assert result is resposta
+    assert polite.request_count == 1
+    assert polite.attempt_count == 2
+    assert polite.last_status_code == 200
+
+
 @pytest.mark.parametrize("retry_after,waits", [("2", [2]), ("invalido", [])])
 def test_429_isolado_pode_recuperar_sem_encerrar_sessao(polite, monkeypatch, retry_after, waits):
     sleep = MagicMock()
