@@ -9,46 +9,97 @@ import re
 import os
 import socket
 import threading
-import time
 from Scan.CommandRun import command_exec
 from Scan.Helpers import delete_http_duplicates, get_random_string, get_domains_for_enumeration
 
-WILDCARD_PROBE_TIMEOUT = 7  # Seconds to wait for the DNS answer for the non-existent subdomain
+WILDCARD_PROBE_TIMEOUT = 7  # Seconds to wait for each DNS answer for the non-existent subdomain
+WILDCARD_PROBE_ATTEMPTS = 2  # Probes per domain; one answer is enough, a domain is treated as timed out only if every probe timed out
+
+
+def _probe_wildcard_once(domain, resolver, timeout):
+    # Returns "wildcard" (the random subdomain resolved), "none" (confirmed not to resolve)
+    # or "timeout" (no DNS answer within the timeout).
+    probe = get_random_string(10).lower() + '.' + domain
+    if '-v' in Flags:
+        print(f"[v] Resolving {probe} to check {domain} for a DNS wildcard")
+    result = {"state": "timeout"}
+
+    def resolve():
+        try:
+            resolver(probe, None)
+            result["state"] = "wildcard"
+        except OSError:
+            result["state"] = "none"
+        except Exception:
+            result["state"] = "timeout"  # An unexpected resolver failure must not mark a domain as a wildcard
+
+    worker = threading.Thread(target=resolve, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        print(f"[!] Wildcard check for {domain} timed out after {timeout}s while resolving {probe}")
+    return result["state"]
+
+
+def detect_dns_wildcard(domain, resolver=None,
+                        timeout=WILDCARD_PROBE_TIMEOUT, attempts=WILDCARD_PROBE_ATTEMPTS):
+    # A domain with a DNS wildcard resolves ANY subdomain, so subdomain enumeration would mark
+    # thousands of non-existent hosts as alive. Only a positive "it resolved" answer marks a domain
+    # as wildcard: timeouts and errors fall back to normal processing.
+    if resolver is None:  # Resolved at call time (not as a default argument) so tests can patch socket.getaddrinfo
+        resolver = socket.getaddrinfo
+    timed_out = True
+    for _ in range(max(1, attempts)):
+        state = _probe_wildcard_once(domain, resolver, timeout)
+        if state == "wildcard":
+            return "wildcard"
+        if state == "none":
+            timed_out = False
+    return "timeout" if timed_out else "none"
 
 
 def check_dns_wildcards():
     # A domain with a DNS wildcard resolves ANY subdomain, so subdomain enumeration would mark
     # thousands of non-existent hosts as alive. For such domains only the root domain is scanned,
     # exactly like with the -ds flag. Uses the system resolver, so it can run in parallel with the
-    # installed-tools check without waiting for dnsx/httpx.
+    # installed-tools check without waiting for dnsx/httpx. Each probe is bounded by its own
+    # timeout, so a hanging resolver can never keep a domain in the enumeration input silently.
     wildcard_domains = []
+    timed_out_domains = []
+    results = {}
+    results_lock = threading.Lock()
 
     def probe_domain(domain):
-        probe = get_random_string(10).lower() + '.' + domain
-        if '-v' in Flags:
-            print(f"[v] Resolving {probe} to check {domain} for a DNS wildcard")
-        try:
-            socket.getaddrinfo(probe, None)
-        except OSError:
-            return  # Does not resolve - the expected result for a domain without a wildcard
-        wildcard_domains.append(domain)
+        state = detect_dns_wildcard(domain)
+        with results_lock:
+            results[domain] = state
 
     print("[*] Checking if subdomain enumeration is possible...")
     threads = [threading.Thread(target=probe_domain, args=(domain,), daemon=True) for domain in Global.Domains]
     for thread in threads:
         thread.start()
-    deadline = time.monotonic() + WILDCARD_PROBE_TIMEOUT
     for thread in threads:
-        thread.join(max(deadline - time.monotonic(), 0))  # Threads still resolving after the timeout are abandoned, their domain counts as fine
+        thread.join()  # Every probe already carries its own per-attempt timeout, so this join always returns
 
-    if not wildcard_domains:
-        return
+    for domain in Global.Domains:
+        state = results.get(domain, "timeout")
+        if state == "wildcard":
+            wildcard_domains.append(domain)
+        elif state == "timeout":
+            timed_out_domains.append(domain)
+
     for domain in wildcard_domains:
         print(f"[e] {domain} resolves any non-existent subdomain, so subdomain enumeration would return only false results!")
-    Global.WildcardDomains.extend(wildcard_domains)
-    print(f"[!] Subdomains will not be enumerated for {', '.join(wildcard_domains)} - only the root domain itself is scanned there")
-    Global.GeneralInfoNotes.append("Subdomain enumeration was skipped because any non-existent subdomain resolves, so only "
-                                   f"the root domain itself was scanned for: {', '.join(wildcard_domains)}")
+    if wildcard_domains:
+        Global.WildcardDomains.extend(wildcard_domains)
+        print(f"[!] Subdomains will not be enumerated for {', '.join(wildcard_domains)} - only the root domain itself is scanned there")
+        Global.GeneralInfoNotes.append("Subdomain enumeration was skipped because any non-existent subdomain resolves, so only "
+                                       f"the root domain itself was scanned for: {', '.join(wildcard_domains)}")
+    if timed_out_domains:
+        print(f"[!] Wildcard DNS check did not get a DNS answer in time for: {', '.join(timed_out_domains)}. "
+              "These domains are processed normally (subdomain enumeration is enabled for them).")
+        Global.GeneralInfoNotes.append("The wildcard DNS check timed out and could not confirm whether any non-existent subdomain "
+                                       f"resolves, so subdomain enumeration ran normally for: {', '.join(timed_out_domains)}")
 
 
 def launch_httpx():

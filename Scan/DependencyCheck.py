@@ -5,11 +5,21 @@ from urllib.parse import urlparse, urljoin
 import json
 import os
 import re
+import shutil
 import subprocess
 import requests
 
 TEMPLATE_PATH = "Scan/resources/exposed-dependency-configs.yaml"
-MAX_BODY_BYTES = 1048576
+MAX_BODY_BYTES = 1048576  # Responses bigger than 1MB are not saved (huge files, error pages, binary junk)
+DOWNLOAD_TIMEOUT = 15
+
+# Reasons recorded in Global.DepSkippedFiles and in the DependencyFiles.log per run
+REASON_HTML = "html-error-page"
+REASON_TOO_LARGE = "body-larger-than-1mb"
+REASON_DUPLICATE = "duplicate-url"
+REASON_DOWNLOAD_FAILED = "download-failed"
+REASON_EMPTY = "empty-response"
+REASON_NOT_MANIFEST = "not-a-manifest-url"
 
 MANIFEST_SUFFIXES = (
     "/package-lock.json",
@@ -142,6 +152,34 @@ _aspnet_bootstrap_re = re.compile(r"aspnetcdn\.com/ajax/bootstrap/" + _js_ver, r
 _aspnet_jqueryui_re = re.compile(r"aspnetcdn\.com/ajax/jqueryui/" + _js_ver, re.I)
 
 _downloaded = []  # [{"url", "dir", "filename"}]
+_seen_urls = set()  # Every normalized URL already handled (saved or rejected), so it is never downloaded twice
+_duplicate_hits = []  # Normalized URLs encountered again after the first handling (audit log only, one entry per occurrence)
+_audit_records = []  # Every rejection including non-report ones (e.g. non-manifest crawl URLs), for DependencyFiles.log
+_skip_counts = {}  # reason -> amount, for the end-of-collection summary
+
+
+def _reset_collection_state():
+    # The module-level state must be reset between scans (and between unit tests in the same process)
+    _downloaded.clear()
+    _seen_urls.clear()
+    _duplicate_hits.clear()
+    _audit_records.clear()
+    _skip_counts.clear()
+    Global.DepExposedFiles.clear()
+    Global.DepSkippedFiles.clear()
+
+
+def _mark_duplicate(url):
+    # The URL was already handled (saved or rejected) earlier in this run: never process it again.
+    # Duplicates are counted and audited but listed in the report only once.
+    key = _normalize_url(url)
+    _duplicate_hits.append(key)
+    _skip_counts[REASON_DUPLICATE] = _skip_counts.get(REASON_DUPLICATE, 0) + 1
+    _audit_records.append({"url": url, "reason": REASON_DUPLICATE})
+    if not any(entry["reason"] == REASON_DUPLICATE and _normalize_url(entry["url"]) == key
+               for entry in Global.DepSkippedFiles):
+        Global.DepSkippedFiles.append({"url": url, "reason": REASON_DUPLICATE})
+        print(f"[!] Duplicate dependency URL processed only once: {url}")
 
 
 def collect_dependency_files():
@@ -151,41 +189,82 @@ def collect_dependency_files():
 
     print("[*] Searching for exposed dependency files...")
     requests.packages.urllib3.disable_warnings()
-    saved_urls = set()
+    _reset_collection_state()
     os.makedirs(Global.RunDir + "/dep_files", exist_ok=True)
 
     jsonl_lines = _run_nuclei(hosts)
     pending_download = []
     for url, body in _urls_from_nuclei(jsonl_lines):
+        key = _normalize_url(url)
+        if key in _seen_urls:
+            _mark_duplicate(url)
+            continue
         if body:
-            _save_manifest(url, body, saved_urls)
-        if _normalize_url(url) not in saved_urls:
-            pending_download.append(url)
+            _save_manifest(url, body)  # Rejection (HTML/oversized) marks the URL as seen, so it is not retried below
+        if key not in _seen_urls:
+            pending_download.append(url)  # Nuclei had no response body: try downloading ourselves
 
+    # Nuclei matches first, then URLs discovered while crawling (with and without a WAF)
     for url in pending_download + list(Global.CrawledURLs) + list(Global.URLsWithWAF):
-        if _normalize_url(url) in saved_urls:
+        key = _normalize_url(url)
+        if key in _seen_urls:
+            _mark_duplicate(url)
             continue
         if not filename_from_url(url):
+            _record_skip(url, REASON_NOT_MANIFEST, console=False, report=False)
             continue
-        body = _download_url(url)
-        if body:
-            _save_manifest(url, body, saved_urls)
+        body, reason = _download_url(url)
+        if body and not reason:
+            _save_manifest(url, body)
+        else:
+            _record_skip(url, reason)
 
+    _write_collection_log()
     print(f"[+] {len(_downloaded)} dependency files were saved")
+    skipped_total = sum(_skip_counts.values())
+    if skipped_total:
+        breakdown = ", ".join(f"{reason}: {amount}" for reason, amount in sorted(_skip_counts.items()))
+        print(f"[!] {skipped_total} candidate dependency URLs were not saved ({breakdown}). "
+            f"Details: {os.path.join(Global.RunDir, 'DependencyFiles.log')}")
+        if _skip_counts.get(REASON_TOO_LARGE) or _skip_counts.get(REASON_HTML):
+            Global.GeneralInfoNotes.append(
+                f"Some exposed dependency files were not analyzed: {_skip_counts.get(REASON_HTML, 0)} HTML error pages "
+                f"and {_skip_counts.get(REASON_TOO_LARGE, 0)} files larger than 1MB were skipped. "
+                "See the Dependency check section of the report for details.")
 
 
 def analyze_dependency_files():
     allowed = set(Global.Details[Global.DetailsLevel]["NucleiCritical"].split(","))
+    tools = check_dependency_tools()
     if _downloaded:
         print("[*] Checking downloaded dependency files...")
         for item in _downloaded:
             Global.DepExposedFiles.append(item["url"])
-            _run_confused(item)
-            _run_osv(item, allowed)
-    scanned_js = _scan_js_cdn_cves(allowed)
+            if tools["confused"]:
+                _run_confused(item)
+            if tools["osv-scanner"]:
+                _run_osv(item, allowed)
+    if tools["osv-scanner"]:
+        scanned_js = _scan_js_cdn_cves(allowed)
+    else:
+        scanned_js = False
     if _downloaded or scanned_js:
         print(f"[+] Dependency check: {len(Global.DepConfusionFindings)} unclaimed packages, "
               f"{len(Global.DepCveFindings)} CVEs")
+
+
+def check_dependency_tools():
+    # Resolved once per run and cached: the main flow must state clearly when confused/osv-scanner
+    # are missing instead of failing per file with an easily missed "Error when running" line.
+    for tool in ("confused", "osv-scanner"):
+        if Global.DepToolsAvailable[tool] is None:
+            Global.DepToolsAvailable[tool] = shutil.which(tool) is not None
+            if not Global.DepToolsAvailable[tool]:
+                print(f"[!] {tool} was not found in PATH, so the {tool} dependency checks are skipped. "
+                      f"Install it and add it to the PATH, or disable the whole dependency check with -dcf.")
+                Global.GeneralInfoNotes.append(
+                    f"The {tool} dependency check was skipped because the {tool} utility is not installed or not in PATH.")
+    return Global.DepToolsAvailable
 
 
 def filename_from_url(url):
@@ -250,40 +329,117 @@ def _http_body(raw):
 
 
 def _is_html(body):
-    head = body.lstrip()[:300].lower()
-    return head.startswith("<!doctype html") or head.startswith("<html") or "<html" in head
+    head = body.lstrip()[:500].lower()
+    return (head.startswith("<!doctype html") or head.startswith("<html")
+            or head.startswith("<!--") or "<html" in head
+            or head.startswith("<head") or "<head" in head[:200])
 
 
-def _save_manifest(url, body, saved_urls):
-    filename = filename_from_url(url)
-    if not filename or not body or _is_html(body):
+def _record_skip(url, reason, console=True, report=True):
+    # One record per rejected candidate URL: visible in the console, in Global.DepSkippedFiles
+    # (rendered in the report) and in DependencyFiles.log. report=False keeps non-manifest crawl
+    # URLs out of the report while still counting and auditing them.
+    key = _normalize_url(url)
+    if key in _seen_urls:
         return
+    _seen_urls.add(key)
+    _skip_counts[reason] = _skip_counts.get(reason, 0) + 1
+    entry = {"url": url, "reason": reason}
+    _audit_records.append(entry)
+    if report:
+        Global.DepSkippedFiles.append(entry)
+    if console:
+        print(f"[!] Dependency manifest not saved ({reason}): {url}")
+    elif "-v" in Flags:
+        print(f"[v] Skipping non-manifest URL: {url}")
+
+
+def _write_collection_log():
+    # Full per-URL audit trail of what was saved or rejected and why (includes candidates that
+    # never reach the report, such as ordinary crawl URLs that are not manifest names)
+    lines = ["# Dependency file collection log", f"# Saved files: {len(_downloaded)}"]
+    for item in _downloaded:
+        lines.append(f"SAVED\t{item['url']}\t{item['dir']}")
+    lines.append("# Rejected candidates:")
+    for entry in _audit_records:
+        lines.append(f"SKIPPED\t{entry['reason']}\t{entry['url']}")
+    for key in _duplicate_hits:
+        lines.append(f"DUPLICATE\t{REASON_DUPLICATE}\t{key}")
+    try:
+        with open(os.path.join(Global.RunDir, "DependencyFiles.log"), "w", encoding="utf-8", newline="\n") as file:
+            file.write("\n".join(lines) + "\n")
+    except OSError as error:
+        print(f"[e] Could not write the dependency collection log: {error}")
+
+
+def _save_manifest(url, body):
+    filename = filename_from_url(url)
+    key = _normalize_url(url)
+    if key in _seen_urls:
+        _mark_duplicate(url)
+        return False
+    if not filename:
+        _record_skip(url, REASON_NOT_MANIFEST, console=False, report=False)
+        return False
+    if not body:
+        _record_skip(url, REASON_EMPTY)
+        return False
+    if _is_html(body):
+        _record_skip(url, REASON_HTML)
+        return False
     body_bytes = body.encode("utf-8", errors="replace")
     if len(body_bytes) > MAX_BODY_BYTES:
-        return
-    key = _normalize_url(url)
-    if key in saved_urls:
-        return
+        print(f"[!] Dependency manifest not saved ({REASON_TOO_LARGE}, {len(body_bytes)} bytes): {url}")
+        _record_skip(url, REASON_TOO_LARGE, console=False)
+        return False
     index = len(_downloaded)
     dest_dir = os.path.join(Global.RunDir, "dep_files", str(index))
     os.makedirs(dest_dir, exist_ok=True)
     dest_path = os.path.join(dest_dir, filename)
     with open(dest_path, "w", encoding="utf-8", errors="replace", newline="\n") as file:
         file.write(body)
-    saved_urls.add(key)
+    _seen_urls.add(key)
     _downloaded.append({"url": url, "dir": dest_dir, "filename": filename})
+    print(f"[+] Saved dependency file: {url} -> {dest_path}")
+    return True
 
 
 def _download_url(url):
+    # Streams the response so a multi-hundred-MB error page cannot be buffered into memory.
+    # Returns (body, reason): reason is "" on success or one of the REASON_* constants.
     try:
-        response = requests.get(url, headers={"User-Agent": Global.UserAgent}, timeout=15, verify=False)
-        if response.status_code != 200:
-            return ""
-        return response.text
-    except requests.RequestException:
+        response = requests.get(url, headers={"User-Agent": Global.UserAgent},
+                                timeout=DOWNLOAD_TIMEOUT, verify=False, stream=True)
+    except requests.RequestException as error:
         if "-v" in Flags:
-            print(f"[v] Failed to download {url}")
-        return ""
+            print(f"[v] Failed to download {url}: {error}")
+        return "", REASON_DOWNLOAD_FAILED
+    try:
+        if response.status_code != 200:
+            if "-v" in Flags:
+                print(f"[v] No dependency file at {url}: HTTP {response.status_code}")
+            return "", REASON_DOWNLOAD_FAILED
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        chunks = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=65536, decode_unicode=False):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > MAX_BODY_BYTES:
+                response.close()
+                return "", REASON_TOO_LARGE
+            chunks.append(chunk)
+        body = b"".join(chunks).decode("utf-8", errors="replace")
+        if not body:
+            return "", REASON_EMPTY
+        # An HTML content type alone is enough: many error pages are served as text/html without
+        # an <html> marker, and manifest files are never served as text/html.
+        if "html" in content_type or _is_html(body):
+            return body, REASON_HTML
+        return body, ""
+    finally:
+        response.close()
 
 
 def _read_text(path):
@@ -652,8 +808,9 @@ def _run_confused(item):
             ["confused", "-l", lang, "-f", scan_file],
             cwd=item["dir"], capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
-    except OSError:
-        print("[e] Error when running confused")
+    except OSError as error:
+        print(f"[e] Error when running confused on {item['url']}: {error}. "
+              "Make sure confused is installed and available in PATH.")
         return
     output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
     try:
@@ -801,8 +958,9 @@ def _osv_json(cwd, lock_arg, label):
              "--output-file", "osv.json", "--verbosity", "error", "--no-resolve"],
             cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
-    except OSError:
-        print("[e] Error when running osv-scanner")
+    except OSError as error:
+        print(f"[e] Error when running osv-scanner on {label}: {error}. "
+              "Make sure osv-scanner is installed and available in PATH.")
         return None
     if result.returncode not in (0, 1):
         if "-v" in Flags:

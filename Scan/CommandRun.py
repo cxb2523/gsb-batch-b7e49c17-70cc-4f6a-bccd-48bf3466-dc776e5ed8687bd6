@@ -45,6 +45,13 @@ def check_installed_tools():
         if utilities_flags[utility] not in Flags:
             result = subprocess.run(f"{utility} -h", shell=True, capture_output=True)
             if result.returncode != 0:
+                if utilities_flags[utility] == "-dcf":
+                    # The dependency-check tools are optional: Scan/DependencyCheck.py announces
+                    # their absence (console + report note) and skips only the affected sub-checks,
+                    # so the main scan must not terminate because one of them is missing.
+                    print(f"[!] {utility} was not found, please install it and add to the path or use -dcf flag! "
+                          "The dependency checks relying on it will be skipped with a notice in the report.")
+                    continue
                 errors_count += 1
                 if utilities_flags[utility] == "No flag":
                     print(f"[!] {utility} was not found, please install it and add to the path!")

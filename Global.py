@@ -174,8 +174,10 @@ NotExistingSocialMediaLinks = []  # [("http://example.com", "https://facebook.co
 LeakixFindings = []
 Byp4xxResult = []  # [[host_title_line, result_line, result_line], ...] - raw byp4xx output grouped per host
 DepExposedFiles = []  # URLs of leaked dependency manifests/lockfiles
+DepSkippedFiles = []  # [{"url", "reason"}] - candidate manifest URLs that were not saved (HTML error page, body > 1MB, download error, etc.)
 DepConfusionFindings = []  # [{"url", "package", "scoped"}]
 DepCveFindings = []  # [{"url", "package", "version", "vuln_id", "severity", "summary"}]
+DepToolsAvailable = {"confused": None, "osv-scanner": None}  # None = not checked yet, True/False = shutil.which() result, cached per run
 
 LeakixAPIKey = os.environ.get("LeakIX_API_key", "CHANGEME")  # Change CHANGEME to your API key
 SecurityTrailsAPIKey = os.environ.get("SecurityTrails_API_key", "")  # Historical-DNS checks (origin behind WAF + access to inactive hosts). Empty => the check is silently disabled

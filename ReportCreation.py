@@ -18,6 +18,19 @@ def get_unique_report_name(prepath, base_name):
     return f"{base_name}-{counter}"
 
 
+def skip_reason_label(reason):
+    # Human-readable text for the machine reason strings recorded by Scan/DependencyCheck.py
+    labels = {
+        "html-error-page": "HTML error page, not a manifest",
+        "body-larger-than-1mb": "Response body larger than 1MB",
+        "duplicate-url": "Duplicate URL, processed only once",
+        "download-failed": "Download failed or non-200 HTTP status",
+        "empty-response": "Empty response body",
+        "not-a-manifest-url": "URL does not point to a known dependency manifest",
+    }
+    return labels.get(reason, reason)
+
+
 def get_host_scan_commands(hosts_pair):  # Suggested manual scan commands for a (host_header, target) pair
     return f"nuclei -u {hosts_pair[1]} -header Host:{hosts_pair[0]} -s {Global.Details[Global.DetailsLevel]['NucleiConfigCritical']} " \
            f"-rl {Global.Threads[Global.LoadLevel]['NucleiRate']} -c {Global.Threads[Global.LoadLevel]['NucleiParallels']}\n" \
@@ -143,6 +156,24 @@ def get_report_start():
             content: " ▼";
         }
         table.dep-cves td.url {
+            word-break: break-all;
+        }
+        table.dep-skipped {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 8px 0 16px 0;
+        }
+        table.dep-skipped th, table.dep-skipped td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+            font-size: 14px;
+        }
+        table.dep-skipped th {
+            background-color: #f4f4f4;
+        }
+        table.dep-skipped td.url {
             word-break: break-all;
         }
     </style>
@@ -392,6 +423,18 @@ def get_report_content():
             text += "</p>\n"
         else:
             text += "No dependency files were found.<br>\n"
+
+        text += "<br><h2>Skipped dependency candidates</h2><br>\n"
+        if Global.DepSkippedFiles:
+            text += "<i>These URLs looked like dependency manifests but were not downloaded or analyzed. " \
+                    "The per-URL audit trail is in DependencyFiles.log in the run directory.</i><br><br>\n"
+            text += "<table class=\"dep-skipped\">\n<tr><th>Reason</th><th>URL</th></tr>\n"
+            for entry in Global.DepSkippedFiles:
+                text += (f'<tr><td>{escape(skip_reason_label(entry["reason"]))}</td>'
+                         f'<td class="url">{escape(entry["url"])}</td></tr>\n')
+            text += "</table>\n"
+        else:
+            text += "No candidate dependency URLs were skipped.<br>\n"
         text += "</div>"
         return text
 
@@ -645,6 +688,16 @@ def get_md_report_content():  # Markdown counterpart of get_report_content(). Ra
             md += "\n"
         else:
             md += "No dependency files were found.\n\n"
+        md += "### Skipped dependency candidates\n\n"
+        if Global.DepSkippedFiles:
+            md += "_These URLs looked like dependency manifests but were not downloaded or analyzed. " \
+                  "The per-URL audit trail is in DependencyFiles.log in the run directory._\n\n"
+            md += "| Reason | URL |\n| --- | --- |\n"
+            for entry in Global.DepSkippedFiles:
+                md += f"| {skip_reason_label(entry['reason'])} | {entry['url']} |\n"
+            md += "\n"
+        else:
+            md += "No candidate dependency URLs were skipped.\n\n"
         return md
 
     def fuzzing_results():

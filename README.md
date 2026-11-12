@@ -213,3 +213,12 @@ Two checks are performed (one SecurityTrails query per host), and results are ad
 - If you think that the report does not contain the results of some utilities, review the outputs of the utilities in the Logs folder. In this folder, you can also view the real-time output of the utilities. These subdirectories are never deleted automatically, so remove old ones manually if they take up too much space.
 - You can use multiple -d arguments to scan multiple domains (-d site1.com -d site2.com -d site3.com).
 - `-bb` flag with enabled Burp Suite is very useful for quick investigating host header manipulation findings.
+
+### DNS wildcard handling
+
+Before subdomain enumeration, every root domain is probed with a random non-existent subdomain. If it resolves, the domain has a DNS wildcard and subdomain enumeration would produce thousands of false hosts, so enumeration is skipped for that domain and only the root domain itself is scanned. The affected domains and the reason are listed in the **General information** section of the report. Each probe has its own timeout (and one retry): a domain whose probe does not get a DNS answer in time is treated as a normal domain and enumerated anyway, and the timeout is recorded in the report notes.
+
+### Exposed dependency files
+
+Exposed dependency manifests and lockfiles (`package.json`, `requirements.txt`, `composer.lock`, ...) are downloaded to `Logs/<run directory>/dep_files/<index>/<original filename>` and checked with **confused** (unregistered packages) and **osv-scanner** (known CVEs). Responses larger than 1MB and HTML error pages are never saved; each URL is processed only once. Every saved or rejected candidate URL, including the rejection reason (HTML page, oversized body, duplicate URL, failed download, empty response), is written to `DependencyFiles.log` in the run directory, and the rejected manifest candidates are listed in the **Dependency check → Skipped dependency candidates** section of the report. If `confused` or `osv-scanner` is not installed, this is announced in the console and in the report (the rest of the scan continues; only the affected sub-checks are skipped) instead of failing silently. Use `-dcf` to disable the whole dependency check.
+
