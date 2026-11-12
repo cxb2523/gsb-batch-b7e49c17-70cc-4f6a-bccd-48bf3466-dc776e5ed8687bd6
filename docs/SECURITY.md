@@ -1,0 +1,176 @@
+# Security
+
+Who may do what in this system, how that is enforced, and how to check it is still true.
+The design rules live in [`ARCHITECTURE.md`](./ARCHITECTURE.md#security-model); this page is the
+policy matrix and the checklist.
+
+## Trust boundaries
+
+| Actor | Credential | What it can reach |
+|---|---|---|
+| Any visitor | `VITE_SUPABASE_ANON_KEY` — **public**, compiled into the browser bundle | Only what RLS grants the `anon` role |
+| Admin | Clerk session; `publicMetadata.role === 'admin'`, checked server-side on every request by `api/_lib/verifyAdminToken.js` | The admin API endpoints |
+| Server code | `SUPABASE_SERVICE_KEY` (service role, bypasses RLS) | Everything, only ever from `api/` and the scheduled jobs |
+| Resend (inbound email webhook) | Svix signature over the raw body, checked with `RESEND_WEBHOOK_SECRET` | `POST /api/ceb-bills/inbound` only. It can hand in a bill, never read one: the response is an outcome word, and a bill is kept only when it comes from `BILL_SENDER_DOMAINS` and names `SOLAR_CEB_ACCOUNT` (LR-005) |
+
+The consequence that shapes everything else: **anything the anon key can read is public.** The
+key is not a secret, so a table or bucket is either public by design or closed to `anon`.
+
+## Policy matrix (as applied, 2026-10-29)
+
+`R` = SELECT, `W` = INSERT / UPDATE / DELETE, `–` = no access. The service role bypasses RLS and
+is not listed. **Nothing is readable with the anon key.** Every real read goes through
+`/api/data/*` (Clerk `viewer` or `admin`, service role server-side) or the admin endpoints.
+
+| Object | `anon` | Why |
+|---|---|---|
+| `ceb_data` | – | Billing figures, account number, file path: read through `/api/data/*` and `/api/ceb-bills/records` |
+| `system_settings` | – | Tariff and targets: `/api/data/settings`; writes `/api/settings` |
+| `inverter_data_live`, `_daily_summary`, `_monthly_summary`, `_live_archive` | – | Generation data: `/api/data/*` |
+| `system_metrics` | – | Unused by v3 |
+| `ceb_bill_ingestions` | – | Holds bill file paths, hashes and admin e-mail addresses |
+| `ceb_bill_extractions` | – | Holds account numbers and meter readings parsed from bills |
+| v3 telemetry tables (`inverter_telemetry`, `collector_heartbeats`, `inverter_alarms`, `inverter_day_uptime`, `inverter_status_segments`, `collector_runs`) | – | Private from creation (2026-10-03) |
+| `admin_users`, `api_logs`, `report_logs` | – | Internal |
+| Storage bucket `ceb_bills` | – | Every bill PDF carries the account holder's name, address, phone number and account number |
+
+Closed in steps: bills 2026-10-04, `ceb_data` narrowed to four columns 2026-10-29 (interim), then
+every remaining anon SELECT policy and privilege revoked 2026-10-29 once v1 — the last browser
+reader — was out of production. Default privileges no longer give `anon` SELECT on new tables.
+Supabase's advisor lists each of these tables as `rls_enabled_no_policy` (INFO): that is the
+intended state for a private table.
+
+No table grants `anon` any write. Every write goes through an admin API endpoint.
+
+How the admin screens work without `anon` access to the closed rows:
+
+- The review queue is `GET /api/ceb-bills/ingestions?view=queue`.
+- Bill previews are `POST /api/ceb-bills/signed-url`.
+
+Column-level privileges are what enforce "four columns only": RLS decides which *rows* `anon`
+sees, the `GRANT` decides which *columns*. A browser query for anything else — including
+`select *` — is refused by Postgres. The admin CEB table reads all columns through
+`GET /api/ceb-bills/records`.
+
+**Verify the live database matches** (expect only `SELECT` rows, and none at all for the closed
+objects):
+
+```sql
+select schemaname, tablename, policyname, cmd, roles
+from pg_policies
+where roles && array['anon', 'public']::name[]
+order by schemaname, tablename, policyname;
+```
+
+`public` in `roles` means every role, `anon` included. And the column check for `ceb_data`
+(expect `true` for exactly `id`, `bill_date`, `earnings`, `units_exported`):
+
+```sql
+select column_name,
+       has_column_privilege('anon', 'public.ceb_data', column_name, 'select') as anon_can_read
+from information_schema.columns
+where table_schema = 'public' and table_name = 'ceb_data'
+order by ordinal_position;
+```
+
+Bringing the database into line with this matrix is
+`scripts/sql/2026-09-24_revoke_anon_bill_access.sql` (bills) and
+`scripts/sql/2026-09-24_ceb_data_public_columns.sql` (`ceb_data` columns), on top of
+`scripts/sql/2026-09-12_revoke_anon_writes.sql` (writes). Migrations are applied by hand; see
+[`MIGRATIONS.md`](./MIGRATIONS.md).
+
+## v3 target state (staged; in force only at cutover)
+
+The matrix above describes what the **running v1 dashboard** needs. The v3 refactor
+([ADR-003](./adr/003-private-reads-through-the-api.md), decision D-2) changes the model from "the
+dashboard is public" to "real data is private": viewers and admins read through `GET /api/data/*`,
+and everyone else sees a demo built from generated data.
+
+| Object | Today | At v3 cutover |
+|---|---|---|
+| `inverter_telemetry`, `collector_heartbeats`, `inverter_alarms`, `inverter_day_uptime`, `inverter_status_segments`, `collector_runs` | **Already private**: RLS on, no policies, no `anon`/`authenticated` privileges (applied 2026-10-03) | unchanged |
+| write-class privileges on every public table | **Already revoked** from `anon`/`authenticated` (applied 2026-10-03), RLS is now the second wall | unchanged |
+| `ceb_data`, `system_settings`, `inverter_data_*` | `anon` SELECT revoked **2026-10-29**; read only through the API | done |
+| Access levels | `admin` only on the server | `admin`, `viewer` (read-only dashboards), none = demo; enforced in `api/_lib/verifyAdminToken.js` (`verifyAccess`) |
+
+v1's direct browser reads were removed on 2026-10-29 and nothing in the browser talks to Supabase
+any more (`tests/v3Cutover.test.js` enforces it). The same day, once that was in production,
+`2026-10-04_v3_revoke_anon_read_at_v1_removal.sql` closed the dashboard tables to `anon`
+(V3-D1, issue #155: done).
+
+The new-endpoint checklist below was applied to `/api/data/[resource]`: authenticate (viewer), method
+gate, `blockOnConfigProblem`, allowlist validation, no dependency error text returned, tests, API.md.
+
+---
+
+## Widening the public surface
+
+If the redesign needs another column on the public dashboard, add it to the `GRANT` in a **new**
+migration and list it in the matrix above. Do not grant the whole table again: the account number
+is real customer data.
+
+## Content-Security-Policy
+
+Set in `vercel.json`, in two mutually exclusive rules: one for the production host
+(`has: host = solaredge.anujajay.com`) and one for every other host (`missing` — preview
+deployments). They are identical except that previews also allow `vercel.live`, the Vercel
+toolbar, which production has no use for. So a preview exercises the production policy.
+
+Since 2026-10-29:
+
+- **No `'unsafe-eval'`.** Nothing in the bundle needs it; `'wasm-unsafe-eval'` covers only
+  WebAssembly (pdf.js's image decoders, should a viewer ever load it).
+- `object-src 'none'` and `form-action 'self'` added; `base-uri` and `frame-ancestors` kept.
+- `https://challenges.cloudflare.com` in `script-src` and `frame-src`: Clerk's bot protection
+  (Cloudflare Turnstile) on sign-up, per Clerk's CSP guidance.
+- `'unsafe-inline'` remains in `script-src` (Clerk's guidance without nonces) and `style-src`.
+
+**Check on a preview after changing it:** sign-in and sign-out (embedded Clerk), the Overview,
+Pro and Settings pages, the admin Bills tab with a PDF preview, and Vercel Analytics — with
+the console open for `Refused to …` errors.
+
+## Audit trail
+
+Every privileged write emits one `[AUDIT]` JSON line through `api/_lib/log.js` —
+`user.update` (role/access `from` → `to`), `user.delete`, `bill.upload`, `bill.approve`,
+`bill.delete`, `record.update` / `record.upsert` (the **names** of the changed fields only),
+`setting.update` (old and new value) and `setting.seed` — with the actor's Clerk id and Vercel's
+request id. Every API request also emits one `[REQUEST]` line (route, status, latency, actor,
+access level). Per `WORKING_RULES.md` §3 neither carries e-mail addresses, account numbers or
+bill contents. Filter the Vercel function log on `[AUDIT]` or `[REQUEST]`; it is the only store,
+kept for a limited time.
+
+## Checklist for a new endpoint
+
+1. Authenticate first: `verifyAdminToken(req, res)`; stop if it returns `null`. The one exception is
+   `POST /api/ceb-bills/inbound`, which a machine calls: it verifies the webhook signature instead, before it
+   reads anything else (`api/_lib/webhookSignature.js`).
+2. `handlePreflightAndMethod(req, res, [...])` with only the methods the handler implements.
+3. `blockOnConfigProblem(res)` before touching the database.
+4. Validate every input with an allowlist, not a blocklist: known values, types, lengths. Copy
+   fields into a new object rather than passing the request body through.
+5. Never echo `error.message` from a dependency to the caller; log it, return a fixed message.
+6. Order writes so a failure part-way leaves the data consistent, check every result, and make
+   the operation safe to repeat.
+7. Export the handler through `withRequestLog('<route>', handler)`, and emit an `audit()` line
+   for anything it changes (`api/_lib/log.js`) — ids and field names, never personal data.
+8. Add a unit test for the validation and update [`API.md`](./API.md).
+9. Count the function: Vercel Hobby allows 12 and the project uses 6. Anything under
+   `api/_lib/` or `api/_config/` does not count.
+
+## Secrets
+
+- Never prefix a secret with `VITE_` — Vite compiles those into the browser bundle.
+- Vercel and GitHub Actions hold **separate** copies of the secrets. Rotating one does not
+  rotate the other.
+- `SUPABASE_SERVICE_KEY` must be the service-role key. `describeConfigProblem()` in
+  `api/_lib/supabaseServer.js` rejects an anon key, and the scheduled jobs and write scripts
+  call it at start-up and exit non-zero on a mismatch.
+- Real CEB bills are never committed (`resources/` is gitignored). Test fixtures use a
+  placeholder account number and redacted personal details.
+- The email intake's settings live only in Vercel: `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET`, the private
+  `BILL_INTAKE_ADDRESS`, `SOLAR_CEB_ACCOUNT` and `BILL_ALERT_TO`. None is in the repository, an issue or a log line.
+
+## Reporting a vulnerability
+
+Open a private security advisory on the GitHub repository rather than a public issue.

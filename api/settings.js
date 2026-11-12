@@ -1,0 +1,125 @@
+// api/settings.js
+//
+// Admin-authenticated writes to `system_settings`.
+//
+// Why this exists: the Settings page previously wrote to Supabase directly from the browser
+// using the public anon key, which forced `system_settings` to carry an
+// `UPDATE ... USING (true)` policy for `anon`. Since the anon key ships in the JS bundle,
+// that meant any visitor could change `rate_per_kwh` — and every earnings figure on the
+// dashboard is derived from it.
+//
+// Writes now go through here with the service-role key, so the anon write policies can be
+// dropped. Reads stay client-side and public; it is a public dashboard.
+//
+// PUT   { id, setting_value }            -> update one setting by row id (v1)
+// PUT   { setting_name, setting_value }  -> update one setting by name (v3: the read API has no row ids)
+// POST  { settings: [...] }    -> insert defaults (used by the "add default settings" action)
+
+import { verifyAdminToken } from './_lib/verifyAdminToken.js';
+import { handlePreflightAndMethod } from './_lib/httpSecurity.js';
+import { supabase, blockOnConfigProblem } from './_lib/supabaseServer.js';
+import { isAllowedSetting, isValidSettingValue, resolveTarget, settingProblem } from './_lib/settingsRules.js';
+import { audit, actorOf, withRequestLog } from './_lib/log.js';
+
+async function handler(req, res) {
+  if (handlePreflightAndMethod(req, res, ['PUT', 'POST'])) return;
+
+  const adminUser = await verifyAdminToken(req, res);
+  if (!adminUser) return; // verifyAdminToken has already sent 401/403
+
+  if (blockOnConfigProblem(res)) return;
+
+  try {
+    if (req.method === 'PUT') {
+      const { setting_value } = req.body || {};
+      const target = resolveTarget(req.body);
+      if (target.error) return res.status(target.status).json({ error: target.error });
+
+      // Resolve the row first so we validate against its name rather than trusting the client
+      // to tell us which setting this is.
+      const lookup = supabase.from('system_settings').select('id, setting_name, setting_value');
+      const { data: existing, error: lookupError } = await (target.by === 'name'
+        ? lookup.eq('setting_name', target.name)
+        : lookup.eq('id', target.id)
+      ).maybeSingle();
+
+      if (lookupError) throw new Error(`Setting lookup failed: ${lookupError.message}`);
+      if (!existing) return res.status(404).json({ error: 'Setting not found' });
+      const id = existing.id;
+
+      if (!isAllowedSetting(existing.setting_name)) {
+        return res.status(403).json({
+          error: `Setting '${existing.setting_name}' is not writable through this endpoint`
+        });
+      }
+
+      if (!isValidSettingValue(existing.setting_name, setting_value)) {
+        return res.status(400).json({
+          error: `Invalid value for ${existing.setting_name}`,
+          details: settingProblem(existing.setting_name)
+        });
+      }
+
+      const { data, error } = await supabase
+        .from('system_settings')
+        .update({ setting_value: String(setting_value), updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw new Error(`Setting update failed: ${error.message}`);
+
+      // Settings values (tariff, capacity, targets, theme) are configuration, not personal data.
+      audit(req, {
+        action: 'setting.update',
+        actor: actorOf(adminUser),
+        target: { settingId: id, settingName: existing.setting_name },
+        changes: { setting_value: { from: existing.setting_value, to: String(setting_value) } }
+      });
+
+      return res.status(200).json({ setting: data });
+    }
+
+    // POST — seed default settings
+    const { settings } = req.body || {};
+    if (!Array.isArray(settings) || settings.length === 0) {
+      return res.status(400).json({ error: 'Expected a non-empty `settings` array' });
+    }
+
+    const invalid = settings.find(
+      (s) => !isAllowedSetting(s?.setting_name) || !isValidSettingValue(s?.setting_name, s?.setting_value)
+    );
+    if (invalid) {
+      return res.status(400).json({
+        error: `Rejected setting '${invalid?.setting_name ?? 'unknown'}'`,
+        details: 'Name must be allowlisted and the value must be valid'
+      });
+    }
+
+    const { data, error } = await supabase
+      .from('system_settings')
+      .insert(
+        settings.map((s) => ({
+          setting_name: s.setting_name,
+          setting_value: String(s.setting_value),
+          description: s.description || null
+        }))
+      )
+      .select();
+
+    if (error) throw new Error(`Setting insert failed: ${error.message}`);
+
+    audit(req, {
+      action: 'setting.seed',
+      actor: actorOf(adminUser),
+      target: { settingNames: settings.map((s) => s.setting_name) }
+    });
+
+    return res.status(201).json({ settings: data });
+  } catch (error) {
+    console.error('Settings write failed', { message: error?.message });
+    return res.status(500).json({ error: 'Failed to write settings' });
+  }
+}
+
+export default withRequestLog('settings', handler);

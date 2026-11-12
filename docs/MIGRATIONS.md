@@ -1,0 +1,117 @@
+# Database migrations
+
+How schema and policy changes reach the Supabase project, and what has been applied.
+
+## Why this page exists
+
+Before September 2026 the repository held migrations for two tables and none for the ones the
+dashboard reads. Columns were added to the live project by hand (`confidence_score`,
+`meter_reading_previous`), and a trigger exists there that appears in no file. Nothing recorded
+which migrations had actually been run. This page is the fix: one workflow, and a ledger.
+
+## Workflow
+
+Migrations are plain SQL under `scripts/sql/`, named `YYYY-MM-DD_what_it_does.sql`. They are
+applied **by hand** in the Supabase SQL editor. There is no migration runner, and adding one
+for a single-site project would be more machinery than the problem needs.
+
+1. **Write it idempotent** — `if not exists`, `drop policy if exists`, `create or replace`. Then
+   running it twice, or against a project that already has the change, is harmless.
+2. **Say why, and say when to run it, in the file header.** If it must follow a code deploy (or
+   precede one) that is the first thing the header states. Two of the migrations below are
+   order-sensitive.
+3. **Include a rollback**, even if it is a comment.
+4. **Take a DB Snapshot first** — the manual *DB Snapshot* workflow (see the
+   [runbook](./RUNBOOK.md)). It is read-only and takes two minutes.
+5. **Run it, then run its verification query.** Most headers include one.
+6. **Record it in the ledger below** in the same pull request that adds the file, or in a
+   follow-up the moment it is applied. An unrecorded migration is the failure this page exists
+   to prevent.
+7. Never edit a migration that has been applied. Add a new one.
+
+Everything in `scripts/sql/` should be safe to replay in filename order onto an empty project,
+except the two `2026-04-23_…anon…` files, which are superseded (see the ledger).
+
+## Ledger
+
+| File | Purpose | Applied to production |
+|---|---|---|
+| `2026-04-23_create_ceb_bill_ingestions.sql` | Upload records table, unique SHA-256 index | Yes — the table is in use |
+| `2026-04-23_create_ceb_bill_extractions.sql` | Parsed-bill table | Yes — the table is in use |
+| `2026-04-23_ceb_bill_ingestions_anon_mode_policies.sql` | **Superseded.** Granted `anon` access to the bill tables and bucket, for an earlier design in which the browser did everything | Probably yes — the browser relied on it until 2026-09-24. Removed by `2026-09-24_revoke_anon_bill_access.sql`. **Do not run it again** |
+| `2026-09-12_baseline_schema.sql` | Point-in-time reconstruction of the live schema. `if not exists` throughout, so a no-op on the live project | Recorded as generated *from* the live database |
+| `2026-09-12_revoke_anon_writes.sql` | Removed `anon` INSERT/UPDATE on `ceb_data` and `system_settings`, and the `admin_users` policies | **Not recorded — verify** with the policy query in [`SECURITY.md`](./SECURITY.md) |
+| `2026-09-24_revoke_anon_bill_access.sql` | Closes the bill tables and the `ceb_bills` bucket to `anon`. **Deploy the code that adds `/signed-url` and `?view=queue` first** | **Yes — 2026-10-04** (DB Snapshot run 37193304087 taken first) |
+| `2026-09-24_approve_ceb_extraction.sql` | `approve_ceb_extraction()` — bill approval in one transaction. Safe before or after the code; the API falls back and warns until it is installed | **Yes — 2026-10-29** (DB Snapshot run 40849945507 first; `supabase db query --linked`; verified: installed, EXECUTE for `service_role` only, not `anon`) |
+| `2026-09-24_ceb_data_public_columns.sql` | Limits `anon` to four `ceb_data` columns (`id`, `bill_date`, `earnings`, `units_exported`). **Deploy the code that adds `GET /api/ceb-bills/records` first** — the old admin table did `select *` from the browser | **Yes — 2026-10-29** (same snapshot; verified: `anon` may read exactly `id`, `bill_date`, `earnings`, `units_exported`; anon REST for `account_number` or `*` → 42501; v1's four-column read still 200) |
+| `2026-09-24_drop_cascade_trigger.sql` | Drops the live-only `trg_cascade_delete_ceb_data` trigger, now redundant. Read its header first: snapshot, deploy the merged `/delete` endpoint, read the definition | **Yes — 2026-10-29** (owner-confirmed; snapshot run 40849945507; verified: no trigger left on `ceb_data`; definitions recorded below for rollback) |
+| `2026-10-03_v3_telemetry_schema.sql` | v3: six new **private** tables (`inverter_telemetry`, `collector_heartbeats`, `inverter_alarms`, `inverter_day_uptime`, `inverter_status_segments`, `collector_runs`) and the `capacity_kwp` setting. Purely additive; RLS on, no policies, no privileges for `anon`/`authenticated`. Rollback: `…_rollback.sql` | **Yes — 2026-10-03** (via Supabase `apply_migration` after DB Snapshot run 37134535084; verified: RLS on, 0 policies, `anon` denied) |
+| `2026-10-03_v3_harden_public_role_privileges.sql` | Revokes INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER from `anon` and `authenticated` on all public tables (they held them; only RLS blocked writes) and sets default privileges so new tables do not get them back. **SELECT is untouched** | **Yes — 2026-10-03** (verified: v1 reads still 200; an `anon` PATCH now fails at privilege level, 42501) |
+| `2026-09-24_ceb_schema_drift.sql` | Adds `confidence_score` and `meter_reading_previous`, which the code writes but no migration declared. No-op on the live project | **No-op — verified 2026-10-29**: both columns already exist on the live project; nothing to run |
+| `2026-10-04_v3_revoke_anon_read_at_v1_removal.sql` (+ `_rollback.sql`) | v3 cutover, final step (#155): drops every `anon` SELECT policy on the dashboard tables and revokes `SELECT` from `anon`. **Breaks the deprecated `/v1` dashboard, which reads these tables in the browser: apply together with removing `/v1`.** | **Yes — 2026-10-29** (after #206 reached production, revision 662f713; DB Snapshot run 40853414353 first; verified: no anon/public policy left, anon SELECT on no table or `ceb_data` column, anon REST on every table → 42501, `/` 200 on demo, `/ready` ok; advisors: +7 INFO `rls_enabled_no_policy`, the newly private tables) |
+| `2026-10-29_daily_peak_from_telemetry.sql` | **Data** correction: raises `inverter_data_daily_summary.peak_power_kw` to the day's highest `inverter_telemetry` reading where stored is NULL or lower (sparse live samples made it far too low); capped at the inverter's 44 kW maximum; raise-only, totals untouched. Apply after the code that stops the daily-summary job lowering peaks is deployed | **Not applied** |
+| `2026-11-10_bill_intake_source.sql` | LR-005 step 6 (#242): unique index on `ceb_bill_ingestions (source_type, source_message_id)` where the message id is set, so a repeated email cannot create a second ingestion. The two columns already exist (2026-04-23); added `if not exists` for completeness. Safe any time | **Yes — 2026-11-10** (DB Snapshot run 42826783795 first; both columns already existed, so only the index was created; verified in `pg_indexes`) |
+
+When you apply one, change its last cell to `Yes — YYYY-MM-DD`.
+
+**No Supabase branch on the Free plan.** `WORKING_RULES.md` §4 asks for a branch first; the org is on
+Free, where branching is unavailable (checked 2026-10-29). Until that changes, migrations follow the
+2026-10-04 precedent: DB Snapshot workflow run first, then the migration, then the security and
+performance advisors compared with their pre-change output, then the file's own verification.
+Applied this way on 2026-10-29: no advisor finding added or removed.
+
+## Data repairs (not migrations)
+
+Recorded here because they changed production rows and the ledger is where a future reader looks.
+
+| Date | What | Evidence |
+|---|---|---|
+| 2026-10-03 | `inverter_data_daily_summary`: 4 false-zero rows (ids 893, 894, 895, 904) set to the SolisCloud values 52.1 / 48.7 / 154 / 172.4 kWh (peak set to NULL); 8 unknowable rows (ids 896–903, 2025-04-14…21) deleted. All 12 came from one bulk insert at 2025-11-23 04:42:01 | Issue #163; DB Snapshot run 37134535084 holds the before-state |
+| 2026-10-03 | **Telemetry backfill** (`functions/collect_telemetry --from 2024-08-02 --write --fill-peaks`, ran 32 min): 111,453 rows in `inverter_telemetry` over 784 days, 165,844 `collector_heartbeats`, 435 `inverter_alarms`, 792 `inverter_day_uptime` rows (784 `ok`, 8 `no_data` = 2025-04-14…21, where Solis holds nothing: a 10-day internet outage). **`peak_power_kw` filled on the 153 daily-summary rows that had NULL**; the 0 remaining are NULL-free. Never overwrote a value | DB Snapshot run 37137895932 + full local export (2,100 rows, 18 tables) taken immediately before |
+| 2026-10-03 | `inverter_day_uptime` / `inverter_status_segments`: 28 days re-derived after LR-002 was corrected so that alarm `1D4C2` ("Loss of internet connection") is logger evidence, not an inverter trip (`scripts/rederive_uptime.mjs`; mean uptime 96.68% → 98.00%). Genuine outages (28–30 Nov 2025, 23–24 Jul 2025) unchanged | Derived tables only; regenerable from the stored facts |
+| 2026-10-03 | `inverter_data_daily_summary`: 8 values raised to the inverter's own end-of-day counter (2024-11-02 148.7→152.2, 11-17 141.4→143.4, 11-18 123.7→125.5, 11-23 88.7→100.5, 11-27 46.0→60.4, 2025-06-26 138.0→146.1, 07-10 127.2→149.4, 2026-02-01 89.3→128.4; net +103 kWh) and the missing 2026-06-03 row inserted (142.0 kWh, peak 37.07 kW). The old values came from sparse live polling that missed evenings. Afterwards 0 days disagree with the counter and every telemetry day has a summary row (785 rows) | Issue #167; DB Snapshot run 37141010417 holds the before-image |
+| 2026-10-03 | `collector_runs` id 1: `points_written` corrected 109,456 → 111,453 (a lost-update bug in the report counter under concurrency; the data was right) | Fixed + regression test |
+| 2026-10-03 | Clerk: 1 user with the legacy `dashboardAccess: real` flag and no role given `role: viewer` (`scripts/migrate-roles.mjs`); legacy flag left in place | Issue #158 |
+| 2026-10-04 | **`2026-09-24_revoke_anon_bill_access.sql` applied.** Dropped 5 policies the public anon key held: SELECT on `ceb_bill_ingestions` and `ceb_bill_extractions` (account numbers, bill PDF paths) and SELECT, **INSERT and DELETE** on the `ceb_bills` storage bucket (anyone with the key could read, upload and delete bill PDFs). RLS re-enabled on both tables. Verified afterwards as anon: both tables return `[]`, the bucket lists empty, an upload is refused (400); the admin screens still work through `/api/ceb-bills/*` | DB Snapshot run 37193304087 immediately before; `pg_policies` query returns zero rows |
+
+## Suggested order for the three pending migrations
+
+1. `2026-09-24_ceb_schema_drift.sql` — harmless; do it first.
+2. `2026-09-24_approve_ceb_extraction.sql` — harmless; the API picks it up on the next approval.
+3. Deploy the application code containing `/api/ceb-bills/signed-url` and
+   `/api/ceb-bills/ingestions?view=queue`, then confirm in the admin screen that the review queue
+   loads and a bill preview opens.
+4. `2026-09-24_revoke_anon_bill_access.sql` — then the verification query in `SECURITY.md`, and
+   reload the review queue and a preview once more.
+5. `2026-09-24_ceb_data_public_columns.sql` — needs the same deployed code as step 4. Afterwards
+   reload the admin CEB table and the public dashboard, and run the column check in `SECURITY.md`.
+6. `2026-09-24_drop_cascade_trigger.sql` — once the merged `/delete` endpoint is live. Read its
+   header first; it asks you to record the trigger's definition before dropping it.
+
+## Removed by `2026-09-24_drop_cascade_trigger.sql` (recorded for rollback)
+
+Captured on 2026-10-29 before the drop. The function was kept (nothing calls it); to restore the old
+behaviour, run the trigger statement alone.
+
+```sql
+CREATE TRIGGER trg_cascade_delete_ceb_data AFTER DELETE ON public.ceb_data
+  FOR EACH ROW EXECUTE FUNCTION cascade_delete_ceb_data();
+
+-- the function, still present:
+CREATE OR REPLACE FUNCTION public.cascade_delete_ceb_data()
+ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO ''
+AS $function$
+BEGIN
+    IF OLD.ingestion_id IS NOT NULL THEN
+        DELETE FROM public.ceb_bill_extractions WHERE ingestion_id = OLD.ingestion_id;
+        DELETE FROM public.ceb_bill_ingestions WHERE id = OLD.ingestion_id;
+    END IF;
+    RETURN OLD;
+END;
+$function$;
+```
+
+## Things deliberately not migrated yet
+
+- A foreign key from `ceb_data.ingestion_id` to `ceb_bill_ingestions(id)`, and a fix for the
+  unique index treating NULL account numbers as distinct. Both are described in the same file.

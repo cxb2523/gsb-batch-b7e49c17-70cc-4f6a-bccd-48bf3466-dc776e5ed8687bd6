@@ -1,0 +1,120 @@
+name: Fetch Live Inverter Data (Every 5 Minutes)
+
+# ============================================
+# WORKFLOW PURPOSE
+# ============================================
+# This workflow fetches real-time data from SolisCloud API and stores it in the 
+# inverter_data_live table in Supabase. This keeps the database up-to-date with
+# current power generation, inverter status, and temperature readings.
+#
+# Schedule: Every 5 minutes (288 runs per day)
+# Runtime: ~5-10 seconds per execution
+# Table: public.inverter_data_live
+# ============================================
+
+on:
+  # Active window in Sri Lanka local time (UTC+5:30): 05:00–19:55
+  # Quiet window (no runs) in Sri Lanka: 20:00–04:59
+  # Converted to UTC quiet window: 14:30–23:29
+  # We approximate by splitting cron expressions:
+  #   1) Every 5 min from 00:00–13:59 UTC
+  #   2) Every 5 min from 14:00–14:25 UTC (stop before 14:30 quiet start)
+  #   3) Every 5 min from 23:30–23:55 UTC (covers 05:00–05:25 local next day start)
+  schedule:
+    - cron: '*/5 0-13 * * *'
+    - cron: '0-25/5 14 * * *'
+    - cron: '30-55/5 23 * * *'
+  
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        default: 'false'
+
+# Only allow one instance of this workflow to run at a time
+concurrency:
+  group: fetch-live-inverter-data
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-live-data:
+    name: Fetch & Store Live Inverter Data
+    runs-on: ubuntu-latest
+    timeout-minutes: 5  # Fail if takes longer than 5 minutes
+    
+    steps:
+      # ============================================
+      # STEP 1: CHECKOUT CODE
+      # ============================================
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1  # Shallow clone for speed
+
+      # ============================================
+      # STEP 2: SETUP PNPM
+      # ============================================
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+
+      # ============================================
+      # STEP 3: SETUP NODE.JS
+      # ============================================
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      # ============================================
+      # STEP 4: INSTALL DEPENDENCIES
+      # ============================================
+      - name: 📚 Install Dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      # ============================================
+      # STEP 5: RUN LIVE DATA FETCHER
+      # ============================================
+      - name: 🚀 Execute Live Data Fetcher
+        run: node functions/fetch_live_data/index.js
+        env:
+          # Supabase Configuration
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          
+          # SolisCloud API Configuration
+          SOLIS_API_URL: ${{ secrets.SOLIS_API_URL }}
+          SOLIS_API_ID: ${{ secrets.SOLIS_API_ID }}
+          SOLIS_API_SECRET: ${{ secrets.SOLIS_API_SECRET }}
+          
+          # Environment
+          NODE_ENV: production
+          DEBUG: ${{ github.event.inputs.debug || 'false' }}
+
+      # ============================================
+      # STEP 6: NOTIFY ON FAILURE
+      # ============================================
+      # Deliberately log-only. This job runs 288 times a day, so raising an issue or a
+      # notification per failure would bury the signal in noise — a single transient
+      # SolisCloud timeout is not worth waking anyone for.
+      #
+      # Sustained failure is caught instead by `data-freshness-check.yml`, which runs daily,
+      # looks at whether rows actually landed in Supabase, and opens a `data-outage` issue.
+      # That is the alert to trust. This step is here for post-hoc log reading only.
+      - name: 📧 Log Failure
+        if: failure()
+        run: |
+          echo "❌ Live data fetch failed at $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo "Check the logs above for error details"
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo ""
+          echo "Not alerting on a single failure by design — see the comment in this file."
+          echo "If this persists, data-freshness-check.yml will open a 'data-outage' issue."

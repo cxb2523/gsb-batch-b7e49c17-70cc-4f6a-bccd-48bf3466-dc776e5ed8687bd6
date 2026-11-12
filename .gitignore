@@ -1,0 +1,89 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Env files
+.env*
+# ...except the template, which carries no values. Renamed from vercel.env.example:
+# the old name dodged the .env* rule by accident rather than by intent, and every
+# other project of mine calls this .env.example.
+!.env.example
+.vercel
+# AI IDE & Agent Specific Folders
+.adal/
+.augment/
+.bob/
+.claude/
+# Vendor agent-skill packs, installed by the `skills` CLI from skills-lock.json (which stays
+# tracked so they can be reinstalled). Tooling, not application code.
+.agents/
+skills/
+.codebuddy/
+.commandcode/
+.continue/
+.cortex/
+.crush/
+.factory/
+.goose/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.vibe/
+.windsurf/
+.zencoder/
+
+# This project uses pnpm (pnpm-lock.yaml) — ignore npm's lockfile
+package-lock.json
+.superpowers/
+
+# Real CEB bills — they carry the account holder's name, address and phone number.
+# Never commit these. Redacted fixtures for tests live in tests/fixtures/ instead.
+#
+# Note the shape: `resources/*` excludes the CONTENTS, which allows the negation below.
+# `resources/` would exclude the directory itself, and git cannot re-include a file whose
+# parent directory is excluded.
+resorces/
+resources/*
+!resources/README.md
+*.bill.pdf
+
+# Playwright output
+/test-results/
+/playwright-report/
+/blob-report/
+
+# Supabase CLI link state (project ref, CLI version cache)
+supabase/.temp/

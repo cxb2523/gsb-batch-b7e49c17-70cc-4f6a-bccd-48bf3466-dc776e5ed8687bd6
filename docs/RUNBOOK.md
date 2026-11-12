@@ -1,0 +1,506 @@
+# Runbook
+
+Operating procedures and incident response.
+
+For *how the system works*, read [`ARCHITECTURE.md`](./ARCHITECTURE.md). This document assumes
+you already know that and something is wrong.
+
+---
+
+## Quick reference
+
+```bash
+# Health
+curl -s https://solaredge.anujajay.com/healthz | jq   # is it up?
+curl -s https://solaredge.anujajay.com/ready   | jq   # can it serve?
+
+# Local
+pnpm dev                                # dev server
+pnpm test                               # vitest
+pnpm lint                               # 0 errors expected
+pnpm build                              # production build
+pnpm audit --prod --audit-level high    # the CI security gate
+
+# Workflows
+gh workflow list
+gh run list --limit 10
+gh workflow run "DB Snapshot"
+```
+
+**Before anything that writes: take a DB Snapshot.** It is a manual, read-only workflow that
+exports every table plus the schema as a downloadable artifact. It costs two minutes.
+
+---
+
+## The workflows
+
+| Workflow | Trigger | What it does | If it fails |
+|---|---|---|---|
+| Fetch Live Inverter Data | every 5 min | SolisCloud → `inverter_data_live` | [No live data](#no-live-inverter-data) |
+| Generate Daily Inverter Summary | `30 1 * * *` | aggregates → `inverter_data_daily_summary` | [Summary failing](#daily-summary-failing) |
+| Data Freshness Check | daily | opens a `data-outage` issue if rows stop arriving, and a `missing-bill` issue if the monthly bill is 7 days overdue | It *is* the alarm — read the issue |
+| Keepalive | `17 3 */10 * *` + push to `main` | heartbeat commit, re-enables schedules | [Workflows disabled](#workflows-silently-disabled) |
+| Collect Inverter Telemetry | `45 18 * * *` (00:15 Colombo) | last 7 completed days of Solis `inverterDay` + `collector/day` + `alarmList` → telemetry, alarms, uptime tables | [Telemetry collector](#telemetry-collector-failing) |
+| Backfill Inverter Telemetry | manual (**dry run default**) | same collector over any range, `--concurrency 4` | [Backfilling telemetry](#backfilling-telemetry) |
+| Backfill Daily Summaries | manual | rebuilds gaps from the Solis month API | [Backfill](#backfilling-a-gap) |
+| DB Snapshot | manual | read-only export of tables + schema | — |
+| ci | push / PR | lint · test · build · prod audit | All four are mandatory |
+
+---
+
+## Incidents
+
+### No live inverter data
+
+**Symptom:** dashboard shows stale figures; `inverter_data_live` stops growing.
+
+This is the failure that ran undetected for five months. Work the causes in this order — they
+are ordered by how often each has actually been the answer.
+
+```mermaid
+flowchart TD
+    S["inverter_data_live not growing"] --> W{"Workflow enabled?"}
+    W -->|no| W1["gh workflow enable 'Fetch Live Inverter Data'<br/>← GitHub auto-disabled it"]
+    W -->|yes| R{"Runs succeeding?"}
+    R -->|no| L["gh run view --log-failed"]
+    R -->|yes, but 0 rows| K{"/ready → service_key_role"}
+    K -->|anon| K1["Wrong key in the repo secret.<br/>Set the service_role key."]
+    K -->|service_role| SOL["SolisCloud side —<br/>credentials or API change"]
+    L --> K
+```
+
+1. **Is the workflow enabled?**
+   ```bash
+   gh workflow list --all      # look for 'disabled_inactivity'
+   gh workflow enable "Fetch Live Inverter Data (Every 5 Minutes)"
+   ```
+   GitHub disables scheduled workflows in a repo with no commits for 60 days, and announces it
+   nowhere. An 88-day commit gap is what did it. `keepalive.yml` now prevents this, but check
+   it first anyway — it is free and it was the answer once.
+
+2. **Are runs failing?**
+   ```bash
+   gh run list --workflow="Fetch Live Inverter Data (Every 5 Minutes)" --limit 5
+   gh run view <run-id> --log-failed
+   ```
+
+3. **Are runs "succeeding" but inserting nothing?** Check for
+   `new row violates row-level security policy`. That means `SUPABASE_SERVICE_KEY` holds an
+   **anon** key. Confirm with `curl -s .../ready | jq .checks.service_key_role`, then:
+   ```bash
+   gh secret set SUPABASE_SERVICE_KEY     # paste the service_role key
+   ```
+   > Vercel and GitHub Actions hold this secret **separately**. Fixing one does not fix the
+   > other. Both have been wrong, at different times.
+
+4. **SolisCloud itself.** Credentials rotated, or the API changed. `POST /api/solis/explore`
+   is the diagnostic proxy.
+
+### PV input or AC phase readings look abnormal
+
+Start with the dated [Solis investigation](../diagnostics/solis/FINDINGS-2026-10-06.md)
+and reproduce the relevant day using the [read-only probe](../diagnostics/solis/README.md).
+The Pro electrical card displays **reported PV input currents**, not a verified
+string-fault diagnosis. For this S5-GC40K, the eight reported voltage fields
+behaved as four identical input pairs over a seven-day producing sample. An
+input with little or no current may be unused.
+
+1. Record the local date and raw `dataTimestamp`, inverter state, AC power,
+   `iPv1–8`, `uPv1–8`, `uAc1–3`, `iAc1–3`, frequency, temperature, and alarms.
+   Compare several producing periods, not a dawn or dusk sample alone.
+2. Obtain the installer string schedule or have a qualified installer identify
+   occupied DC terminals, MPPT pairing, module counts, orientation and shading.
+   Do not declare a faulty string or estimate loss until comparable connected
+   inputs are known.
+3. If the AC phases differ or `1010`/`1011`/F017 alarms recur, arrange a
+   qualified onsite check of phase voltages, configured grid standard and AC
+   wiring/grounding. Keep cloud readings and physical measurements separate.
+
+### Historical daily energy is missing from SolisCloud
+
+The April 14–21, 2025 example is documented in the
+[investigation](../diagnostics/solis/FINDINGS-2026-10-06.md): both inverter
+and plant monthly endpoints omit those dates, while the inverter lifetime
+counter increased. `inverterAll` and `stationAll` annual rollups also omit
+most of that counter increase. The backfill-daily-summaries workflow reads
+Solis's monthly endpoint, so rerunning it cannot recover dates that endpoint
+does not return.
+
+1. Check the authenticated dashboard `totals` and `range` resources for the
+   affected dates. Verify that absent rows are shown as missing or unknown,
+   and that billing comparisons mark incomplete periods.
+2. Compare the first and last available `eTotal` readings and nearby
+   `eToday` values. State a combined counter-derived estimate with its
+   rounding and timestamp limits; do not assign it to individual missing days.
+3. Use an independent utility meter, installer export or Solis support
+   recovery if exact daily figures are needed. Review any proposed database
+   correction as a separate, snapshotted operation; preserve provenance.
+
+### Daily summary failing
+
+The job **fails deliberately** when it processes zero rows — "SolisCloud returned nothing" and
+"there was nothing to do" used to be indistinguishable, and the silent version of this bug is
+what hid the five-month outage.
+
+So first: **is this a real failure or a legitimate empty window?** The job checks
+`inverter_data_live`'s row count before failing. If that table is genuinely near-empty (e.g.
+immediately after a recovery), the failure is correct but uninteresting — fix the *live*
+collector and this resolves itself. If the live table is healthy and the summary still fails,
+the aggregation is at fault.
+
+### Telemetry collector failing
+
+`Collect Inverter Telemetry` (ADR-001) ends **non-zero** unless the run fully succeeded: any failed
+day, a failed alarm fetch, or a run that found no points at all. A failure opens or updates the
+shared `data-outage` issue, and records a row in `collector_runs` with `status = failed | empty`
+and the error. First look there:
+
+```sql
+select started_at, status, date_from, date_to, points_written, alarms_written, days_derived, error
+from collector_runs order by started_at desc limit 10;
+```
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| `alarm fetch failed` | SolisCloud `alarmList` error or rate limit | Re-run the workflow; days derived without alarms carry `alarms_known = false` and are corrected by the next successful run (re-processing is idempotent) |
+| `N day(s) failed` | One `inverterDay` call errored (Solis 5xx/504) | Re-run; only the failed days need data |
+| `empty` | No points for any requested day. Inverter off for the whole range, or the credentials work but return nothing | Check the Solis web portal; a real total outage is recorded per day as `down`/`no_data` |
+| Everything fails with `Missing Solis API credentials` / RLS error | Rotated `SOLIS_*` secrets, or `SUPABASE_SERVICE_KEY` is not the `service_role` key | [Rotating credentials](#rotating-credentials). Remember GitHub and Vercel hold **separate** copies |
+
+Re-running is always safe: every write is an upsert on a natural key and segments are replaced per day.
+
+### Backfilling telemetry
+
+Dry run first, always. It prints per-day results and any disagreement with the daily summary, and
+writes nothing:
+
+```bash
+node functions/collect_telemetry/index.js --from 2024-08-02 --concurrency 4          # dry run
+```
+
+Then take a **DB Snapshot**, then write:
+
+```bash
+gh workflow run "DB Snapshot"
+node functions/collect_telemetry/index.js --from 2024-08-02 --concurrency 4 --write
+node functions/collect_telemetry/index.js --from 2024-08-02 --concurrency 4 --write --fill-peaks
+```
+
+(or run the **Backfill Inverter Telemetry** workflow with `dry_run` unticked; note a workflow is
+only dispatchable once it exists on the default branch). `--fill-peaks` raises `peak_power_kw` on
+daily-summary rows where it is NULL or lower than the telemetry peak; it never lowers a value and
+never creates a row. The nightly collector runs with it since 2026-10-29.
+Expect about 25–30 minutes for the full history: each Solis call has ~5 s latency and the
+collector keeps request *starts* 700 ms apart (the API limit is 2 per second).
+
+The dry run's "reconcile" list names days where the daily summary disagrees with the inverter's
+own counter by more than 1.5 kWh. That is how the false zeros in #163 were found; investigate each.
+
+### Re-deriving uptime without calling SolisCloud
+
+`inverter_day_uptime` and `inverter_status_segments` are **derived** from the stored facts
+(telemetry, heartbeats, alarms). If the derivation rules change (as they did on 2026-10-03 when
+`1D4C2` "Loss of internet connection" stopped counting as downtime), or a derived row is damaged:
+
+```bash
+node scripts/rederive_uptime.mjs            # dry run: lists the days that would change, writes nothing
+node scripts/rederive_uptime.mjs --write    # applies; a second run is a no-op
+```
+
+No Solis calls, about a minute. Take a snapshot first if you want a before-image of the derived tables.
+
+### Freshness check for the telemetry tables
+
+`scripts/check_data_freshness.js` also checks `collector_runs` and `inverter_day_uptime`
+(`shared/domain/freshness.js`). It ships **unarmed**: while those tables are empty the checks are
+skipped. After the first successful run set `TELEMETRY_REQUIRED=true` in
+`.github/workflows/data-freshness-check.yml` (issue #165), otherwise a collector that silently
+stops stays invisible.
+
+### The monthly bill is overdue (`missing-bill` issue)
+
+`scripts/check_missing_bill.js` (job `bill` in `data-freshness-check.yml`, LR-005 rule 9) expects the next bill one
+usual interval after the latest (the median of the last 6 gaps) and alerts 7 days after that, unless an upload is
+waiting in the review queue. The issue closes itself once the bill is in. To clear it:
+
+1. Find the bill in Gmail (from `eBill@edl.lk`). If it never came, EDL is late: wait, or ask EDL.
+2. Upload it on the Admin page and approve it. Once email intake is live, also check that Gmail forwarding is not
+   paused (Settings → Forwarding) and that the filter still matches (sender and subject).
+
+### Workflows silently disabled
+
+```bash
+gh workflow list --all
+gh workflow enable "<name>"
+```
+
+`keepalive.yml` re-enables the schedules on every push to `main` and makes a heartbeat commit
+every ten days. If it has itself been disabled, enable it first — it repairs the others.
+
+### Bill upload returns 500
+
+A layered failure with a documented history. Check in order:
+
+1. **Config.** `curl -s .../ready | jq .checks` — a `config` failure names the variable.
+2. **Is the body our JSON or Vercel's HTML?** An HTML error page means the function crashed at
+   **module load**, before any `try/catch` could run — almost always a missing dependency.
+3. **Is every `api/` import in `dependencies`?** Vercel ships only `dependencies` into the
+   function bundle, never `devDependencies`. `tests/runtimeDependencies.test.js` enforces this;
+   run `pnpm test` before assuming otherwise.
+4. **Is it a validation error, not a crash?** The endpoints now return `400` with an `error` (and
+   a `details` list for records) for bad input, and a fixed `500` message otherwise — the real
+   cause is in the function log (`vercel logs`), not the response.
+5. **Read the real response body.** Bare 500s are undiagnosable from the outside. Getting the
+   actual body — from the browser, with a live session token — is what finally resolved this
+   last time, after several blind deploy cycles. Do it early, not late.
+
+```bash
+vercel logs <deployment-url>          # runtime logs
+```
+
+### Bill extraction produces wrong or empty figures
+
+Almost certainly a **bill format change**. The parser is nine regexes pinned to the bill's text
+layout, not OCR and not AI.
+
+1. Extract the text and look at it:
+   ```bash
+   node -e "import('./api/_lib/pdfText.js').then(async m => \
+     console.log(await m.extractPdfText(require('fs').readFileSync('bill.pdf'))))"
+   ```
+2. Compare against `tests/fixtures/ceb-bill-2026.txt`.
+3. The fragile one is `meterRow` — `\t(\d+)\t(\d{4}-\d{2}-\d{2})`. It depends on table cells
+   arriving **tab-delimited**, which is invisible on the page. If the tabs are gone, that
+   anchor is what broke.
+4. Fix the regex in `api/_lib/cebBillParser.js`, **add the new format as a fixture**, and
+   assert on specific values — not just the match count. A figure the regexes cannot find is
+   `null` in the result, never `0`; if the queue shows a blank where a number should be, that
+   anchor is what missed.
+
+If `POST /extract` reports "No tariff available", the bill did not print a rate and
+`system_settings.rate_per_kwh` is unset or unreadable. Set the setting; there is deliberately no
+default.
+
+> **Redact before committing a fixture.** Real bills carry the account holder's name, address
+> and phone number.
+
+---
+
+## Routine procedures
+
+### Rolling back v3.0.0
+
+The release only changed which app is served; the database, collector and API are unchanged and compatible with both.
+
+1. Fastest (about a minute, no code): Vercel dashboard → the project → Deployments → pick the last deployment from before the
+   release merge → "Promote to Production".
+2. Or revert: `git revert -m 1 <merge commit of the release PR>` on a branch, open a PR, merge it (the main rules apply).
+3. Last resort, previous dashboard as it was: tag `v2.1.0`. Note it expects `/` and `/dashboard`, not `/v1`.
+
+v1 itself was removed on 2026-10-29, so "serve /v1 again" is no longer an option; reverting that PR brings it back.
+**v1 cannot read anything once the anon revoke is applied** — revert the removal only together with the revoke's `_rollback.sql`.
+
+Nothing in the data needs undoing. If you applied `2026-10-04_v3_revoke_anon_read_at_v1_removal.sql`, run its `_rollback.sql` first.
+
+### Backfilling a gap
+
+```bash
+gh workflow run "DB Snapshot"                 # 1. ALWAYS first
+gh workflow run "Backfill Daily Summaries"    # 2. dry run BY DEFAULT
+gh run view <run-id> --log                    # 3. read what it WOULD write
+# 4. only then re-run with the write flag
+```
+
+The dry run is the default for a reason. Read its output against the Solis month API before
+letting it write; this job rebuilds historical data, and a wrong backfill is far harder to
+notice than a missing one.
+
+**`null` is not `0`.** A gap the backfill cannot fill must stay `null`. Writing `0` fabricates
+a measured zero that is indistinguishable from real data once it lands, and drags every average
+down while looking plausible. This has corrupted the dataset twice.
+
+### Adding a bill
+
+1. Admin dashboard → CEB Billing → upload the PDF.
+2. Extraction runs automatically; the result lands in the verification queue.
+3. **Review it even when `auto_approved`.** Validation proves the bill is *internally
+   consistent* — it cannot prove the right bill was parsed, or that the regexes latched onto
+   the right table rows.
+4. Approve. The record is written to `ceb_data` and the extraction and ingestion are marked
+   `approved`, in one transaction. Approval logs a warning if `approve_ceb_extraction()` has not
+   been installed yet — see [`MIGRATIONS.md`](./MIGRATIONS.md).
+
+Duplicates are caught by SHA-256 before storage, so re-uploading is safe.
+
+### Email bill intake
+
+The owner's Gmail forwards the solar bill to a private Resend address. Resend calls `POST /api/ceb-bills/inbound`,
+which reads the PDF and records it or puts it in the review queue (spec: LR-005). It emails `BILL_ALERT_TO` only
+when a person is needed.
+
+**Domain** (done 2026-11-12, #242): `mail.solaredge.anujajay.com` is verified in Resend for sending and receiving.
+Its five records are in the Cloudflare zone `anujajay.com`, DNS only, each with the comment
+`Resend mail.solaredge (LR-005, #242)`. Check them with `resend domains get <id>`: every record should read
+`verified`.
+
+**Setting it up**, in this order:
+
+1. In Vercel (Production), set these variables. None of them may be prefixed `VITE_`.
+   - `RESEND_API_KEY`: a Resend key that can read received email and send.
+   - `BILL_INTAKE_ADDRESS`: `bills-<random>@mail.solaredge.anujajay.com`. Make the random part long, because
+     the address is the first gate.
+   - `BILL_SENDER_DOMAINS`: `edl.lk`.
+   - `SOLAR_CEB_ACCOUNT`: the solar bill's account number.
+   - `BILL_ALERT_TO`: the address that receives the alerts.
+   - `BILL_INTAKE_MODE`: `off` for now.
+   - Optional: `BILL_ALERT_FROM`, which defaults to `Solar Analytics <bills@mail.solaredge.anujajay.com>`, and
+     `BILL_RATIO_MIN` / `BILL_RATIO_MAX`. Without the ratio bounds the units check is unknown, so nothing is
+     recorded automatically.
+2. Create the webhook:
+   `resend webhooks create --endpoint https://solaredge.anujajay.com/api/ceb-bills/inbound --events email.received`.
+   Put its signing secret (`whsec_…`) in Vercel as `RESEND_WEBHOOK_SECRET`, then redeploy so the function sees
+   the new variables.
+3. In Gmail, go to Settings → Forwarding and add the intake address. Gmail sends a confirmation code to it. In
+   mode `off` the webhook does nothing, so read the code in the Resend dashboard (Emails → Receiving).
+4. In Gmail, create a filter: `from:eBill@edl.lk subject:<the solar account> has:attachment`, set to forward to
+   the intake address.
+5. Set `BILL_INTAKE_MODE=shadow` and redeploy. Every bill then still goes to the review queue, and each one
+   produces one "would have recorded / would need review" email.
+6. After two bills where the "would have" email matched what you did, set the ratio bounds and switch to `auto`.
+
+**Modes:** `off` answers 200 and does nothing; this is the kill switch. `shadow` is the default when the variable is
+unset or mistyped. `auto` records a bill only when every check passes.
+
+**Reading the log:** filter the Vercel function log on `[INTAKE]`. There is one line per email, showing the
+outcome (`recorded`, `review`, `shadow`, `needs_attention`, `ignored`, `discarded`, `duplicate`), the reason and
+the failed check ids. A `401` in Resend's webhook log means `RESEND_WEBHOOK_SECRET` does not match the webhook's
+signing secret. A `500` means a variable is missing (the log line names it) or something failed. Resend retries
+both for about a day.
+
+**Replaying a held email:** once the cause is fixed, use Resend's dashboard to resend the failed webhook delivery.
+- A webhook that was answered `500` before the PDF was stored runs again from the start.
+- A webhook whose email was already taken in answers `duplicate`.
+- An email that was answered `200` (ignored, for example) is not retried. Forward it again from Gmail, or upload
+  the PDF on the Admin page.
+
+### Applying a database migration
+
+Take a DB Snapshot, read the migration's header for **ordering** (some must follow a code deploy),
+run it in the Supabase SQL editor, run its verification query, then record it in the ledger in
+[`MIGRATIONS.md`](./MIGRATIONS.md). The full procedure is there. To check the policies the app
+relies on are what [`SECURITY.md`](./SECURITY.md) says they should be, run the query at the top of
+that page.
+
+### Verifying the data trail
+
+The integrity checks worth running after any bulk change:
+
+```sql
+-- contiguous periods: each start should be the previous end + 1 day
+select bill_date, billing_period_start, billing_period_end,
+       billing_period_start - lag(billing_period_end) over (order by bill_date) as gap_days
+from ceb_data order by bill_date;
+
+-- meter delta must equal units_exported
+select bill_date, units_exported,
+       meter_reading - lag(meter_reading) over (order by bill_date) as meter_delta
+from ceb_data order by bill_date;
+
+-- no duplicates
+select bill_date, count(*) from ceb_data group by bill_date having count(*) > 1;
+```
+
+`gap_days` should be `1` on every row. `meter_delta` should equal `units_exported`. The sum of
+`units_exported` should equal the total meter delta across the whole span — an independent
+checksum, since it comes from different fields.
+
+### Pruning duplicate bill files
+
+The `ceb_bills` bucket can accumulate objects that no ingestion row references — test uploads,
+or files whose ingestion was deleted. They are invisible in the UI and carry the account
+holder's name, address and phone number, so they are worth removing.
+
+**Never delete by "looks unreferenced" alone.** Prove by content hash that nothing unique is
+lost:
+
+```sql
+-- how many objects are unreferenced?
+select count(*) from storage.objects o
+where o.bucket_id = 'ceb_bills'
+  and not exists (select 1 from ceb_bill_ingestions i where i.file_path = o.name);
+```
+
+Then, for each unreferenced object, download it, SHA-256 it, and compare against
+`ceb_bill_ingestions.file_sha256`. Delete **only** the ones that match a bill you keep; leave
+anything whose content is not otherwise held, and investigate it instead.
+
+Afterwards the object count should equal the ingestion count exactly.
+
+`scripts/prune-orphaned-bill-files.mjs` does exactly this. **Dry run by default** — read its
+output before passing `--apply`:
+
+```bash
+node scripts/prune-orphaned-bill-files.mjs            # report only
+node scripts/prune-orphaned-bill-files.mjs --apply    # delete proven duplicates
+```
+
+It refuses to run with an anon key. That is not paranoia: storage `list()` under an anon key
+returns zero objects rather than an error, so the script would report "nothing to prune" and
+exit successfully having done nothing — a silent no-op indistinguishable from success.
+
+> Run on 2026-09-13: 19 objects removed, 17.5 MB. The bucket now reconciles at 25 objects
+> against 25 ingestion rows, with nothing unreferenced.
+
+### Reading live-data failures
+
+The live tile reads `GET /api/data/live`. Filter the Vercel function log on `[REQUEST]` and
+`data/live`: a `502` with `latencyMs` near 30000 is the SolisCloud request ceiling
+(`SOLIS_TIMEOUT_MS`); a quick `502` is SolisCloud answering with an error. Either way only the
+live tiles are affected; every other figure reads the database. (The `solis-live-data` Edge
+Function that served v1 was deleted on 2026-10-29.)
+
+### Rotating credentials
+
+Each secret lives in **two or three** places, configured separately. Missing one is the
+standard way to half-break the system.
+
+| Secret | Vercel | GitHub Actions | Local `.env` |
+|---|---|---|---|
+| `SUPABASE_SERVICE_KEY` | ✅ | ✅ | ✅ |
+| `CLERK_SECRET_KEY` | ✅ | — | ✅ |
+| `SOLIS_API_ID` / `SOLIS_API_SECRET` | ✅ | ✅ | ✅ |
+| `RESEND_API_KEY` / `RESEND_WEBHOOK_SECRET` | ✅ | — | — |
+| `VITE_*` | ✅ | — | ✅ |
+
+```bash
+vercel env rm  <NAME> production && vercel env add <NAME> production
+gh secret set  <NAME>
+curl -s https://solaredge.anujajay.com/ready | jq   # verify after
+```
+
+After rotating `SUPABASE_SERVICE_KEY`, confirm `service_key_role` still reads `service_role`.
+Pasting the anon key here is the single most repeated mistake in this project's history.
+
+### Deploying
+
+`main` auto-deploys to production. CI must pass all four gates — lint, test, build, prod audit.
+None is `--if-present`; two of them silently passed for months before that was fixed. The full
+checklist is [`guides/DEPLOYMENT_CHECKLIST.md`](./guides/DEPLOYMENT_CHECKLIST.md).
+
+```bash
+curl -s https://solaredge.anujajay.com/ready | jq   # smoke test after deploy
+```
+
+---
+
+## Escalation
+
+There is no on-call rotation — this is a single-owner project. In practice:
+
+1. `/ready` tells you whether config and the database are fine.
+2. `gh run list` tells you whether collection is fine.
+3. The `data-outage` issue, if one is open, tells you when it stopped.
+
+If all three look healthy and the numbers still look wrong, the problem is **semantic** rather
+than operational — start at [LR-001](./logic-registry/LR-001-ceb-vs-inverter-monthly-alignment.md),
+because a month-offset error produces wrong figures that look entirely plausible.

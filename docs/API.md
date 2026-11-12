@@ -1,0 +1,419 @@
+# API Reference
+
+Every HTTP endpoint this project exposes. Base URL: `https://solaredge.anujajay.com`.
+
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for how these fit together and
+[`RUNBOOK.md`](./RUNBOOK.md) for operating them.
+
+---
+
+## Conventions that apply to every endpoint
+
+**Authentication.** Everything except the health probes requires a Clerk session token:
+
+```
+Authorization: Bearer <clerk-session-token>
+```
+
+`api/_lib/verifyAdminToken.js` verifies it with `@clerk/backend`'s `verifyToken` (one code path,
+`authenticate()`), then fetches the user and maps `publicMetadata` to an **access level**
+(`shared/domain/access.js`): `admin` (`role: 'admin'`), `viewer` (`role: 'viewer'`, or the legacy
+`dashboardAccess: 'real'` until the role migration is complete) or `none`.
+
+- Write and admin endpoints require **`admin`** (`verifyAdminToken` / `verifyAccess(…, 'admin')`).
+- The dashboard data endpoints (`/api/data/*`) require **`viewer` or above**; admin satisfies viewer.
+
+It **fails closed** — any error verifying, any missing claim, any unknown level is a rejection,
+never a pass-through.
+
+**CORS.** An allowlist, not `*`. Defaults to the production domain, localhost dev ports, and
+this project's Vercel preview deployments. `ALLOWED_ORIGINS` **replaces** those defaults rather
+than adding to them.
+
+**Method gating.** `handlePreflightAndMethod(req, res, [...])` answers `OPTIONS` and rejects
+anything outside the declared list with `405`.
+
+**Errors.** JSON, shaped `{ error: string, details?: string | string[] }`.
+
+| Status | Meaning |
+|---|---|
+| `400` | Malformed request — missing field, bad type, unparseable body |
+| `401` | No token, expired token, or verification failed |
+| `403` | Valid token, but the access level is too low (not an admin / not a viewer) |
+| `404` | Referenced row does not exist |
+| `405` | Method not in the endpoint's allowlist |
+| `409` | Conflict — currently only duplicate-bill detection |
+| `429` | Rate limited (`/api/solis/explore`; `/api/data/*`, 120 requests/min/user, `Retry-After` set) |
+| `502` | `/api/data/live` only: SolisCloud unavailable and nothing cached (never a fabricated reading) |
+| `500` | Unhandled — or a configuration problem, which says so explicitly |
+| `503` | `/ready` only: a dependency is down |
+
+> A `500` whose body names `SUPABASE_SERVICE_KEY` is a **configuration** error, not a bug.
+> See [§ Config errors](#config-errors).
+
+---
+
+## Health probes
+
+Unauthenticated by design. Both are served by a single function (`api/health.js`) via rewrites
+in `vercel.json`, because Vercel Hobby caps the project at 12 functions.
+
+### `GET /healthz` — liveness
+
+"Is the process running?" **No dependency checks, ever** — it must not fail because Supabase is
+down, or a health-check consumer would recycle healthy instances during someone else's outage.
+
+`200` always, if the runtime booted:
+
+```json
+{
+  "status": "ok",
+  "probe": "live",
+  "revision": "ca87c7e",
+  "uptime_s": 12,
+  "timestamp": "2026-09-13T11:42:00.000Z"
+}
+```
+
+### `GET /ready` — readiness
+
+"Can this instance actually serve?" Checks configuration and reaches Postgres with a **3-second
+timeout**. `200` when ready, `503` when not.
+
+```json
+{
+  "status": "ok",
+  "probe": "ready",
+  "revision": "ca87c7e",
+  "checks": {
+    "config": { "ok": true },
+    "supabase": { "ok": true, "latency_ms": 87 },
+    "service_key_role": "service_role"
+  },
+  "timestamp": "2026-09-13T11:42:00.000Z"
+}
+```
+
+`service_key_role` reports the **role** of the configured Supabase key, never the key. An
+`anon` value there is the misconfiguration that caused the five-month outage — reads keep
+working while every write fails RLS, so the app looks healthy from every other angle. This
+field exists to make that state observable without reading logs.
+
+`null` means an opaque `sb_secret_…` / `sb_publishable_…` key whose role can't be read locally.
+
+---
+
+## CEB bill pipeline
+
+The endpoints below are one workflow. Order matters.
+
+```mermaid
+flowchart LR
+    A["POST /upload"] --> B["POST /extract"]
+    B --> C["👤 review in UI"]
+    C --> D["PUT /records"]
+    A -.->|"list / queue"| E["GET /ingestions"]
+    A -.->|"preview PDF"| G["POST /signed-url"]
+    A -.->|"discard"| F["DELETE /delete"]
+```
+
+### `POST /api/ceb-bills/upload`
+
+Accepts a bill PDF as `multipart/form-data`, field name `file`. **PDF only** — the type is
+checked twice: the declared `Content-Type` must be `application/pdf` and the bytes must contain
+the `%PDF-` marker. The stored path always ends in `.pdf`.
+
+Computes SHA-256 over the bytes and checks it against `ceb_bill_ingestions` **before** storing,
+so re-uploading the same bill is a no-op rather than a duplicate.
+
+| Status | Body |
+|---|---|
+| `201` | `{ ingestionId, filePath, fileSha256, status: "received", receivedAt }` |
+| `400` | Missing `file` field, empty file, not a PDF, or larger than 4 MB |
+| `409` | `{ error, ingestionId, filePath, receivedAt, status, fileSha256 }` — this exact file is already ingested |
+
+The limit is 4 MB, enforced by the handler and checked in the browser before upload
+(`src/v3/admin/billForm.js`). It sits under Vercel's 4.5 MB request-body limit on purpose: above
+that, Vercel answers `413` with its own HTML page before the handler runs, so the client never
+sees a JSON error. (It was 10 MB until 2026-10-29, which made bills between 4.5 and 10 MB fail
+exactly that way.)
+
+> Real bills contain the account holder's name, address and phone number. They are gitignored
+> (`resources/*`), and any test fixture derived from one must be redacted.
+
+### `POST /api/ceb-bills/extract`
+
+```json
+{ "ingestionId": "uuid" }
+```
+
+Downloads the PDF from Storage, extracts text with `pdfjs-dist`, runs the nine regex anchors,
+validates, and writes a `ceb_bill_extractions` row. Re-running is idempotent: the new
+extraction is saved first and only then are the ones it replaces removed, so a failed re-parse
+leaves the previous result in place. Nothing is changed until the file has been downloaded,
+parsed and validated.
+
+Returns `200` with `{ success, extraction, validation }`:
+
+```json
+{
+  "validation": {
+    "status": "auto_approved",
+    "confidence_score": 100,
+    "validation_errors": [],
+    "notes": []
+  }
+}
+```
+
+`status` is `auto_approved` or `pending_review`, decided by **blocking errors only**. `notes`
+(e.g. "the bill states a different tariff than `system_settings`") ride along in
+`validation_errors` for the reviewer but do not downgrade the status — conflating the two
+silently sent good extractions to manual review.
+
+Validation cross-checks three things:
+
+| Check | Assertion |
+|---|---|
+| Tariff maths | `units_exported × rate == earnings` (±Rs 1) |
+| Meter delta | `meter_current − meter_previous == units_exported` |
+| Timeline | `billing_period_start < billing_period_end` |
+
+The rate comes from the bill itself when present (the 2026 format prints
+`Export Rate (Rs.) 37.00`), falling back to `system_settings.rate_per_kwh`. If neither is
+available the extraction is sent to review with a "No tariff available" error — there is no
+built-in default rate to validate against. Preferring the
+on-bill rate makes the check self-contained: a tariff change no longer makes every
+correctly-parsed bill fail validation in a way that looks exactly like a parser fault.
+
+**Null is not zero.** A figure the extractor could not find is `null` in the result and is
+reported as missing; a `0` means the bill printed zero and is valid. Earlier versions returned
+`0` for both, so a bill whose text the regexes failed to read looked like a bill that exported
+nothing.
+
+`400` if `ingestionId` is missing, the file isn't a PDF, or the ingestion is already
+`approved`; `404` if it does not exist. On an internal failure an ingestion that was never
+extracted is marked `failed_extraction` rather than left stuck at `received`; one that already
+has an extraction keeps its status.
+
+### `GET /api/ceb-bills/ingestions`
+
+Admin-only. Two views:
+
+- `?limit=N` (default 12, max 100) → `{ files: [...] }` — recent uploads with their extraction
+  joined, for the admin file list.
+- `?view=queue` → `{ extractions: [...], failedIngestions: [...] }` — the verification queue:
+  extractions that are `pending_review`, `auto_approved` or `approved`, each with its ingestion
+  joined, plus ingestions that ended `failed_api_limit` / `failed_extraction`.
+
+The review screen reads these through the API rather than querying the tables from the
+browser. The tables hold account numbers and the path of every private bill PDF, and the
+browser's anon key is public — see [`SECURITY.md`](./SECURITY.md).
+
+### `POST /api/ceb-bills/signed-url`
+
+```json
+{ "filePath": "ceb/2026/09/user_xxx/2026-09-03T…_bill.pdf" }
+```
+
+`200` → `{ signedUrl, expiresIn: 300 }`. A five-minute link to one bill PDF, signed
+server-side. `filePath` must belong to a known ingestion (`404` otherwise) — the endpoint will
+not sign an arbitrary path in the bucket.
+
+### `GET` | `POST` | `PATCH` | `PUT /api/ceb-bills/records`
+
+Reads and writes `ceb_data` — the canonical billing table.
+
+| Method | Purpose | Body |
+|---|---|---|
+| `GET` | Every row, all columns, newest bill first → `{ records: [...] }`. This is the admin table's data source: the public anon key may read only `id`, `bill_date`, `earnings` and `units_exported` | — |
+| `POST` | Upsert a manually entered record (on `account_number, billing_month`) | `{ record }` |
+| `PATCH` | Edit an existing one | `{ id, record }` |
+| `PUT` | Approve a parsed bill: upsert `ceb_data` and mark the extraction and ingestion `approved`, **in one transaction** | `{ extractionId, ingestionId, record }` |
+
+`400` returns `{ error: "Invalid record", details: [...] }` listing each field that failed
+validation. Required: `bill_date` (a real `YYYY-MM-DD` date), `meter_reading`, `units_exported`,
+`earnings` (non-negative numbers; **`0` is accepted, a missing value is not**). Optional columns
+are whitelisted, type-checked and length-capped; `ingestion_id` must be a UUID; a period that
+runs backwards is rejected.
+
+`PUT` calls the `approve_ceb_extraction()` database function
+(`scripts/sql/2026-09-24_approve_ceb_extraction.sql`), so the three writes cannot be left
+half-done. It also rejects an `extractionId` that does not belong to `ingestionId`. If the
+function has not been installed yet, the handler logs a warning and falls back to the old
+sequential writes.
+
+This endpoint exists because these writes used to happen from the browser. They cannot: the
+anon key has `SELECT` and nothing else.
+
+### `POST` | `DELETE /api/ceb-bills/delete`
+
+Fully destructive. Address the bill by **one** of:
+
+- `{ ingestionId }` — the upload, its extraction, any `ceb_data` row derived from it, and the
+  stored PDF.
+- `{ recordId }` — one `ceb_data` row, plus the ingestion, extraction and PDF behind it when
+  there is one.
+
+`400` if neither or both are given; `404` if unknown. `200` → `{ success: true }`, with
+`warnings: [...]` when the database was cleaned but the stored PDF could not be removed.
+
+Order is database rows first and the file last, and every step is checked and idempotent, so a
+failed request can be repeated. This endpoint replaces the former `delete-record`, which did
+the same job in the opposite order and relied on a database trigger that is not in any
+migration.
+
+### `POST /api/ceb-bills/inbound`
+
+The Resend `email.received` webhook of the email bill intake
+([LR-005](./logic-registry/LR-005-email-bill-intake.md)). **Not Clerk-authenticated**: Resend calls it, and its
+credential is the Svix signature (`svix-id`, `svix-timestamp`, `svix-signature`), verified over the raw body with
+`RESEND_WEBHOOK_SECRET` and refused when the timestamp is more than 5 minutes off. The body is Resend's
+metadata-only event; the handler fetches the email (`GET /emails/receiving/{id}`, for the From header and the DKIM
+result) and its one PDF (`GET /emails/receiving/{id}/attachments`) itself.
+
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | `{ outcome }` | A deliberate outcome: `recorded`, `review`, `shadow`, `needs_attention`, `ignored`, `discarded`, `duplicate` or `off` |
+| `400` | `{ error }` | The signed body is not JSON |
+| `401` | `{ error }` | The signature does not verify. Resend shows the failure and retries |
+| `500` | `{ error }` | A setting is missing, or an unexpected failure. Resend retries for about a day |
+
+The response never carries details. Each email writes one `[INTAKE]` log line with the Resend email id, the outcome,
+the failed check ids and at most the last 3 digits of an account number. Configuration (`BILL_INTAKE_MODE` and the
+rest) is in LR-005; setting it up is in [`RUNBOOK.md`](./RUNBOOK.md#email-bill-intake).
+
+---
+
+## Dashboard data (v3 read API)
+
+`GET /api/data/{resource}`, **one function** (`api/data/[resource].js`) serving every dashboard
+read, authorised at **viewer** level. The browser never queries the real tables directly (D-2);
+reads use the service-role key server-side. Responses are `Cache-Control: private, max-age=30`
+with `Vary: Authorization`, so a shared cache can never serve one user's data to another.
+
+Errors are `{ error, code }` where `code` is a stable machine-readable string
+(`invalid_range`, `range_too_large`, `missing_param`, `invalid_param`, `not_found`, `rate_limited`,
+`upstream_unavailable`, `internal`). A 500 never contains upstream or database error text.
+
+**Null is not zero.** An unknown value is `null` in JSON and an **empty cell** in CSV. A day with
+no data is *missing*, and every aggregate reports `presentDays`/`completeness` so a partial range
+is never read as a full one.
+
+| Resource | Query | Returns |
+|---|---|---|
+| `range` | `from`, `to` (≤ 3660 days), `rate=effective\|fixed` (default `effective`), `compare=prev,yoy` | Explore figures (LR-003): total, average/day, best/worst day, `lowestFull` (lowest day the inverter ran all day: at most 30 min down per the uptime log, with counts of days left out), peak, specific yield (kWh/kWp, **DC** size), capacity factor (**AC** rating), LKR with its `basis`, daily series with cumulative; optional baselines with average-per-day deltas; uptime aggregate for the same range |
+| `comparison` | `year` | 12 bill-aligned CEB-vs-inverter rows (LR-001) with `daysPresent / daysInPeriod / completeness`. The open period is the month of the latest bill, from the day after it to today; later months are `pending` |
+| `bills` | – | Every bill: period, CEB kWh, earnings, **effective LKR/kWh**, inverter kWh, completeness, variance (flagged `complete: false` when days are missing) |
+| `uptime` | `from`, `to` | Per-day uptime rows, weighted aggregate, and timeline `segments` (ranges ≤ 62 days; otherwise `null`) (LR-002) |
+| `alarms` | `from`, `to` (≤ 400 days), `limit` (1–500, default 200) | Alarm log, counts by code, `truncated` flag |
+| `telemetry` | `date` | One day of 5-minute points (power, string V/I, AC V/I, frequency, PF, temperature). Past days come from stored telemetry (`source: 'database'`). **Today** comes from SolisCloud's `inverterDay` (`source: 'soliscloud'`, `{ ts, pac_kw }` only, read at most every 5 minutes and shared with the live peak), falling back to whatever is stored if that fails. `live: true` marks today |
+| `electrical` | `from`, `to` (≤ 31 completed Colombo days) | Per-day and whole-range summaries of producing telemetry: PV input current/voltage, separate AC phase voltages and spread, temperature, frequency, power factor, and sample/day coverage. Missing days remain unknown. |
+| `live` | – | Right-now status from SolisCloud: `status` (`online`/`offline`/`alarm`), `abnormalOffline`, `currentPowerKw`, `todayKwh`, `totalKwh`, **`todayKey`** (the server's Asia/Colombo date; clients never use their own clock for date keys); `peakTodayKw` / `peakTodayAt` (the day's highest power and its Asia/Colombo time, from today's `inverterDay`, cached 5 min; `null` when unavailable, never 0); cached 60 s. `source` is `soliscloud` (just fetched), `memory` or `saved`, and `upstream` is `ok` or `unavailable`. When SolisCloud fails it serves the newest real reading with `stale: true, upstream: 'unavailable'`: the last good value in memory, or the newest reading the scheduled job saved in `inverter_data_live` **today** (never an earlier day's). With neither it returns 502 `upstream_unavailable`. `faultCode` is the SolisCloud state code during an inverter alarm |
+| `totals` | – | Overview headline figures without shipping every day: `generation` (`totalKwh` over days that have a reading, `dayCount`, `firstDay`, `lastDay`, `missingDays`; `null` when there is no data) and `earnings` (`totalLkr` summed over bills that carry an earnings figure, `billCount`, `billsWithoutEarnings`, first/last bill date), and `openPeriod`: the open bill period (LR-001), from the day after the latest bill to today, with `month`/`year` it will be reported as, `lastBillDate`, `inverter`, `daysPresent`/`daysInPeriod`; and `lastBillPeriod`: the latest complete bill period (`periodStart` = previous bill + 1 day, `periodEnd` = `billDate`; 30 days with one bill; `null` with none) |
+| `settings` | – | `ratePerKwh`, `capacityKwp`, `acRatedKw`, `dailyTargetKwh` (null when unset; never a guessed default) |
+| `export` | `kind=daily\|uptime\|alarms`, `from`, `to` | `text/csv` attachment; RFC 4180 quoting; spreadsheet-formula injection neutralised |
+
+`state = offline` is **normal every night**; only `abnormalOffline` indicates a real problem.
+
+Tariff basis: `effective` uses each bill period's own rate (earnings ÷ units exported); days not
+covered by any bill are **unrated** and excluded from LKR (counted in `unratedDays`). `fixed` uses
+the Settings tariff for every day. The response always states which was used.
+
+---
+
+## Settings
+
+### `PUT` | `POST /api/settings`
+
+_Update by name (v3): `PUT { setting_name, setting_value }` is accepted as well as `{ id, setting_value }`; the name must be allowlisted (`api/_lib/settingsRules.js`)._
+
+- `PUT` — one setting: `{ id, setting_value }`
+- `POST` — seed several: `{ settings: [{ setting_name, setting_value, description? }, ...] }`
+
+`200` → `{ setting }`; `201` → `{ settings }`. `400` on a missing id or a value that fails the
+per-setting type check; `403` if the setting is not editable; `404` if unknown.
+
+`rate_per_kwh` is the one that matters — it is the fallback tariff for validating bills that
+don't print their own rate.
+
+---
+
+## Users
+
+### `GET` | `PATCH` | `DELETE /api/admin/users/[userId]`
+
+Clerk user administration (admin only). `GET` without a `userId` lists every user (paged through
+Clerk 100 at a time, up to 1,000); with one, returns that user. Responses include `accessLevel`
+(`admin` | `viewer` | `none`), the level the server will actually enforce.
+
+`PATCH` accepts `{ role?, dashboardAccess? }` and validates both (`api/_lib/userMetadataRules.js`; the
+role list is shared with the enforcer in `shared/domain/access.js`):
+
+| Field | Allowed values |
+|---|---|
+| `role` | `user`, `viewer`, `admin` |
+| `dashboardAccess` | `demo`, `real` (legacy flag, retired after the role migration) |
+
+`400` for anything else (including case variants such as `"Admin"`), for an empty update, and for an
+admin trying to remove **their own** admin role — which is what guarantees the last admin cannot be
+demoted. Unknown keys in the body are ignored, never merged into the user's metadata. `DELETE`
+refuses to delete the caller.
+
+One-off migration of legacy users to `role: viewer`: `node scripts/migrate-roles.mjs` (dry run by
+default; `--write` applies; the legacy flag is left in place so it is reversible). Applied
+2026-10-03 (1 user).
+
+---
+
+## SolisCloud debug proxy
+
+### `POST /api/solis/explore`
+
+```json
+{ "endpointKey": "inverterDetail", "params": { } }
+```
+
+Signs and forwards a request to SolisCloud. `endpointKey` must name a pre-registered endpoint;
+arbitrary URLs are not accepted. Parameters are validated against that endpoint's schema
+(declared names only, string type, length cap, and format / range where declared — e.g. dates
+are `YYYY-MM-DD`, page size is 1–100) and anything else is dropped or rejected with `400`.
+
+Every call writes one `[AUDIT]` JSON line to the function log. The rate limit (`429`) is held in
+module memory, so it applies per warm serverless instance: it slows a runaway client but is not
+a global quota.
+
+This is a diagnostic tool, not part of the data path. The scheduled collectors in `functions/`
+call SolisCloud directly.
+
+---
+
+## Config errors
+
+A misconfigured deployment answers with an explanation rather than a bare `500`:
+
+```json
+{
+  "error": "Supabase server key is not a service_role key",
+  "details": "SUPABASE_SERVICE_KEY carries role \"anon\". Server endpoints write to tables whose RLS policies only permit the service role, so every write will be rejected. Set the service_role (secret) key from Supabase → Project Settings → API — on Vercel AND as the GitHub Actions secret; they are configured separately."
+}
+```
+
+Checked **before** any database work, so a bad deployment fails cleanly instead of halfway
+through — which is how an earlier version left orphaned files in Storage after the `ceb_data`
+insert was rejected.
+
+The key is accepted under either `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY`. Both
+mean the same thing; the dashboard labels it `service_role`, so that is the name people reach
+for first, and guessing wrong cost a production outage once already.
+
+---
+
+## Not an API
+
+`api/_lib/` and `api/_config/` are **not** routes. The leading underscore excludes them from
+Vercel's function count, which is why shared code lives there — the Hobby plan caps this
+project at 12 functions and it currently uses 6. The seven `/api/ceb-bills/*` URLs (six admin endpoints and the
+email webhook) are one function,
+`api/ceb-bills/[action].js`, which loads the matching handler from `api/_lib/cebBills/`; any other
+action answers `404 { "error": "Unknown bill endpoint" }`.

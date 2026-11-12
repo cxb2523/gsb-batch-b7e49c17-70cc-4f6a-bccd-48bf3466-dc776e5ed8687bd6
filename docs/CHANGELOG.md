@@ -1,0 +1,616 @@
+# Changelog
+
+All notable changes to the Solar Analytics Dashboard project.
+
+## [Unreleased]
+
+## [3.3.0] - 2026-11-12
+
+### Added
+- **Bills can arrive by email** (#242, LR-005). `POST /api/ceb-bills/inbound` takes Resend's `email.received` webhook
+  for the solar bill the owner's Gmail forwards. The webhook must carry a valid signature, the email must come from
+  `edl.lk`, and the bill must name the solar account; any other bill is discarded before anything is stored. The
+  intake reads the one PDF, runs the auto-record gate, and either records the bill or puts it in the review queue with
+  the reasons. It emails the owner only when a person is needed: a review, a tariff change, no PDF, an unreadable
+  PDF, or a failure. Mode `shadow` (the default) keeps every bill in the queue and says what auto mode would have
+  done; `off` turns the intake off. It is still the same single bill function (6 of 12). The receiving and sending
+  domain `mail.solaredge.anujajay.com` is verified in Resend. Setup is in `docs/RUNBOOK.md` ("Email bill intake").
+- **Every merge to main is released automatically**, so the version on screen always matches what is deployed. The
+  PR title picks the version (`feat:` minor, `fix:`/`refactor:`/dependency updates patch, `docs:`/`test:`/`ci:` none),
+  the changelog's [Unreleased] becomes the release notes, and a changelog line is written from the title for a released
+  PR that added none. A new PR check shows which release a PR will make and fails on a title it cannot read
+  (`docs/RELEASING.md`).
+
+## [3.2.0] - 2026-11-12
+
+### Changed
+- **The money gap is monthly and readable at a glance** (#226). Under the CEB vs Inverter chart, each bill month gets
+  one cell lined up with its column: `✓ even` when CEB paid for what the inverter made (within 1%), `▼ 4.0 K` (amber)
+  when it paid less, `▲ 1.2 K` (green) when it paid more, in LKR, and a dash when the month cannot be compared. One
+  sentence above sums up the months in view. The signed headline, the paid/worth chips, the all-time total and the
+  up/down bars are gone.
+- **CEB vs Inverter shows the difference in kWh, and which side was higher.** Under each month, a small triangle in
+  the inverter's orange or CEB's blue marks the higher side, followed by the difference in kWh (e.g. ▲ 133), instead of
+  a signed percentage. The tooltip, the table ("Higher, by kWh") and screen readers say it in words: "Inverter
+  generated 133 kWh more than CEB paid for". As before, it is shown only for periods with every day recorded.
+- **The six bill endpoints are one serverless function.** `api/ceb-bills/[action].js` routes `/api/ceb-bills/upload`,
+  `extract`, `ingestions`, `signed-url`, `records` and `delete` to their handlers, which moved unchanged to
+  `api/_lib/cebBills/`. The URLs and behaviour are the same. The project now uses 6 of Vercel Hobby's 12 functions
+  (was 11), which leaves room for the email bill intake (#242) and observability (#241). A new test fails CI if the
+  count ever goes over 12.
+- **Bill upload and reading are shared steps** (`api/_lib/billIntake.js`). The admin upload and extract endpoints use
+  them and behave exactly as before. The email intake (#242) will use the same steps in a different order: it reads the
+  PDF in memory first, so a home bill can be discarded before anything is stored.
+
+### Added
+- **The auto-record gate for emailed bills** (`api/_lib/billGate.js`, LR-005 rule 5). It holds seven checks: extraction,
+  account, new month, order, meter continuity, a 25–35 day period, and CEB units against the inverter. Each passes,
+  fails or is unknown, and unknown never passes. It is not wired to anything yet.
+- **A missing-bill alert.** The daily Data Freshness Check now has a second job that opens a `missing-bill` issue
+  (which emails you) when no bill has arrived 7 days after it was due. The due date is the latest bill plus the usual
+  gap between bills, and nothing fires while an uploaded bill waits for review. It is separate from the inverter
+  outage alert (LR-005 rule 9).
+- **A migration for emailed bills** (`scripts/sql/2026-11-10_bill_intake_source.sql`, applied 2026-11-10): a unique
+  index so the same email can never create two uploads.
+- **Dependency updates** (Dependabot #235, #236, #238): the weekly minor and patch group, `@eslint/js` and `globals`.
+
+## [3.1.1] - 2026-11-04
+
+### Fixed
+- **The kWh billboard follows the theme.** In light mode the board over the town was still a black panel. It is now a
+  white board, like the buildings around it, with deep orange dots; dark mode is unchanged.
+
+## [3.1.0] - 2026-11-04
+
+### Added
+- **The daily goal is a little power grid.** Instead of a filling circle, the Today tile draws your home, with solar
+  panels on the roof and an inverter on the wall, feeding a town. The power goes over two pylons and a substation,
+  then along the street, with a little depth: lit fronts, shaded sides, bright tops. The town has ten buildings, each
+  worth exactly 10% of today's target, lit floor by floor, so eight lit buildings read as 80% at a glance.
+  Pulses of light run from your roof to the building being powered now. At the target the street lamps come on; past
+  it, windows turn gold and stars appear. Today's kWh is on a dot-matrix LED billboard on top of the tallest tower, so
+  it is the first thing you see. The text beside the town leads with the percentage of the target, then the target and
+  what is left to go (the building count is left to the picture, and both are told to screen readers). Today's peak
+  is no longer repeated here; it is marked on the live power gauge. Stale
+  or asleep: the pulses stop (and stale greys out as before). Without a target, the kWh only. On phones the town
+  gets the full width, and live power under it shrinks to a slim strip instead of a second big gauge: the kW now, a
+  thin bar of the share of the maximum with today's peak marked on it, and the peak time.
+- **CI checks more than "it renders".** New Playwright tests on desktop and phone: the motion ends on the real
+  figures, charts draw when scrolled to, the date pickers jump by month and year, the Mark above line stays in its
+  chart, nothing scrolls sideways at 320 px, and light mode is light. Also an axe accessibility scan of each page in
+  both themes, and a gzipped bundle-size budget (`bundle-budget.json`). The e2e job is now required to merge.
+- **Date marks on the statistics chart**, so a dip or a peak can be placed in time. The last 30 days are marked every
+  5th day, the last 365 days on the 1st of each month (January shows the year), and lifetime at each new year (months
+  when there is less than a year of records). Each mark has a faint line up through the chart. Narrow phones label
+  every other month.
+- **Full sequence on a visit, a quick fade on a refresh.** The full sequence below plays on the first visit, or after
+  30 minutes or more away from the Overview. A refresh or a return within that time fades the page in together in
+  0.3 s, with the headline figures already in place. Only the live parts still animate: the Today circle and kWh, the
+  live power gauge, and the day's power curve. (The time away is kept in this browser; without it, the full sequence.)
+- **The Overview fills in instead of popping in, one part after another.** After a refresh or a visit, the motion
+  follows the eye down the page, about half a second apart. First the headline figures count up. Then the live row:
+  the gauge sweeps from 0, and the Today circle fills while its kWh and the live kW count up (hidden until their turn,
+  never shown as a 0). Then the CEB vs Inverter bars grow, their labels fade in, and the money-gap bars follow. The generation line, the day curve and the statistics chart draw left to right at a steady pen
+  speed (1.6 s), only as far as the data goes (up to "now" on today's curve), and each dot, the peak and the best and
+  lowest markers appear as the line reaches them. Sections further down fade and rise once as they scroll into view. Each chart draws only once
+  about 40% of it is on screen, and is held empty until then, so it is never already drawn when you reach it. Live refreshes glide from the old value to the new one instead of replaying from zero. The first screen settles within
+  about 2.5 s, the real value is in the page from the first render, and with reduced motion nothing moves. Plain CSS
+  and two small hooks (`src/v3/ui/useMotion.js`), no animation library.
+- **"Generation through the day" is a live power curve, as SolisCloud draws it.** Every power reading in kW (about one a
+  minute from SolisCloud; the caption states the real interval) instead of kWh on the hour, with the day's peak marked on the line ("Peak so far 26.3 kW · 11:35" for today). It
+  opens on **today**, which comes from SolisCloud, refreshes every two minutes, and adds the live reading as a "now" dot.
+  A hover line shows the exact time and kW anywhere on the curve. Holes in the readings break the line rather than
+  being drawn through. Today's total uses the inverter's own counter. The "Per hour" bars were removed: the curve shows the whole day.
+  A **Today** button jumps back from any past day.
+  The generation section now opens on this "Through the day" view (on phones, the Day tab).
+  Today's readings are read once by the page and shared, so the Today tile's peak is the chart's peak (it no longer
+  shows a dash while SolisCloud's day read is slow).
+- **Inverter generation → Year is a calendar year you pick** with ‹ 2026 › arrows (one year shown, so the control never
+  grows) instead of a rolling 365 days. It never goes past the data: the arrows stop at the first and last year with
+  readings, and any other year is pulled back inside them. It
+  always shows January to December. A month only partly recorded (the first one, or this one so far) is drawn as
+  partial with its day count. A month with no readings stays empty and says why (not yet, before records began, or
+  not recorded), never a zero. The year's total and "N of M days recorded" sit above the chart.
+- **Date pickers jump by month and year.** Clicking the month title opens a month picker with year arrows, so a date a
+  year back takes three clicks instead of twelve presses of the month arrow. Months outside the data are greyed out.
+- **Explanations sit behind ⓘ icons instead of a Hints switch.** The sidebar's Hints switch (off by default, and
+  missing on phones) is gone. An ⓘ appears only where the screen does not already say it: bill date to bill date, the
+  lifetime counter, bills left out of earnings, how uptime and time stopped are counted, unresolved alarms, logger and
+  alarm-log coverage, the money-gap formula, the average per day, SolisCloud or fault states, Solis's alarm advice, and
+  admin health rows that need attention. Hover (short delay), tap or keyboard focus opens it; a click keeps it open;
+  a click elsewhere, Escape or a scroll closes it. Obvious ones (Today, peak, freshness, Online, best/lowest day, all-time
+  coverage) have none, and the texts are shorter.
+- **Chart details always show on hover** (a bar's period and figures), with an arrow to what they describe. On phones a
+  tap shows one until the next tap. They close when the page scrolls, so one no longer stays stuck on a bar that has
+  moved away. Tooltips use 12.5–13 px text.
+- **Chart tooltips say only what the bar does not.** CEB vs Inverter columns show just the period ("Jun 4 → Jul 4"),
+  since both totals are on the bars. Money-gap bars show the period and one plain line ("CEB paid LKR 5.8 K less than the
+  generation was worth"). Generation points show the date, and the value only when there are too many bars to label.
+  The uptime strip lists only what stopped the inverter; PV inputs add only the voltage; rate and year-on-year details
+  are trimmed. The CEB table uses the same "Jun 4 → Jul 4" spans.
+- **Chart tooltips sit on the bar they describe**, just above its value label, instead of all at the top of the chart.
+- Tooltips follow the theme: white with dark text and a soft shadow in light mode, a dark surface in dark mode.
+- **The live tile says why there is no live reading.** When SolisCloud does not answer, the status reads "SolisCloud not
+  responding" (amber) instead of "Unknown", because the inverter may be fine. The tile shows the newest real reading with
+  its time ("Last saved reading at 11:50", "Today · as of 11:50", "kW then"): the last value in memory, or, after a fresh
+  deployment, the newest reading the scheduled job saved today in `inverter_data_live`. With nothing saved today the
+  figures stay a dash. Nothing is estimated.
+- An inverter alarm shows its SolisCloud state code ("Fault · code 1011"). The "could not be loaded" note names
+  SolisCloud instead of `upstream_unavailable`.
+- The live status sits in the gauge tile's top-right corner as designed (its tooltip wrapper had pulled it beside the
+  gauge, where longer labels wrapped), and the gauge's caption wraps on phones instead of widening the tile. The Today
+  circle shows a dash, not "No target", when a target is set but today's figure is unknown.
+
+### Changed
+- **The live power gauge is a rising sun.** 40 rays fan over the horizon from 0 kW on the left to the inverter's maximum
+  on the right, one ray per 2.5% of it. Lit rays are the live output, and the last five are the red zone near the
+  maximum. The kW reading sits in the sun, on a scale labelled on round steps (0, 10, 20, 30, 40 kW). Today's peak is
+  marked on the scale like a cruise-control set point: a red line across it and a small arrow pointing at it, which
+  sweeps into place after the rays light up. Its value and time are shown beside the gauge. At night, or when the
+  power is unknown, the sun is grey with no ray lit, and never shows a false 0. Stale readings grey out as before.
+- **CEB vs Inverter opens on 12 bill periods** (a year) instead of 8. Phones stay on 8, where 12 pairs of bars and their
+  figures run into each other; 12 and All are a tap away.
+- **The live tiles stay live.** The Today and live power tiles re-read the moment you return to the tab, focus the
+  window or the network comes back, instead of showing the old figure until the next minute. They pause while the tab
+  is hidden (no SolisCloud calls for a page nobody is looking at). A failed re-read keeps the last reading on screen,
+  greyed as "Reconnecting…" with "Not live · as of 10:28", instead of dashes, and retries after 15 s (then 30 s, up to
+  a minute). In daylight a reading more than 15 minutes old shows as "No new reading" even when SolisCloud answers (the
+  logger may be offline). "x min ago" ticks every 10 s, and the freshness ring stays full for the inverter's normal
+  five-minute reporting gap.
+- **Inverter generation: Week and Month are calendar periods.** Week is Monday to Sunday, labelled "Week 44 · 2026"
+  (ISO week numbers; hover for the dates), with weekday labels on the chart. Month is the calendar month, labelled
+  "November 2026", always drawing all its days. Days not reached yet stay empty, never zero. The arrows step a whole
+  week or month and stop at the data, and the label opens a picker: a calendar where any day picks its week (hover
+  shows which), or the year-and-months grid. Before, both were rolling 7 or 30 days ending on the newest day.
+- **Custom is just the range calendar**, opening on the latest complete bill period (bill date to bill date, from the
+  new `totals.lastBillPeriod`). The arrows and the date text beside it are gone, and the calendar's quick picks start
+  with "Last bill period".
+- **Statistics: "Lowest day" is now "Lowest full day".** The lowest recorded day was almost always a power cut or a
+  part-recorded day (e.g. 11.5 kWh), not a poor-weather day. It now counts only days the uptime log shows the inverter
+  running all day: at most 30 min stopped, since short grid trips are routine here. The card says how many days were
+  left out, its ⓘ says why and gives the lowest recorded day too, and the chart marks the same day.
+- **The Area chart type is gone.** It was the line with the space under it shaded, nothing more. Inverter generation
+  now offers Line (the default) and Bars; CEB vs Inverter offers Bars and Lines.
+
+### Fixed
+- **Light mode text on orange is readable.** Selected options, the calendar's chosen day and primary buttons used
+  white on bright orange (3.1:1). Light mode now fills them with a deeper orange (4.7:1), and the footer is no longer
+  faded (5.3:1). Dark mode is unchanged. Found by the new accessibility scan.
+- **The background colour flows across the cards.** Behind the glass cards the page glows each faded in one straight
+  step, so the CEB vs Inverter card was near-black at the top and turned blue partway down, with a visible edge. The
+  glows are now larger, overlap, and fade gradually, over a faint warm-to-cool wash, so the colour blends smoothly.
+  The upper cards also stay see-through after the quick fade-in: the fade used to stay applied to the row wrapping them,
+  which made their glass render flat dark next to the blue chart card. It now fades the cards themselves and ends cleanly.
+- **The Mark above line no longer climbs forever.** Dragging it to the top (or holding it there) kept raising the
+  value, because the chart grew to fit the line and the top moved up with it. The scale now comes from the data alone,
+  and the line stays inside the chart, whether dragged, moved with the keys or typed.
+- **The page no longer re-reads everything once a minute.** Each time the sign-in session refreshed its token
+  (about once a minute) the dashboard rebuilt its data source and re-read every figure on the page, and the admin and
+  Settings screens rebuilt theirs. Only the live figures re-read now, on their own schedule.
+- **Date pickers and the bill viewer follow the theme.** In light mode they were a dark panel with dark text (they used
+  the tooltip colours that are dark in both themes); they are now white with dark text, and unchanged in dark mode.
+- **A reading that is not current now looks it.** When SolisCloud is not answering, the Today and live power tiles turn
+  grey (the fill, the gauge arc and the numbers), the wave stops, and the Today tile shows an amber "Not live · as of
+  16:58" chip instead of the faint freshness ring.
+- **Reading times no longer print with decimals.** A reading taken at 16:58:08 showed as "16:58.135233…"; it now shows
+  16:58.
+- **"This billing period" runs bill date to bill date** (LR-001). Between the 1st of a month and the next bill, the open
+  period was clipped to the 1st ("since 1 Nov" instead of "since 4 Oct"), filed under the wrong month, and the month
+  before it showed "missing bill". It now starts the day after the latest bill, however late the next bill is, and stays
+  right across New Year (`totals.openPeriod`). Past months without a bill no longer count days a later bill already
+  covers, so no day is counted twice. The CEB table shows each period's real dates.
+- **Bill PDF extraction closes the document through its loading task**, so it works with pdfjs-dist 6 as well as 5
+  (pdfjs 6 removed `destroy()` from the document; the old call threw after reading the text and failed every upload).
+  `tests/pdfText.test.js` now reads a real PDF built in the test, so a pdfjs upgrade that breaks extraction fails CI.
+
+### Tooling
+- **Releases in one command, and the live version on screen.** `pnpm release minor` (or `patch`, `major`, or an exact
+  version) turns `[Unreleased]` into a dated version, bumps `package.json` and `shared/version.js`, and opens a release
+  PR. Merging it tags the version and publishes the GitHub Release with these notes (`.github/workflows/release.yml`).
+  The footer shows the version (`v3.1.0`), linked to its release notes, and `/healthz` reports `version` next to
+  the commit. See `docs/RELEASING.md`.
+
+## [3.0.0] - 2026-10-04
+
+The new dashboard becomes the default. Full notes and the production-readiness analysis:
+[`RELEASE_v3.0.0.md`](RELEASE_v3.0.0.md). `v2.1.0` is the last build of the previous dashboard.
+
+### Changed
+- **`/` is now the new dashboard** (Overview, Pro metrics, Settings, Admin, sign-in). The previous dashboard is deprecated:
+  it is served under `/v1` with a "V1 · DEPRECATED" banner on every page. Old paths (`/dashboard`, `/demodashbaard`,
+  `/login`, `/admin/dashboard/…`, the `/v3` preview prefix) redirect to their new home; anything else is a real 404 page.
+- Production bundles no longer contain `console.log/debug/info` (warn and error are kept). The new app's first page no longer
+  preloads the Supabase, vendor, v1-admin or charts chunks.
+- Real data is private to invited users through the authenticated read API; visitors get demo data dated 2035+.
+
+### Added
+- LR-004 earnings difference (CEB paid minus what the generation was worth, at each bill's own rate).
+- Live peak kW today and its time on real data; `totals` resource; `live.todayKey`; `PUT /api/settings` by setting name.
+- Admin: edit/delete saved bills, remove people. Error boundary, 404 page, skip link, per-page titles.
+- Branch rulesets on `main` and `integration/*`, PR template, branching model in `docs/WORKING_RULES.md` 7a.
+
+### Staged, not applied (need the owner)
+- `scripts/sql/2026-10-04_v3_revoke_anon_read_at_v1_removal.sql` (+ rollback): makes the real data private. Apply when `/v1` is removed.
+- `2026-09-24_revoke_anon_bill_access.sql` is safe to apply now.
+
+## [Unreleased - earlier] - 2026-09-24
+
+Remediation of the repository audit in [`REPO_AUDIT_2026-09-24.md`](REPO_AUDIT_2026-09-24.md).
+The three SQL migrations it adds are **not applied automatically** — see
+[`MIGRATIONS.md`](MIGRATIONS.md).
+
+### Security
+- **Bill PDFs and the review queue no longer depend on public anon access.** New
+  `POST /api/ceb-bills/signed-url` and `GET /api/ceb-bills/ingestions?view=queue` replace the
+  browser's direct storage and table reads. `2026-09-24_revoke_anon_bill_access.sql` drops the
+  anon policies on the two `ceb_bill_*` tables and the `ceb_bills` bucket. Deploy the code first.
+- `/api/admin/users`: `role` and `dashboardAccess` are allowlisted; an admin cannot remove their own
+  admin role; the user list pages past 100; no pre-authentication logging; no upstream error text
+  in responses.
+- `/api/solis/explore`: stricter parameter schema (date formats, integer ranges, length cap),
+  own-property endpoint lookup, and an audit line that is always written.
+- Uploads are PDF-only, verified by their bytes; stored paths always end in `.pdf`.
+- CORS accepts only this project's Vercel preview hosts under this team's scope, not any project
+  whose name starts the same way.
+- `/ready` no longer echoes database error text; auth details are no longer logged to the browser
+  console; the real account number was replaced by a placeholder in tracked files.
+- Removed `.npmrc`'s `frozen-lockfile=false` so Vercel installs match the lockfile CI verifies.
+- `docs/SECURITY.md` added: trust boundaries, the policy matrix, a new-endpoint checklist.
+
+### Fixed
+- **`null` is no longer confused with `0` in the bill parser.** It returned `0` for any figure it
+  could not find; a measured zero was rejected as a failure and a missing value accepted. The
+  review queue also showed a parsed `0` as blank.
+- **Bill approval is atomic** (`approve_ceb_extraction()`): `ceb_data`, the extraction and the
+  ingestion are approved in one transaction. Record input is validated more strictly.
+- `POST /api/ceb-bills/extract` no longer deletes the previous extraction before it has downloaded
+  and parsed the file, and no longer validates against an invented Rs 37 tariff.
+- Scheduled collectors, backfill scripts and the freshness check now refuse to start with an anon
+  key in `SUPABASE_SERVICE_KEY` (`api/_lib/serviceKeyGuard.js`).
+- One `delete` endpoint replaces `delete` and `delete-record`; rows are removed before the file and
+  every result is checked.
+
+### Removed
+- ~1,700 lines of unreachable source, eight unused fetchers in `dataService.js`, five broken Clerk
+  adapter methods, three dead scripts.
+- Dependencies: `@chakra-ui/react`, `@emotion/react`, `@emotion/styled`, `framer-motion`,
+  `crypto-js`, `@types/react`, `@types/react-dom`. Non-PDF JavaScript 1,557 KB → 1,194 KB;
+  `react-vendor` 776 KB → 263 KB. `pnpm audit --prod` is now clean.
+- The dashboard v2 preview and its design-direction document (PR #143). They remain in git history.
+- The finished Clerk-migration scripts (`migrate-users-to-clerk.js`, `export-users.js`).
+- The vendor agent-skill packs are no longer tracked (`.agents/`, `skills/` are gitignored);
+  `skills-lock.json` remains.
+
+### Security (continued)
+- **`ceb_data` no longer exposes the account number or file path to the public anon key.**
+  `2026-09-24_ceb_data_public_columns.sql` limits `anon` to the four columns the dashboard reads.
+  The admin CEB table now loads through `GET /api/ceb-bills/records`. Deploy the code first.
+
+### Added
+- `2026-09-24_ceb_data_public_columns.sql` — the column grants above.
+- Handler-level tests for `/api/ceb-bills/records`: authentication first, bad input never reaches
+  the database, approval is one RPC, and the fallback works while the function is missing.
+- `2026-09-24_drop_cascade_trigger.sql` — drops the redundant, undocumented live-only trigger.
+
+### Documentation
+- `SECURITY.md`, `MIGRATIONS.md`, `guides/LOCAL_DEVELOPMENT.md` added; `START_HERE`, `docs/README`,
+  the CEB bill guide, the deployment checklist, `API.md` and `ARCHITECTURE.md` brought up to date.
+- Fifty-odd superseded documents moved to `docs/archive/` with banners.
+
+## [2.1.0] - 2026-09-13
+
+Last known-good state before the UI redesign work began. The CEB bill parser handles both the
+pre-2026 and the 2026 (`ebill-edl-v.1.0.2`) formats; 25 bills reconciled end to end. Details:
+[`RECOVERY_STATUS_2026-09.md`](RECOVERY_STATUS_2026-09.md),
+[`PROJECT_AUDIT_2026-09.md`](PROJECT_AUDIT_2026-09.md).
+
+### Security
+- Every write moved behind an admin-authenticated API endpoint; anon write policies dropped.
+- Clerk verification moved to `@clerk/backend` with a replay guard; CORS is an allowlist.
+
+### Fixed
+- The five-month inverter data outage and its three stacked causes; a freshness check, a keepalive
+  and a DB snapshot workflow added so a silent recurrence is not possible.
+- The parser and its text extraction, and the Edge Function's retry handling.
+
+### Added
+- Liveness and readiness probes (`/healthz`, `/ready`); `ARCHITECTURE`, `API` and `RUNBOOK`.
+
+## [Earlier 2026-07-12] — lint sweep
+
+### Fixed
+- **ErrorBanner.jsx**: fixed an invalid/conditional React hook call.
+- **eslint.config.js**: added Node globals for `api/`, `functions/`, `scripts/`, eliminating ~130 false positives.
+- **AdminDashboard.jsx**: fixed a broken escape sequence in the ASCII-art banner.
+- Removed dead code left over from a pre-database implementation of `ingestions.js`.
+
+## [2.0.0] - 2025-11-16
+
+### 🎉 Major Release - Performance & Reliability Overhaul
+
+This release represents a complete refactor of the data management system with focus on performance, reliability, and user experience.
+
+---
+
+## 🚀 Added Features
+
+### Phase 1: Core Infrastructure
+- **SWR (Stale-While-Revalidate) Caching**
+  - Instant page loads with cached data
+  - Background refresh for fresh data
+  - Dual-layer cache (memory + localStorage)
+  - TTL-based expiration (5m live, 15m charts, 1h yearly)
+  
+- **Adaptive Polling System**
+  - Smart intervals: 5min (live), 15min (charts/earnings)
+  - Visibility-aware: pauses when tab hidden
+  - Network-aware: pauses when offline
+  - Automatic resume on tab focus/reconnect
+
+- **Centralized Data Management**
+  - Single DataContext for all data types
+  - Removed component-level Supabase clients
+  - Consolidated API calls
+  - Eliminated redundant fetches
+
+### Phase 2: UX & Loading Experience
+- **Skeleton Loaders**
+  - Shimmer animation components
+  - CardSkeleton, ChartSkeleton, DialSkeleton
+  - Replaced blank Suspense fallbacks
+  - Smooth loading transitions
+
+- **Loading Indicators**
+  - RefreshIndicator component (top-right)
+  - Real-time spinner during background fetch
+  - "Last updated" timestamps (Just now / 5m ago / 2h ago)
+  - Stale warning when data >10 minutes old
+
+- **Staleness Badges**
+  - ⏱️ badges on cards with old data (>10 min)
+  - Hover tooltips with exact timestamps
+  - Visual feedback for data freshness
+  - Per-card staleness tracking
+
+### Phase 3: Billing Period Accuracy
+- **Dynamic Billing Calculations**
+  - Uses actual billing dates from system_settings
+  - Configurable billing cycle (default 30 days)
+  - Cross-month/year boundary support
+  - Fallback to calendar month if settings missing
+
+- **Chart Alignment**
+  - RPC function returns period_label
+  - Tooltips show exact billing windows (e.g., "Oct 05 - Nov 04")
+  - Monthly generation card displays current period
+  - Accurate period labels throughout dashboard
+
+### Phase 4: Error Handling & Resilience
+- **Exponential Backoff Retry Logic**
+  - Automatic retry with increasing delays (30s → 1m → 5m)
+  - Max 3 retries per endpoint
+  - 30-minute pause after max retries
+  - Reset on successful fetch
+
+- **Error Classification System**
+  - Auth errors (401/403): no retry, show modal
+  - Rate limits (429): extend intervals
+  - Server errors (5xx): exponential backoff
+  - Transient errors (timeout/network): auto-retry
+  - Client errors (400/404): log only
+
+- **Circuit Breaker Pattern**
+  - Opens after 5 consecutive failures
+  - 30-minute cooldown period
+  - Automatic reset when cooldown expires
+  - Independent per data type
+
+- **User Notifications**
+  - ErrorBanner for prolonged outages (>5 min)
+  - AuthErrorModal for authentication issues
+  - Error badges on affected cards
+  - Silent handling of transient errors
+
+- **Graceful Degradation**
+  - Shows stale data during outages
+  - Partial degradation (one failure doesn't affect others)
+  - Manual refresh always available
+  - Error details on hover
+
+### Phase 5: Bug Fixes
+- **Theme Auto-change Fix**
+  - Removed auto-apply on Settings page mount
+  - Theme now persists correctly across navigation
+  - localStorage as single source of truth
+  - No implicit route-based theme switches
+
+---
+
+## 🔧 Improvements
+
+### Performance
+- **Bundle Size Optimization**
+  - Total: 319 KB gzipped (from ~500 KB)
+  - React vendor: 175 KB gzipped
+  - Main vendor: 100 KB gzipped
+  - Lazy loading for chart components
+  - Code splitting by route
+
+- **Load Time Improvements**
+  - First load: < 3 seconds
+  - Cached load: < 1 second (instant)
+  - Time to Interactive: < 3 seconds
+  - 60-80% faster perceived load time
+
+### Developer Experience
+- Comprehensive documentation
+  - README.md with full feature list
+  - TESTING_GUIDE.md with test procedures
+  - IMPLEMENTATION_TRACKER.md (46/47 tasks complete)
+  - DEPLOYMENT_CHECKLIST.md
+  - CACHING_IMPLEMENTATION.md
+
+- Better debugging
+  - Console logs for data flow
+  - Cache statistics
+  - Error tracking with timestamps
+  - Retry attempt logging
+
+---
+
+## 🐛 Bug Fixes
+
+- Fixed circular dependency in DataContext (scheduleRetry ↔ fetchData)
+- Fixed white screen on load (null safety checks in ErrorBanner/AuthErrorModal)
+- Fixed theme persistence across page navigation
+- Fixed Settings page auto-changing theme on mount
+- Fixed stale data not showing during errors
+- Fixed polling continuing when tab hidden
+- Fixed cache not being checked first (SWR)
+
+---
+
+## 🔄 Changed
+
+### Breaking Changes
+- **Error state structure changed**
+  - Old: `errors.key = "error message"`
+  - New: `errors.key = { message, type, time }`
+  - Enables time-based error tracking
+  - Supports error classification
+
+- **DataContext polling behavior**
+  - Now respects visibility and network state
+  - Circuit breakers can pause polling
+  - Retry logic may delay next poll
+
+### Non-breaking Changes
+- Improved cache service API (backwards compatible)
+- Enhanced useData hook with more exports (lastUpdate, isStale, refreshAll)
+- Updated component props (optional new props only)
+
+---
+
+## 📦 Dependencies
+
+### Updated
+- React: 19.2.0
+- Vite: 7.1.10
+- Recharts: Latest
+- Supabase JS: Latest
+
+### Added
+- None (used existing dependencies)
+
+---
+
+## 🔐 Security
+
+- Environment variables properly configured
+- No sensitive data in localStorage
+- Rate limiting via circuit breakers
+- Auth token refresh handling
+- XSS protection via React
+
+---
+
+## 📊 Performance Metrics
+
+### Before (v1.x)
+- First load: 5-8 seconds
+- Reload: 3-5 seconds (no cache)
+- Blank screens: 35+ seconds on slow connection
+- No error handling
+- No retry logic
+
+### After (v2.0)
+- First load: < 3 seconds ✅
+- Reload: < 1 second (instant cache) ✅
+- No blank screens (skeleton loaders) ✅
+- Automatic error recovery ✅
+- Smart retry with circuit breakers ✅
+
+---
+
+## 🎯 Completion Status
+
+**Implementation Progress: 98% (46/47 tasks)**
+
+### Completed Phases
+- ✅ Phase 1: Core Infrastructure (4/4 tasks)
+- ✅ Phase 2: UX & Loading (9/9 tasks)
+- ✅ Phase 3: Billing Period (6/6 tasks)
+- ✅ Phase 4: Error Handling (16/16 tasks)
+- ✅ Phase 5: Bug Fixes (5/5 tasks)
+
+### Optional Phases (Future)
+- ⏳ Phase 6: Observability (6 tasks) - 50% complete
+- ⏳ Phase 7: Advanced Caching (6 tasks) - Not started
+
+---
+
+## 🚀 Migration Guide
+
+### From v1.x to v2.0
+
+1. **Update environment variables** (no changes required)
+
+2. **Database migration** (add billing period settings):
+```sql
+INSERT INTO system_settings (setting_name, setting_value) 
+VALUES 
+  ('last_billing_date', '2025-11-05'),
+  ('billing_cycle_days', '30')
+ON CONFLICT (setting_name) DO UPDATE 
+SET setting_value = EXCLUDED.setting_value;
+```
+
+3. **Clear browser cache** for users
+   - First load will rebuild cache with new TTLs
+   - All data will refresh automatically
+
+4. **Test error handling**
+   - Verify ErrorBanner and AuthErrorModal appear correctly
+   - Check console for retry logs
+   - Confirm circuit breaker activates after 5 failures
+
+5. **Verify theme persistence**
+   - Toggle theme
+   - Navigate between pages
+   - Theme should persist
+
+---
+
+## 📝 Notes
+
+- All changes are backwards compatible except error state structure
+- Existing components work without modification
+- Cache automatically migrates to new structure
+- No breaking changes to database schema
+
+---
+
+## 🙏 Acknowledgments
+
+- React community for SWR pattern inspiration
+- Supabase team for excellent documentation
+- Users who reported the theme persistence bug
+- QA team for comprehensive testing
+
+---
+
+**Full Changelog:** [GitHub Releases](https://github.com/your-repo/releases)  
+**Upgrade Guide:** See README.md for detailed instructions  
+**Support:** Contact development team or open an issue
+
+---
+
+## 📋 Document History
+
+**Maintainer:** Anuja Jayasinghe  
+
+### Change Log
+- **Created:** November 16, 2025 - Initial v2.0.0 changelog documentation
+- **Updated:** November 19, 2025 - Added maintainer log, verified all entries accurate
+
+**Last Updated:** November 19, 2025

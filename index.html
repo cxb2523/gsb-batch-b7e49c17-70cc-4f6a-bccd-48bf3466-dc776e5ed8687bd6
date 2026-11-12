@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+    <meta name="description" content="Solar Analytics Dashboard - Monitor your solar energy generation in real-time" />
+    <meta name="theme-color" content="#ff7a00" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <!--
+      Clerk is contacted by the very first render, to resolve the session; without the hint the
+      browser only discovers it after the JS bundle parses (Lighthouse measured 312ms of avoidable
+      connection setup). Supabase is no longer preconnected: since v1 was removed the browser never
+      talks to it — every dashboard read goes through /api/data/*.
+    -->
+    <link rel="preconnect" href="https://clerk.solaredge.anujajay.com" crossorigin />
+    <link rel="dns-prefetch" href="https://clerk.solaredge.anujajay.com" />
+
+    <link rel="canonical" href="https://solaredge.anujajay.com/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="SolarEdge" />
+    <meta property="og:title" content="SolarEdge — Solar Analytics Dashboard" />
+    <meta property="og:description" content="Compare what a 40 kW solar array actually generated against what the electricity utility paid for." />
+    <meta property="og:url" content="https://solaredge.anujajay.com/" />
+    <meta property="og:image" content="https://solaredge.anujajay.com/logo_bText.png" />
+    <meta property="og:image:alt" content="SolarEdge logo" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="SolarEdge — Solar Analytics Dashboard" />
+    <meta name="twitter:description" content="Compare what a 40 kW solar array actually generated against what the electricity utility paid for." />
+    <meta name="twitter:image" content="https://solaredge.anujajay.com/logo_bText.png" />
+
+    <title>Solar Analytics</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
