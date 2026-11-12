@@ -4,6 +4,7 @@
   "no_entities": "Adicione uma entidade no editor para começar.",
   "no_matches": "Nenhuma entidade corresponde neste momento.",
   "none_available": "Nenhuma destas entidades está disponível.",
+  "config_error": "Configuração inválida: {error}",
   "editor_section_entities": "Entidades",
   "editor_section_style": "Estilo",
   "editor_section_chart": "Gráfico",

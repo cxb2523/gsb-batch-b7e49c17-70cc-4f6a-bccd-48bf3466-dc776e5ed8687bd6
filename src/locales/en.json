@@ -4,6 +4,7 @@
   "no_entities": "Add an entity in the editor to get started.",
   "no_matches": "No entities match right now.",
   "none_available": "None of these entities are available.",
+  "config_error": "Invalid configuration: {error}",
   "editor_section_entities": "Entities",
   "editor_section_style": "Style",
   "editor_section_chart": "Chart",

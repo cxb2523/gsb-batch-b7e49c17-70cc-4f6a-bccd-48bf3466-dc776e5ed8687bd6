@@ -4,6 +4,7 @@
   "no_entities": "Ajoutez une entité dans l'éditeur pour commencer.",
   "no_matches": "Aucune entité ne correspond pour le moment.",
   "none_available": "Aucune de ces entités n'est disponible.",
+  "config_error": "Configuration invalide : {error}",
   "editor_section_entities": "Entités",
   "editor_section_style": "Style",
   "editor_section_chart": "Graphique",

@@ -89,6 +89,10 @@ export const shared = css`
     padding: 8px 0;
     color: var(--secondary-text-color);
   }
+  /* A config that failed validation: the reason reads as an error, not as an empty card. */
+  .hint.error {
+    color: var(--error-color, #db4437);
+  }
   .legend {
     display: flex;
     flex-wrap: wrap;

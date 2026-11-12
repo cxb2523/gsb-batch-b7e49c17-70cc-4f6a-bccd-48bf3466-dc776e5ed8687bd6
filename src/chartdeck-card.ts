@@ -67,6 +67,7 @@ export class ChartdeckCard extends LitElement {
     hass: { attribute: false },
     preview: { type: Boolean },
     _config: { state: true },
+    _error: { state: true },
   };
 
   static styles = [shared, exportStyles, ...Object.values(STYLES).map((s) => s.styles)];
@@ -75,6 +76,8 @@ export class ChartdeckCard extends LitElement {
   /** Set by Home Assistant on the editor's preview card, which it rebuilds on every change. */
   declare preview?: boolean;
   declare _config?: NormalizedConfig;
+  /** The config that failed validation: its readable reason, and the title it asked for. */
+  declare _error?: { message: string; title?: string };
 
   private _watched = new Set<string>();
   /** Ids the include rule matched at the last render, to notice entities arriving or leaving. */
@@ -107,7 +110,16 @@ export class ChartdeckCard extends LitElement {
   }
 
   setConfig(config: CardConfig): void {
-    const normalized = normalizeConfig(config);
+    let normalized: NormalizedConfig;
+    try {
+      normalized = normalizeConfig(config);
+    } catch (err) {
+      // A missing config is Home Assistant's own bug, not YAML to explain: let it through. A
+      // config that is there but won't validate is the user's, and is shown inside the card.
+      if (!config || typeof config !== 'object') throw err;
+      this._configError(config, err);
+      return;
+    }
     validateExport(config);
     // What an earlier config drew is not this one's to export.
     forgetPlotted(this);
@@ -119,7 +131,31 @@ export class ChartdeckCard extends LitElement {
     if (isChart(style)) for (const id of style.watch?.(config) ?? []) this._watched.add(id);
     // A different chart style may hold subscriptions the new one doesn't know about.
     if (this._config && this._config.style !== normalized.style) this._disconnectStyle();
+    // The config is valid again: nothing of the error is left to show.
+    this._error = undefined;
     this._config = normalized;
+  }
+
+  /**
+   * The config failed validation: draw a readable reason instead of the chart, and forget
+   * everything the previous config had drawn, watched or remembered.
+   */
+  private _configError(raw: CardConfig, err: unknown): void {
+    // Never render the exception itself: only its message, which says the field and the reason.
+    // A fresh object each time, so an identical message under a different title still draws.
+    this._error = {
+      message: err instanceof Error ? err.message : String(err),
+      ...(typeof raw.title === 'string' ? { title: raw.title } : {}),
+    };
+    if (this._config) this._disconnectStyle();
+    stopExport(this);
+    forgetPlotted(this);
+    for (const detach of this._detachers.values()) detach();
+    this._detachers.clear();
+    this._watched = new Set<string>();
+    this._matched = [];
+    this._items = [];
+    this._config = undefined;
   }
 
   private get _styleName(): StyleName {
@@ -322,6 +358,16 @@ export class ChartdeckCard extends LitElement {
   }
 
   render() {
+    // A config that failed validation: say which field is wrong and why, in the card's language.
+    if (this._error) {
+      return html`<ha-card .header=${this._error.title}>
+        <div class="content">
+          <div class="hint error" role="alert">
+            ${localize(this.hass, 'config_error', { error: this._error.message })}
+          </div>
+        </div>
+      </ha-card>`;
+    }
     if (!this._config) return nothing;
     const hass = this.hass;
     // `source: energy`: the entities come from the Energy dashboard's settings, once they load.
@@ -334,6 +380,10 @@ export class ChartdeckCard extends LitElement {
     let valueCh: number | undefined;
     const resolved = hass ? resolveEntities(config, hass) : [];
     this._matched = hass ? matchedIds(config, hass) : [];
+    // A rule that matched nothing is a different problem from entities that are merely hidden:
+    // matched entities that are all unavailable (and hidden) say "none available", not "no match".
+    // Listed entities are the card's own; only a rule with nothing listed can be a pure rule miss.
+    const ruleMissed = !!config.include && config.entities.length === 0 && this._matched.length === 0;
     if (energy.message) {
       this._items = [];
       body = html`<div class="hint">${energy.message}</div>`;
@@ -345,7 +395,7 @@ export class ChartdeckCard extends LitElement {
       body = nothing;
     } else if (resolved.length === 0) {
       this._items = [];
-      body = html`<div class="hint">${localize(hass, config.include ? 'no_matches' : 'none_available')}</div>`;
+      body = html`<div class="hint">${localize(hass, ruleMissed ? 'no_matches' : 'none_available')}</div>`;
     } else {
       first = resolved[0];
       // Key rows by entity id (config position breaks ties for a repeated id) so a re-sort moves

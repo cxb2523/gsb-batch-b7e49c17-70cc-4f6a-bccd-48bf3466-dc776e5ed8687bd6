@@ -4,6 +4,7 @@
   "no_entities": "Voeg in de editor een entiteit toe om te beginnen.",
   "no_matches": "Er komen nu geen entiteiten overeen.",
   "none_available": "Geen van deze entiteiten is beschikbaar.",
+  "config_error": "Ongeldige configuratie: {error}",
   "editor_section_entities": "Entiteiten",
   "editor_section_style": "Stijl",
   "editor_section_chart": "Grafiek",
