@@ -1000,10 +1000,22 @@ const sitemapHandlers: Record<string, (args: SitemapToolArgs) => Promise<ReturnT
 		);
 	},
 	approve: async ({ jobId }) => {
-		const data = await apiRequestJson<SitemapMutationResponse>(
-			`/sitemap/${encodeURIComponent(requireJobId(jobId, "approve"))}/approve`,
-		);
-		return sitemapResult(`sitemap job ${data.jobId} approved: ${data.status}`, data);
+		const id = requireJobId(jobId, "approve");
+		try {
+			const data = await apiRequestJson<SitemapMutationResponse>(`/sitemap/${encodeURIComponent(id)}/approve`);
+			return sitemapResult(`sitemap job ${data.jobId} approved: ${data.status}`, data);
+		} catch (err) {
+			// A 409 whose body carries status partial_state means an earlier approve was
+			// interrupted mid-handoff: a queryable, repairable state (call approve again),
+			// not a failure of this call. Any other 4xx/5xx stays an error.
+			if (err instanceof ApiError && err.body.status === "partial_state") {
+				return sitemapResult(
+					`sitemap job ${id}: partial_state — approval handoff incomplete, call approve again`,
+					{ jobId: id, status: "partial_state" },
+				);
+			}
+			throw err;
+		}
 	},
 	status: async ({ jobId }) => {
 		const id = requireJobId(jobId, "status");
@@ -1034,11 +1046,10 @@ const sitemapHandlers: Record<string, (args: SitemapToolArgs) => Promise<ReturnT
 		return sitemapResult(`sitemap job ${payload.jobId}: ${payload.status}${sitemapStatusDetail(payload)}`, payload);
 	},
 	results: async ({ jobId, limit, offset }) => {
-		// The server silently clamps oversized limits, which would make a
-		// fewer-than-requested page look like the end of the data — reject instead.
-		if (limit !== undefined && limit > 5000) {
-			throw new Error(`limit ${limit} exceeds the results maximum of 5000 — request smaller pages and use offset`);
-		}
+		// The server silently clamps out-of-range pages, which would make a
+		// fewer-than-requested page look like the end of the data — reject instead,
+		// before any request leaves the process.
+		({ limit, offset } = validateSitemapPaging({ limit, offset }, SITEMAP_RESULTS_LIMIT_MAX));
 		const data = await apiRequestJson<SitemapResultsResponse>(
 			`/sitemap/${encodeURIComponent(requireJobId(jobId, "results"))}/urls`,
 			{ method: "GET", query: { limit, offset } },
@@ -1057,9 +1068,7 @@ const sitemapHandlers: Record<string, (args: SitemapToolArgs) => Promise<ReturnT
 	},
 	list: async ({ limit, offset }) => {
 		// Same clamp-vs-truncation ambiguity as results, at the list maximum.
-		if (limit !== undefined && limit > 100) {
-			throw new Error(`limit ${limit} exceeds the list maximum of 100 — request smaller pages and use offset`);
-		}
+		({ limit, offset } = validateSitemapPaging({ limit, offset }, SITEMAP_LIST_LIMIT_MAX));
 		const data = await apiRequestJson<SitemapListResponse>("/sitemap", {
 			method: "GET",
 			query: { limit, offset },
@@ -1071,6 +1080,32 @@ const sitemapHandlers: Record<string, (args: SitemapToolArgs) => Promise<ReturnT
 function requireJobId(jobId: string | undefined, action: string): string {
 	if (!jobId) throw new Error(`jobId is required for action "${action}"`);
 	return jobId;
+}
+
+const SITEMAP_RESULTS_LIMIT_MAX = 5000;
+const SITEMAP_LIST_LIMIT_MAX = 100;
+
+/**
+ * Validates the results/list paging arguments before any request is sent. The server silently
+ * clamps out-of-range values, which would make a fewer-than-requested page look like the end of
+ * the data, so every boundary is rejected locally instead.
+ */
+function validateSitemapPaging(
+	args: { limit?: number; offset?: number },
+	maxLimit: number,
+): { limit?: number; offset?: number } {
+	const { limit, offset } = args;
+	if (limit !== undefined) {
+		if (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 1 || limit > maxLimit) {
+			throw new Error(`limit must be an integer between 1 and ${maxLimit}, got ${limit}`);
+		}
+	}
+	if (offset !== undefined) {
+		if (!Number.isFinite(offset) || !Number.isInteger(offset) || offset < 0) {
+			throw new Error(`offset must be a non-negative integer, got ${offset}`);
+		}
+	}
+	return { limit, offset };
 }
 
 interface SitemapToolArgs {
@@ -1166,13 +1201,11 @@ This single tool drives the whole job lifecycle through \`action\`:
 				.string()
 				.optional()
 				.describe("The job id returned by submit. Required for approve, status, results, and cancel."),
-			limit: z
-				.number()
-				.int()
-				.min(1)
-				.optional()
-				.describe("results/list only: page size. results default 1000 (max 5000); list default 20 (max 100)."),
-			offset: z.number().int().min(0).optional().describe("results/list only: number of rows to skip for pagination."),
+			// Range is enforced inside the results/list handlers (with their per-action
+			// maxima) so every out-of-range value gets one message naming the legal range
+			// and is rejected before a request is sent; Zod here only guarantees a number.
+			limit: z.number().optional().describe("results/list only: page size. results default 1000 (max 5000); list default 20 (max 100)."),
+			offset: z.number().optional().describe("results/list only: number of rows to skip for pagination; a non-negative integer."),
 		},
 	},
 	async (args: SitemapToolArgs) => {
