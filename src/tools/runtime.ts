@@ -1,0 +1,233 @@
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+
+import { LAUNCH_HINT } from '../wss.ts';
+import type { WSS } from '../wss.ts';
+
+const DEFAULT_READY_TIMEOUT = 20_000;
+
+// runtime:info fields merged into the launch_start result
+const RUNTIME_INFO_FIELDS = ['engineVersion', 'engineRevision', 'deviceType', 'sessionId'];
+
+export const register = (server: McpServer, wss: WSS) => {
+    server.registerTool(
+        'launch_start',
+        {
+            description: [
+                'Start a real Launch runtime instance of the current scene (the editor\'s Launch button) so scripts, physics, animation and input actually run.',
+                'Opens the launch page in a new browser window with debug logging on; the editor bridges it automatically.',
+                'Returns { url, sceneId, ready, adopted, engineVersion, device, deviceType, sessionId } where ready=true means the runtime is usable by capture_runtime / read_runtime_logs, and adopted=true means it attached to an app that was already running instead of starting a new one (which happens only when no options are passed, so pass an option to force a fresh launch).',
+                'engineVersion is the exact version the app launched with (null when adopting an app of unknown origin), device is the requested override, deviceType is the backend the runtime actually created (webgpu/webgl2/webgl1), and sessionId changes on every launch so you can tell a fresh launch from a re-used one.',
+                'This is the prerequisite for all runtime tools. If ready=false, the page may still be loading or popups were blocked; poll read_runtime_logs or retry.',
+                'When NOT to use: to screenshot the editor (use capture_viewport); to change the scene (edit-time tools).'
+            ].join(' '),
+            annotations: {
+                title: 'Launch Runtime',
+                readOnlyHint: false,
+                destructiveHint: false,
+                idempotentHint: false,
+                openWorldHint: true
+            },
+            inputSchema: {
+                device: z.enum(['webgpu', 'webgl2', 'webgl1']).optional().describe('Graphics device to launch with (default: project setting)'),
+                engineVersion: z.string().min(1).optional().describe('Engine channel (current | previous | releaseCandidate) or an exact available version; omit to use the Editor\'s own selection (the Launch button "Use Release Candidate" option, else the session engine-version setting). list_engine_versions reports both.'),
+                profiler: z.boolean().optional(),
+                debug: z.boolean().optional(),
+                concatenate: z.boolean().optional(),
+                bundles: z.boolean().optional(),
+                miniStats: z.boolean().optional(),
+                waitMs: z.number().int().min(0).max(60000).optional().describe('How long to wait for the runtime to connect before returning (default 20000)')
+            }
+        },
+        async ({ waitMs, ...options }) => {
+            try {
+                const opened = await wss.raw('launch:start', options);
+                if (opened?.error) {
+                    return wss.fail('launch:start', opened.error);
+                }
+                const ready = await wss.waitForRuntime(waitMs ?? DEFAULT_READY_TIMEOUT);
+                const data: Record<string, unknown> = { ...(opened?.data as object || {}), ready };
+                if (ready) {
+                    const info = (await wss.raw('runtime:info')).data as Record<string, unknown>;
+                    for (const field of RUNTIME_INFO_FIELDS) {
+                        data[field] = info[field];
+                    }
+                }
+                return wss.ok(
+                    'launch:start',
+                    data,
+                    ready ? undefined : { hint: `Runtime did not connect in time. The launch page may still be loading (poll read_runtime_logs). ${LAUNCH_HINT}` }
+                );
+            } catch (err) {
+                return wss.fail('launch:start', err instanceof Error ? err.message : String(err));
+            }
+        }
+    );
+
+    server.registerTool(
+        'launch_stop',
+        {
+            description: [
+                'Stop the running Launch instance started by launch_start (closes the launch window). Returns { stopped }.',
+                'When NOT to use: there is no need to call this between captures — keep the instance running and re-capture.'
+            ].join(' '),
+            annotations: {
+                title: 'Stop Runtime',
+                readOnlyHint: false,
+                destructiveHint: true,
+                idempotentHint: true,
+                openWorldHint: false
+            }
+        },
+        () => {
+            return wss.call('launch:stop');
+        }
+    );
+
+    server.registerTool(
+        'list_engine_versions',
+        {
+            description: [
+                'List the engine channels and versions the connected Editor can launch and build with, plus the version a default launch would use.',
+                'Returns { available: [{ channel, version }], launchDefault: { channel, version, source } } where source is launch-option (the Launch button\'s "Use Release Candidate"), session-setting or current.',
+                'Use it before launch_start / create_build when a specific engine version matters, e.g. to reproduce a bug on the release candidate or pin a build to the current release.'
+            ].join(' '),
+            annotations: {
+                title: 'List Engine Versions',
+                readOnlyHint: true,
+                openWorldHint: false
+            }
+        },
+        () => {
+            return wss.call('launch:versions');
+        }
+    );
+
+    server.registerTool(
+        'capture_runtime',
+        {
+            description: [
+                'Screenshot the RUNNING Launch instance (not the editor preview) as a downscaled WebP image — the agent\'s "eye" for visually verifying play-mode behavior.',
+                'Requires launch_start first. Captures the live frame buffer, so what you see reflects scripts/physics/animation actually running.',
+                'Works on both WebGL and WebGPU backends; meta.deviceType reports which backend produced the frame.',
+                'When NOT to use: before launch_start (use capture_viewport for edit-time visuals).'
+            ].join(' '),
+            annotations: {
+                title: 'Capture Runtime',
+                readOnlyHint: true,
+                openWorldHint: false
+            }
+        },
+        () => {
+            return wss.callImage('runtime:capture');
+        }
+    );
+
+    server.registerTool(
+        'read_runtime_logs',
+        {
+            description: [
+                'Read console output (log/info/warn/error), uncaught exceptions and unhandled rejections from the RUNNING Launch instance — the first-line signal for runtime bugs.',
+                'Requires launch_start first. Returns the most recent entries first, paginated (meta has total/count/hasMore/nextCursor). Exceptions and rejections are serialised as "name: message" plus their stack, so a thrown Error is readable without opening devtools.',
+                'Defaults to warnings + errors; set level="all" (or debug/info/warn/error as a minimum severity) to widen, and keyword to filter. An empty result is success, not an error.',
+                'When NOT to use: to read edit-time editor logs (this is the launched app only).'
+            ].join(' '),
+            annotations: {
+                title: 'Read Runtime Logs',
+                readOnlyHint: true,
+                openWorldHint: false
+            },
+            inputSchema: {
+                level: z.enum(['all', 'debug', 'info', 'warn', 'error']).optional().describe('Minimum severity to include (default: warn)'),
+                keyword: z.string().optional().describe('Only include entries whose text contains this (case-insensitive)'),
+                limit: z.number().int().min(1).max(1000).optional().describe('Max entries to return (default 100)'),
+                offset: z.number().int().min(0).optional().describe('Entries to skip from the newest (use nextCursor)')
+            }
+        },
+        (options) => {
+            return wss.call('runtime:logs', {
+                level: options.level ?? 'warn',
+                keyword: options.keyword,
+                limit: options.limit,
+                offset: options.offset
+            });
+        }
+    );
+
+    server.registerTool(
+        'query_runtime_state',
+        {
+            description: [
+                'Read the LIVE runtime state of entities in the RUNNING Launch instance — the non-visual ground-truth read-back for verifying play-mode behaviour without guessing screenshot timing.',
+                'Requires launch_start first. For each matched entity returns world position, local position, euler rotation, scale, enabled, component names, plus rigidbody (type/mass/linearVelocity/angularVelocity) and element (type/text, e.g. a HUD score label) when present.',
+                'Filter with ids (editor resource_ids — the runtime uses the same GUIDs) or name (case-insensitive substring); omit both to page through every entity. Paginated via limit (default 50) + offset (meta has total/count/hasMore/nextCursor).',
+                'Use this to answer questions the camera cannot: "did the ball actually move / fall through the floor?", "is the rigidbody simulating (velocity != 0)?", "what does the score HUD say?". An empty result is success, not an error.',
+                'When NOT to use: for edit-time scene data (use list_entities); before launch_start; to change state (use modify_entities / inject_input).'
+            ].join(' '),
+            annotations: {
+                title: 'Query Runtime State',
+                readOnlyHint: true,
+                openWorldHint: false
+            },
+            inputSchema: {
+                ids: z.array(z.string()).optional().describe('Entity resource_ids to inspect (same GUIDs as edit-time). Omit to filter by name or list all.'),
+                name: z.string().optional().describe('Filter by entity name (case-insensitive substring)'),
+                limit: z.number().int().min(1).max(500).optional().describe('Max entities to return (default 50)'),
+                offset: z.number().int().min(0).optional().describe('Entities to skip (use nextCursor from a previous page)')
+            }
+        },
+        (options) => {
+            return wss.call('runtime:state', options);
+        }
+    );
+
+    const KeyEventSchema = z.object({
+        type: z.literal('key'),
+        key: z.string().describe('Key name: a single char ("w", "1"), or a named key ("Space", "Enter", "ArrowUp", "Shift", "Escape")'),
+        action: z.enum(['press', 'down', 'up']).optional().describe('press = down+up (default); use down/up to hold across calls'),
+        holdMs: z.number().int().min(0).max(10000).optional().describe('For action=press, hold the key down this long before releasing'),
+        repeat: z.number().int().min(1).max(50).optional().describe('Repeat this key event N times')
+    });
+    const MouseEventSchema = z.object({
+        type: z.literal('mouse'),
+        action: z.enum(['move', 'down', 'up', 'click']),
+        x: z.number().optional().describe('X in CSS pixels from the canvas top-left'),
+        y: z.number().optional().describe('Y in CSS pixels from the canvas top-left'),
+        button: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional().describe('0=left (default), 1=middle, 2=right')
+    });
+    const TouchEventSchema = z.object({
+        type: z.literal('touch'),
+        action: z.enum(['start', 'move', 'end', 'tap']),
+        x: z.number().describe('X in CSS pixels from the canvas top-left'),
+        y: z.number().describe('Y in CSS pixels from the canvas top-left'),
+        id: z.number().int().optional().describe('Touch identifier (for multi-touch sequences)')
+    });
+
+    server.registerTool(
+        'inject_input',
+        {
+            description: [
+                'Dispatch keyboard / mouse / touch input to the RUNNING Launch instance so you can drive end-to-end interactions ("press W to move", "click a button", "tap the screen").',
+                'Requires launch_start first. Events run in order; coordinates are CSS pixels from the canvas top-left (match capture_runtime\'s framing). Returns { dispatched }.',
+                'Mouse and touch events are dispatched as PointerEvents plus the matching MouseEvent/TouchEvent, so both the engine\'s pointer-based input sources (camera-controls, first-person-controller) and legacy pc.Mouse / pc.TouchDevice receive them.',
+                'Patterns: key press with holdMs to move for a duration; mouse click at (x,y); a down→move…→up sequence for dragging; touch tap for mobile UI.',
+                'After injecting, use capture_runtime / read_runtime_logs / query the scene to observe the effect.',
+                'When NOT to use: to change entity data directly (use modify_entities) or before launch_start.'
+            ].join(' '),
+            annotations: {
+                title: 'Inject Runtime Input',
+                readOnlyHint: false,
+                destructiveHint: false,
+                idempotentHint: false,
+                openWorldHint: false
+            },
+            inputSchema: {
+                events: z.array(z.discriminatedUnion('type', [KeyEventSchema, MouseEventSchema, TouchEventSchema])).nonempty().describe('Ordered list of input events to dispatch'),
+                betweenMs: z.number().int().min(0).max(10000).optional().describe('Delay between consecutive events (default 0)')
+            }
+        },
+        ({ events, betweenMs }) => {
+            return wss.call('runtime:input', { events, betweenMs });
+        }
+    );
+};

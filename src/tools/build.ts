@@ -1,0 +1,311 @@
+import { randomUUID } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { link, rename, stat, unlink } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+
+import type { WSS } from '../wss.ts';
+
+const BUILD_TIMEOUT_MS = 10 * 60_000;
+const POLL_MS = 2_000;
+
+// the publish job is written before POST /apps responds, so this only covers list lag
+const JOB_TIMEOUT_MS = 10_000;
+const JOB_POLL_MS = 1_000;
+const IdSchema = z.number().int().positive();
+
+type BuildStart = {
+    id?: number;
+    build_job_id?: number;
+};
+type Artifact = { type: string; url: string };
+type Build = { id?: number; job_id?: number; app_id?: number; status?: string; message?: string; artifacts?: Artifact[] };
+type App = { id?: number; name?: string; url?: string; task?: { status?: string } };
+
+const fields = {
+    name: z.string().min(1).max(1000),
+    sceneIds: z
+        .array(IdSchema)
+        .nonempty()
+        .describe('Scene ids in the designated project'),
+    primarySceneId: IdSchema.optional().describe(
+        'Primary scene; must also be in sceneIds'
+    ),
+    engineVersion: z
+        .string()
+        .optional()
+        .describe(
+            'Configured engine channel or exact available engine version'
+        ),
+    concatenate: z.boolean().optional(),
+    minify: z.boolean().optional(),
+    sourceMaps: z.boolean().optional(),
+    optimizeSceneFormat: z.boolean().optional()
+};
+
+const sleep = (ms = POLL_MS) => new Promise((resolve) => setTimeout(resolve, ms));
+const raw = (wss: WSS, name: string, ...args: unknown[]) =>
+    wss.raw(name, ...args).catch((err) => ({
+        data: undefined,
+        error: err instanceof Error ? err.message : String(err)
+    }));
+
+export const register = (server: McpServer, wss: WSS) => {
+    server.registerTool(
+        'list_builds',
+        {
+            description:
+                'List publish and download builds for the designated project, including durable job status and artifacts.',
+            annotations: {
+                title: 'List Builds',
+                readOnlyHint: true,
+                openWorldHint: false
+            },
+            inputSchema: {
+                limit: z.number().int().min(1).max(500).optional(),
+                cursor: z.string().regex(/^\d+$/).optional(),
+                type: z.enum(['publish', 'download']).optional(),
+                status: z.enum(['complete', 'running', 'error']).optional(),
+                format: z.enum(['playcanvas', 'static', 'npm']).optional(),
+                branch: z.string().optional(),
+                actor: z.string().optional()
+            }
+        },
+        ({ limit, cursor, ...filters }) =>
+            wss.call('builds:list', { limit, cursor, filters })
+    );
+
+    server.registerTool(
+        'get_build',
+        {
+            description:
+                'Get a publish or download build job by id from the designated project. buildId is the durable build JOB id from list_builds/create_build, not the app id.',
+            annotations: {
+                title: 'Get Build',
+                readOnlyHint: true,
+                openWorldHint: false
+            },
+            inputSchema: { buildId: z.number().int().positive() }
+        },
+        ({ buildId }) => wss.call('builds:get', buildId)
+    );
+
+    server.registerTool(
+        'create_build',
+        {
+            description:
+                'Create a published PlayCanvas build for scenes in the designated project. Returns { buildId, appId, status, url, name }: buildId is the durable build JOB id from list_builds/create_build (the id get_build/set_primary_build/delete_build take), appId is the published app id, and url is the playable app URL. Publishing continues in the background, so poll get_build(buildId) for completion. buildId is null only when the job is not listed yet — meta.hint then tells you to find it with list_builds.',
+            annotations: {
+                title: 'Create Build',
+                readOnlyHint: false,
+                destructiveHint: false,
+                idempotentHint: false,
+                openWorldHint: false
+            },
+            inputSchema: {
+                ...fields,
+                description: z.string().max(10000).optional(),
+                version: z.string().max(20).optional(),
+                releaseNotes: z.string().max(10000).optional(),
+                imageS3Key: z.string().min(1).optional()
+            }
+        },
+        async (options) => {
+            const created = await raw(wss, 'builds:create', options);
+            if (created.error) {
+                return wss.fail('builds:create', created.error);
+            }
+            const app = (created.data ?? {}) as App;
+            const appId = app.id === undefined ? null : Number(app.id);
+
+            // builds:create returns the App row, whose id is the APP id; the durable build
+            // job id every other build tool takes comes from the publish list, by app_id
+            const deadline = Date.now() + JOB_TIMEOUT_MS;
+            let job: Build | undefined;
+            while (appId !== null && !job && Date.now() < deadline) {
+                const listed = await raw(wss, 'builds:list', {
+                    limit: 500,
+                    filters: { type: 'publish' }
+                });
+                if (listed.error) {
+                    return wss.fail('builds:create', listed.error);
+                }
+                job = (listed.data as Build[] | undefined)?.find((build) => Number(build.app_id) === appId);
+                if (!job) {
+                    await sleep(JOB_POLL_MS);
+                }
+            }
+            const data = {
+                buildId: job?.id === undefined ? null : Number(job.id),
+                appId,
+                status: job?.status ?? app.task?.status ?? null,
+                url: app.url ?? job?.artifacts?.find((item) => item.url)?.url ?? null,
+                name: app.name ?? null
+            };
+            return wss.ok(
+                'builds:create',
+                data,
+                data.buildId === null
+                    ? { hint: 'The build started but its durable build job is not listed yet. Use list_builds (type=publish) to find the job whose app_id matches appId, then pass its id to get_build.' }
+                    : undefined
+            );
+        }
+    );
+
+    server.registerTool(
+        'download_build',
+        {
+            description:
+                'Create a static or NPM download build, wait for its artifact, and save the archive to an explicit local path. Existing files are not overwritten unless overwrite=true.',
+            annotations: {
+                title: 'Download Build',
+                readOnlyHint: false,
+                destructiveHint: true,
+                idempotentHint: false,
+                openWorldHint: true
+            },
+            inputSchema: {
+                ...fields,
+                format: z.enum(['static', 'npm']),
+                outputPath: z.string().min(1),
+                overwrite: z.boolean().optional()
+            }
+        },
+        async ({ outputPath, overwrite, ...options }) => {
+            const started = await raw(wss, 'builds:download', options);
+            if (started.error) {
+                return wss.fail('builds:download', started.error);
+            }
+            const data = started.data as BuildStart | undefined;
+            let id = data?.build_job_id;
+            if (!id && data?.id) {
+                const listed = await raw(wss, 'builds:list', {
+                    limit: 500,
+                    filters: { type: 'download' }
+                });
+                if (listed.error) {
+                    return wss.fail('builds:download', listed.error);
+                }
+                id = (listed.data as Build[] | undefined)?.find((build) => build.job_id === data.id)?.id;
+            }
+            if (!id) {
+                return wss.fail(
+                    'builds:download',
+                    'The build started but its durable build job was not found. Use list_builds to inspect its status.'
+                );
+            }
+            const deadline = Date.now() + BUILD_TIMEOUT_MS;
+            let build: Build | undefined;
+            while (Date.now() < deadline) {
+                const current = await raw(wss, 'builds:get', id);
+                if (current.error) {
+                    return wss.fail('builds:download', current.error);
+                }
+                build = current.data as Build;
+                if (build?.status === 'complete' || build?.status === 'error') {
+                    break;
+                }
+                await sleep();
+            }
+            if (build?.status === 'error') {
+                return wss.fail(
+                    'builds:download',
+                    build.message || `Build ${id} failed.`
+                );
+            }
+            if (build?.status !== 'complete') {
+                return wss.fail(
+                    'builds:download',
+                    `Build ${id} is still running after 10 minutes. Use get_build to inspect it.`
+                );
+            }
+            const artifact =
+                build.artifacts?.find((item) => item.type === 'download') ||
+                build.artifacts?.[0];
+            if (!artifact?.url) {
+                return wss.fail(
+                    'builds:download',
+                    `Build ${id} completed without a download artifact.`
+                );
+            }
+            const response = await fetch(artifact.url).catch((err) =>
+                err instanceof Error ? err : new Error(String(err))
+            );
+            if (response instanceof Error) {
+                return wss.fail('builds:download', response.message);
+            }
+            if (!response.ok) {
+                return wss.fail(
+                    'builds:download',
+                    `Artifact download failed (${response.status} ${response.statusText}).`
+                );
+            }
+            if (!response.body) {
+                return wss.fail('builds:download', 'Artifact download returned no response body.');
+            }
+            const path = resolve(outputPath);
+            const temp = `${path}.${randomUUID()}.tmp`;
+            const done = pipeline(Readable.fromWeb(response.body), createWriteStream(temp, { flags: 'wx' })).then(
+                async () => {
+                    const bytes = (await stat(temp)).size;
+                    await (overwrite ? rename(temp, path) : link(temp, path));
+                    await unlink(temp).catch(() => null);
+                    return bytes;
+                }
+            );
+            const [error, bytes] = await done.then(
+                (bytes) => [null, bytes] as const,
+                async (err) => {
+                    await unlink(temp).catch(() => null);
+                    return [err instanceof Error ? err : new Error(String(err)), 0] as const;
+                }
+            );
+            if (error) {
+                return wss.fail('builds:download', error.message);
+            }
+            return wss.ok('builds:download', {
+                buildId: Number(id),
+                path,
+                bytes
+            });
+        }
+    );
+
+    server.registerTool(
+        'set_primary_build',
+        {
+            description:
+                'Set a completed publish build as the project primary build. buildId is the durable build JOB id from list_builds/create_build, not the app id.',
+            annotations: {
+                title: 'Set Primary Build',
+                readOnlyHint: false,
+                destructiveHint: false,
+                idempotentHint: true,
+                openWorldHint: false
+            },
+            inputSchema: { buildId: z.number().int().positive() }
+        },
+        ({ buildId }) => wss.call('builds:primary:set', buildId)
+    );
+
+    server.registerTool(
+        'delete_build',
+        {
+            description:
+                'Permanently delete a build job and its linked artifact from the designated project. buildId is the durable build JOB id from list_builds/create_build, not the app id.',
+            annotations: {
+                title: 'Delete Build',
+                readOnlyHint: false,
+                destructiveHint: true,
+                idempotentHint: true,
+                openWorldHint: false
+            },
+            inputSchema: { buildId: z.number().int().positive() }
+        },
+        ({ buildId }) => wss.call('builds:delete', buildId)
+    );
+};

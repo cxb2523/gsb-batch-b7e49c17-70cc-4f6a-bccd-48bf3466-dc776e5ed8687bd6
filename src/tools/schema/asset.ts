@@ -1,0 +1,367 @@
+import { z } from 'zod';
+
+import { AssetIdSchema, AssetRefSchema, EntityIdSchema, RgbSchema, Vec2Schema, Vec3Schema } from './common.ts';
+
+export const MaterialSchema = z.object({
+    name: z.string().optional(),
+    ambient: RgbSchema.optional(),
+    aoMap: AssetRefSchema.optional(),
+    aoMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    aoMapUv: z.number().int().min(0).max(7).optional(),
+    aoMapTiling: Vec2Schema.optional(),
+    aoMapOffset: Vec2Schema.optional(),
+    aoMapRotation: z.number().optional(),
+    aoVertexColor: z.boolean().optional(),
+    aoVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    aoIntensity: z.number().optional(),
+    diffuse: RgbSchema.optional(),
+    diffuseMap: AssetRefSchema.optional(),
+    diffuseMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    diffuseMapUv: z.number().int().min(0).max(7).optional(),
+    diffuseMapTiling: Vec2Schema.optional(),
+    diffuseMapOffset: Vec2Schema.optional(),
+    diffuseMapRotation: z.number().optional(),
+    diffuseVertexColor: z.boolean().optional(),
+    diffuseVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    specular: RgbSchema.optional(),
+    specularMap: AssetRefSchema.optional(),
+    specularMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    specularMapUv: z.number().int().min(0).max(7).optional(),
+    specularMapTiling: Vec2Schema.optional(),
+    specularMapOffset: Vec2Schema.optional(),
+    specularMapRotation: z.number().optional(),
+    specularAntialias: z.boolean().optional(),
+    specularTint: z.boolean().optional(),
+    specularVertexColor: z.boolean().optional(),
+    specularVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    occludeSpecular: z.number().int().min(0).max(2).optional(),
+    specularityFactor: z.number().optional(),
+    specularityFactorMap: AssetRefSchema.optional(),
+    specularityFactorMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    specularityFactorMapUv: z.number().int().min(0).max(7).optional(),
+    specularityFactorMapTiling: Vec2Schema.optional(),
+    specularityFactorMapOffset: Vec2Schema.optional(),
+    specularityFactorMapRotation: z.number().optional(),
+    specularityFactorTint: z.boolean().optional(),
+    specularityFactorVertexColor: z.boolean().optional(),
+    specularityFactorVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    enableGGXSpecular: z.boolean().optional(),
+    anisotropy: z.number().min(-1).max(1).optional(),
+    useMetalness: z.boolean().optional(),
+    metalness: z.number().min(0).max(1).optional(),
+    metalnessMap: AssetRefSchema.optional(),
+    metalnessMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    metalnessMapUv: z.number().int().min(0).max(7).optional(),
+    metalnessMapTiling: Vec2Schema.optional(),
+    metalnessMapOffset: Vec2Schema.optional(),
+    metalnessMapRotation: z.number().optional(),
+    metalnessVertexColor: z.boolean().optional(),
+    metalnessVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    useMetalnessSpecularColor: z.boolean().optional(),
+    conserveEnergy: z.boolean().optional(),
+    shininess: z.number().min(0).max(100).optional(),
+    glossMap: AssetRefSchema.optional(),
+    glossMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    glossMapUv: z.number().int().min(0).max(7).optional(),
+    glossMapTiling: Vec2Schema.optional(),
+    glossMapOffset: Vec2Schema.optional(),
+    glossMapRotation: z.number().optional(),
+    glossVertexColor: z.boolean().optional(),
+    glossVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    glossInvert: z.boolean().optional(),
+    clearCoat: z.number().min(0).max(1).optional(),
+    clearCoatMap: AssetRefSchema.optional(),
+    clearCoatMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    clearCoatMapUv: z.number().int().min(0).max(7).optional(),
+    clearCoatMapTiling: Vec2Schema.optional(),
+    clearCoatMapOffset: Vec2Schema.optional(),
+    clearCoatMapRotation: z.number().optional(),
+    clearCoatVertexColor: z.boolean().optional(),
+    clearCoatVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    clearCoatGloss: z.number().min(0).max(1).optional(),
+    clearCoatGlossMap: AssetRefSchema.optional(),
+    clearCoatGlossMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    clearCoatGlossMapUv: z.number().int().min(0).max(7).optional(),
+    clearCoatGlossMapTiling: Vec2Schema.optional(),
+    clearCoatGlossMapOffset: Vec2Schema.optional(),
+    clearCoatGlossMapRotation: z.number().optional(),
+    clearCoatGlossVertexColor: z.boolean().optional(),
+    clearCoatGlossVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    clearCoatGlossInvert: z.boolean().optional(),
+    clearCoatNormalMap: AssetRefSchema.optional(),
+    clearCoatNormalMapUv: z.number().int().min(0).max(7).optional(),
+    clearCoatNormalMapTiling: Vec2Schema.optional(),
+    clearCoatNormalMapOffset: Vec2Schema.optional(),
+    clearCoatNormalMapRotation: z.number().optional(),
+    useSheen: z.boolean().optional(),
+    sheen: RgbSchema.optional(),
+    sheenMap: AssetRefSchema.optional(),
+    sheenMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    sheenMapUv: z.number().int().min(0).max(7).optional(),
+    sheenMapTiling: Vec2Schema.optional(),
+    sheenMapOffset: Vec2Schema.optional(),
+    sheenMapRotation: z.number().optional(),
+    sheenVertexColor: z.boolean().optional(),
+    sheenVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    sheenGloss: z.number().optional(),
+    sheenGlossMap: AssetRefSchema.optional(),
+    sheenGlossMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    sheenGlossMapUv: z.number().int().min(0).max(7).optional(),
+    sheenGlossMapTiling: Vec2Schema.optional(),
+    sheenGlossMapOffset: Vec2Schema.optional(),
+    sheenGlossMapRotation: z.number().optional(),
+    sheenGlossVertexColor: z.boolean().optional(),
+    sheenGlossVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    sheenGlossInvert: z.boolean().optional(),
+    emissive: RgbSchema.optional(),
+    emissiveMap: AssetRefSchema.optional(),
+    emissiveMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    emissiveMapUv: z.number().int().min(0).max(7).optional(),
+    emissiveMapTiling: Vec2Schema.optional(),
+    emissiveMapOffset: Vec2Schema.optional(),
+    emissiveMapRotation: z.number().optional(),
+    emissiveIntensity: z.number().min(0).max(10).optional(),
+    emissiveVertexColor: z.boolean().optional(),
+    emissiveVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    normalMap: AssetRefSchema.optional(),
+    normalMapUv: z.number().int().min(0).max(7).optional(),
+    normalMapTiling: Vec2Schema.optional(),
+    normalMapOffset: Vec2Schema.optional(),
+    normalMapRotation: z.number().optional(),
+    bumpMapFactor: z.number().optional(),
+    useDynamicRefraction: z.boolean().optional(),
+    refraction: z.number().min(0).max(1).optional(),
+    refractionMap: AssetRefSchema.optional(),
+    refractionMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    refractionMapUv: z.number().int().min(0).max(7).optional(),
+    refractionMapTiling: Vec2Schema.optional(),
+    refractionMapOffset: Vec2Schema.optional(),
+    refractionMapRotation: z.number().optional(),
+    refractionVertexColor: z.boolean().optional(),
+    refractionVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    refractionIndex: z.number().min(0).max(1).optional(),
+    dispersion: z.number().min(0).max(10).optional(),
+    thickness: z.number().optional(),
+    thicknessMap: AssetRefSchema.optional(),
+    thicknessMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    thicknessMapUv: z.number().int().min(0).max(7).optional(),
+    thicknessMapTiling: Vec2Schema.optional(),
+    thicknessMapOffset: Vec2Schema.optional(),
+    thicknessMapRotation: z.number().optional(),
+    thicknessVertexColor: z.boolean().optional(),
+    thicknessVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    attenuation: z.array(z.number()).length(3).optional(),
+    attenuationDistance: z.number().optional(),
+    useIridescence: z.boolean().optional(),
+    iridescence: z.number().optional(),
+    iridescenceMap: AssetRefSchema.optional(),
+    iridescenceMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    iridescenceMapUv: z.number().int().min(0).max(7).optional(),
+    iridescenceMapTiling: Vec2Schema.optional(),
+    iridescenceMapOffset: Vec2Schema.optional(),
+    iridescenceMapRotation: z.number().optional(),
+    iridescenceRefractionIndex: z.number().optional(),
+    iridescenceThicknessMap: AssetRefSchema.optional(),
+    iridescenceThicknessMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    iridescenceThicknessMapUv: z.number().int().min(0).max(7).optional(),
+    iridescenceThicknessMapTiling: Vec2Schema.optional(),
+    iridescenceThicknessMapOffset: Vec2Schema.optional(),
+    iridescenceThicknessMapRotation: z.number().optional(),
+    iridescenceThicknessMin: z.number().optional(),
+    iridescenceThicknessMax: z.number().optional(),
+    heightMap: AssetRefSchema.optional(),
+    heightMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    heightMapUv: z.number().int().min(0).max(7).optional(),
+    heightMapTiling: Vec2Schema.optional(),
+    heightMapOffset: Vec2Schema.optional(),
+    heightMapRotation: z.number().optional(),
+    heightMapFactor: z.number().min(0).max(2).optional(),
+    alphaToCoverage: z.boolean().optional(),
+    alphaTest: z.number().min(0).max(1).optional(),
+    alphaFade: z.number().min(0).max(1).optional(),
+    opacity: z.number().min(0).max(1).optional(),
+    opacityMap: AssetRefSchema.optional(),
+    opacityMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    opacityMapUv: z.number().int().min(0).max(7).optional(),
+    opacityMapTiling: Vec2Schema.optional(),
+    opacityMapOffset: Vec2Schema.optional(),
+    opacityMapRotation: z.number().optional(),
+    opacityVertexColor: z.boolean().optional(),
+    opacityVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    opacityFadesSpecular: z.boolean().optional(),
+    opacityDither: z.enum(['none', 'bayer8', 'bluenoise', 'ignnoise']).optional(),
+    opacityShadowDither: z.enum(['none', 'bayer8', 'bluenoise', 'ignnoise']).optional(),
+    reflectivity: z.number().min(0).max(1).optional(),
+    sphereMap: AssetRefSchema.optional(),
+    cubeMap: AssetRefSchema.optional(),
+    cubeMapProjection: z.number().int().min(0).max(1).optional(),
+    cubeMapProjectionBox: z.object({
+        center: Vec3Schema,
+        halfExtents: Vec3Schema
+    }).optional(),
+    lightMap: AssetRefSchema.optional(),
+    lightMapChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    lightMapUv: z.number().int().min(0).max(7).optional(),
+    lightMapTiling: Vec2Schema.optional(),
+    lightMapOffset: Vec2Schema.optional(),
+    lightMapRotation: z.number().optional(),
+    lightVertexColor: z.boolean().optional(),
+    lightVertexColorChannel: z.enum(['r', 'g', 'b', 'a', 'rgb']).optional(),
+    depthTest: z.boolean().optional(),
+    depthWrite: z.boolean().optional(),
+    depthBias: z.number().optional(),
+    slopeDepthBias: z.number().optional(),
+    cull: z.number().int().min(0).max(3).optional(),
+    blendType: z.number().int().min(0).max(10).optional(),
+    useFog: z.boolean().optional(),
+    useLighting: z.boolean().optional(),
+    useSkybox: z.boolean().optional(),
+    useTonemap: z.boolean().optional(),
+    twoSidedLighting: z.boolean().optional()
+}).passthrough();
+
+export const CssCreateSchema = z.object({
+    type: z.literal('css'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional(),
+        text: z.string().optional()
+    }).optional()
+}).describe('CSS asset');
+
+export const HtmlCreateSchema = z.object({
+    type: z.literal('html'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional(),
+        text: z.string().optional()
+    }).optional()
+}).describe('HTML asset');
+
+export const FolderCreateSchema = z.object({
+    type: z.literal('folder'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional()
+    }).optional()
+}).describe('Folder asset');
+
+export const MaterialCreateSchema = z.object({
+    type: z.literal('material'),
+    options: z.object({
+        data: MaterialSchema.optional(),
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional()
+    }).optional()
+}).describe('Material asset');
+
+export const ScriptCreateSchema = z.object({
+    type: z.literal('script'),
+    options: z.object({
+        filename: z.string().min(1),
+        data: z.record(z.any()).optional(),
+        folder: AssetIdSchema.optional(),
+        preload: z.boolean().optional(),
+        text: z.string().optional()
+    })
+}).describe('Script asset');
+
+export const ShaderCreateSchema = z.object({
+    type: z.literal('shader'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional(),
+        text: z.string().optional()
+    }).optional()
+}).describe('Shader asset');
+
+export const TemplateCreateSchema = z.object({
+    type: z.literal('template'),
+    options: z.object({
+        entity: EntityIdSchema,
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional()
+    })
+}).describe('Template asset');
+
+export const TextCreateSchema = z.object({
+    type: z.literal('text'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional(),
+        text: z.string().optional()
+    }).optional()
+}).describe('Text asset');
+
+export const AnimStateGraphCreateSchema = z.object({
+    type: z.literal('animstategraph'),
+    options: z.object({
+        data: z.record(z.any()).optional(),
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional()
+    }).optional()
+}).describe('Animation state graph asset');
+
+export const BundleCreateSchema = z.object({
+    type: z.literal('bundle'),
+    options: z.object({
+        assets: z.array(AssetIdSchema).optional(),
+        folder: AssetIdSchema.optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional()
+    }).optional()
+}).describe('Bundle asset');
+
+export const CubemapCreateSchema = z.object({
+    type: z.literal('cubemap'),
+    options: z.object({
+        anisotropy: z.number().optional(),
+        folder: AssetIdSchema.optional(),
+        magFilter: z.number().int().optional(),
+        minFilter: z.number().int().optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional(),
+        textures: z.array(AssetRefSchema).max(6).optional()
+    }).optional()
+}).describe('Cubemap asset');
+
+export const JsonCreateSchema = z.object({
+    type: z.literal('json'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        json: z.any().optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional(),
+        spaces: z.number().int().min(0).max(10).optional()
+    }).optional()
+}).describe('JSON asset');
+
+export const I18nCreateSchema = z.object({
+    type: z.literal('i18n'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        localizationData: z.record(z.any()).optional(),
+        name: z.string().optional(),
+        preload: z.boolean().optional()
+    }).optional()
+}).describe('Localization JSON asset');
+
+export const SpriteCreateSchema = z.object({
+    type: z.literal('sprite'),
+    options: z.object({
+        folder: AssetIdSchema.optional(),
+        frameKeys: z.array(z.union([z.string(), z.number()])).optional(),
+        name: z.string().optional(),
+        pixelsPerUnit: z.number().positive().optional(),
+        preload: z.boolean().optional(),
+        renderMode: z.number().int().min(0).max(2).optional(),
+        textureAtlas: AssetIdSchema.optional()
+    }).optional()
+}).describe('Sprite asset');

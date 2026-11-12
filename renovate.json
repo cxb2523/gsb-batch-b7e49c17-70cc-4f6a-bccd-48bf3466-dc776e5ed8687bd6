@@ -1,0 +1,22 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": ["config:recommended"],
+    "packageRules": [
+        {
+            "matchManagers": ["npm"],
+            "groupName": "all npm dependencies",
+            "schedule": ["on monday at 10:00am"],
+            "rangeStrategy": "pin"
+        },
+        {
+            "description": "Match the Node 22 LTS floor in engines",
+            "matchPackageNames": ["@types/node"],
+            "allowedVersions": "22.x"
+        },
+        {
+            "matchManagers": ["github-actions"],
+            "groupName": "all GitHub Actions",
+            "schedule": ["on monday at 10:00am"]
+        }
+    ]
+}
