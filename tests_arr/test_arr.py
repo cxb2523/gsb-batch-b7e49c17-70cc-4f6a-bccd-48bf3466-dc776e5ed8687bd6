@@ -25,7 +25,7 @@ from arrkit.clients import ClientError
 from arrkit.indexers import IndexerError
 from arrkit.testing import FakeServer
 
-from py_bandcamp import arr
+from py_bandcamp import arr, guard
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MP3 = b"ID3" + b"\x00" * 2000
@@ -666,7 +666,7 @@ class Caps(ClientCase):
 
     def test_a_page_over_the_limit_is_an_error(self):
         self.site.on("GET", "/big", "<html>" + "x" * 5000 + "</html>")
-        with mock.patch.object(arr, "MAX_PAGE", 4000):
+        with mock.patch.object(guard, "MAX_PAGE", 4000):
             with self.assertRaisesRegex(IndexerError, "more than 4000 bytes"):
                 arr.Site(0, [net.host_of(self.site.url)]).get(self.site.url + "/big")
         self.assertEqual(arr.Site(0, [net.host_of(self.site.url)]).get(self.site.url + "/big")[:6], "<html>")
@@ -682,7 +682,7 @@ class Caps(ClientCase):
                     raise AssertionError("read on past the limit")
                 return b"x" * n
         body = Body()
-        with mock.patch.object(arr, "CHUNK", 100):
+        with mock.patch.object(guard, "CHUNK", 100):
             with self.assertRaises(arr.TooLarge):
                 arr.read_capped(body, 1000)
         self.assertEqual(body.reads, 11)
@@ -700,7 +700,7 @@ class Caps(ClientCase):
         url = self.free_album()
         self.stream(body=MP3 + b"\x00" * 5000)
         c = self.client()
-        with mock.patch.object(arr, "MAX_AUDIO", 4000):
+        with mock.patch.object(guard, "MAX_AUDIO", 4000):
             row = self.finish(c, self.grab(c, url))
         self.assertEqual(row["state"], "failed", row)
         self.assertIn("more than 4000 bytes", row["message"])
@@ -710,7 +710,7 @@ class Caps(ClientCase):
         url = self.free_album()
         self.stream(body=MP3)
         c = self.client()
-        with mock.patch.object(arr, "MAX_AUDIO", len(MP3)):
+        with mock.patch.object(guard, "MAX_AUDIO", len(MP3)):
             row = self.finish(c, self.grab(c, url))
         self.assertEqual(row["state"], "completed", row)
 
@@ -904,7 +904,7 @@ class Budget(RawCase):
     def test_a_page_that_trickles_is_cut_off_at_the_budget(self):
         server = self.raw(drip(length=1000))
         started = time.monotonic()
-        with mock.patch.object(arr, "PAGE_SECONDS", 1):
+        with mock.patch.object(guard, "PAGE_SECONDS", 1):
             with self.assertRaisesRegex(IndexerError, "within 1 seconds"):
                 arr.Site(0, [net.host_of(server.url)], timeout=1).get(server.url + "/p")
         self.assertLess(time.monotonic() - started, 4)
@@ -912,7 +912,7 @@ class Budget(RawCase):
     def test_a_page_without_a_length_that_trickles_is_cut_off_at_the_budget(self):
         server = self.raw(drip())
         started = time.monotonic()
-        with mock.patch.object(arr, "PAGE_SECONDS", 1):
+        with mock.patch.object(guard, "PAGE_SECONDS", 1):
             with self.assertRaisesRegex(IndexerError, "within 1 seconds"):
                 arr.Site(0, [net.host_of(server.url)], timeout=1).get(server.url + "/p")
         self.assertLess(time.monotonic() - started, 4)
@@ -920,7 +920,7 @@ class Budget(RawCase):
     def trickle(self, length):
         server = self.raw(drip(length=length, first=MP3[:1]))
         started = time.monotonic()
-        with mock.patch.object(arr, "AUDIO_SECONDS", 1), mock.patch.object(arr, "AUDIO_RATE", 10 ** 15):
+        with mock.patch.object(guard, "AUDIO_SECONDS", 1), mock.patch.object(guard, "AUDIO_RATE", 10 ** 15):
             row = self.job_against(server, timeout="1")
         self.assertEqual(row["state"], "failed", row)
         self.assertIn("within 1 seconds", row["message"])
@@ -943,7 +943,7 @@ class Budget(RawCase):
             conn.sendall(b"\r\n\r\nhello")
         server = self.raw(script)
         started = time.monotonic()
-        with mock.patch.object(arr, "PAGE_SECONDS", 1):
+        with mock.patch.object(guard, "PAGE_SECONDS", 1):
             with self.assertRaisesRegex(IndexerError, "within 1 seconds"):
                 arr.Site(0, [net.host_of(server.url)], timeout=2).get(server.url + "/p")
         self.assertLess(time.monotonic() - started, 3)
@@ -953,7 +953,7 @@ class Budget(RawCase):
             conn.sendall(b"HTTP/1.1 200 OK\r\n")
             time.sleep(3)
         server = self.raw(script)
-        with mock.patch.object(arr, "PAGE_SECONDS", 1):
+        with mock.patch.object(guard, "PAGE_SECONDS", 1):
             with self.assertRaisesRegex(IndexerError, "within 1 seconds"):
                 arr.Site(0, [net.host_of(server.url)], timeout=2).get(server.url + "/p")
 
@@ -966,7 +966,7 @@ class Budget(RawCase):
                 conn.sendall(b"y")
         server = self.raw(script)
         started = time.monotonic()
-        with mock.patch.object(arr, "PAGE_SECONDS", 1):
+        with mock.patch.object(guard, "PAGE_SECONDS", 1):
             with self.assertRaisesRegex(IndexerError, "within 1 seconds"):
                 arr.Site(0, [net.host_of(server.url)], timeout=2).get(server.url + "/p")
         self.assertLess(time.monotonic() - started, 1.4)
@@ -984,7 +984,7 @@ class Budget(RawCase):
                 conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello")
         server = self.raw(script)
         started = time.monotonic()
-        with mock.patch.object(arr, "PAGE_SECONDS", 2):
+        with mock.patch.object(guard, "PAGE_SECONDS", 2):
             with self.assertRaisesRegex(IndexerError, "within 2 seconds"):
                 arr.Site(0, [net.host_of(server.url)], timeout=2).get(server.url + "/h0")
         self.assertLess(time.monotonic() - started, 3.5)
@@ -1020,3 +1020,38 @@ class Spacing(Base):
         gaps = [b - a for a, b in zip(starts, starts[1:])]
         self.assertEqual(len(gaps), 2)
         self.assertTrue(all(g >= 0.25 for g in gaps), gaps)
+
+
+class GuardWiring(Base):
+    """Site.fetch and Site.save run on the checks of py_bandcamp.guard: one set of rules, callable on their own."""
+
+    def test_arr_re_exports_the_guard_entries(self):
+        for name in ("trusted", "is_challenge", "read_capped", "declared_length", "page_seconds", "audio_seconds",
+                     "TooLarge", "Truncated", "TooSlow", "BadLength", "Untrusted", "WeakerScheme", "TooManyHops", "Refused"):
+            self.assertIs(getattr(arr, name), getattr(guard, name), name)
+        for name in ("MAX_HOPS", "MAX_PAGE", "MAX_AUDIO", "CHUNK", "PAGE_SECONDS", "AUDIO_SECONDS", "AUDIO_RATE", "AUDIO_SECONDS_MAX"):
+            self.assertEqual(getattr(arr, name), getattr(guard, name), name)
+
+    def test_fetch_asks_the_guard_about_every_hop(self):
+        self.site.on("GET", "/go", (302, {"Location": "/page"}, ""))
+        self.site.on("GET", "/page", "<html>ok</html>")
+        seen = []
+        real = guard.check_trusted
+
+        def spy(url, extra=(), stream=False):
+            seen.append(url)
+            return real(url, extra, stream)
+        with mock.patch.object(guard, "check_trusted", spy):
+            text = arr.Site(0, [net.host_of(self.site.url)]).get(self.site.url + "/go")
+        self.assertEqual(text, "<html>ok</html>")
+        self.assertEqual(seen, [self.site.url + "/go", self.site.url + "/page"], "both hops went through guard.check_trusted")
+
+    def test_a_guard_refusal_becomes_the_callers_error_with_the_guard_message(self):
+        with self.assertRaisesRegex(IndexerError, "is not a Bandcamp address"):
+            arr.Site(0, []).get("https://169.254.169.254/latest/meta-data")
+        try:
+            guard.check_trusted("https://169.254.169.254/latest/meta-data")
+        except guard.Untrusted as e:
+            self.assertIn("169.254.169.254", str(e))
+        else:
+            self.fail("check_trusted accepted a foreign host")

@@ -13,7 +13,8 @@ followed by hand, at most MAX_HOPS of them, and every hop must be a trusted addr
 bytes and an audio file up to MAX_AUDIO; a longer answer is an error, and so is one that ends short of its declared length or
 takes longer than PAGE_SECONDS (a page) or audio_seconds (an audio file); the headers of all hops together get PAGE_SECONDS, and a page's body
 counts in the same budget. A Content-Length that is repeated or is not plain digits is an error. A page that answers with a bot check or a refusal (403, 429, 503) is an error that says Bandcamp is not usable from here; it is
-never worked around.
+never worked around. These rules are the functions of ``py_bandcamp.guard`` — ``Site.fetch`` and ``Site.save`` call them, and any
+other code can call them too (on an address, a redirect, a header or an already downloaded body) and get the same judgment.
 
 A release adds to arrkit's keys: ``bandcamp_id`` (resolved releases), ``artist``, ``album``, ``year``, ``format`` (MP3), ``bitrate`` (128), ``quality`` (MP3-128), ``tracks``,
 ``seconds``, ``tracklist`` ([{number, title, seconds}], resolved releases), ``tags``, ``label``, ``thumbnail``, ``license`` (an SPDX id
@@ -46,7 +47,10 @@ from arrkit.clients.direct import Direct
 from arrkit.clients.jobs import JobQueue
 from arrkit.indexers import Indexer, IndexerError
 
-from py_bandcamp import BandCamp, _to_iso_date
+from py_bandcamp import BandCamp, _to_iso_date, guard
+from py_bandcamp.guard import (AUDIO_RATE, AUDIO_SECONDS, AUDIO_SECONDS_MAX, CHUNK, MAX_AUDIO, MAX_HOPS, MAX_PAGE, PAGE_SECONDS,
+                               BadLength, Refused, TooLarge, TooManyHops, TooSlow, Truncated, Untrusted, WeakerScheme,
+                               audio_seconds, declared_length, is_challenge, page_seconds, read_capped, trusted)
 from py_bandcamp.models import BandcampAlbum, BandcampArtist
 from py_bandcamp.utils import _extract_tralbum, _parse_ldjson
 
@@ -58,19 +62,9 @@ MAX_TERMS = 2
 NAME_LIMIT = 200
 FILE_LIMIT = 255
 FREE, PAID = 1, 2
-MAX_HOPS = 5
-MAX_PAGE = 8 * 1024 * 1024
-MAX_AUDIO = 256 * 1024 * 1024
-CHUNK = 64 * 1024
-PAGE_SECONDS = 120
-AUDIO_SECONDS = 60
-AUDIO_RATE = 32 * 1024
-AUDIO_SECONDS_MAX = 3600
 DOWNLOADABLE = ("free", "name_your_price", "licensed")
-CHALLENGE = re.compile(r"captcha|client challenge|/_fs-ch-|cf-chl|just a moment|attention required|access denied|verify you are human|checking your browser", re.I)
 CC_URL = re.compile(r"creativecommons\.org/(?:licenses/([a-z-]+)/([0-9.]+)|publicdomain/zero/([0-9.]+))", re.I)
 SUBDOMAIN = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
-UNSAFE = re.compile(r"[\s\x00-\x1f\x7f]")
 
 
 class PageError(ValueError):
@@ -79,11 +73,6 @@ class PageError(ValueError):
 
 def words(value):
     return [w.strip() for w in str(value or "").split(",") if w.strip()]
-
-
-def is_challenge(text):
-    """True for a page that is a bot check and not Bandcamp's."""
-    return bool(CHALLENGE.search(text[:20000])) and "searchresult" not in text and "data-tralbum" not in text
 
 
 def fit(name, suffix="", limit=FILE_LIMIT):
@@ -109,20 +98,6 @@ def spdx_of(url):
     return f"CC-{m.group(1).upper()}-{m.group(2)}"
 
 
-def trusted(url, extra=(), stream=False):
-    """True for an https address on bandcamp.com (and on bcbits.com for a stream), or on a host the instance names in extra_hosts."""
-    url = str(url or "")
-    u = urllib.parse.urlsplit(url)
-    if UNSAFE.search(url) or "\\" in u.netloc:
-        return False
-    host = net.host_of(url) if u.hostname else ""
-    if host and host in extra and u.scheme in ("http", "https"):
-        return True
-    suffixes = (".bandcamp.com", ".bcbits.com") if stream else (".bandcamp.com",)
-    name = (u.hostname or "").lower()
-    return u.scheme == "https" and bool(name) and (name == "bandcamp.com" or name.endswith(suffixes))
-
-
 def artist_url(name):
     """The page address of a followed artist: an address as given, or a name turned into its bandcamp.com subdomain."""
     name = str(name or "").strip()
@@ -130,32 +105,6 @@ def artist_url(name):
         return name.rstrip("/")
     slug = re.sub(r"[^a-z0-9-]+", "", name.lower().replace(" ", "-"))
     return f"https://{slug}.bandcamp.com" if SUBDOMAIN.fullmatch(slug) else ""
-
-
-class TooLarge(Exception):
-    """An answer is longer than the limit for it."""
-
-
-class Truncated(Exception):
-    """An answer ended before the length it declared: args are the bytes read and the bytes declared."""
-
-
-class TooSlow(Exception):
-    """An answer did not finish within its time budget in seconds, which is args[0]."""
-
-
-class BadLength(Exception):
-    """An answer carries a Content-Length that is not a single run of ASCII digits."""
-
-
-def page_seconds(declared):
-    """The time a page may take to arrive."""
-    return PAGE_SECONDS
-
-
-def audio_seconds(declared):
-    """The time an audio file may take to arrive: a base plus the time at AUDIO_RATE bytes a second, up to AUDIO_SECONDS_MAX."""
-    return min(AUDIO_SECONDS_MAX, AUDIO_SECONDS + (MAX_AUDIO if declared is None else declared) / AUDIO_RATE)
 
 
 class Stay(urllib.request.HTTPRedirectHandler):
@@ -197,7 +146,6 @@ class WatchedHTTPSHandler(urllib.request.HTTPSHandler):
 
 
 OPENER = urllib.request.build_opener(Stay, WatchedHTTPHandler, WatchedHTTPSHandler)
-CONTENT_LENGTH = re.compile(r"[0-9]+")
 _turns, _turn_lock = {}, threading.Lock()
 
 
@@ -213,40 +161,6 @@ def wait_turn(host, gap):
         time.sleep(start - now)
 
 
-def declared_length(response):
-    """The Content-Length of `response` as an int, or None when it has none. Raises BadLength for one that is repeated or is not ASCII digits."""
-    values = response.headers.get_all("Content-Length") or []
-    if not values:
-        return None
-    if len(values) > 1 or not CONTENT_LENGTH.fullmatch(values[0].strip()):
-        raise BadLength
-    return int(values[0].strip())
-
-
-def read_capped(response, limit, sink=None, budget=page_seconds, since=None):
-    """The body of `response`, or the number of bytes written to `sink` when there is one. Raises TooLarge as soon as the body passes `limit`,
-    BadLength for a malformed Content-Length, TooSlow when it is not complete `budget(declared length)` seconds after `since` (the first read
-    when not given), and Truncated when it ends short of its declared length."""
-    declared = declared_length(response)
-    if declared is not None and declared > limit:
-        raise TooLarge(limit)
-    deadline = (time.monotonic() if since is None else since) + budget(declared)
-    chunks, size = [], 0
-    while True:
-        chunk = response.read1(CHUNK)
-        if not chunk:
-            break
-        size += len(chunk)
-        if size > limit:
-            raise TooLarge(limit)
-        sink.write(chunk) if sink else chunks.append(chunk)
-        if time.monotonic() > deadline:
-            raise TooSlow(round(budget(declared)))
-    if declared is not None and size != declared:
-        raise Truncated(size, declared)
-    return size if sink else b"".join(chunks)
-
-
 class Site:
     """The HTTP side shared by the indexer and the client: GET spaced per host, redirects followed by hand, bodies capped, bot checks refused."""
 
@@ -256,16 +170,18 @@ class Site:
     def fetch(self, url, read, error, stream=False):
         """`read(response, start)` of the answer to a GET of `url`, or None when it is gone (404); `start` is when the first request began. A
         redirect is followed for at most MAX_HOPS hops, each to a trusted address and never from https to another scheme. The headers of all
-        the hops together have page_seconds(None) seconds to arrive."""
-        start = None
-        for hop in range(MAX_HOPS + 1):
-            if not trusted(url, self.extra, stream):
-                raise error(f"{net.host_of(url) or url} is not a Bandcamp address; add it to the extra hosts to use it")
-            host = net.host_of(url)
+        the hops together have page_seconds() seconds to arrive. Every rule is checked by py_bandcamp.guard; a refusal (a guard.Refused)
+        is reported through `error` with the guard's message."""
+        start, hops = None, 0
+        while True:
+            try:
+                host = guard.check_trusted(url, self.extra, stream)
+            except Refused as e:
+                raise error(str(e)) from None
             wait_turn(host, self.delay)
             if start is None:
                 start = time.monotonic()
-            limit = page_seconds(None)
+            limit = page_seconds()
             left = start + limit - time.monotonic()
             socks, fired = [], []
 
@@ -294,53 +210,49 @@ class Site:
                     _local.watch = None
                 with response:
                     if fired:
-                        raise TooSlow(round(limit))
+                        raise TooSlow(round(limit), host)
                     return read(response, start)
             except urllib.error.HTTPError as e:
                 with e:
                     status, location = e.code, e.headers.get("Location")
                 if status in (301, 302, 303, 307, 308) and location:
-                    target = urllib.parse.urljoin(url, location)
-                    if urllib.parse.urlsplit(url).scheme == "https" and urllib.parse.urlsplit(target).scheme != "https":
-                        raise error(f"{host} redirected from https to {net.host_of(target) or 'another address'} over a weaker scheme; refused") from None
-                    url = target
+                    hops += 1
+                    try:
+                        guard.check_hops(hops, host)
+                        url = guard.redirect_target(url, location)
+                    except Refused as e:
+                        raise error(str(e)) from None
                     continue
                 if status == 404:
                     return None
                 if status in (403, 429, 503):
                     raise error(f"{host} refused the request (HTTP {status}); bandcamp is not usable from here") from None
                 raise error(f"HTTP {status} from {host}") from None
-            except TooLarge as e:
-                raise error(f"{host} answered with more than {e.args[0]} bytes; refused") from None
-            except Truncated as e:
-                raise error(f"{host} closed the answer after {e.args[0]} of {e.args[1]} bytes; refused") from None
-            except TooSlow as e:
-                raise error(f"{host} did not deliver the answer within {e.args[0]} seconds; refused") from None
-            except BadLength:
-                raise error(f"{host} sent a Content-Length that is not a single number; refused") from None
+            except Refused as e:
+                e.host = e.host or host
+                raise error(str(e)) from None
             except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
                 if fired:
-                    raise error(f"{host} did not deliver the answer within {round(limit)} seconds; refused") from None
+                    raise error(str(TooSlow(round(limit), host))) from None
                 raise error(f"{host} did not answer: {getattr(e, 'reason', e)}") from None
-        raise error(f"{net.host_of(url) or url} redirected more than {MAX_HOPS} times; refused")
 
     def get(self, url, params=None, error=IndexerError):
         """The text of a page, or None when it is gone (404)."""
         if params:
             url += ("&" if "?" in url else "?") + urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")})
-        body = self.fetch(url, lambda r, start: read_capped(r, MAX_PAGE, budget=page_seconds, since=start), error)
+        body = self.fetch(url, lambda r, start: read_capped(r, guard.MAX_PAGE, budget=page_seconds, since=start), error)
         if body is None:
             return None
         text = body.decode("utf-8", "replace")
         if is_challenge(text):
-            raise error(f"{net.host_of(url)} answered with a bot check; bandcamp is not usable from here")
+            raise error(f"{guard.host_of(url)} answered with a bot check; bandcamp is not usable from here")
         return text
 
     def save(self, url, path, error=ClientError):
         """Writes the audio file at `url` to `path` and returns its size, or None when it is gone (404). Stops at MAX_AUDIO bytes."""
         def write(response, start):
             with open(path, "wb") as f:
-                return read_capped(response, MAX_AUDIO, f, audio_seconds)
+                return read_capped(response, guard.MAX_AUDIO, f, audio_seconds)
         return self.fetch(url, write, error, stream=True)
 
 
@@ -353,7 +265,7 @@ def read_page(text, url):
         meta = BandcampAlbum.data_from_page(text, url)
         ld = _parse_ldjson(text, clean=True)
     except (ValueError, IndexError, KeyError, TypeError, AttributeError) as e:
-        raise PageError(f"{net.host_of(url)} did not answer a release page: {type(e).__name__}") from None
+        raise PageError(f"{guard.host_of(url)} did not answer a release page: {type(e).__name__}") from None
     tralbum = _extract_tralbum(text)
     current = tralbum.get("current") or {}
     infos = [t for t in tralbum.get("trackinfo") or [] if isinstance(t, dict)]
@@ -431,7 +343,7 @@ class Bandcamp(Indexer):
         return (self.settings["url"] or SITE).rstrip("/")
 
     def site(self):
-        return Site(self.num("delay", 3), [*words(self.settings["extra_hosts"]), net.host_of(self.base())])
+        return Site(self.num("delay", 3), [*words(self.settings["extra_hosts"]), guard.host_of(self.base())])
 
     def search_texts(self, query):
         titles = [str(t).strip() for t in [query.get("title"), *(query.get("titles") or ())] if t and str(t).strip()]
