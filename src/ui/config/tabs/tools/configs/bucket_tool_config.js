@@ -25,17 +25,17 @@ class BucketToolConfig extends BaseToolConfig {
           {
             icon: "fill-cube-connected",
             value: "fill-cube-connected",
-            title: "Cube connected (default)\nFills all connected pixels of the same color on all sides of the cube"
-          }, 
+            title: "Cube connected (default)\nFills connected pixels of the same color on the clicked cube face, stopping at UV seams"
+          },
           {
             icon: "fill-face-connected",
             value: "fill-face-connected",
             title: "Face connected\nFills all connected pixels of the same color on the face"
-          }, 
+          },
           {
             icon: "fill-cube-replace",
             value: "fill-cube-replace",
-            title: "Cube replace\nFills the whole cube with the selected color"
+            title: "Cube replace\nFills the whole clicked face with the selected color, stopping at UV seams"
           },
           {
             icon: "fill-face-replace",

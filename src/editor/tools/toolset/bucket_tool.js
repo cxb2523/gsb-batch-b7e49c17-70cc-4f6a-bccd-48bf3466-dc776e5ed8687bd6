@@ -1,5 +1,6 @@
 import Color from "color";
 import { BaseTool } from "../base_tool.js";
+import { computeCubeFaceFill } from "../fill_engine.js";
 
 const TRANSPARENT_COLOR = new Color("#000000").alpha(0);
 
@@ -29,40 +30,58 @@ class BucketTool extends BaseTool {
     const point = toolData.getCoords();
     const color = this.config.get("bucketErase", false) ? () => TRANSPARENT_COLOR : this.config.getColor.bind(this.config);
     const old_color = toolData.texture.getPixel({ x: point.x, y: point.y });
-    const limbs = {
-      "head_inner": [8, 8, 8, 0, 0],
-      "head_outer": [8, 8, 8, 32, 0],
-      "torso_inner": [8, 12, 4, 16, 16],
-      "torso_outer": [8, 12, 4, 16, 32],
-      "right_arm_inner_classic": [4, 12, 4, 40, 16],
-      "right_arm_outer_classic": [4, 12, 4, 40, 32],
-      "left_arm_inner_classic": [4, 12, 4, 32, 48],
-      "left_arm_outer_classic": [4, 12, 4, 48, 48],
-      "right_arm_inner_slim": [3, 12, 4, 40, 16],
-      "right_arm_outer_slim": [3, 12, 4, 40, 32],
-      "left_arm_inner_slim": [3, 12, 4, 32, 48],
-      "left_arm_outer_slim": [3, 12, 4, 48, 48],
-      "right_leg_inner": [4, 12, 4, 0, 16],
-      "right_leg_outer": [4, 12, 4, 0, 32],
-      "left_leg_inner": [4, 12, 4, 16, 48],
-      "left_leg_outer": [4, 12, 4, 0, 48],
-      "ears": [6, 6, 1, 24, 0],
-    }
 
     this.replaceColor = this.config.get("fillStyle")==="replace-color";
-    this.cubeUV = this.config.get("fillStyle")==="fill-cube-connected" || this.config.get("fillStyle")==="fill-cube-replace";
     this.replaceWithColor = this.config.get("fillStyle")==="fill-cube-replace"||this.config.get("fillStyle")==="fill-face-replace";
+
+    const cubeFill = this.config.get("fillStyle")==="fill-cube-connected" || this.config.get("fillStyle")==="fill-cube-replace";
 
     this.cursor = point;
     if (!this.replaceColor) {
-      Object.keys(limbs).forEach(key => {
-        if ((toolData.variant === 'slim' && key.endsWith("classic")) ||
-            (toolData.variant === 'classic' && key.endsWith("slim"))) {
-          return;
-        }
-        this.draw_box_uv(limbs[key], texture, point, color, old_color);
-      });
+      if (cubeFill) {
+        // Cube styles flood fill a single face of the variant's real cube
+        // layout. The fill is clipped to that face, so it never crosses UV
+        // seams into other faces or neighbouring parts (e.g. classic 4px
+        // vs slim 3px arms can never bleed into each other).
+        const result = computeCubeFaceFill(texture, toolData.variant, point, {
+          colorsMatch: this.colorsMatch.bind(this),
+          replace: this.replaceWithColor,
+        });
 
+        if (result) {
+          for (const target of result.points) {
+            texture.putPixel(target, color());
+          }
+        }
+      } else {
+        const limbs = {
+          "head_inner": [8, 8, 8, 0, 0],
+          "head_outer": [8, 8, 8, 32, 0],
+          "torso_inner": [8, 12, 4, 16, 16],
+          "torso_outer": [8, 12, 4, 16, 32],
+          "right_arm_inner_classic": [4, 12, 4, 40, 16],
+          "right_arm_outer_classic": [4, 12, 4, 40, 32],
+          "left_arm_inner_classic": [4, 12, 4, 32, 48],
+          "left_arm_outer_classic": [4, 12, 4, 48, 48],
+          "right_arm_inner_slim": [3, 12, 4, 40, 16],
+          "right_arm_outer_slim": [3, 12, 4, 40, 32],
+          "left_arm_inner_slim": [3, 12, 4, 32, 48],
+          "left_arm_outer_slim": [3, 12, 4, 48, 48],
+          "right_leg_inner": [4, 12, 4, 0, 16],
+          "right_leg_outer": [4, 12, 4, 0, 32],
+          "left_leg_inner": [4, 12, 4, 16, 48],
+          "left_leg_outer": [4, 12, 4, 0, 48],
+          "ears": [6, 6, 1, 24, 0],
+        }
+
+        Object.keys(limbs).forEach(key => {
+          if ((toolData.variant === 'slim' && key.endsWith("classic")) ||
+              (toolData.variant === 'classic' && key.endsWith("slim"))) {
+            return;
+          }
+          this.draw_box_uv(limbs[key], texture, point, color, old_color);
+        });
+      }
     } else {
         this.draw_replace_color(texture, color, old_color);
     }
@@ -115,42 +134,14 @@ class BucketTool extends BaseTool {
           visited.add(`${x},${y}`);
 
           if (this.cubeUV) {
-            // The lines below limit the bucket tool from spilling over to other limbs and parts of the cube that aren't physically connected
-            this.UV(x+1<=width&&!((x==(offset_x+box_depth+box_width-1)&&y>=offset_y&&y<=(offset_y+box_depth-1))||(x==(offset_x+box_depth+(box_width*2)-1)&&y>=offset_y&&y<=(offset_y+box_depth-1))||(x==(offset_x+(box_depth*2)+(box_width*2)-1)&&y>=(offset_y+box_depth)&&y<=(offset_y+box_depth+box_height-1))), { x: x + 1, y },texture,old_color,queue);
-            this.UV(x-1>=0&&!((x==(offset_x+box_depth)&&y>=(offset_y)&&y<=(offset_y+box_depth-1))||(x==(offset_x+box_depth+box_width)&&y>=(offset_y)&&y<=(offset_y+box_depth-1))||(x==offset_x&&y>=(offset_y+box_depth)&&y<=(offset_y+box_depth+box_height-1))), { x: x - 1, y },texture,old_color,queue);
-            this.UV(y+1<=height&&!((y==(offset_y+box_depth-1)&&x>=(offset_x+box_depth+box_width)&&x<=(offset_x+box_depth+(box_width*2)-1))||(y==(offset_y+box_depth+box_height-1)&&x>=offset_x&&x<=(offset_x+(box_width*2)+(box_depth*2)-1))), { x, y: y + 1 },texture,old_color,queue);
-            this.UV(y-1>=0&&!((y==offset_y&&x>=(offset_x+box_depth)&&x<=(offset_x+box_depth+box_width*2))||(y==(offset_y+box_depth)&&x>=offset_x&&x<=(offset_x+box_depth-1))||(y==(offset_y+box_depth)&&x>=(offset_x+box_depth+box_width)&&x<=(offset_x+(box_depth*2)+(box_width*2)-1))), { x, y: y - 1 },texture,old_color,queue);
-
-            // Left-Right UV
-            this.UV(x==offset_x&&y>=(offset_y+box_depth)&&y<=(offset_y+box_depth+box_height-1), { x: (offset_x+(box_depth*2)+(box_width*2)-1), y },texture,old_color,queue);
-            this.UV(x==(offset_x+(box_depth*2)+(box_width*2)-1)&&y>=(offset_y+box_depth)&&y<=(offset_y+box_depth+box_height-1), { x: offset_x, y },texture,old_color,queue);
-            // 1st Top UV
-            this.UV(x>=offset_x&&x<=(offset_x+box_depth)&&y==(offset_y+box_depth), { x: (offset_x+box_depth), y: (offset_y+(x-offset_x)) },texture,old_color,queue);
-            this.UV(y>=offset_y&&y<=(offset_y+box_depth-1)&&x==(offset_x+box_depth), { x: (offset_x+(y-offset_y)), y: (offset_y+box_depth) },texture,old_color,queue);
-            // 2nd Top UV
-            this.UV(x>=(offset_x+box_depth+box_width)&&x<=(offset_x+(box_depth*2)+box_width-1)&&y==(offset_y+box_depth), { x: (offset_x+box_depth+box_width-1), y: (offset_y+((offset_x+(box_depth*2)+box_width-1)-x)) },texture,old_color,queue);
-            this.UV(y>=offset_y&&y<=(offset_y+box_depth)&&x==(offset_x+box_depth+box_width-1), { x: (offset_x+((offset_y+(box_depth*2)+box_width-1)-y)), y: (offset_y+box_depth) },texture,old_color,queue);
-            // 3rd Top UV
-            this.UV(y==(offset_y+box_depth)&&x>=(offset_x+(box_depth*2)+box_width)&&x<=(offset_x+(box_depth*2)+(box_width*2)), { x: (offset_x*2+box_depth*3+box_width*2-x-1), y: offset_y },texture,old_color,queue);
-            this.UV(y==offset_y&&x>=(offset_x+box_depth)&&x<=(offset_x+box_depth+box_width-1), { x: ((offset_x*2)+(box_depth*3)+(box_width*2)-x-1), y: (offset_y+box_depth) },texture,old_color,queue);
-            // 1st Bottom UV
-            this.UV(y==(offset_y+box_depth+box_height-1)&&x>=offset_x&&x<=(offset_x+box_depth-1), { x: (offset_x+box_depth+box_width), y: (offset_y+(x-offset_x)) },texture,old_color,queue);
-            this.UV(x==(offset_x+box_depth+box_width)&&y>=offset_y&&y<=(offset_y+box_depth-1), { x: (offset_x+(y-offset_y)), y: (offset_y+box_depth+box_height-1) },texture,old_color,queue);
-            // 2nd Bottom UV
-            this.UV(y==(offset_y+box_depth+box_height-1)&&x>=(offset_x+box_depth)&&x<=(offset_x+box_depth+box_width-1), { x: (x+(box_width)), y: (offset_y+box_depth-1) },texture,old_color,queue);
-            this.UV(y==(offset_y+box_depth-1)&&x>=(offset_x+box_depth+box_width)&&x<=(offset_x+box_depth+(box_width*2)-1), { x: (x-(box_width)), y: (offset_y+box_depth+box_height-1) },texture,old_color,queue);
-            // 3rd Bottom UV
-            this.UV(y==(offset_y+box_depth+box_height-1)&&x>=(offset_x+box_depth+box_width)&&x<=(offset_x+(box_depth*2)+box_width-1), { x: (offset_x+box_depth+box_width*2-1), y: (offset_y+(offset_x+box_depth*2+box_width-x-1)) },texture,old_color,queue);
-            this.UV(x==(offset_x+box_depth+box_width*2-1)&&y>=offset_y&&y<=(offset_y+box_depth-1), { x: (offset_x+box_depth*2+box_width+(offset_y-y-1)), y: (offset_y+box_depth+box_height-1) },texture,old_color,queue);
-            // 4th Bottom UV
-            this.UV(y==(offset_y+box_depth+box_height-1)&&x>=(offset_x+box_depth*2+box_width)&&x<=(offset_x+(box_depth*2)+(box_width*2)-1), { x: (offset_x*2 + box_depth*3 + box_width*3 - x - 1), y: offset_y },texture,old_color,queue);
-            this.UV(y==offset_y&&x>=(offset_x+box_depth+box_width)&&x<=(offset_x+box_depth+box_width*2-1), { x: (offset_x*2 + box_depth*3 + box_width*3 - x - 1), y: (offset_y+box_depth+box_height-1) },texture,old_color,queue);
-          } else {
-            this.UV(x+1<=width&&!((x==(offset_x+box_depth-1)&&y>=(offset_y+box_depth))||(x==(offset_x+box_depth+box_width-1))||(x==(offset_x+box_depth+box_width*2-1)&&y<(offset_y+box_depth))||(x==(offset_x+box_depth*2+box_width-1)&&y>=(offset_y+box_depth))||(x==(offset_x+box_depth*2+box_width*2-1))), { x: x + 1, y },texture,old_color,queue);
-            this.UV(x-1>=0&&!((x==(offset_x))||(x==(offset_x+box_depth))||(x==(offset_x+box_depth+box_width)||(x==(offset_x+box_depth*2+box_width))&&(y>=(offset_y+box_depth)))), { x: x - 1, y },texture,old_color,queue);
-            this.UV(y+1<=height&&!(y==(offset_y+box_depth-1)||(y==(offset_y+box_depth+box_height-1))), { x, y: y + 1 },texture,old_color,queue);
-            this.UV(y-1>=0&&!((y==(offset_y)||y==(offset_y+box_depth))), { x, y: y - 1 },texture,old_color,queue);
+            // cube styles are handled by fill_engine.js
+            continue;
           }
+
+          this.UV(x+1<=width&&!((x==(offset_x+box_depth-1)&&y>=(offset_y+box_depth))||(x==(offset_x+box_depth+box_width-1))||(x==(offset_x+box_depth+box_width*2-1)&&y<(offset_y+box_depth))||(x==(offset_x+box_depth*2+box_width-1)&&y>=(offset_y+box_depth))||(x==(offset_x+box_depth*2+box_width*2-1))), { x: x + 1, y },texture,old_color,queue);
+          this.UV(x-1>=0&&!((x==(offset_x))||(x==(offset_x+box_depth))||(x==(offset_x+box_depth+box_width)||(x==(offset_x+box_depth*2+box_width))&&(y>=(offset_y+box_depth)))), { x: x - 1, y },texture,old_color,queue);
+          this.UV(y+1<=height&&!(y==(offset_y+box_depth-1)||(y==(offset_y+box_depth+box_height-1))), { x, y: y + 1 },texture,old_color,queue);
+          this.UV(y-1>=0&&!((y==(offset_y)||y==(offset_y+box_depth))), { x, y: y - 1 },texture,old_color,queue);
         }
         if (previous_queue_legth === queue.length){
           break;
