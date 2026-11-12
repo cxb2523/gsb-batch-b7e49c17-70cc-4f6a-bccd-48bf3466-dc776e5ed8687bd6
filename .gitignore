@@ -1,0 +1,26 @@
+# JavaScript and Next.js
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+*.log
+.pnpm-store/
+
+# Local environment
+.env*
+!.env.example
+.vercel/
+
+# Browser output
+artifacts/
+playwright-report/
+test-results/
+blob-report/
+
+# Nix build outputs
+result
+result-*
+
+.DS_Store
