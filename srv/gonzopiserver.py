@@ -20,13 +20,17 @@ if rundir != '':
     os.chdir(rundir)
 
 urls = (
-    '/','intro',   
+    '/','intro',
     '/c/?', 'index',
     '/f/(.*)?', 'films',
     '/t/(.*)?', 'tree',
     '/e/(.*)?', 'edit',
     '/save-order/(.*)?', 'logorder',
     '/p/(.*)?', 'player',
+    '/viewfinder/retry/?', 'viewfinder_retry',
+    '/viewfinder/status/?', 'viewfinder_status',
+    '/viewfinder/feed/?', 'viewfinder_feed',
+    '/viewfinder/?', 'viewfinder_page',
     '/api','api'
 )
 
@@ -86,6 +90,22 @@ else:
 
 basedir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(basedir)
+
+# Web viewfinder (live MJPEG feed with failure/stall degradation states).
+# Imported after basedir is on sys.path so it also resolves under
+# Apache/mod_wsgi. Tolerant of failure: if the package cannot load, the
+# rest of the control server keeps working.
+try:
+    from viewfinder.webapp import (
+        viewfinder_page,
+        viewfinder_feed,
+        viewfinder_status,
+        viewfinder_retry,
+    )
+    VIEWFINDER_AVAILABLE = True
+except Exception as _vf_exc:  # pragma: no cover - defensive
+    VIEWFINDER_AVAILABLE = False
+    VIEWFINDER_IMPORT_ERROR = _vf_exc
 
 films = []
 

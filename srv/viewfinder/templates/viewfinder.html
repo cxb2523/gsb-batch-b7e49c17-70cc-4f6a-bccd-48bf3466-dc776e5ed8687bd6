@@ -1,0 +1,281 @@
+$def with (status)
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gonzo Pi Web Viewfinder</title>
+<style>
+  body {
+    margin: 0;
+    background: #000;
+    color: #FCD612;
+    font-family: monospace;
+  }
+  h1 { font-size: 16px; margin: 8px 12px; font-weight: normal; }
+  a { color: #f4f4f4; }
+
+  /* Two-column layout: picture and status are always both visible.
+     On narrow screens it wraps to a vertical stack instead of overlaying. */
+  .vf-layout {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 0 12px 16px;
+  }
+  .vf-stage {
+    position: relative;
+    flex: 1 1 480px;
+    min-width: 280px;
+    background: #111;
+    border: 1px solid #333;
+  }
+  .vf-stage img {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #050505;
+  }
+
+  /* In-frame notice: a compact strip pinned inside the top of the image,
+     never a full-screen mask. The rest of the picture stays visible. */
+  .vf-notice {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 6px 10px;
+    font-size: 13px;
+    line-height: 1.4;
+    background: rgba(20, 20, 20, 0.82);
+    color: #fff;
+    border-bottom: 2px solid #888;
+    box-sizing: border-box;
+  }
+  .vf-notice strong { color: #FCD612; }
+  .vf-notice.paused { border-bottom-color: #FCD612; }
+  .vf-notice.failed { border-bottom-color: #e0473a; color: #ffb3ab; }
+  .vf-notice.starting { border-bottom-color: #4aa3ff; color: #bcd9ff; }
+
+  /* Side panel: always rendered alongside the image area. */
+  .vf-panel {
+    flex: 0 0 260px;
+    max-width: 100%;
+    border: 1px solid #333;
+    background: #141414;
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .vf-panel .row { margin: 6px 0; }
+  .vf-state {
+    display: inline-block;
+    padding: 2px 8px;
+    border: 1px solid #555;
+  }
+  .vf-state.running { color: #7dffa0; border-color: #2e7d4f; }
+  .vf-state.paused  { color: #FCD612; border-color: #a8870f; }
+  .vf-state.failed  { color: #ff8a80; border-color: #a93226; }
+  .vf-state.starting{ color: #8ec3ff; border-color: #24609e; }
+  .vf-state.stopped { color: #ccc; }
+
+  .vf-reason {
+    color: #ffb3ab;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  button.vf-retry {
+    margin-top: 8px;
+    background: #FCD612;
+    color: #000;
+    border: 0;
+    padding: 8px 14px;
+    font-family: monospace;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.vf-retry:disabled { opacity: .45; cursor: default; }
+  .vf-meta { color: #9a9a9a; font-size: 12px; }
+  .vf-back { margin: 6px 12px 12px; display: inline-block; }
+</style>
+</head>
+<body>
+
+<h1>Gonzo Pi Web Viewfinder</h1>
+
+<div class="vf-layout">
+  <div class="vf-stage">
+    <img id="vf-img" alt="camera view" src="/viewfinder/feed">
+    <div id="vf-notice" class="vf-notice"></div>
+  </div>
+
+  <div class="vf-panel" id="vf-panel">
+    <div class="row">Status:
+      <span id="vf-state" class="vf-state stopped">Connecting...</span>
+    </div>
+    <div class="row vf-reason" id="vf-reason"></div>
+    <div class="row">
+      <button id="vf-retry" class="vf-retry" type="button">Retry connection</button>
+    </div>
+    <div class="row vf-meta" id="vf-meta"></div>
+    <div class="row vf-meta" id="vf-frameinfo"></div>
+    <div class="row vf-meta">
+      Resolution: $status['resolution'] &nbsp;
+      FPS: $status['fps'] &nbsp;
+      Stall timeout: $status['stall_timeout']s
+    </div>
+  </div>
+</div>
+
+<a class="vf-back" href="/">&larr; Back</a>
+
+<script>
+(function () {
+  var img = document.getElementById('vf-img');
+  var notice = document.getElementById('vf-notice');
+  var stateEl = document.getElementById('vf-state');
+  var reasonEl = document.getElementById('vf-reason');
+  var metaEl = document.getElementById('vf-meta');
+  var frameInfoEl = document.getElementById('vf-frameinfo');
+  var retryBtn = document.getElementById('vf-retry');
+  var POLL_MS = 800;
+  var reconnectTimer = null;
+  var retrying = false;
+
+  var ERROR_TEXT = {
+    device_busy: 'Camera device is busy (already in use by another process).',
+    init_failed: 'Camera initialization failed.',
+    runtime_error: 'Viewfinder interrupted: camera runtime error.',
+    backend_unavailable: 'Camera backend unavailable (picamera not found).'
+  };
+
+  function setNotice(kind, html) {
+    if (!html) {
+      notice.style.display = 'none';
+      notice.className = 'vf-notice';
+      notice.innerHTML = '';
+      return;
+    }
+    notice.style.display = 'block';
+    notice.className = 'vf-notice ' + kind;
+    notice.innerHTML = html;
+  }
+
+  function setState(cls, text) {
+    stateEl.className = 'vf-state ' + cls;
+    stateEl.textContent = text;
+  }
+
+  function formatTime(epoch) {
+    if (!epoch) { return 'none'; }
+    var d = new Date(epoch * 1000);
+    return d.toLocaleTimeString();
+  }
+
+  function reconnectFeed() {
+    // Force the browser to re-open the multipart connection. Only runs
+    // after a hard failure; a stall keeps the existing connection alive.
+    if (reconnectTimer) { return; }
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      img.src = '/viewfinder/feed?ts=' + Date.now();
+    }, 1500);
+  }
+
+  function render(status) {
+    var failed = status.state === 'failed';
+    var stopped = status.state === 'stopped';
+    var starting = status.state === 'starting';
+    var reasonText = '';
+    if (status.last_error) {
+      reasonText = (ERROR_TEXT[status.last_error.code] ||
+                    status.last_error.code) +
+        '\n' + (status.last_error.message || '');
+    }
+    reasonEl.textContent = reasonText;
+    metaEl.textContent = 'Last error: ' +
+      (status.last_error ? formatTime(status.last_error.at) : 'none');
+    frameInfoEl.textContent = 'Frames received: ' + status.frame_seq +
+      ' - Last new frame: ' + formatTime(status.last_frame_at);
+
+    if (failed || stopped) {
+      setState('failed', failed ? 'Camera failed' : 'Stopped');
+      setNotice('failed',
+        '<strong>Camera unavailable</strong><br>' +
+        'Check the camera connection / whether it is busy, then press Retry.');
+      retryBtn.disabled = false;
+      reconnectFeed();
+    } else if (status.stalled) {
+      // No NEW frame within the configured timeout - either a running
+      // camera that froze or a start whose first frame never arrived.
+      // The last frame stays on screen (clearly marked) and is never
+      // refreshed or presented as a new frame.
+      setState('paused', 'Paused - waiting for frames');
+      setNotice('paused',
+        '<strong>Picture paused, waiting for camera frames...</strong>');
+      retryBtn.disabled = false;
+    } else if (starting) {
+      setState('starting', 'Starting...');
+      setNotice('starting', 'Opening camera...');
+      retryBtn.disabled = false;
+    } else {
+      setState('running', 'Live');
+      setNotice(null);
+      retryBtn.disabled = false;
+    }
+  }
+
+  function poll() {
+    fetch('/viewfinder/status', { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) { throw new Error('status ' + r.status); }
+        return r.json();
+      })
+      .then(render)
+      .catch(function () {
+        setState('failed', 'No response from server');
+        setNotice('failed',
+          '<strong>Viewfinder service unreachable</strong>');
+      });
+  }
+
+  retryBtn.addEventListener('click', function () {
+    if (retrying) { return; }
+    retrying = true;
+    retryBtn.disabled = true;
+    setState('starting', 'Retrying...');
+    fetch('/viewfinder/retry', {
+      method: 'POST',
+      cache: 'no-store'
+    }).then(function (r) { return r.json(); })
+      .then(function (status) {
+        render(status);
+        // Re-open the feed so a recovered camera immediately resumes.
+        img.src = '/viewfinder/feed?ts=' + Date.now();
+      })
+      .catch(function () {
+        setNotice('failed',
+          '<strong>Retry request failed</strong>');
+      })
+      .then(function () {
+        retrying = false;
+        retryBtn.disabled = false;
+      });
+  });
+
+  // If the multipart connection itself drops (503 while failed, network
+  // error), surface it; the status poll remains the authoritative source.
+  img.addEventListener('error', function () {
+    setNotice('failed',
+      '<strong>Stream disconnected</strong><br>' +
+      'Waiting for the camera to recover...');
+    reconnectFeed();
+  });
+
+  setInterval(poll, POLL_MS);
+  poll();
+})();
+</script>
+</body>
+</html>
