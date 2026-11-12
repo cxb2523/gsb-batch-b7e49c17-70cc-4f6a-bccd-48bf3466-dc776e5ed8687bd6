@@ -1,0 +1,87 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# The root package has no dependencies; each package keeps its own lockfile.
+# A root lockfile is only ever a stray artefact of running pnpm install here.
+/pnpm-lock.yaml
+
+# Local & Internal Workspaces (Never commit or push to version control)
+local/
+.local/
+design/
+TODO.md
+scratch/
+
+# Build & Compilation outputs
+dist/
+dist-ssr/
+frontend/dist/
+backend/dist/
+frontend/.vite
+*.tsbuildinfo
+
+# Environment & Secrets (Keep strictly out of version control)
+.env
+.env.*
+.env.local
+.env.*.local
+*.env
+!.env.example
+*.pem
+*.key
+
+# Database & Storage
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+backend/prisma/*.db
+backend/prisma/*.db-journal
+data/
+rustfs-data/
+
+# Generated Prisma Client
+/backend/src/generated/prisma
+/src/generated/prisma
+
+# Logs & Debugging
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Test coverage & Reports
+coverage/
+*.lcov
+.nyc_output/
+test-results/
+frontend/playwright-report
+
+# Tool-installed agent skills (kept locally, not tracked in version control)
+.claude/
+backend/.agents/
+backend/.claude/
+backend/.windsurf/
+backend/skills-lock.json
+
+# OS & Editor metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.bak

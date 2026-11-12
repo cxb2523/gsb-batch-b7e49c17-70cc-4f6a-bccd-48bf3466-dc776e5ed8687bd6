@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/crates/oxc_linter/src/rules.rs",
+  "plugins": ["typescript", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/no-floating-promises": "error"
+  },
+  "env": {
+    "node": true
+  },
+  "overrides": [
+    {
+      "files": ["src/**/*.ts", "prisma7.config.ts"],
+      "rules": {
+        "@typescript-eslint/no-explicit-any": "error",
+        "typescript/no-unsafe-type-assertion": "error",
+        "typescript/no-non-null-assertion": "error"
+      },
+      "excludeFiles": ["**/*.spec.ts", "**/*.test.ts"]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+pnpm-lock.yaml
+local/
+backend/prisma/migrations/
+
+# Tool-installed agent skills (not tracked)
+backend/.agents
+backend/.claude
+backend/.windsurf
+
+# Prose is written by hand; the in-app docs are rewritten separately
+*.md

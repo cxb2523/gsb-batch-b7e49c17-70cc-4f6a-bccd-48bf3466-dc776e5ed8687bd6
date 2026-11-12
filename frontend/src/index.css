@@ -1,0 +1,340 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Core Palette & Semantic Tokens */
+    --paper: #f8f8f4;
+    --surface: #ffffff;
+    --surface-2: #f0f2ec;
+    --surface-2-hover: #e4e8df;
+    --surface-3: #eff1ed;
+    --surface-warm: #fcfdfa;
+    --surface-pill: #f9faf7;
+    --surface-card-hover: #f4f7f2;
+
+    --ink: #172238;
+    --ink-hover: #26364f;
+    --ink-muted: #6f7e91;
+    --ink-subtle: #96a2af;
+    --ink-prose: #34435a;
+    --ink-secondary: #55657e;
+    --ink-tertiary: #3b5278;
+    --ink-pill-bg: #243552;
+    --ink-pill-border: #3b5278;
+    --ink-footer-text: #94a3b8;
+    --code-bg: #121927;
+    --code-border: #25334c;
+    --github: #24292e;
+
+    --border: #dfe5de;
+    --border-strong: #cbd5cb;
+    --border-subtle: #eff1ed;
+    --badge-neutral-border: #e4e8e0;
+    --metric-card-border: #e1e8dd;
+    --metric-card-neutral-border: #e8ece5;
+
+    --brand: #55745d;
+    --brand-hover: #435e4a;
+    --brand-strong: #355844;
+    --brand-subtle: #eef3ea;
+    --brand-subtle-hover: #e4ece0;
+    --brand-border: #dce6d8;
+    --brand-tile: #dce9dc;
+    --brand-title: #2c4d39;
+    --brand-metric: #4e7658;
+    --brand-metric-text: #657568;
+    --avatar-blue-bg: #e9edf7;
+    --avatar-blue-text: #465e86;
+
+    --success: #20b889;
+    --success-subtle: #e4f6ee;
+    --success-bright: #34d399;
+    --success-light: #6ee7b7;
+
+    --warning: #b45309;
+    --warning-subtle: #fef6ee;
+    --warning-border: #fbd38d;
+    --warning-amber: #d97706;
+    --warning-dot: #f59e0b;
+    --warning-callout-border: #fae5cb;
+    --warning-callout-text: #8c501e;
+    --warning-callout-title: #733e14;
+
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --danger-border: #fecaca;
+    --danger-subtle: #fef2f2;
+    --danger-light: #fee2e2;
+    --danger-soft: #faecea;
+    --danger-soft-border: #f5c6cb;
+    --danger-muted: #bf5550;
+
+    /* Shadcn standard tokens mapped to palette */
+    --background: var(--paper);
+    --foreground: var(--ink);
+    --card: var(--surface);
+    --card-foreground: var(--ink);
+    --popover: var(--surface);
+    --popover-foreground: var(--ink);
+    --primary: var(--ink);
+    --primary-foreground: #ffffff;
+    --secondary: var(--surface-2);
+    --secondary-foreground: var(--ink);
+    --muted: var(--surface-2);
+    --muted-foreground: var(--ink-subtle);
+    --accent: var(--surface-2);
+    --accent-foreground: var(--ink);
+    --destructive: var(--danger);
+    --destructive-foreground: #ffffff;
+    --input: var(--border-strong);
+    --ring: var(--brand);
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Excalidraw Customization: Disallow adding external libraries */
+.excalidraw .library-menu-browse-button,
+.excalidraw .publish-library-button,
+.excalidraw .library-menu-control-buttons > a,
+.excalidraw .library-menu-control-buttons > button {
+  display: none !important;
+}
+
+/* ==========================================================================
+   Excalidraw Theme Customization
+   Soft rounded corners, neutral #dfe5de borders, and elevation
+   ========================================================================== */
+.excalidraw,
+.excalidraw-container {
+  --border-radius-lg: 12px !important;
+  --border-radius-md: 8px !important;
+  --radius: 8px !important;
+  --embeddable-radius: 12px !important;
+  --space-factor: 1rem;
+}
+
+/* Excalidraw UI component border radius */
+.excalidraw .Island {
+  border-radius: 14px !important;
+  border: 1px solid #dfe5de !important;
+  box-shadow:
+    0 4px 16px -2px rgba(23, 34, 56, 0.06),
+    0 2px 6px -1px rgba(23, 34, 56, 0.04) !important;
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+.excalidraw .ToolIcon,
+.excalidraw .ToolIcon__icon,
+.excalidraw .ToolIcon_type_button,
+.excalidraw .ToolIcon_type_radio,
+.excalidraw .ToolIcon_type_floating {
+  border-radius: 8px !important;
+}
+
+.excalidraw .dropdown-menu,
+.excalidraw .context-menu,
+.excalidraw .Modal__content,
+.excalidraw .color-picker {
+  border-radius: 16px !important;
+  border: 1px solid #dfe5de !important;
+  box-shadow:
+    0 10px 25px -3px rgba(23, 34, 56, 0.08),
+    0 4px 10px -2px rgba(23, 34, 56, 0.04) !important;
+}
+
+.excalidraw .buttonList,
+.excalidraw .buttonList button,
+.excalidraw .ExcButton,
+.excalidraw .ExcTextField,
+.excalidraw .default-sidebar-trigger,
+.excalidraw .Toast,
+.excalidraw-tooltip {
+  border-radius: 8px !important;
+}
+
+/* ==========================================================================
+   Documentation Hub Typography & Callouts
+   ========================================================================== */
+.doc-content h1 {
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: #0f172a;
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  line-height: 1.2;
+}
+
+.doc-content h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.doc-content h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.doc-content p {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.6;
+}
+
+.doc-content ul {
+  list-style-type: disc;
+  padding-left: 1.25rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.doc-content ol {
+  list-style-type: decimal;
+  padding-left: 1.25rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.doc-content li {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  line-height: 1.5;
+}
+
+.doc-content hr {
+  margin-top: 2rem;
+  margin-bottom: 2rem;
+  border: none;
+  border-top: 1px solid #dfe5de;
+}
+
+.doc-content code:not(pre code) {
+  font-family: 'SFMono-Regular', Consolas, 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background-color: #f0f2ec;
+  border: 1px solid #dfe5de;
+  padding: 0.15rem 0.35rem;
+  border-radius: 5px;
+  color: #172238;
+}
+
+.doc-content table {
+  width: stretch;
+  width: -webkit-fill-available;
+  border-collapse: collapse;
+  margin-top: 1.25rem;
+  margin-bottom: 1.25rem;
+  font-size: 12px;
+}
+
+.doc-content th {
+  background-color: #f0f2ec;
+  border: 1px solid #dfe5de;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 650;
+  color: #172238;
+}
+
+.doc-content td {
+  border: 1px solid #dfe5de;
+  padding: 0.5rem 0.75rem;
+  color: #34435a;
+  vertical-align: top;
+}
+
+/* Callout Variants */
+.doc-callout {
+  border-radius: 8px;
+  border: 1px solid #dfe5de;
+  background-color: #fcfdfa;
+}
+
+.doc-callout-note {
+  border-left-width: 3px !important;
+  border-left-color: #4b6a9a !important;
+  background-color: #f4f7fc;
+}
+.doc-callout-note .callout-title {
+  color: #38537a;
+}
+
+.doc-callout-tip {
+  border-left-width: 3px !important;
+  border-left-color: #20b889 !important;
+  background-color: #eef7f2;
+}
+.doc-callout-tip .callout-title {
+  color: #2a6f47;
+}
+
+.doc-callout-warning {
+  border-left-width: 3px !important;
+  border-left-color: #d97706 !important;
+  background-color: #fdf9f2;
+}
+.doc-callout-warning .callout-title {
+  color: #b45309;
+}
+
+.doc-callout-security {
+  border-left-width: 3px !important;
+  border-left-color: #355844 !important;
+  background-color: #edf4ee;
+}
+.doc-callout-security .callout-title {
+  color: #274734;
+}
+
+.doc-callout-important {
+  border-left-width: 3px !important;
+  border-left-color: #bf5550 !important;
+  background-color: #faecea;
+}
+.doc-callout-important .callout-title {
+  color: #9e3d39;
+}
+
+/* ==========================================================================
+   Canvas Blueprint & Utilities
+   ========================================================================== */
+.editorial-canvas-grid {
+  background-color: #fbfcf9;
+  background-image:
+    linear-gradient(#e8ece6 1px, transparent 1px),
+    linear-gradient(90deg, #e8ece6 1px, transparent 1px),
+    linear-gradient(#f0f2ed 1px, transparent 1px),
+    linear-gradient(90deg, #f0f2ed 1px, transparent 1px);
+  background-size:
+    80px 80px,
+    80px 80px,
+    16px 16px,
+    16px 16px;
+}
+
+.editorial-shadow {
+  box-shadow: 0 10px 30px rgba(29, 44, 59, 0.045);
+}
+
+.editorial-shadow-lg {
+  box-shadow: 0 22px 55px rgba(34, 49, 57, 0.07);
+}

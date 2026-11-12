@@ -1,0 +1,79 @@
+# Weekly, and grouped: one pull request for the backend's minor and patch updates, one for the
+# frontend's, one for the workflow actions and one for Docker. A new major version always arrives
+# on its own, so a risky upgrade (Prisma, Nest, Excalidraw) never holds up the rest.
+# The "chore" prefix keeps these out of the release notes.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      backend-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      frontend-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      docker:
+        patterns: ['*']
+    # A new major version of Node or of a base image is a deliberate upgrade, never an automatic one.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      docker-compose:
+        patterns: ['*']
+    # PostgreSQL in particular: a new major version cannot open the old data files without a
+    # dump and restore, so it must never arrive as an automatic update.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']

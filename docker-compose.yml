@@ -1,0 +1,152 @@
+# ==============================================================================
+# CANVHQ DOCKER COMPOSE CONFIGURATION
+#
+# Option A: Local Development (Default)
+#   Spins up PostgreSQL + RustFS + Backend + Frontend.
+#   Command: docker compose up
+#
+# Option B: Your own S3-compatible storage
+#   Supply its credentials in .env and start without the local storage container:
+#   Command: docker compose up db backend frontend
+# ==============================================================================
+
+name: canvhq
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: canvhq-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
+      POSTGRES_DB: ${POSTGRES_DB:-canvhq}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-canvhq}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - canvhq-network
+
+  # Option A Storage: S3-compatible RustFS, runs locally
+  storage:
+    image: rustfs/rustfs:latest
+    container_name: canvhq-storage
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-minioadmin}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-minioadminpassword}
+      RUSTFS_ADDRESS: "0.0.0.0:9000"
+      RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadminpassword}
+    ports:
+      - "127.0.0.1:9000:9000" # S3 API (localhost only)
+      - "127.0.0.1:9001:9001" # Web Console (localhost only)
+      - "127.0.0.1:8333:9000" # S3 API backwards compatibility alias
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/ready || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    networks:
+      - canvhq-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: canvhq-backend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/${POSTGRES_DB:-canvhq}?schema=public
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://storage:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadminpassword}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-canvhq-boards}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env (see .env.example)}
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      ENABLE_DEV_LOGIN: "${ENABLE_DEV_LOGIN:-true}"
+      # Optional: set both in .env to sign in with Google locally. Empty means not configured.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Local dev and the multi-browser e2e suite share one IP; production keeps the schema
+      # default (enabled) unless the operator opts out. Set RATE_LIMIT_ENABLED=true to exercise it.
+      RATE_LIMIT_ENABLED: "${RATE_LIMIT_ENABLED:-false}"
+      RATE_LIMIT_TTL: "${RATE_LIMIT_TTL:-60}"
+      RATE_LIMIT_LIMIT: "${RATE_LIMIT_LIMIT:-100}"
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: >
+      sh -c "
+      if [ -f ./prisma/schema.prisma ]; then
+        pnpm exec prisma generate && pnpm exec prisma migrate deploy;
+      fi &&
+      pnpm run start:dev
+      "
+    networks:
+      - canvhq-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: canvhq-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+      VITE_ENABLE_DEV_LOGIN: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: pnpm run dev -- --host 0.0.0.0
+    networks:
+      - canvhq-network
+
+volumes:
+  postgres_data:
+    name: canvhq_postgres_data
+  rustfs_data:
+    name: canvhq_rustfs_data
+
+networks:
+  canvhq-network:
+    name: canvhq-network
+    driver: bridge

@@ -1,0 +1,27 @@
+{
+  "name": "canvhq-root",
+  "version": "0.2.2",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "CanvHQ - a self-hostable, end-to-end encrypted whiteboard",
+  "packageManager": "pnpm@12.17.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check:versions": "node scripts/check-versions.mjs",
+    "test:prod-container": "./scripts/test-prod-container.sh",
+    "typecheck": "pnpm -C backend typecheck && pnpm -C frontend typecheck",
+    "lint": "pnpm -C backend lint && pnpm -C frontend lint",
+    "format": "pnpm -C backend format && pnpm -C frontend format",
+    "format:check": "pnpm -C backend format:check && pnpm -C frontend format:check",
+    "test": "pnpm -C backend test && pnpm -C frontend test -- --run",
+    "test:coverage": "pnpm -C backend test:cov && pnpm -C frontend test:coverage",
+    "test:backend": "pnpm -C backend test",
+    "test:frontend": "pnpm -C frontend test -- --run",
+    "test:e2e": "pnpm -C frontend test:e2e",
+    "build": "pnpm -C frontend run build && pnpm -C backend run build",
+    "build:frontend": "pnpm -C frontend run build",
+    "build:backend": "pnpm -C backend run build"
+  }
+}

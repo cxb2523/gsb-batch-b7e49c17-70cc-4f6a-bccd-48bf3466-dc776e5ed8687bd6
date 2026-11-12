@@ -1,0 +1,279 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ================= Better Auth Models ================= //
+model User {
+  id                String    @id
+  name              String
+  email             String
+  emailVerified     Boolean
+  image             String?
+  isAnonymous       Boolean?  @default(false)
+  createdAt         DateTime
+  updatedAt         DateTime
+  
+  // E2EE Identity Fields
+  kdfSalt           String?
+  keyWrapIv         String?
+  wrappedPrivateKey String?
+  publicKey         String?
+
+  sessions          Session[]
+  accounts          Account[]
+  members           Member[]
+  invitations       Invitation[]
+  projectMembers    ProjectMember[]
+  notifications     Notification[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime
+  updatedAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeOrganizationId String?
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@map("verification")
+}
+
+model Organization {
+  id          String   @id
+  name        String
+  slug        String?
+  logo        String?
+  createdAt   DateTime
+  metadata    String?
+  /** Current workspace key generation. Rotated by batch 13c; never decreased. */
+  keyVersion     Int      @default(1)
+  keyRotationDue Boolean  @default(false)
+  members     Member[]
+  invitations Invitation[]
+  projects    Project[]
+  notifications Notification[]
+
+  @@unique([slug])
+  @@map("organization")
+}
+
+model Member {
+  id              String       @id
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role            String
+  
+  // E2EE: Wrapped orgKey for workspace Owner and Admins
+  encryptedOrgKey String?
+
+  createdAt       DateTime
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("member")
+}
+
+model Invitation {
+  id              String       @id
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email           String
+  role            String?
+  status          String
+  expiresAt       DateTime
+  inviterId       String
+  user            User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+  
+  // Projects the invitee is pre-assigned to; the grant starts pending until a keyholder wraps
+  // the project key for them.
+  projectIds      String[] @default([])
+
+  createdAt            DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([email])
+  @@index([inviterId])
+  @@map("invitation")
+}
+
+// ================= Domain Models ================= //
+model Project {
+  id                  String       @id @default(cuid())
+  name                String
+  organizationId      String
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  // E2EE: Wrapped projectKey for workspace admins with orgKey
+  encryptedProjectKey String?
+  /** Current project key generation, carried by every board key and payload. */
+  keyVersion          Int      @default(1)
+  /** Set when access ends; an Owner or Admin must rotate before new keys are written. */
+  keyRotationDue     Boolean  @default(false)
+
+  boards              Board[]
+  keyHistory          ProjectKeyHistory[]
+  members             ProjectMember[]
+
+  @@index([organizationId])
+  @@map("project")
+}
+
+model ProjectMember {
+  id                  String   @id @default(cuid())
+  projectId           String
+  project             Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role                String   @default("editor") // "admin", "editor", "viewer"
+  
+  // E2EE: Wrapped projectKey for explicitly assigned members
+  encryptedProjectKey String?
+
+  createdAt           DateTime @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@map("project_member")
+}
+
+// Older project keys, each wrapped under the next one, so a remaining member can open boards
+// that have not been re-keyed yet. `version` is the older version this entry recovers.
+model ProjectKeyHistory {
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version      Int
+  encryptedKey String
+  createdAt    DateTime @default(now())
+
+  @@id([projectId, version])
+  @@map("project_key_history")
+}
+
+model Board {
+  id                String    @id @default(cuid())
+  title             String
+  projectId         String
+  revision          Int       @default(0)
+  hasPayload        Boolean   @default(false)
+  payloadBytes      Int       @default(0)
+  
+  // E2EE: Wrapped boardKey using projectKey
+  encryptedBoardKey String?
+  /** The project-key generation this board key and payload are bound to. */
+  keyVersion        Int     @default(1)
+
+  // Public Sharing (Strictly Read-Only, Unguessable Token)
+  isPublic          Boolean   @default(false)
+  publicShareToken  String?   @unique
+
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  files             BoardFile[]
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([projectId, updatedAt])
+  @@map("board")
+}
+
+model BoardFile {
+  id         String   @id @default(cuid())
+  boardId    String
+  board      Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  fileId     String
+  keyVersion Int      @default(1)
+  size       Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([boardId, fileId])
+  @@index([boardId])
+  @@map("board_file")
+}
+
+// Stored objects to remove after the database change that orphaned them has committed.
+// Rows are written in the same transaction as the delete and removed once the objects are gone.
+model PendingBlobDeletion {
+  id            String   @id @default(cuid())
+  objectKey     String   @unique
+  attempts      Int      @default(0)
+  lastError     String?
+  nextAttemptAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  @@index([nextAttemptAt])
+  @@map("pending_blob_deletion")
+}
+
+model SignupAttempt {
+  id        String   @id @default(cuid())
+  ip        String
+  createdAt DateTime @default(now())
+
+  @@index([ip, createdAt])
+  @@map("signup_attempt")
+}
+
+// The in-app inbox: something happened that a person may need to act on or know about. A row holds
+// only the kind and names that are stored in the clear anyway (workspace, project, person), never
+// canvas content. The `kind` list is enforced by a CHECK constraint in the migration.
+model Notification {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Organization @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  kind        String
+  data        Json
+  readAt      DateTime?
+  createdAt   DateTime     @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notification")
+}
