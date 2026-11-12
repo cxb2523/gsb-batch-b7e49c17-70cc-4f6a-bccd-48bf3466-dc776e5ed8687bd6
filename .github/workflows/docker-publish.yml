@@ -1,0 +1,138 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never interrupt a push after one registry has already accepted an image.
+concurrency:
+  group: image-publication
+  cancel-in-progress: false
+
+env:
+  REGISTRY_DOCKERHUB: docker.io
+  REGISTRY_GHCR: ghcr.io
+  IMAGE_NAME_HUB: cotdp/scraper-mcp
+  IMAGE_NAME_GHCR: scraper-mcp
+
+jobs:
+  check-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      current-main: ${{ steps.guard.outputs.current-main }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify merged commit and release version
+        id: guard
+        run: python3 scripts/check_release.py
+
+  validate:
+    needs: check-release
+    uses: ./.github/workflows/ci.yml
+
+  build-and-push:
+    needs: [check-release, validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU for multi-arch builds
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build smoke-test image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: scraper-mcp:release-check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify HTTP MCP, admin authentication, cache, and Chromium
+        run: |
+          docker run --rm --network none -i scraper-mcp:release-check python - < scripts/smoke_image.py
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.REGISTRY_GHCR }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: |
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME_HUB }}
+            ${{ env.REGISTRY_GHCR }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME_GHCR }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.check-release.outputs.current-main == 'true' }}
+            type=semver,pattern={{major}},enable=${{ needs.check-release.outputs.current-main == 'true' }}
+            type=sha,prefix=main-
+            type=raw,value=latest,enable=${{ needs.check-release.outputs.current-main == 'true' }}
+          flavor: latest=false
+          labels: |
+            org.opencontainers.image.title=Scraper MCP
+            org.opencontainers.image.description=MCP server for web scraping with requests and BeautifulSoup
+            org.opencontainers.image.vendor=cotdp
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push Docker images
+        id: build-and-push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=min
+          sbom: true
+
+      - name: Output image details
+        env:
+          IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Published Docker images"
+            echo ""
+            echo '```text'
+            echo "$IMAGE_TAGS"
+            echo '```'
+            echo ""
+            echo "Digest: $IMAGE_DIGEST"
+            echo "Platforms: linux/amd64, linux/arm64"
+          } >> "$GITHUB_STEP_SUMMARY"

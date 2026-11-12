@@ -1,0 +1,87 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.5/schema.json",
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 4,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "useConst": "warn"
+      },
+      "suspicious": {
+        "noExplicitAny": "off",
+        "noVar": "error"
+      },
+      "correctness": {
+        "noUnusedVariables": "warn"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "trailingCommas": "es5"
+    }
+  },
+  "css": {
+    "formatter": {
+      "enabled": true,
+      "indentStyle": "space",
+      "indentWidth": 4
+    },
+    "linter": {
+      "enabled": true
+    }
+  },
+  "json": {
+    "formatter": {
+      "enabled": true,
+      "indentStyle": "space",
+      "indentWidth": 2
+    }
+  },
+  "html": {
+    "formatter": {
+      "enabled": false
+    },
+    "linter": {
+      "enabled": false
+    },
+    "assist": {
+      "enabled": false
+    }
+  },
+  "files": {
+    "includes": [
+      "**/src/**/*.html",
+      "**/src/**/*.css",
+      "**/src/**/*.js",
+      "**/src/**/*.json",
+      "**/*.json",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/build",
+      "!**/.venv",
+      "!**/__pycache__",
+      "!**/*.pyc",
+      "!**/.git",
+      "!**/.ruff_cache",
+      "!**/.pytest_cache",
+      "!**/.mypy_cache",
+      "!**/.impeccable",
+      "!**/htmlcov"
+    ]
+  }
+}
