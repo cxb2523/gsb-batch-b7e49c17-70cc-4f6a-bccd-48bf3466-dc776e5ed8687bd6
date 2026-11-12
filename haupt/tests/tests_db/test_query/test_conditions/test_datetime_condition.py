@@ -1,0 +1,412 @@
+import datetime
+import pytest
+from zoneinfo import ZoneInfo
+
+from django.conf import settings
+from django.db.models import Q
+
+from clipped.utils.dates import DateTimeFormatter
+from haupt.db.factories.runs import RunFactory
+from haupt.db.models.runs import Run
+from polyaxon._pql.builder import DateTimeCondition
+from polyaxon.exceptions import PQLException
+from polyaxon.schemas import ManagedBy
+from tests.tests_db.test_query.base import BaseTestQuery
+
+
+# pylint:disable=protected-access
+
+
+def localize(*args):
+    return datetime.datetime(*args, tzinfo=ZoneInfo(settings.TIME_ZONE))
+
+
+class TestDateTimeCondition(BaseTestQuery):
+    def test_range_operators(self):
+        with self.assertRaises(AssertionError):
+            DateTimeCondition._range_operator(
+                "field", "value", query_backend=Q, timezone=settings.TIME_ZONE
+            )
+
+        with self.assertRaises(AssertionError):
+            DateTimeCondition._nrange_operator(
+                "field", "value", query_backend=Q, timezone=settings.TIME_ZONE
+            )
+
+        with self.assertRaises(PQLException):
+            DateTimeCondition._range_operator(
+                "field", ("v1", "v2"), query_backend=Q, timezone=settings.TIME_ZONE
+            )
+
+        with self.assertRaises(PQLException):
+            DateTimeCondition._nrange_operator(
+                "field",
+                ("v1", "2010-01-01"),
+                query_backend=Q,
+                timezone=settings.TIME_ZONE,
+            )
+
+        with self.assertRaises(PQLException):
+            DateTimeCondition._nrange_operator(
+                "field",
+                ("2010-01-01", "v2"),
+                query_backend=Q,
+                timezone=settings.TIME_ZONE,
+            )
+
+        assert DateTimeCondition._range_operator(
+            "field",
+            ("2010-01-01", "2010-01-01"),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        ) == Q(field__range=(localize(2010, 1, 1), localize(2010, 1, 1)))
+        assert DateTimeCondition._nrange_operator(
+            "field",
+            ("2010-01-01 10:10", "2010-01-01"),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        ) == ~Q(field__range=(localize(2010, 1, 1, 10, 10), localize(2010, 1, 1)))
+
+    def test_range_condition_init_with_correct_operator(self):
+        range_cond = DateTimeCondition(op="range")
+        assert range_cond.operator == DateTimeCondition._range_operator
+        nrange_cond = DateTimeCondition(op="range", negation=True)
+        assert nrange_cond.operator == DateTimeCondition._nrange_operator
+
+    def test_comparison_operators(self):
+        for operator, lookup in (
+            (DateTimeCondition._lt_operator, "lt"),
+            (DateTimeCondition._lte_operator, "lte"),
+            (DateTimeCondition._gt_operator, "gt"),
+            (DateTimeCondition._gte_operator, "gte"),
+        ):
+            with self.assertRaises(PQLException):
+                operator("field", "value", query_backend=Q, timezone=settings.TIME_ZONE)
+
+            for value, expected in (
+                ("2010-01-01", localize(2010, 1, 1)),
+                ("2010-01-01 10:10", localize(2010, 1, 1, 10, 10)),
+            ):
+                assert operator(
+                    "field", value, query_backend=Q, timezone=settings.TIME_ZONE
+                ) == Q(**{f"field__{lookup}": expected})
+
+    def test_comparison_condition_init_with_correct_operator(self):
+        assert DateTimeCondition(op="lt").operator == DateTimeCondition._lt_operator
+        assert (
+            DateTimeCondition(op="lt", negation=True).operator
+            == DateTimeCondition._gte_operator
+        )
+        assert DateTimeCondition(op="lte").operator == DateTimeCondition._lte_operator
+        assert (
+            DateTimeCondition(op="lte", negation=True).operator
+            == DateTimeCondition._gt_operator
+        )
+        assert DateTimeCondition(op="gt").operator == DateTimeCondition._gt_operator
+        assert (
+            DateTimeCondition(op="gt", negation=True).operator
+            == DateTimeCondition._lte_operator
+        )
+        assert DateTimeCondition(op="gte").operator == DateTimeCondition._gte_operator
+        assert (
+            DateTimeCondition(op="gte", negation=True).operator
+            == DateTimeCondition._lt_operator
+        )
+
+    @pytest.mark.filterwarnings(
+        "error:DateTimeField .* received a naive datetime:RuntimeWarning"
+    )
+    def test_comparison_apply_does_not_pass_naive_datetimes(self):
+        for op, count in (("lt", 0), ("lte", 0), ("gt", 1), ("gte", 1)):
+            queryset = DateTimeCondition(op=op).apply(
+                queryset=Run.objects,
+                name="created_at",
+                params="2018-01-01 10:10",
+                query_backend=Q,
+                timezone=settings.TIME_ZONE,
+            )
+            assert queryset.count() == count
+
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_range_apply(self):
+        # Delete current run
+        self.run.delete()
+
+        run = RunFactory(
+            project=self.project,
+            managed_by=ManagedBy.USER,
+            outputs={"accuracy": 0.9, "precision": 0.9},
+        )
+        run.created_at = datetime.datetime(2018, 1, 1)
+        run.save()
+        run = RunFactory(
+            project=self.project,
+            managed_by=ManagedBy.USER,
+            outputs={"accuracy": 0.9, "precision": 0.9},
+        )
+        run.created_at = datetime.datetime(2010, 1, 1)
+        run.save()
+
+        eq_cond = DateTimeCondition(op="eq")
+        lt_cond = DateTimeCondition(op="lt")
+        lte_cond = DateTimeCondition(op="lte")
+        gt_cond = DateTimeCondition(op="gt")
+        gte_cond = DateTimeCondition(op="gte")
+        range_cond = DateTimeCondition(op="range")
+        nrange_cond = DateTimeCondition(op="range", negation=True)
+
+        # eq
+        queryset = eq_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 1
+
+        queryset = eq_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-02-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        # lt
+        queryset = lt_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-02-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        queryset = lt_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 1
+
+        queryset = lt_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2008-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        # lte
+        queryset = lte_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-02-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        queryset = lte_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        queryset = lte_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2008-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        # gt
+        queryset = gt_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-02-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        queryset = gt_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        queryset = gt_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2008-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        # lte
+        queryset = gte_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-02-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        queryset = gte_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2018-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 1
+
+        queryset = gte_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params="2008-01-01",
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        # range
+        queryset = range_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2018-02-01 00:00", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2018-03-01 00:00", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        queryset = range_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2018-02-01", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2008-03-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        queryset = range_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2017-02-01", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2018-03-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 1
+
+        queryset = range_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2008-02-01 00:00:12", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2018-03-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        queryset = range_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2010-01-01", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2010-01-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 1
+
+        # nrange
+        queryset = nrange_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2018-02-01 00:00", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2018-03-01 00:00", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        queryset = nrange_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2018-02-01", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2008-03-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 2
+
+        queryset = nrange_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2017-02-01", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2018-03-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 1
+
+        queryset = nrange_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2008-02-01 00:00:12", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2018-03-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 0
+
+        queryset = nrange_cond.apply(
+            queryset=Run.objects,
+            name="created_at",
+            params=(
+                DateTimeFormatter.extract("2010-01-01", settings.TIME_ZONE),
+                DateTimeFormatter.extract("2010-01-01", settings.TIME_ZONE),
+            ),
+            query_backend=Q,
+            timezone=settings.TIME_ZONE,
+        )
+        assert queryset.count() == 1
+
+
+del BaseTestQuery

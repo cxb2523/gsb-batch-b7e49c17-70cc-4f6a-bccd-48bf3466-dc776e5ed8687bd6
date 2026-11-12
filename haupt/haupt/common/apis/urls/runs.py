@@ -1,0 +1,96 @@
+from haupt.common.apis.regex import (
+    ARTIFACT_NAME_PATTERN,
+    OWNER_NAME_PATTERN,
+    PROJECT_NAME_PATTERN,
+    RUN_UUID_PATTERN,
+)
+
+
+URLS_RUNS_DETAILS = r"^{}/{}/runs/{}/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_RESTART = r"^{}/{}/runs/{}/restart/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_RESUME = r"^{}/{}/runs/{}/resume/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_COPY = r"^{}/{}/runs/{}/copy/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_STOP = r"^{}/{}/runs/{}/stop/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_SKIP = r"^{}/{}/runs/{}/skip/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_APPROVE = r"^{}/{}/runs/{}/approve/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_STATUSES = r"^{}/{}/runs/{}/statuses/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_NAMESPACE = r"^{}/{}/runs/{}/namespace/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_ARTIFACTS_LINEAGE_LIST_V0 = r"^{}/{}/runs/{}/artifacts_lineage/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_ARTIFACTS_LINEAGE_NAMES_V0 = (
+    r"^{}/{}/runs/{}/artifacts_lineage/names/?$".format(
+        OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+    )
+)
+URLS_RUNS_ARTIFACTS_LINEAGE_DETAILS_V0 = (
+    r"^{}/{}/runs/{}/artifacts_lineage/{}/?$".format(
+        OWNER_NAME_PATTERN,
+        PROJECT_NAME_PATTERN,
+        RUN_UUID_PATTERN,
+        ARTIFACT_NAME_PATTERN,
+    )
+)
+URLS_RUNS_ARTIFACTS_LINEAGE_LIST = r"^{}/{}/runs/{}/lineage/artifacts/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_ARTIFACTS_LINEAGE_NAMES = r"^{}/{}/runs/{}/lineage/artifacts/names/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_ARTIFACTS_LINEAGE_DETAILS = r"^{}/{}/runs/{}/lineage/artifacts/{}/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN, ARTIFACT_NAME_PATTERN
+)
+URLS_RUNS_UPSTREAM_LINEAGE_LIST = r"^{}/{}/runs/{}/lineage/upstream/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_DOWNSTREAM_LINEAGE_LIST = r"^{}/{}/runs/{}/lineage/downstream/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_CLONES_LINEAGE_LIST = r"^{}/{}/runs/{}/lineage/clones/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_EDGES_LINEAGE_CREATE = r"^{}/{}/runs/{}/lineage/edges/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+
+URLS_RUNS_TRANSFER = r"^{}/{}/runs/{}/transfer/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_INVALIDATE = r"^{}/{}/runs/{}/invalidate/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_ARCHIVE = r"^{}/{}/runs/{}/archive/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_RESTORE = r"^{}/{}/runs/{}/restore/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+
+URLS_RUNS_BOOKMARK = r"^{}/{}/runs/{}/bookmark/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+URLS_RUNS_UNBOOKMARK = r"^{}/{}/runs/{}/unbookmark/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)
+
+URLS_RUNS_STATS = r"^{}/{}/runs/{}/stats/?$".format(
+    OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, RUN_UUID_PATTERN
+)

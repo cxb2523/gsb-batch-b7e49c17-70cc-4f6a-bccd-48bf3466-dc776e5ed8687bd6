@@ -1,0 +1,15 @@
+from typing import Any
+
+import redis
+
+
+class BaseRedisDb:
+    REDIS_POOL = None
+
+    @classmethod
+    def _get_redis(cls) -> Any:
+        return redis.Redis(connection_pool=cls.REDIS_POOL, socket_keepalive=True)
+
+    @classmethod
+    def connection(cls) -> Any:
+        return cls._get_redis()

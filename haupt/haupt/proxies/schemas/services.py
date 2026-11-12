@@ -1,0 +1,433 @@
+from typing import Optional
+
+from haupt import settings
+from haupt.proxies.schemas.base import get_config
+from haupt.proxies.schemas.urls import get_service_url
+from polyaxon.api import (
+    AUTH_REQUEST_V1_LOCATION,
+    EXTERNAL_V1_LOCATION,
+    MONITORS_V1_LOCATION,
+    REWRITE_EXTERNAL_V1_LOCATION,
+    REWRITE_MONITORS_V1_LOCATION,
+    REWRITE_SERVICES_V1_LOCATION,
+    SANDBOX_V1_LOCATION,
+    SERVICES_V1_LOCATION,
+)
+
+
+PLUGIN_OPTIONS = r"""
+location ~ /{plugin_name}/proxy/([-_.:\w]+)/(.*) {{
+    {cors}
+    {auth}
+    {resolver}
+    rewrite_log on;
+    rewrite ^/{plugin_name}/proxy/([-_.:\w]+)/(.*) /{plugin_name}/proxy/$1/$2 break;
+    proxy_pass http://$1:{port};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_buffering off;
+}}
+"""  # noqa
+
+
+def get_plugin_location_config(
+    name: str, port: int, resolver: str, cors: str, auth: str
+):
+    return get_config(
+        options=PLUGIN_OPTIONS,
+        indent=0,
+        plugin_name=name,
+        port=port,
+        resolver=resolver,
+        cors=cors,
+        auth=auth,
+    )
+
+
+def get_plugins_location_config(
+    resolver: str, cors: str, auth: str, proxy_services=None
+):
+    plugins = []
+
+    if proxy_services:
+        for plugin, config in proxy_services.items():
+            plugins.append(
+                get_plugin_location_config(
+                    name=plugin,
+                    port=config["port"],
+                    resolver=resolver,
+                    cors=cors,
+                    auth=auth,
+                )
+            )
+
+    return plugins
+
+
+SERVICES_OPTIONS = r"""
+location ~ {app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/(.*) {{
+    {cors}
+    {auth}
+    {resolver}
+    proxy_pass http://plx-operation-$4.$1.svc.{dns_custom_cluster}:$5;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+SERVICES_REWRITE_OPTIONS = r"""
+location ~ {app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/(.*) {{
+    {cors}
+    {auth}
+    {resolver}
+    rewrite_log on;
+    rewrite ^{app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/(.*) /$6 break;
+    proxy_pass http://plx-operation-$4.$1.svc.{dns_custom_cluster}:$5;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+EXTERNAL_OPTIONS = r"""
+location ~ {app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/(.*) {{
+    {cors}
+    {resolver}
+    proxy_pass http://plx-operation-$4-ext.$1.svc.{dns_custom_cluster}:$5;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+EXTERNAL_REWRITE_OPTIONS = r"""
+location ~ {app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/(.*) {{
+    {cors}
+    {resolver}
+    rewrite_log on;
+    rewrite ^{app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/(.*) /$6 break;
+    proxy_pass http://plx-operation-$4-ext.$1.svc.{dns_custom_cluster}:$5;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+
+def get_services_location_config(
+    resolver: str,
+    cors: str,
+    auth: str,
+    rewrite: bool = False,
+    external: bool = False,
+):
+    if external:
+        options = EXTERNAL_REWRITE_OPTIONS if rewrite else EXTERNAL_OPTIONS
+        app = REWRITE_EXTERNAL_V1_LOCATION if rewrite else EXTERNAL_V1_LOCATION
+    else:
+        options = SERVICES_REWRITE_OPTIONS if rewrite else SERVICES_OPTIONS
+        app = REWRITE_SERVICES_V1_LOCATION if rewrite else SERVICES_V1_LOCATION
+    return get_config(
+        options=options,
+        app=app,
+        resolver=resolver,
+        cors=cors,
+        auth="" if external else auth,
+        dns_custom_cluster=settings.PROXIES_CONFIG.dns_custom_cluster,
+    )
+
+
+SERVICES_MONITORS_OPTIONS = r"""
+location ~ {app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/(.*) {{
+    {cors}
+    {auth}
+    {resolver}
+    proxy_pass http://$5.$1.svc.{dns_custom_cluster}:$6;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+SERVICES_MONITORS_REWRITE_OPTIONS = r"""
+location ~ {app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/(.*) {{
+    {cors}
+    {auth}
+    {resolver}
+    rewrite_log on;
+    rewrite ^{app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/(.*) /$7 break;
+    proxy_pass http://$5.$1.svc.{dns_custom_cluster}:$6;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+
+def get_service_monitors_location_config(
+    resolver: str, cors: str, auth: str, rewrite: bool = False
+):
+    options = (
+        SERVICES_MONITORS_REWRITE_OPTIONS if rewrite else SERVICES_MONITORS_OPTIONS
+    )
+    app = REWRITE_MONITORS_V1_LOCATION if rewrite else MONITORS_V1_LOCATION
+    return get_config(
+        options=options,
+        app=app,
+        resolver=resolver,
+        cors=cors,
+        auth=auth,
+        dns_custom_cluster=settings.PROXIES_CONFIG.dns_custom_cluster,
+    )
+
+
+SANDBOX_OPTIONS = r"""
+location ~ {app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/(.+) {{
+    {cors}
+    auth_request     {auth_request};
+    auth_request_set $auth_status $upstream_status;
+    auth_request_set $sandbox_token $upstream_http_sandbox_token;
+    {resolver}
+    rewrite_log on;
+    rewrite ^{app}([-_.:\w]+)/([-_.:\w]+)/([-_.:\w]+)/runs/([-_.:\w]+)/(.+) /$5 break;
+    proxy_pass http://plx-operation-$4.$1.svc.{dns_custom_cluster}:9090;
+    proxy_http_version 1.1;
+    proxy_redirect     off;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Polyaxon-Sandbox-Token $sandbox_token;
+    proxy_set_header Authorization "";
+    proxy_set_header Cookie "";
+    proxy_buffering off;
+}}
+"""  # noqa
+
+
+def get_sandbox_location_config(resolver: str, cors: str):
+    return get_config(
+        options=SANDBOX_OPTIONS,
+        app=SANDBOX_V1_LOCATION,
+        auth_request=AUTH_REQUEST_V1_LOCATION,
+        resolver=resolver,
+        cors=cors,
+        dns_custom_cluster=settings.PROXIES_CONFIG.dns_custom_cluster,
+    )
+
+
+def get_services_definitions(resolver: str, cors: str, auth: str):
+    return [
+        get_sandbox_location_config(resolver=resolver, cors=cors),
+        get_services_location_config(
+            resolver=resolver,
+            cors=cors,
+            auth=auth,
+            rewrite=False,
+            external=False,
+        ),
+        get_services_location_config(
+            resolver=resolver,
+            cors=cors,
+            auth=auth,
+            rewrite=True,
+            external=False,
+        ),
+        get_services_location_config(
+            resolver=resolver,
+            cors=cors,
+            auth=auth,
+            rewrite=False,
+            external=True,
+        ),
+        get_services_location_config(
+            resolver=resolver,
+            cors=cors,
+            auth=auth,
+            rewrite=True,
+            external=True,
+        ),
+        get_service_monitors_location_config(
+            resolver=resolver,
+            cors=cors,
+            auth=auth,
+            rewrite=False,
+        ),
+        get_service_monitors_location_config(
+            resolver=resolver,
+            cors=cors,
+            auth=auth,
+            rewrite=True,
+        ),
+    ]
+
+
+STREAMS_OPTIONS = r"""
+location /streams/ {{
+    {cors}
+    {auth}
+    {resolver}
+    proxy_pass {service};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+
+def get_streams_service(is_local_service: bool = False) -> str:
+    return (
+        "http://polyaxon"
+        if is_local_service
+        else get_service_url(
+            host=settings.PROXIES_CONFIG.streams_host,
+            port=settings.PROXIES_CONFIG.streams_port,
+        )
+    )
+
+
+def get_streams_location_config(
+    resolver: str, cors: str, auth: str, is_local_service: bool = False
+):
+    service = get_streams_service(is_local_service)
+    # Do not use resolve local streams service
+    resolver = "" if is_local_service else resolver
+    return get_config(
+        options=STREAMS_OPTIONS,
+        resolver=resolver,
+        cors=cors,
+        auth=auth,
+        service=service,
+    )
+
+
+K8S_OPTIONS = r"""
+location /k8s/ {{
+    {cors}
+    {auth}
+    {resolver}
+    proxy_pass {service};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+
+def get_k8s_location_config(
+    resolver: str, cors: str, auth: str, is_local_service: bool = False
+):
+    service = get_streams_service(is_local_service)
+    # Do not use resolve local streams service
+    resolver = "" if is_local_service else resolver
+    return get_config(
+        options=K8S_OPTIONS, resolver=resolver, cors=cors, auth=auth, service=service
+    )
+
+
+INTERNAL_OPTIONS = r"""
+location /internal/ {{
+    {cors}
+    {resolver}
+    proxy_pass {service};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Origin "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;
+}}
+"""  # noqa
+
+
+def get_internal_location_config(
+    resolver: str, cors: str, is_local_service: bool = False
+):
+    service = get_streams_service(is_local_service)
+    # Do not use resolve local streams service
+    resolver = "" if is_local_service else resolver
+    return get_config(
+        options=INTERNAL_OPTIONS, resolver=resolver, cors=cors, service=service
+    )
+
+
+AUTH_REQUEST_OPTIONS = """
+location = {app} {{
+    {cors}
+    proxy_pass {service};
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Origin-URI $request_uri;
+    proxy_set_header X-Origin-Method $request_method;
+    proxy_set_header Host $http_host;
+    proxy_intercept_errors {intercept_errors};
+    internal;
+}}
+"""
+
+
+def get_auth_request_config(cors: Optional[str] = ""):
+    return get_config(
+        options=AUTH_REQUEST_OPTIONS,
+        app=AUTH_REQUEST_V1_LOCATION,
+        service=get_streams_service(True),
+        cors=cors,
+        indent=0,
+        intercept_errors="off",
+    )

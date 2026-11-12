@@ -1,0 +1,119 @@
+from django.conf import settings
+from django.db.models import Count, Q
+
+from clipped.utils.tz import get_datetime_from_now, now
+from haupt.background.celeryp.tasks import SchedulerCeleryTasks
+from haupt.common import conf, workers
+from haupt.common.options.registry.cleaning import (
+    CLEANING_INTERVALS_ARCHIVES,
+    CLEANING_INTERVALS_DELETION,
+)
+from haupt.db.defs import Models
+from haupt.db.managers.live_state import confirm_delete_runs
+from haupt.db.managers.projects import touch_projects
+from haupt.db.managers.runs import collect_pipeline_controller_ids
+from polyaxon.schemas import LifeCycle, LiveState, V1RunKind, V1Statuses
+
+
+class CronsDeletionManager:
+    @staticmethod
+    def delete_archived_projects():
+        last_date = get_datetime_from_now(days=conf.get(CLEANING_INTERVALS_ARCHIVES))
+        ids = Models.Project.archived.filter(archived_at__lte=last_date).values_list(
+            "id", flat=True
+        )
+        for _id in ids:
+            workers.send(
+                SchedulerCeleryTasks.DELETE_ARCHIVED_PROJECT,
+                kwargs={"project_id": _id},
+            )
+
+    @staticmethod
+    def delete_in_progress_projects():
+        last_date = get_datetime_from_now(days=conf.get(CLEANING_INTERVALS_DELETION))
+        ids = Models.Project.all.filter(
+            live_state=LiveState.DELETION_PROGRESSING,
+            deleted_at__lte=last_date,
+        ).values_list("id", flat=True)
+        for project_id in ids:
+            workers.send(
+                SchedulerCeleryTasks.DELETE_IN_PROGRESS_PROJECT,
+                kwargs={"project_id": project_id},
+            )
+
+    @staticmethod
+    def delete_in_progress_runs():
+        # Delete pipelines without managed runs
+        runs = (
+            Models.Run.all.filter(
+                kind__in={V1RunKind.DAG, V1RunKind.MATRIX, V1RunKind.SCHEDULE},
+                live_state=LiveState.DELETION_PROGRESSING,
+            )
+            .annotate(
+                unfinished=Count(
+                    "pipeline_runs",
+                    filter=~Q(
+                        pipeline_runs__status__in=LifeCycle.DONE_VALUES
+                        | LifeCycle.PENDING_VALUES
+                    ),
+                    distinct=True,
+                )
+            )
+            .filter(unfinished=0, deleted_at__isnull=True)
+        )
+        confirm_delete_runs(runs=runs)
+
+        if settings.HAS_ORG_MANAGEMENT:
+            # Delete runs that are not assigned to an agent
+            runs = Models.Run.all.filter(
+                kind__in={
+                    V1RunKind.JOB,
+                    V1RunKind.SERVICE,
+                    V1RunKind.TUNER,
+                    V1RunKind.NOTIFIER,
+                },
+                live_state=LiveState.DELETION_PROGRESSING,
+                agent__isnull=True,
+                deleted_at__isnull=True,
+            )
+            run_values = list(runs.values_list("id", "pipeline_id", "controller_id"))
+            run_ids = [v[0] for v in run_values]
+            confirm_delete_runs(runs=runs, run_ids=run_ids)
+            parent_ids = collect_pipeline_controller_ids(
+                (v[1], v[2]) for v in run_values
+            )
+            for parent_id in parent_ids:
+                workers.send(
+                    SchedulerCeleryTasks.RUNS_CHECK_ORPHAN_PIPELINE,
+                    kwargs={"run_id": parent_id},
+                )
+
+        last_date = get_datetime_from_now(days=1)
+        expired_runs = Models.Run.all.filter(
+            live_state=LiveState.DELETION_PROGRESSING, deleted_at__lte=last_date
+        )
+        project_ids = set(expired_runs.values_list("project_id", flat=True))
+        expired_runs.delete()
+        touch_projects(project_ids)
+
+        # Stop all pipelines in deletion progress
+        Models.Run.all.filter(
+            kind__in={V1RunKind.DAG, V1RunKind.MATRIX, V1RunKind.SCHEDULE},
+            live_state=LiveState.DELETION_PROGRESSING,
+        ).exclude(status__in=LifeCycle.DONE_VALUES).update(
+            status=V1Statuses.STOPPED, updated_at=now()
+        )
+
+    @staticmethod
+    def delete_archived_runs():
+        last_date = get_datetime_from_now(days=conf.get(CLEANING_INTERVALS_ARCHIVES))
+        ids = Models.Run.archived.filter(
+            # We only check values that will not be deleted by the archived projects
+            project__live_state=LiveState.LIVE,
+            archived_at__lte=last_date,
+        ).values_list("id", flat=True)
+        for _id in ids:
+            workers.send(
+                SchedulerCeleryTasks.DELETE_ARCHIVED_RUN,
+                kwargs={"run_id": _id},
+            )

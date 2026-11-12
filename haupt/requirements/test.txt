@@ -1,0 +1,17 @@
+coverage<7.12
+faker<41
+pytest-rerunfailures<16.2
+mock<5.3.0
+pytest<=9.1.0
+pytest-asyncio<1.4
+ruff
+
+mypy<1.20
+types-aiofiles
+types-certifi
+types-protobuf
+types-python-dateutil
+types-PyYAML
+types-requests
+types-setuptools
+types-orjson

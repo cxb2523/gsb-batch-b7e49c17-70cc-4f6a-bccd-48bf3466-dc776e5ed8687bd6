@@ -1,0 +1,2170 @@
+from datetime import timedelta
+from itertools import product
+import pytest
+from unittest.mock import patch
+
+from rest_framework import status
+
+from clipped.utils.json import orjson_dumps, orjson_loads
+from clipped.utils.tz import now
+from haupt.apis.serializers.runs import (
+    RunDetailSerializer,
+    RunSerializer,
+    RunStatusSerializer,
+)
+from haupt.background.celeryp.tasks import SchedulerCeleryTasks
+from haupt.db.factories.projects import ProjectFactory
+from haupt.db.factories.runs import RunFactory
+from haupt.db.managers.statuses import new_run_status, new_run_stop_status
+from haupt.db.models.projects import Project
+from haupt.db.models.runs import Run
+from haupt.orchestration import operations
+from haupt.orchestration.scheduler.manager import SchedulingManager
+from polyaxon import settings as polyaxon_settings
+from polyaxon._connections import V1BucketConnection, V1Connection, V1ConnectionKind
+from polyaxon._constants.metadata import META_RECOMPILE
+from polyaxon._polyaxonfile import (
+    CompiledOperationSpecification,
+    OperationSpecification,
+)
+from polyaxon._polyaxonfile.specs import read_polyaxonfile
+from polyaxon._schemas.agent import AgentConfig
+from polyaxon.api import API_V1
+from polyaxon.schemas import (
+    LiveState,
+    ManagedBy,
+    V1RunKind,
+    V1RunPending,
+    V1StatusCondition,
+    V1Statuses,
+)
+from tests.base.case import (
+    BaseTest,
+    BaseTestBookmarkCreateView,
+    BaseTestBookmarkDeleteView,
+)
+
+
+class BaseTestRunApi(BaseTest):
+    model_class = Run
+    factory_class = RunFactory
+
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory()
+        self.object = self.factory_class(
+            user=self.user,
+            project=self.project,
+            content="test",
+            raw_content="test",
+            managed_by=ManagedBy.AGENT,
+        )
+        self.url = "/{}/{}/{}/runs/{}/".format(
+            API_V1, self.user.username, self.project.name, self.object.uuid.hex
+        )
+        self.queryset = self.model_class.objects.all()
+
+
+@pytest.mark.run_mark
+class TestRunDetailViewV1(BaseTestRunApi):
+    serializer_class = RunDetailSerializer
+
+    def test_get(self):
+        resp = self.client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        self.object.refresh_from_db()
+        expected = self.serializer_class(self.object).data
+        assert resp.data == expected
+
+    def test_patch_exp(self):
+        new_description = "updated_xp_name"
+        data = {"description": new_description}
+        assert self.object.description != data["description"]
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.user == self.object.user
+        assert new_object.description != self.object.description
+        assert new_object.description == new_description
+
+        # is_managed
+        data = {"is_managed": False}
+        assert self.object.is_managed is True
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.is_managed is False
+        assert new_object.managed_by == ManagedBy.USER
+
+        # is_managed
+        data = {"is_managed": None}
+        assert new_object.is_managed is False
+        resp = self.client.patch(self.url, data=data)
+        # Should raise because the run has no content
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.is_managed is False
+        assert new_object.managed_by == ManagedBy.USER
+
+        # path is_managed
+        data = {"is_managed": False}
+        assert new_object.is_managed is False
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.is_managed is False
+        assert new_object.managed_by == ManagedBy.USER
+
+        # managed_by
+        data = {"managed_by": ManagedBy.USER}
+        assert self.object.is_managed is True
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.is_managed is False
+        assert new_object.managed_by == ManagedBy.USER
+
+        # is_managed
+        data = {"managed_by": None}
+        assert new_object.is_managed is False
+        resp = self.client.patch(self.url, data=data)
+        # Should raise because the run has no content
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.is_managed is False
+        assert new_object.managed_by == ManagedBy.USER
+
+        # path is_managed
+        data = {"managed_by": ManagedBy.USER}
+        assert new_object.is_managed is False
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.is_managed is False
+        assert new_object.managed_by == ManagedBy.USER
+
+        # pending
+        data = {"pending": V1RunPending.APPROVAL}
+        assert self.object.pending is None
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.pending == V1RunPending.APPROVAL
+
+        # pending
+        data = {"pending": None}
+        assert new_object.pending == V1RunPending.APPROVAL
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.pending is None
+
+        # Update tags
+        assert new_object.tags is None
+        data = {"tags": ["foo", "bar"]}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert sorted(new_object.tags) == sorted(["foo", "bar"])
+
+        data = {"tags": ["foo_new", "bar_new"], "merge": False}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert sorted(new_object.tags) == sorted(["foo_new", "bar_new"])
+
+        data = {"tags": ["foo", "bar"], "merge": True}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert sorted(new_object.tags) == sorted(["foo_new", "bar_new", "foo", "bar"])
+
+        # Update name
+        data = {"name": "new_name"}
+        assert new_object.name is None
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.name == data["name"]
+
+    def test_patch_exp_io(self):
+        # Update inputs
+        assert self.object.inputs is None
+        data = {"inputs": {"foo": "bar"}}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.inputs == {"foo": "bar"}
+
+        data = {"inputs": {"foo_new": "bar_new"}, "merge": False}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.inputs == {"foo_new": "bar_new"}
+
+        data = {"inputs": {"foo": "bar"}, "merge": True}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.inputs == {"foo_new": "bar_new", "foo": "bar"}
+
+        # Update outputs
+        assert new_object.outputs is None
+        data = {"outputs": {"foo": "bar", "loss": 0.001}}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.outputs == {"foo": "bar", "loss": 0.001}
+
+        data = {"outputs": {"foo_new": "bar_new"}, "merge": False}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.outputs == {"foo_new": "bar_new"}
+
+        data = {"outputs": {"foo": "bar", "loss": 0.001}, "merge": True}
+        resp = self.client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.outputs == {"foo_new": "bar_new", "foo": "bar", "loss": 0.001}
+
+    def test_delete_from_created_schedule_archives_and_schedules_stop(self):
+        assert self.model_class.objects.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.delete(self.url)
+        assert workers_send.call_count == 0
+        assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Deleted
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1  # Async
+
+    def test_delete_from_running_status_archives_and_schedules_stop(self):
+        new_run_status(
+            self.object,
+            condition=V1StatusCondition.get_condition(
+                type=V1Statuses.RUNNING, status=True
+            ),
+        )
+        assert self.model_class.objects.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.delete(self.url)
+        assert workers_send.call_count == 0
+        assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Deleted
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        assert self.model_class.all.last().live_state == LiveState.DELETION_PROGRESSING
+
+
+@pytest.mark.run_mark
+class TestRunArchiveRestoreViewV1(BaseTestRunApi):
+    def test_archive_schedule_deletion(self):
+        new_run_status(
+            self.object,
+            condition=V1StatusCondition.get_condition(
+                type=V1Statuses.RUNNING, status=True
+            ),
+        )
+        assert self.model_class.objects.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "archive/")
+        assert workers_send.call_count == 0
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+
+    def test_restore(self):
+        self.object.archive()
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "restore/")
+        assert workers_send.call_count == 0
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.model_class.objects.count() == 1
+        assert self.model_class.all.count() == 1
+
+
+@pytest.mark.run_mark
+class BaseRerunRunApi(BaseTestRunApi):
+    def setUp(self):
+        super().setUp()
+        self.object.delete()
+        values = {
+            "version": 1.1,
+            "kind": "operation",
+            "name": "foo",
+            "description": "a description",
+            "params": {"image": {"value": "foo/bar"}},
+            "component": {
+                "name": "build-template",
+                "inputs": [{"name": "image", "type": "str"}],
+                "tags": ["tag1", "tag2"],
+                "run": {
+                    "kind": V1RunKind.JOB,
+                    "container": {"image": "{{ image }}"},
+                    "init": [{"connection": "foo", "git": {"revision": "dev"}}],
+                },
+            },
+        }
+        op_spec = OperationSpecification.read(values=values)
+        self.object = operations.init_and_save_run(
+            project_id=self.project.id, op_spec=op_spec, user_id=self.user.id
+        )
+        self.url = "/{}/{}/{}/runs/{}/".format(
+            API_V1, self.user.username, self.project.name, self.object.uuid.hex
+        )
+
+
+@pytest.mark.run_mark
+class TestRestartRunViewV1(BaseRerunRunApi):
+    serializer_class = RunSerializer
+
+    def test_restart(self):
+        data = {}
+        assert self.queryset.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "restart/", data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.queryset.count() == 2
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is True
+        assert last_experiment.is_restart is True
+        assert last_experiment.is_copy is False
+        assert last_experiment.is_resume is False
+        assert last_experiment.original == self.object
+
+    def test_restart_patch_config(self):
+        data = {"content": '{"trigger": "all_succeeded"}'}
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "restart/", data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.queryset.count() == 2
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is True
+        assert last_experiment.is_restart is True
+        assert last_experiment.is_copy is False
+        assert last_experiment.is_resume is False
+        assert last_experiment.original == self.object
+        assert OperationSpecification.read(last_experiment.raw_content).trigger is None
+        assert (
+            CompiledOperationSpecification.read(last_experiment.content).trigger
+            == "all_succeeded"
+        )
+
+    def test_restart_override_does_not_change_source_for_next_restart(self):
+        data = {"content": '{"runPatch": {"container": {"image": "debug:v2"}}}'}
+        with patch("haupt.common.workers.send"):
+            response = self.client.post(self.url + "restart/", data)
+
+        assert response.status_code == status.HTTP_201_CREATED
+        first = self.queryset.last()
+        first_raw = OperationSpecification.read(first.raw_content)
+        first_compiled = CompiledOperationSpecification.read(first.content)
+        assert first_raw.component.run.container.image == "{{ image }}"
+        assert first_raw.run_patch is None
+        assert first_compiled.run.container.image == "debug:v2"
+
+        first_url = "/{}/{}/{}/runs/{}/restart/".format(
+            API_V1, self.user.username, self.project.name, first.uuid.hex
+        )
+        with patch("haupt.common.workers.send"):
+            response = self.client.post(first_url, {})
+
+        assert response.status_code == status.HTTP_201_CREATED
+        second = self.queryset.last()
+        second_raw = OperationSpecification.read(second.raw_content)
+        second_compiled = CompiledOperationSpecification.read(second.content)
+        assert second.original == first
+        assert second_raw.component.run.container.image == "{{ image }}"
+        assert second_raw.run_patch is None
+        assert second_compiled.run.container.image == "{{ image }}"
+
+    def test_restart_patch_wrong_config_raises(self):
+        data = {"content": "sdf"}
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "restart/", data)
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 1
+
+    def test_restart_recompile_override_config_raises(self):
+        data = {
+            "content": '{"trigger": "all_succeeded"}',
+            "meta_info": {META_RECOMPILE: True},
+        }
+        with patch("haupt.common.workers.send"):
+            resp = self.client.post(self.url + "restart/", data)
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_restart_recompile_config(self):
+        replacement = OperationSpecification.read(self.object.raw_content)
+        replacement.component.run.container.image = "replacement:v3"
+        data = {"content": replacement.to_json(), "meta_info": {META_RECOMPILE: True}}
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "restart/", data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.queryset.count() == 2
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is True
+        assert last_experiment.is_restart is True
+        assert last_experiment.is_copy is False
+        assert last_experiment.is_resume is False
+        assert last_experiment.original == self.object
+        assert (
+            OperationSpecification.read(
+                last_experiment.raw_content
+            ).component.run.container.image
+            == "replacement:v3"
+        )
+        assert (
+            CompiledOperationSpecification.read(
+                last_experiment.content
+            ).run.container.image
+            == "replacement:v3"
+        )
+
+
+@pytest.mark.run_mark
+class TestResumeRunViewV1(BaseRerunRunApi):
+    serializer_class = RunSerializer
+
+    def setUp(self):
+        super().setUp()
+        new_run_status(
+            self.object,
+            condition=V1StatusCondition.get_condition(
+                type=V1Statuses.STOPPED, status=True
+            ),
+        )
+
+    def test_resume(self):
+        data = {}
+        assert self.queryset.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "resume/", data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.queryset.count() == 1
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is False
+        assert last_experiment.is_restart is False
+        assert last_experiment.is_copy is False
+        assert last_experiment.is_resume is True
+        assert last_experiment.original is None
+
+    def test_resume_patch_config(self):
+        data = {"content": '{"trigger": "all_succeeded"}'}
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "resume/", data)
+
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.queryset.count() == 1
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is False
+        assert last_experiment.is_restart is False
+        assert last_experiment.is_copy is False
+        assert last_experiment.is_resume is True
+        assert last_experiment.original is None
+        assert OperationSpecification.read(last_experiment.raw_content).trigger is None
+        assert (
+            CompiledOperationSpecification.read(last_experiment.content).trigger
+            == "all_succeeded"
+        )
+
+    def test_resume_patch_wrong_config_raises(self):
+        data = {"content": "d"}
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "resume/", data)
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 1
+
+    def test_resume_recompile_override_config_raises(self):
+        data = {
+            "content": '{"trigger": "all_succeeded"}',
+            "meta_info": {META_RECOMPILE: True},
+        }
+        with patch("haupt.common.workers.send"):
+            resp = self.client.post(self.url + "resume/", data)
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_resume_recompile_config(self):
+        replacement = OperationSpecification.read(self.object.raw_content)
+        replacement.component.run.container.image = "replacement:v3"
+        data = {"content": replacement.to_json(), "meta_info": {META_RECOMPILE: True}}
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "resume/", data)
+
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.queryset.count() == 1
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is False
+        assert last_experiment.is_restart is False
+        assert last_experiment.is_copy is False
+        assert last_experiment.is_resume is True
+        assert last_experiment.original is None
+        assert (
+            OperationSpecification.read(
+                last_experiment.raw_content
+            ).component.run.container.image
+            == "replacement:v3"
+        )
+        assert (
+            CompiledOperationSpecification.read(
+                last_experiment.content
+            ).run.container.image
+            == "replacement:v3"
+        )
+
+    def test_resume_undone_run(self):
+        new_run_status(
+            self.object,
+            condition=V1StatusCondition.get_condition(
+                type=V1Statuses.RUNNING, status=True
+            ),
+            force=True,
+        )
+        data = {}
+        assert self.queryset.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "resume/", data)
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 1
+
+
+@pytest.mark.run_mark
+class TestCopyRunViewV1(BaseRerunRunApi):
+    serializer_class = RunSerializer
+
+    def test_copy(self):
+        data = {}
+        assert self.queryset.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "copy/", data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+        assert self.queryset.count() == 2
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is True
+        assert last_experiment.is_restart is False
+        assert last_experiment.is_copy is True
+        assert last_experiment.is_resume is False
+        assert last_experiment.original == self.object
+
+    def test_copy_patch_config(self):
+        data = {"content": '{"trigger": "all_succeeded"}'}
+        assert self.queryset.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "copy/", data)
+
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert len(workers_send.call_args_list) == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+        assert self.queryset.count() == 2
+
+        last_experiment = self.queryset.last()
+        assert last_experiment.is_clone is True
+        assert last_experiment.is_restart is False
+        assert last_experiment.is_copy is True
+        assert last_experiment.is_resume is False
+        assert last_experiment.original == self.object
+        assert OperationSpecification.read(last_experiment.raw_content).trigger is None
+        assert (
+            CompiledOperationSpecification.read(last_experiment.content).trigger
+            == "all_succeeded"
+        )
+
+    def test_resume_patch_wrong_config_raises(self):
+        data = {"content": "sdf"}
+        assert self.queryset.count() == 1
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "copy/", data)
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 1
+
+
+@pytest.mark.run_mark
+class TestLegacyRerunPreparationV1(BaseRerunRunApi):
+    def setUp(self):
+        super().setUp()
+        self.object.delete()
+        spec = OperationSpecification.read(
+            {
+                "version": 1.1,
+                "kind": "operation",
+                "params": {"image": {"value": "busybox:1.36"}},
+                "component": {
+                    "inputs": [{"name": "image", "type": "str"}],
+                    "run": {
+                        "kind": V1RunKind.JOB,
+                        "container": {"image": "{{ image }}"},
+                    },
+                },
+            }
+        )
+        self.object = operations.init_and_save_run(
+            project_id=self.project.id, op_spec=spec, user_id=self.user.id
+        )
+        self.base_component_state = self.object.component_state
+        self.url = "/{}/{}/{}/runs/{}/".format(
+            API_V1, self.user.username, self.project.name, self.object.uuid.hex
+        )
+
+    def _post(self, run, action, data):
+        url = "/{}/{}/{}/runs/{}/{}/".format(
+            API_V1, self.user.username, self.project.name, run.uuid.hex, action
+        )
+        with patch("haupt.common.workers.send"):
+            response = self.client.post(url, data)
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        if action == "resume":
+            return Run.objects.get(id=run.id)
+        return Run.objects.last()
+
+    def _assert_saved(
+        self, run, source_image, compiled_image, param_image, input_image=None
+    ):
+        source = OperationSpecification.read(run.raw_content)
+        compiled = CompiledOperationSpecification.read(run.content)
+        assert source.component.run.container.image == source_image
+        assert source.params["image"].value == param_image
+        assert compiled.run.container.image == compiled_image
+        assert run.params["image"]["value"] == param_image
+        assert run.inputs == {"image": input_image or param_image}
+        assert run.component_state == self.base_component_state
+
+    def _prepare(self, run, image, param_image):
+        agent_config = AgentConfig(
+            namespace="rerun-test",
+            artifacts_store=V1Connection(
+                name="artifacts",
+                kind=V1ConnectionKind.GCS,
+                schema_=V1BucketConnection(bucket="gs//:foo"),
+            ),
+        )
+        with patch.object(polyaxon_settings, "AGENT_CONFIG", agent_config):
+            SchedulingManager.runs_prepare(run_id=run.id, start=False)
+        run.refresh_from_db()
+        assert run.status == V1Statuses.COMPILED, run.status_conditions
+        assert run.inputs == {"image": param_image}
+        assert (
+            CompiledOperationSpecification.read(run.content).run.container.image
+            == image
+        )
+
+    def test_restart_override_then_restart_uses_saved_source(self):
+        first = self._post(
+            self.object,
+            "restart",
+            {"content": {"runPatch": {"container": {"image": "debug:v2"}}}},
+        )
+        self._assert_saved(first, "{{ image }}", "debug:v2", "busybox:1.36")
+        self._prepare(first, "debug:v2", "busybox:1.36")
+
+        second = self._post(first, "restart", {})
+        assert second.original_id == first.id
+        self._assert_saved(second, "{{ image }}", "{{ image }}", "busybox:1.36")
+        self._prepare(second, "busybox:1.36", "busybox:1.36")
+
+    def test_resume_override_then_recompile_updates_same_run(self):
+        new_run_status(
+            self.object,
+            condition=V1StatusCondition.get_condition(
+                type=V1Statuses.STOPPED, status=True
+            ),
+        )
+        resumed = self._post(
+            self.object,
+            "resume",
+            {"content": {"runPatch": {"container": {"image": "debug:v2"}}}},
+        )
+        assert resumed.id == self.object.id
+        self._assert_saved(resumed, "{{ image }}", "debug:v2", "busybox:1.36")
+        self._prepare(resumed, "debug:v2", "busybox:1.36")
+
+        new_run_status(
+            resumed,
+            condition=V1StatusCondition.get_condition(
+                type=V1Statuses.STOPPED, status=True
+            ),
+            force=True,
+        )
+        replacement = OperationSpecification.read(resumed.raw_content)
+        replacement.params["image"].value = "new-input:v3"
+        replacement.component.run.container.image = "replacement:v3"
+        resumed = self._post(
+            resumed,
+            "resume",
+            {"content": replacement.to_json(), "meta_info": {META_RECOMPILE: True}},
+        )
+        self._assert_saved(
+            resumed,
+            "replacement:v3",
+            "replacement:v3",
+            "new-input:v3",
+            input_image="busybox:1.36",
+        )
+        self._prepare(resumed, "replacement:v3", "new-input:v3")
+
+    def test_copy_override_then_copy_and_recompile(self):
+        first = self._post(
+            self.object,
+            "copy",
+            {"content": {"runPatch": {"container": {"image": "debug:v2"}}}},
+        )
+        self._assert_saved(first, "{{ image }}", "debug:v2", "busybox:1.36")
+        self._prepare(first, "debug:v2", "busybox:1.36")
+
+        second = self._post(first, "copy", {})
+        assert second.original_id == first.id
+        self._assert_saved(second, "{{ image }}", "{{ image }}", "busybox:1.36")
+        self._prepare(second, "busybox:1.36", "busybox:1.36")
+
+        replacement = OperationSpecification.read(self.object.raw_content)
+        replacement.params["image"].value = "new-input:v3"
+        replacement.component.run.container.image = "replacement:v3"
+        third = self._post(
+            self.object,
+            "copy",
+            {"content": replacement.to_json(), "meta_info": {META_RECOMPILE: True}},
+        )
+        self._assert_saved(third, "replacement:v3", "replacement:v3", "new-input:v3")
+        self._prepare(third, "replacement:v3", "new-input:v3")
+
+    def test_copy_recompile_requires_full_operation(self):
+        response = self.client.post(
+            self.url + "copy/",
+            {
+                "content": {"trigger": "all_succeeded"},
+                "meta_info": {META_RECOMPILE: True},
+            },
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert Run.objects.count() == 1
+
+
+@pytest.mark.run_mark
+@patch("haupt.apis.runs.views.RunCloneView.throttle_classes", [])
+class TestSharedRerunPreparationV1(BaseTest):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory()
+        self.url = "/{}/{}/{}/runs/".format(
+            API_V1, self.user.username, self.project.name
+        )
+        self.agent_config = AgentConfig(
+            namespace="shared-rerun-test",
+            artifacts_store=V1Connection(
+                name="artifacts",
+                kind=V1ConnectionKind.GCS,
+                schema_=V1BucketConnection(bucket="gs//:foo"),
+            ),
+        )
+
+    def _create(self, source):
+        with patch("haupt.common.workers.send"):
+            response = self.client.post(self.url, {"content": orjson_dumps(source)})
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        return Run.objects.get(uuid=response.data["uuid"])
+
+    def _rerun(self, run, action, data=None):
+        if action == "resume":
+            new_run_status(
+                run,
+                condition=V1StatusCondition.get_condition(
+                    type=V1Statuses.STOPPED, status=True
+                ),
+                force=True,
+            )
+        count = Run.objects.count()
+        url = "{}{}/{}/".format(self.url, run.uuid.hex, action)
+        with patch("haupt.common.workers.send"):
+            response = self.client.post(url, data or {})
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        rerun = Run.objects.get(uuid=response.data["uuid"])
+        if action == "resume":
+            assert Run.objects.count() == count
+            assert rerun.id == run.id
+            assert rerun.is_resume is True
+        else:
+            assert Run.objects.count() == count + 1
+            assert rerun.id != run.id
+            assert rerun.original_id == run.id
+            assert rerun.cloning_kind == action
+        return rerun
+
+    def _prepare(
+        self, run, runtime, count, image="busybox:1.36", param_image="busybox:1.36"
+    ):
+        compiled = CompiledOperationSpecification.read(run.content)
+        assert compiled.strict_params is True
+        with patch.object(polyaxon_settings, "AGENT_CONFIG", self.agent_config):
+            SchedulingManager.runs_prepare(run_id=run.id, start=False)
+        run.refresh_from_db()
+        assert run.status == V1Statuses.COMPILED, run.status_conditions
+        assert run.kind == runtime
+        assert run.runtime == runtime
+        assert run.inputs == {
+            "image": param_image,
+            "count": count,
+            "message": "hello",
+        }
+        assert run.outputs == {"result": 7}
+        assert run.gpu == 1
+        compiled = CompiledOperationSpecification.read(run.content)
+        assert compiled.strict_params is None
+        assert "strictParams" not in compiled.to_dict()
+        assert compiled.run.kind == runtime
+        assert compiled.run.container.image == image
+        assert compiled.run.container.command == ["sh", "-c"]
+        assert compiled.run.container.args == ["echo {} hello".format(count)]
+        assert compiled.contexts[0].name == "message"
+        assert compiled.contexts[0].value == "hello"
+        if runtime == V1RunKind.SERVICE:
+            assert compiled.run.ports == [8080]
+
+    @staticmethod
+    def _source(runtime=V1RunKind.JOB):
+        source = {
+            "version": 1.1,
+            "strictParams": True,
+            "inputs": [
+                {"name": "image", "type": "str"},
+                {"name": "count", "type": "int"},
+            ],
+            "outputs": [{"name": "result", "type": "int", "value": 7}],
+            "params": {
+                "image": "busybox:1.36",
+                "count": 3,
+                "message": {"value": "hello", "contextOnly": True},
+            },
+            "run": {
+                "kind": runtime,
+                "container": {
+                    "image": "{{ image }}",
+                    "command": ["sh", "-c"],
+                    "args": ["echo {{ count }} {{ message }}"],
+                    "resources": {"limits": {"nvidia.com/gpu": 1}},
+                },
+            },
+        }
+        if runtime == V1RunKind.SERVICE:
+            source["run"]["ports"] = [8080]
+        return source
+
+    @classmethod
+    def _shortcut_source(cls):
+        # A root container without `run` prepares as the same job.
+        source = cls._source()
+        source["container"] = source.pop("run")["container"]
+        return source
+
+    def _check_rerun(self, action):
+        for kind, runtime, embedded in product(
+            (None, "component", "operation"),
+            (V1RunKind.JOB, V1RunKind.SERVICE),
+            (False, True),
+        ):
+            with self.subTest(kind=kind, runtime=runtime, embedded=embedded):
+                source = self._source(runtime)
+                if embedded:
+                    source = {
+                        "component": {"kind": "operation", **source},
+                        "params": {"count": 5},
+                    }
+                if kind:
+                    source["kind"] = kind
+                count = 5 if embedded else 3
+                original = self._create(source)
+                raw_content = original.raw_content
+                assert read_polyaxonfile(raw_content).to_dict() == (
+                    read_polyaxonfile(source).to_dict()
+                )
+                self._prepare(original, runtime, count)
+                prepared_content = original.content
+                params = original.params
+
+                rerun = self._rerun(original, action)
+
+                assert rerun.raw_content == raw_content
+                assert rerun.params == params
+                assert (
+                    read_polyaxonfile(rerun.raw_content).to_dict().get("kind") == kind
+                )
+                compiled = CompiledOperationSpecification.read(rerun.content)
+                assert compiled.run.container.image == "{{ image }}"
+                assert compiled.run.container.args == ["echo {{ count }} {{ message }}"]
+                self._prepare(rerun, runtime, count)
+                assert rerun.raw_content == raw_content
+                original.refresh_from_db()
+                assert original.raw_content == raw_content
+                if action != "resume":
+                    assert original.content == prepared_content
+
+    def test_explicit_null_workflows_stay_disabled_on_rerun(self):
+        for action, (field, inherited) in product(
+            ("restart", "resume", "copy"),
+            (
+                ("schedule", {"kind": "cron", "cron": "0 * * * *"}),
+                (
+                    "matrix",
+                    {
+                        "kind": "grid",
+                        "params": {"count": {"kind": "choice", "value": [1, 2]}},
+                    },
+                ),
+            ),
+        ):
+            with self.subTest(action=action, field=field):
+                source = {
+                    "component": {**self._source(), field: inherited},
+                    field: None,
+                }
+                original = self._create(source)
+                raw_content = original.raw_content
+                self._prepare(original, V1RunKind.JOB, 3)
+
+                rerun = self._rerun(original, action)
+
+                self._prepare(rerun, V1RunKind.JOB, 3)
+                assert rerun.raw_content == raw_content
+                for run in (original, rerun):
+                    assert not run.pipeline_runs.exists()
+                    compiled = CompiledOperationSpecification.read(run.content)
+                    assert getattr(compiled, field) is None
+                    saved = orjson_loads(run.raw_content)
+                    assert saved[field] is None
+                    assert saved["component"][field] == inherited
+                    for omitted in ("kind", "version", "queue"):
+                        assert omitted not in saved
+
+    def test_omitted_workflow_overrides_still_inherit(self):
+        for field, inherited in (
+            ("schedule", {"kind": "cron", "cron": "0 * * * *"}),
+            (
+                "matrix",
+                {
+                    "kind": "grid",
+                    "params": {"count": {"kind": "choice", "value": [1, 2]}},
+                },
+            ),
+        ):
+            with self.subTest(field=field):
+                run = self._create({"component": {**self._source(), field: inherited}})
+
+                assert run.kind == field
+                compiled = CompiledOperationSpecification.read(run.content)
+                assert getattr(compiled, field).to_dict() == inherited
+                saved = orjson_loads(run.raw_content)
+                assert field not in saved
+                assert saved["component"][field] == inherited
+
+    def test_dag_binding_preserves_explicit_nulls(self):
+        component = self._source()
+        component["params"]["count"] = {"ref": "dag", "value": "inputs.count"}
+        component["schedule"] = {"kind": "cron", "cron": "0 * * * *"}
+        component["matrix"] = {
+            "kind": "grid",
+            "params": {"count": {"kind": "choice", "value": [1, 2]}},
+        }
+        parent = RunFactory(project=self.project, kind=V1RunKind.DAG)
+        dag_spec = CompiledOperationSpecification.read(
+            {
+                "inputs": [{"name": "count", "type": "int", "value": 3}],
+                "run": {"kind": "dag"},
+            }
+        )
+
+        child = operations.init_run(
+            project_id=self.project.id,
+            user_id=self.user.id,
+            op_spec={"component": component, "schedule": None, "matrix": None},
+            dag_run=parent,
+            dag_spec=dag_spec,
+        ).instance
+
+        compiled, params = OperationSpecification.compile_operation_with_params(
+            read_polyaxonfile(child.raw_content), is_dag_node=True
+        )
+        assert compiled.schedule is None
+        assert compiled.matrix is None
+        assert compiled.run.kind == V1RunKind.JOB
+        assert params["count"].value == 3
+        saved = orjson_loads(child.raw_content)
+        assert saved["schedule"] is None
+        assert saved["matrix"] is None
+        assert "queue" not in saved
+        assert saved["component"]["params"]["count"]["value"] == 3
+        assert "ref" not in saved["component"]["params"]["count"]
+
+    def test_restart_shared_source_through_prepare(self):
+        self._check_rerun("restart")
+
+    def test_resume_shared_source_through_prepare(self):
+        self._check_rerun("resume")
+
+    def test_copy_shared_source_through_prepare(self):
+        self._check_rerun("copy")
+
+    def test_overrides_keep_saved_source_for_next_rerun(self):
+        for action, strategy, field in product(
+            ("restart", "resume", "copy"),
+            (None, "post_merge", "pre_merge", "replace", "isnull"),
+            ("run", "runPatch", "both"),
+        ):
+            with self.subTest(action=action, strategy=strategy, field=field):
+                source = {"kind": "operation", **self._source(V1RunKind.SERVICE)}
+                original = self._create(source)
+                raw_content = original.raw_content
+                original_content = original.content
+                override = {
+                    "kind": "component",
+                    "params": {**source["params"], "count": 5},
+                }
+                if field in ("run", "both"):
+                    override["run"] = {"container": {"image": "native:v2"}}
+                if field in ("runPatch", "both"):
+                    override["runPatch"] = {"container": {"image": "patch:v3"}}
+                if strategy:
+                    override["patchStrategy"] = strategy
+                changes_image = strategy in (None, "post_merge", "replace")
+                image = (
+                    ("native:v2" if field == "run" else "patch:v3")
+                    if changes_image
+                    else "busybox:1.36"
+                )
+                count = 5 if changes_image else 3
+
+                first = self._rerun(original, action, {"content": override})
+
+                assert first.raw_content == raw_content
+                assert first.params["count"]["value"] == count
+                self._prepare(first, V1RunKind.SERVICE, count, image=image)
+                assert first.raw_content == raw_content
+
+                second = self._rerun(first, action)
+
+                assert second.raw_content == raw_content
+                assert second.params["count"]["value"] == 3
+                self._prepare(second, V1RunKind.SERVICE, 3)
+                assert second.raw_content == raw_content
+                original.refresh_from_db()
+                assert original.raw_content == raw_content
+                if action != "resume":
+                    assert original.content == original_content
+
+    def test_legacy_source_accepts_native_run_override(self):
+        for action in ("restart", "resume", "copy"):
+            with self.subTest(action=action):
+                component = self._source()
+                source = {
+                    "kind": "operation",
+                    "params": component.pop("params"),
+                    "component": component,
+                }
+                original = self._create(source)
+                raw_content = original.raw_content
+
+                rerun = self._rerun(
+                    original,
+                    action,
+                    {
+                        "content": {
+                            "run": {"container": {"image": "native:v2"}},
+                            "params": {"count": 5},
+                        }
+                    },
+                )
+
+                assert rerun.raw_content == raw_content
+                assert rerun.params["count"]["value"] == 5
+                self._prepare(rerun, V1RunKind.JOB, 5, image="native:v2")
+                assert rerun.raw_content == raw_content
+
+    def test_recompile_replaces_source_for_next_rerun(self):
+        for action, kind, shortcut in product(
+            ("restart", "resume", "copy"),
+            (None, "component", "operation"),
+            (False, True),
+        ):
+            with self.subTest(action=action, kind=kind, shortcut=shortcut):
+                build = self._shortcut_source if shortcut else self._source
+                source = {"kind": "operation", **build()}
+                source["params"]["old"] = {"value": "discard", "contextOnly": True}
+                if shortcut:
+                    source["env"] = {"OLD": "discard"}
+                original = self._create(source)
+                original_raw = original.raw_content
+                original_content = original.content
+                if shortcut:
+                    # The replacement drops this shortcut; it must not come back.
+                    env = orjson_loads(original_content)["run"]["container"]["env"]
+                    assert [(e["name"], e["value"]) for e in env] == [
+                        ("OLD", "discard")
+                    ]
+                replacement = build()
+                replacement["params"]["image"] = "replacement:v3"
+                replacement["params"]["count"] = 7
+                if kind:
+                    replacement["kind"] = kind
+
+                replaced = self._rerun(
+                    original,
+                    action,
+                    {
+                        "content": (
+                            orjson_dumps(replacement)
+                            if kind == "component"
+                            else replacement
+                        ),
+                        "meta_info": {META_RECOMPILE: True},
+                    },
+                )
+
+                replacement_raw = replaced.raw_content
+                assert replacement_raw != original_raw
+                assert read_polyaxonfile(replacement_raw).to_dict() == (
+                    read_polyaxonfile(replacement).to_dict()
+                )
+                assert replaced.params == {
+                    "image": {"value": "replacement:v3"},
+                    "count": {"value": 7},
+                    "message": {"value": "hello", "contextOnly": True},
+                }
+                self._prepare(
+                    replaced,
+                    V1RunKind.JOB,
+                    7,
+                    image="replacement:v3",
+                    param_image="replacement:v3",
+                )
+                assert not orjson_loads(replaced.content)["run"]["container"].get("env")
+
+                again = self._rerun(replaced, action)
+
+                assert again.raw_content == replacement_raw
+                assert again.params == replaced.params
+                self._prepare(
+                    again,
+                    V1RunKind.JOB,
+                    7,
+                    image="replacement:v3",
+                    param_image="replacement:v3",
+                )
+                assert not orjson_loads(again.content)["run"]["container"].get("env")
+                assert again.raw_content == replacement_raw
+                if action != "resume":
+                    original.refresh_from_db()
+                    assert original.raw_content == original_raw
+                    assert original.content == original_content
+
+    def test_rerun_rejects_invalid_run_patch(self):
+        original = self._create(self._source())
+        for action in ("restart", "resume", "copy"):
+            with self.subTest(action=action):
+                if action == "resume":
+                    new_run_status(
+                        original,
+                        condition=V1StatusCondition.get_condition(
+                            type=V1Statuses.STOPPED, status=True
+                        ),
+                        force=True,
+                    )
+                original.refresh_from_db()
+                before = (
+                    original.raw_content,
+                    original.content,
+                    original.params,
+                    original.status,
+                )
+                count = Run.objects.count()
+                url = "{}{}/{}/".format(self.url, original.uuid.hex, action)
+
+                with patch("haupt.common.workers.send") as workers_send:
+                    response = self.client.post(
+                        url, {"content": {"runPatch": {"sidecars": True}}}
+                    )
+
+                assert response.status_code == status.HTTP_400_BAD_REQUEST, (
+                    response.data
+                )
+                assert "sidecars" in str(response.data)
+                workers_send.assert_not_called()
+                assert Run.objects.count() == count
+                original.refresh_from_db()
+                assert (
+                    original.raw_content,
+                    original.content,
+                    original.params,
+                    original.status,
+                ) == before
+
+    def test_recompile_rejects_missing_or_incomplete_source(self):
+        original = self._create(self._source())
+        for action, replacement in product(
+            ("restart", "resume", "copy"),
+            (
+                {},
+                {"content": None},
+                {"content": {}},
+                {"content": {"params": {"count": 5}}},
+                {"content": {"runPatch": {"container": {"image": "patch:v3"}}}},
+                {"content": {"run": {"container": {"image": "missing-kind:v3"}}}},
+            ),
+        ):
+            with self.subTest(action=action, replacement=replacement):
+                if action == "resume":
+                    new_run_status(
+                        original,
+                        condition=V1StatusCondition.get_condition(
+                            type=V1Statuses.STOPPED, status=True
+                        ),
+                        force=True,
+                    )
+                original.refresh_from_db()
+                before = (
+                    original.raw_content,
+                    original.content,
+                    original.params,
+                    original.component_state,
+                    original.status,
+                )
+                count = Run.objects.count()
+                url = "{}{}/{}/".format(self.url, original.uuid.hex, action)
+
+                with patch("haupt.common.workers.send") as workers_send:
+                    response = self.client.post(
+                        url, {**replacement, "meta_info": {META_RECOMPILE: True}}
+                    )
+
+                assert response.status_code == status.HTTP_400_BAD_REQUEST, (
+                    response.data
+                )
+                if not replacement.get("content"):
+                    assert "Recompile requires a complete Polyaxonfile" in str(
+                        response.data
+                    )
+                workers_send.assert_not_called()
+                assert Run.objects.count() == count
+                original.refresh_from_db()
+                assert (
+                    original.raw_content,
+                    original.content,
+                    original.params,
+                    original.component_state,
+                    original.status,
+                ) == before
+
+
+@pytest.mark.run_mark
+class TestTransferRunViewV1(BaseTestRunApi):
+    def setUp(self):
+        super().setUp()
+        self.same_owner_project = ProjectFactory()
+
+    def test_transfer(self):
+        data = {"project": self.same_owner_project.name}
+        assert self.queryset.count() == 1
+        assert Run.objects.filter(project=self.project).count() == 1
+        assert Run.objects.filter(project=self.same_owner_project).count() == 0
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "transfer/", data)
+        assert resp.status_code == status.HTTP_200_OK
+        assert len(workers_send.call_args_list) == 0
+        assert self.queryset.count() == 1
+        assert Run.objects.filter(project=self.project).count() == 0
+        assert Run.objects.filter(project=self.same_owner_project).count() == 1
+
+    def test_transfer_same_project(self):
+        data = {"project": self.project.name}
+        assert self.queryset.count() == 1
+        assert Run.objects.filter(project=self.project).count() == 1
+        assert Run.objects.filter(project=self.same_owner_project).count() == 0
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url + "transfer/", data)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 0
+        assert len(workers_send.call_args_list) == 0
+        assert self.queryset.count() == 1
+        assert Run.objects.filter(project=self.project).count() == 1
+        assert Run.objects.filter(project=self.same_owner_project).count() == 0
+
+    def test_transfer_touches_children_and_projects(self):
+        Run.objects.filter(id=self.object.id).update(kind=V1RunKind.DAG)
+        child = self.factory_class(
+            project=self.project, user=self.user, pipeline=self.object
+        )
+        last_week = now() - timedelta(days=7)
+        Run.objects.update(updated_at=last_week)
+        Project.objects.update(updated_at=last_week)
+        data = {"project": self.same_owner_project.name}
+        with patch("haupt.common.workers.send"):
+            resp = self.client.post(self.url + "transfer/", data)
+        assert resp.status_code == status.HTTP_200_OK
+        child.refresh_from_db()
+        assert child.project_id == self.same_owner_project.id
+        assert child.updated_at > last_week
+        for project in (self.project, self.same_owner_project):
+            project.refresh_from_db()
+            assert project.updated_at > last_week
+
+
+@pytest.mark.run_mark
+class TestRunStatusListViewV1(BaseTestRunApi):
+    serializer_class = RunStatusSerializer
+    num_objects = 3
+
+    def setUp(self):
+        super().setUp()
+        self.url = self.url + "statuses/"
+
+    def test_get(self):
+        resp = self.client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+
+        data = resp.data
+        assert len(data["status_conditions"]) == 0
+        assert data == self.serializer_class(self.object).data
+
+        new_run_status(
+            self.object,
+            condition=V1StatusCondition.get_condition(
+                type=V1Statuses.RUNNING, status=True
+            ),
+        )
+        self.object.refresh_from_db()
+        resp = self.client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+
+        data = resp.data
+        assert len(data["status_conditions"]) == 1
+        assert data == self.serializer_class(self.object).data
+
+        new_run_stop_status(run=self.object, message="foo")
+        self.object.refresh_from_db()
+        resp = self.client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+
+        data = resp.data
+        assert len(data["status_conditions"]) == 2
+        assert data == self.serializer_class(self.object).data
+
+    def test_create(self):
+        assert self.object.status == V1Statuses.CREATED
+        assert self.object.status_conditions == {}
+        data = {}
+        resp = self.client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        self.object.refresh_from_db()
+        assert self.object.status == V1Statuses.CREATED
+        assert self.object.status_conditions == {}
+
+        data = {"condition": {"type": V1Statuses.RUNNING}}
+        resp = self.client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        self.object.refresh_from_db()
+        assert self.object.status == V1Statuses.RUNNING
+        condition = self.object.status_conditions[0]
+        condition.pop("last_transition_time")
+        condition.pop("last_update_time")
+        assert condition == {
+            "type": V1Statuses.RUNNING,
+        }
+
+        # Create with message and traceback
+        data = {
+            "condition": {
+                "type": V1Statuses.FAILED,
+                "status": True,
+                "reason": "Run is stopped",
+                "message": "foo",
+            }
+        }
+        resp = self.client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        self.object.refresh_from_db()
+        assert self.object.status == V1Statuses.FAILED
+        assert len(self.object.status_conditions) == 2
+        condition = self.object.status_conditions[1]
+        condition.pop("last_transition_time")
+        condition.pop("last_update_time")
+        assert condition == {
+            "type": V1Statuses.FAILED,
+            "status": True,
+            "reason": "Run is stopped",
+            "message": "foo",
+        }
+
+    def test_final_status(self):
+        assert self.object.status == V1Statuses.CREATED
+        assert self.object.status_conditions == {}
+        # Create with failed status
+        data = {
+            "condition": {
+                "type": V1Statuses.FAILED,
+                "status": True,
+                "reason": "Run is stopped",
+                "message": "foo",
+            }
+        }
+        resp = self.client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        self.object.refresh_from_db()
+        assert self.object.status == V1Statuses.FAILED
+        assert len(self.object.status_conditions) == 1
+        condition = self.object.status_conditions[0]
+        condition.pop("last_transition_time")
+        condition.pop("last_update_time")
+        assert condition == {
+            "type": V1Statuses.FAILED,
+            "status": True,
+            "reason": "Run is stopped",
+            "message": "foo",
+        }
+
+        # Create with stopped status
+        data = {
+            "condition": {
+                "type": V1Statuses.STOPPED,
+            }
+        }
+        resp = self.client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        self.object.refresh_from_db()
+        assert self.object.status == V1Statuses.FAILED
+        assert len(self.object.status_conditions) == 1
+        condition = self.object.status_conditions[0]
+        condition.pop("last_transition_time")
+        condition.pop("last_update_time")
+        assert condition == {
+            "type": V1Statuses.FAILED,
+            "status": True,
+            "reason": "Run is stopped",
+            "message": "foo",
+        }
+
+        # Create with stopped status with force flag
+        data = {
+            "condition": {
+                "type": V1Statuses.STOPPED,
+            },
+            "force": True,
+        }
+        resp = self.client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        self.object.refresh_from_db()
+        assert self.object.status == V1Statuses.STOPPED
+        assert len(self.object.status_conditions) == 2
+        condition = self.object.status_conditions[1]
+        condition.pop("last_transition_time")
+        condition.pop("last_update_time")
+        assert condition == {
+            "type": V1Statuses.STOPPED,
+        }
+
+
+@pytest.mark.run_mark
+class TestStopRunViewV1(BaseTestRunApi):
+    def setUp(self):
+        super().setUp()
+        self.url = self.url + "stop/"
+
+    def test_stop_safe_stop(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.save()
+        assert self.queryset.last().status == V1Statuses.CREATED
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().status == V1Statuses.STOPPED
+
+    def test_stop(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.status = V1Statuses.QUEUED
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 1
+        assert self.queryset.last().status == V1Statuses.STOPPING
+
+    def test_stop_non_managed(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.USER
+        last_run.save()
+        assert self.queryset.last().status == V1Statuses.CREATED
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().status == V1Statuses.STOPPED
+
+    def test_stop_pipeline_dag_safe_stop(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.DAG
+        last_run.status = V1Statuses.COMPILED
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.COMPILED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.COMPILED
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_NOTIFY_DONE,
+        }
+        assert self.queryset.count() == 4
+        assert self.queryset.last().status == V1Statuses.STOPPED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.STOPPED,
+        }
+
+    def test_stop_pipeline_dag(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.DAG
+        last_run.status = V1Statuses.QUEUED
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.QUEUED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.RUNNING
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 4
+        assert self.queryset.last().status == V1Statuses.STOPPING
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.STOPPING,
+            V1Statuses.STOPPED,
+        }
+
+    def test_stop_pipeline_matrix_safe_stop(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.MATRIX
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.CREATED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.COMPILED
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_NOTIFY_DONE,
+        }
+        assert self.queryset.count() == 4
+        last_run.refresh_from_db()
+        assert last_run.status == V1Statuses.STOPPED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.STOPPED,
+        }
+
+    def test_stop_pipeline_matrix(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.MATRIX
+        last_run.status = V1Statuses.RUNNING
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.RUNNING
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.RUNNING
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 4
+        last_run.refresh_from_db()
+        assert last_run.status == V1Statuses.STOPPING
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.STOPPING,
+            V1Statuses.STOPPED,
+        }
+
+    def test_stop_pipeline_with_matrix_and_no_runs(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.DAG
+        last_run.status = V1Statuses.RUNNING
+        last_run.save()
+        matrix = RunFactory(project=self.project, user=self.user, controller=last_run)
+        matrix.kind = V1RunKind.MATRIX
+        matrix.status = V1Statuses.RUNNING
+        matrix.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_NOTIFY_DONE,
+        }
+        assert self.queryset.count() == 2
+        assert self.queryset.last().status == V1Statuses.STOPPED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.STOPPED,
+        }
+
+
+@pytest.mark.run_mark
+class TestSkipRunViewV1(BaseTestRunApi):
+    def setUp(self):
+        super().setUp()
+        self.url = self.url + "skip/"
+
+    def test_skip_safe_stop(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.save()
+        assert self.queryset.last().status == V1Statuses.CREATED
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().status == V1Statuses.SKIPPED
+
+    def test_skip(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.status = V1Statuses.COMPILED
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().status == V1Statuses.SKIPPED
+
+    def test_skip_unsafe(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.status = V1Statuses.QUEUED
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 0
+        assert self.queryset.count() == 1
+        assert self.queryset.last().status == V1Statuses.QUEUED
+
+    def test_skip_non_managed(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.USER
+        last_run.save()
+        assert self.queryset.last().status == V1Statuses.CREATED
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().status == V1Statuses.SKIPPED
+
+    def test_skip_pipeline_dag_safe_stop(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.DAG
+        last_run.status = V1Statuses.COMPILED
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.COMPILED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.COMPILED
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_NOTIFY_DONE,
+        }
+        assert self.queryset.count() == 4
+        assert self.queryset.last().status == V1Statuses.SKIPPED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.SKIPPED,
+        }
+
+    def test_skip_pipeline_dag(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.DAG
+        last_run.status = V1Statuses.COMPILED
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.COMPILED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.RUNNING
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 4
+        assert self.queryset.last().status == V1Statuses.STOPPING
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.STOPPING,
+            V1Statuses.SKIPPED,
+        }
+
+    def test_skip_pipeline_matrix_safe_stop(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.MATRIX
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.CREATED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.COMPILED
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_NOTIFY_DONE,
+        }
+        assert self.queryset.count() == 4
+        last_run.refresh_from_db()
+        assert last_run.status == V1Statuses.SKIPPED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.SKIPPED,
+        }
+
+    def test_skip_pipeline_matrix(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.MATRIX
+        last_run.status = V1Statuses.CREATED
+        last_run.save()
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        run3 = RunFactory(project=self.project, user=self.user, controller=last_run)
+        assert last_run.status == V1Statuses.CREATED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.CREATED,
+        }
+        run3.status = V1Statuses.RUNNING
+        run3.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_NOTIFY_DONE,
+        }
+        assert self.queryset.count() == 4
+        last_run.refresh_from_db()
+        assert last_run.status == V1Statuses.SKIPPED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.STOPPING,
+            V1Statuses.SKIPPED,
+        }
+
+    def test_skip_pipeline_with_matrix_and_no_runs(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.managed_by = ManagedBy.AGENT
+        last_run.kind = V1RunKind.DAG
+        last_run.status = V1Statuses.COMPILED
+        last_run.save()
+        matrix = RunFactory(project=self.project, user=self.user, controller=last_run)
+        matrix.kind = V1RunKind.MATRIX
+        matrix.status = V1Statuses.COMPILED
+        matrix.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_NOTIFY_DONE,
+        }
+        assert self.queryset.count() == 2
+        assert self.queryset.last().status == V1Statuses.SKIPPED
+        assert set(last_run.controller_runs.values_list("status", flat=True)) == {
+            V1Statuses.SKIPPED,
+        }
+
+
+@pytest.mark.run_mark
+class TestApproveRunViewV1(BaseTestRunApi):
+    def setUp(self):
+        super().setUp()
+        self.url = self.url + "approve/"
+
+    def test_approve(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.APPROVAL
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending is None
+
+    def test_approve_compiled(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.APPROVAL
+        last_run.status = V1Statuses.COMPILED
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending is None
+
+    def test_approve_cache(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.CACHE
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending is None
+
+    def test_approve_build(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.BUILD
+        last_run.content = None
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending is None
+
+    def test_approve_build_approve(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        values = {
+            "version": 1.1,
+            "kind": "operation",
+            "name": "foo",
+            "description": "a description",
+            "params": {"image": {"value": "foo/bar"}},
+            "isApproved": False,
+            "component": {
+                "name": "build-template",
+                "inputs": [{"name": "image", "type": "str"}],
+                "tags": ["tag1", "tag2"],
+                "run": {
+                    "kind": V1RunKind.JOB,
+                    "container": {"image": "{{ image }}"},
+                    "init": [{"connection": "foo", "git": {"revision": "dev"}}],
+                },
+            },
+        }
+        op_spec = OperationSpecification.read(values=values)
+        instance = operations.init_run(
+            project_id=self.project.id, op_spec=op_spec, user_id=self.user.id
+        ).instance
+        last_run.content = instance.content
+        last_run.pending = V1RunPending.BUILD
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending == V1RunPending.APPROVAL
+
+    def test_approve_upload(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.UPLOAD
+        last_run.content = None
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending is None
+
+    def test_approve_build_upload(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        values = {
+            "version": 1.1,
+            "kind": "operation",
+            "name": "foo",
+            "description": "a description",
+            "params": {"image": {"value": "foo/bar"}},
+            "isApproved": False,
+            "component": {
+                "name": "build-template",
+                "inputs": [{"name": "image", "type": "str"}],
+                "tags": ["tag1", "tag2"],
+                "run": {
+                    "kind": V1RunKind.JOB,
+                    "container": {"image": "{{ image }}"},
+                    "init": [{"connection": "foo", "git": {"revision": "dev"}}],
+                },
+            },
+        }
+        op_spec = OperationSpecification.read(values=values)
+        instance = operations.init_run(
+            project_id=self.project.id, op_spec=op_spec, user_id=self.user.id
+        ).instance
+        last_run.content = instance.content
+        last_run.pending = V1RunPending.UPLOAD
+        last_run.save()
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending == V1RunPending.APPROVAL
+
+    def test_approve_already_approved_run(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.APPROVAL
+        last_run.save()
+        resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.queryset.count() == 1
+        assert self.queryset.last().pending is None
+
+    def test_approve_pipeline_dag_does_not_approve_subtasks(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.APPROVAL
+        last_run.kind = V1RunKind.DAG
+        last_run.save()
+        RunFactory(
+            project=self.project,
+            user=self.user,
+            pipeline=last_run,
+            controller=last_run,
+            pending=V1RunPending.APPROVAL,
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(project=self.project, user=self.user, controller=last_run)
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_PREPARE,
+        }
+        assert self.queryset.count() == 4
+        assert self.queryset.last().pending is None
+        assert set(last_run.controller_runs.values_list("pending", flat=True)) == {
+            None,
+            V1RunPending.APPROVAL,
+        }
+
+    def test_approve_pipeline_matrix(self):
+        assert self.queryset.count() == 1
+        last_run = self.queryset.last()
+        last_run.pending = V1RunPending.APPROVAL
+        last_run.kind = V1RunKind.MATRIX
+        last_run.status = V1Statuses.COMPILED
+        last_run.save()
+        RunFactory(
+            project=self.project,
+            user=self.user,
+            pipeline=last_run,
+            controller=last_run,
+            pending=V1RunPending.APPROVAL,
+        )
+        RunFactory(
+            project=self.project, user=self.user, pipeline=last_run, controller=last_run
+        )
+        RunFactory(project=self.project, user=self.user, controller=last_run)
+        with patch("haupt.common.workers.send") as workers_send:
+            resp = self.client.post(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert workers_send.call_count == 1
+        assert {c[0][0] for c in workers_send.call_args_list} == {
+            SchedulerCeleryTasks.RUNS_START,
+        }
+        assert self.queryset.count() == 4
+        last_run.refresh_from_db()
+        assert self.queryset.last().pending is None
+        assert set(last_run.controller_runs.values_list("pending", flat=True)) == {
+            None,
+            V1RunPending.APPROVAL,
+        }
+
+
+@pytest.mark.run_mark
+class TestRunBookmarkCreateView(BaseTestBookmarkCreateView):
+    model_class = Run
+    factory_class = RunFactory
+
+    def get_url(self):
+        return "/{}/{}/{}/runs/{}/bookmark/".format(
+            API_V1, self.user.username, self.project.name, self.object.uuid.hex
+        )
+
+    def create_object(self):
+        self.project = ProjectFactory()
+        return self.factory_class(user=self.user, project=self.project)
+
+
+@pytest.mark.run_mark
+class TestRunBookmarkDeleteView(BaseTestBookmarkDeleteView):
+    model_class = Run
+    factory_class = RunFactory
+
+    def get_url(self):
+        return "/{}/{}/{}/runs/{}/unbookmark/".format(
+            API_V1, self.user.username, self.project.name, self.object.uuid.hex
+        )
+
+    def create_object(self):
+        self.project = ProjectFactory()
+        return self.factory_class(user=self.user, project=self.project)
+
+
+del BaseTestBookmarkCreateView
+del BaseTestBookmarkDeleteView

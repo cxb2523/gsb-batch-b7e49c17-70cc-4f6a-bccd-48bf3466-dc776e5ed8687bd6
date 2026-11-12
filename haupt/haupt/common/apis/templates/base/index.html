@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  {% load static %}
+  <title>Polyaxon</title>
+  <style>
+    .plxLoading {
+      position: fixed;
+      top: 35%;
+      left: 50%;
+      width: 64px;
+      height: 64px;
+      transform: translate(-50%, -50%);
+    }
+    .plxLoading svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .plxLoading path {
+        animation: plxLoading 1.2s ease-in-out infinite;
+      }
+      .plxLoading path:nth-of-type(2) {
+        animation-delay: -0.3s;
+      }
+      .plxLoading path:nth-of-type(3) {
+        animation-delay: -0.6s;
+      }
+      .plxLoading path:nth-of-type(4) {
+        animation-delay: -0.9s;
+      }
+    }
+    @keyframes plxLoading {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.35;
+      }
+    }
+  </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <link rel="icon" type="image/png" href="{% static 'images/favicon.ico' %}?version={{ ui_assets_version }}"/>
+  <link rel="icon" type="image/svg+xml" href="{% static 'images/favicon.svg' %}?version={{ ui_assets_version }}"/>
+  <base href="{{ ui_base_url }}">
+</head>
+
+<body class="plxBody">
+  <div id="root" class="plxLayout">
+    <div class="plxLoading" role="status" aria-label="Loading Polyaxon">
+      <svg viewBox="204.226497 150.966679 907.547005 907.547005" aria-hidden="true">
+        <defs>
+          <linearGradient id="polyaxon-gray-startup-base" gradientUnits="userSpaceOnUse" x1="366" y1="151" x2="950" y2="1058">
+            <stop offset="0" stop-color="#606060"/>
+            <stop offset="0.5" stop-color="#909090"/>
+            <stop offset="1" stop-color="#BEBEBE"/>
+          </linearGradient>
+          <linearGradient id="polyaxon-gray-startup-middle" href="#polyaxon-gray-startup-base" gradientTransform="translate(-120 -69.282032)"/>
+          <linearGradient id="polyaxon-gray-startup-right" gradientUnits="userSpaceOnUse" x1="366" y1="151" x2="950" y2="1058" gradientTransform="translate(-20 -11.547005)">
+            <stop offset="0" stop-color="#777777"/>
+            <stop offset="0.5" stop-color="#7E8DA3"/>
+            <stop offset="1" stop-color="#879FBF"/>
+          </linearGradient>
+        </defs>
+        <path fill="url(#polyaxon-gray-startup-base)"
+          d="M366 938.31158
+            L366 382.854228
+            A20 20 0 0 1 376 365.53372
+            L743 153.646171
+            A20 20 0 0 1 763 153.646171
+            L828.5 191.462614
+            A3 3 0 0 1 828.5 196.658766
+            L456 411.721741
+            A20 20 0 0 0 446 429.042249
+            L446 986.231652
+            A3 3 0 0 1 441.5 988.829728
+            L372 948.703884
+            A12 12 0 0 1 366 938.31158
+            Z"/>
+        <path fill="url(#polyaxon-gray-startup-middle)" transform="translate(120 69.282032)"
+          d="M366 938.31158
+            L366 382.854228
+            A20 20 0 0 1 376 365.53372
+            L743 153.646171
+            A20 20 0 0 1 763 153.646171
+            L828.5 191.462614
+            A3 3 0 0 1 828.5 196.658766
+            L456 411.721741
+            A20 20 0 0 0 446 429.042249
+            L446 986.231652
+            A3 3 0 0 1 441.5 988.829728
+            L372 948.703884
+            A12 12 0 0 1 366 938.31158
+            Z"/>
+        <path fill="url(#polyaxon-gray-startup-right)" transform="translate(20 11.547005)"
+          d="M805.5 394.689908
+            L731.5 437.413828
+            A3 3 0 0 0 730 440.011904
+            L730 569.915715
+            A20 20 0 0 1 720 587.236223
+            L612 649.590053
+            A12 12 0 0 0 606 659.982357
+            L606 740.234045
+            A3 3 0 0 0 610.5 742.832121
+            L800 633.424244
+            A20 20 0 0 0 810 616.103736
+            L810 397.287984
+            A3 3 0 0 0 805.5 394.689908
+            Z"/>
+        <path fill="url(#polyaxon-gray-startup-right)" transform="translate(20 11.547005)"
+          d="M925.5 325.407876
+            L851.5 368.131796
+            A3 3 0 0 0 850 370.729872
+            L850 639.197748
+            A20 20 0 0 1 840 656.518256
+            L612 788.154117
+            A12 12 0 0 0 606 798.546421
+            L606 878.798109
+            A3 3 0 0 0 610.5 881.396185
+            L920 702.706277
+            A20 20 0 0 0 930 685.385769
+            L930 328.005952
+            A3 3 0 0 0 925.5 325.407876
+            Z"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Dependencies -->
+  {% if ui_enabled %}
+  {% if ui_offline %}
+  <script src="{% static 'vendors/js/react.production.18.0.2.min.js' %}"></script>
+  <script src="{% static 'vendors/js/react-dom.production.18.0.2.min.js' %}"></script>
+  <script src="{% static 'vendors/js/moment.2.30.1.min.js' %}"></script>
+  <script src="{% static 'vendors/js/plotly.3.1.1.min.js' %}"></script>
+  <script src="{% static 'vendors/js/create-plotly-component.2.6.0.min.js' %}"></script>
+  <script type="application/json" id="plx-chart-libs">
+    {
+      "bokeh": ["{% static 'vendors/js/bokeh.3.2.0.min.js' %}"],
+      "vega": [
+        "{% static 'vendors/js/vega@5.min.js' %}",
+        "{% static 'vendors/js/vega-lite@5.min.js' %}",
+        "{% static 'vendors/js/vega-embed@6.min.js' %}"
+      ]
+    }
+  </script>
+  {% else %}
+  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.30.1/moment.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/3.1.1/plotly.min.js"></script>
+  <script src="https://unpkg.com/react-plotly.js@2.6.0/dist/create-plotly-component.min.js"></script>
+  <script type="application/json" id="plx-chart-libs">
+    {
+      "bokeh": ["https://cdnjs.cloudflare.com/ajax/libs/bokeh/3.2.0/bokeh.min.js"],
+      "vega": [
+        "https://cdn.jsdelivr.net/npm/vega@5.25.0/build/vega.min.js",
+        "https://cdn.jsdelivr.net/npm/vega-lite@5.11.1/build/vega-lite.min.js",
+        "https://cdn.jsdelivr.net/npm/vega-embed@6.22.1/build/vega-embed.min.js"
+      ]
+    }
+  </script>
+  {% endif %}
+  <script src="{% static 'dist/js/0.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  <script src="{% static 'dist/js/1.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  <script src="{% static 'dist/js/2.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  <script src="{% static 'dist/js/3.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  <script src="{% static 'dist/js/4.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  <script src="{% static 'dist/js/5.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  <script src="{% static 'dist/js/6.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  <script src="{% static 'dist/js/7.bundle.js' %}?version={{ ui_assets_version }}"></script>
+  {% endif %}
+</body>
+
+</html>
