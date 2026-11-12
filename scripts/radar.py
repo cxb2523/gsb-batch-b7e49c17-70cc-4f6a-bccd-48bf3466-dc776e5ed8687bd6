@@ -10,6 +10,10 @@ Two sources of data:
   2. live language stats from the GitHub API
         python scripts/radar.py --github YOUR_USERNAME -o assets/radar-langs
 
+     --github mode prints a fetch summary (scanned / ok / failed / excluded
+     repos, per-language byte totals) so skipped repos are never silent.
+     Set RADAR_GITHUB_API_BASE to point at a mock GitHub API for testing.
+
 Writes <out>-dark.svg and <out>-light.svg so the README can swap them with
 <picture> + prefers-color-scheme.
 
@@ -80,40 +84,111 @@ def _api(url, token):
 
 def from_github(user: str, token: str | None, limit: int, exclude: set[str],
                 curve: float):
-    """Sum language bytes across the user's non-fork public repos."""
+    """Sum language bytes across the user's non-fork, non-archived repos.
+
+    Every repo is accounted for in a terminal summary: fetched OK, HTTP
+    failure (with status code), or excluded as fork/archived. Exits non-zero
+    without rendering when no usable data came back, so a broken API can
+    never produce an empty or all-zero chart.
+    """
+    base = os.environ.get("RADAR_GITHUB_API_BASE",
+                          "https://api.github.com").rstrip("/")
     totals: dict[str, int] = {}
+    lang_repos: dict[str, int] = {}   # language -> repos contributing bytes
+    ok: list[str] = []
+    failed: list[tuple[str, str]] = []
+    excluded: list[tuple[str, str]] = []
+
     page = 1
     while True:
-        repos = _api(
-            f"https://api.github.com/users/{user}/repos"
-            f"?per_page=100&page={page}&type=owner&sort=pushed",
-            token,
-        )
+        try:
+            repos = _api(
+                f"{base}/users/{user}/repos"
+                f"?per_page=100&page={page}&type=owner&sort=pushed",
+                token,
+            )
+        except urllib.error.HTTPError as e:
+            sys.exit(f"cannot list repos for '{user}': HTTP {e.code}")
+        except Exception as e:
+            sys.exit(f"cannot list repos for '{user}': {e}")
         if not repos:
             break
         for repo in repos:
+            name = repo.get("name", "?")
             if repo.get("fork") or repo.get("archived"):
+                excluded.append((name, "fork" if repo.get("fork") else "archived"))
+                continue
+            url = repo.get("languages_url")
+            if not url:
+                failed.append((name, "no languages_url in repo payload"))
                 continue
             try:
-                langs = _api(repo["languages_url"], token)
-            except urllib.error.HTTPError:
+                langs = _api(url, token)
+            except urllib.error.HTTPError as e:
+                failed.append((name, f"HTTP {e.code}"))
                 continue
-            for name, count in langs.items():
-                if name.lower() in exclude:
+            except Exception as e:
+                failed.append((name, f"{type(e).__name__}: {e}"))
+                continue
+            ok.append(name)
+            for lname, count in langs.items():
+                if lname.lower() in exclude:
                     continue
-                totals[name] = totals.get(name, 0) + count
+                if not isinstance(count, (int, float)) or count <= 0:
+                    continue  # zero/negative byte entries never enter the sums
+                totals[lname] = totals.get(lname, 0) + count
+                lang_repos[lname] = lang_repos.get(lname, 0) + 1
         if len(repos) < 100:
             break
         page += 1
 
-    if not totals:
-        sys.exit(f"no language data found for '{user}' (private repos need a token)")
+    scanned = len(ok) + len(failed)
+    print(f"github fetch summary for '{user}':")
+    print(f"  repos scanned: {scanned}")
+    print(f"  succeeded:     {len(ok)}")
+    for n in ok:
+        print(f"    ok       {n}")
+    print(f"  failed:        {len(failed)}")
+    for n, why in failed:
+        print(f"    FAIL     {n}: {why}")
+    print(f"  excluded:      {len(excluded)} (fork/archived)")
+    for n, why in excluded:
+        print(f"    excluded {n} ({why})")
 
-    top = sorted(totals.items(), key=lambda kv: -kv[1])[:limit]
+    if scanned and not ok:
+        sys.exit(f"error: all {scanned} scanned repos failed to return language "
+                 f"data for '{user}' (see failures above); refusing to render "
+                 f"an empty chart")
+    if not scanned:
+        sys.exit(f"no eligible repos for '{user}' "
+                 f"(account has only forked/archived repos or none at all)")
+    if not totals:
+        sys.exit(f"no language data found for '{user}' "
+                 f"(repos are empty, or every language was --excluded)")
+
+    if failed:
+        print(f"  WARNING: 结果不完整 (INCOMPLETE RESULTS) — "
+              f"{len(failed)} of {scanned} repos failed; "
+              f"the chart reflects only the {len(ok)} that succeeded")
+
+    ranked = sorted(totals.items(), key=lambda kv: -kv[1])
+    print("  languages (cumulative bytes / source repos):")
+    for lname, b in ranked:
+        print(f"    {lname:<20} {b:>12,} bytes  from {lang_repos[lname]} repo(s)")
+
+    # --limit outside [1, #languages] falls back to everything available;
+    # the <3-axes rule in main() still applies afterwards.
+    effective = limit if 1 <= limit <= len(ranked) else len(ranked)
+    if effective != limit:
+        print(f"  note: --limit {limit} adjusted to {effective} "
+              f"(available languages)")
+    top = ranked[:effective]
+
     peak = top[0][1]
     # Raw byte ratios are brutally lopsided — one dominant language leaves every
     # other axis pinned near the centre and the shape reads as a spike. `curve`
     # compresses that: 1.0 is linear, 0.5 (default) is sqrt, lower spreads more.
+    # It only rescales axis values; ranking and byte totals above are untouched.
     axes = [(n, round(100 * (c / peak) ** curve, 1)) for n, c in top]
     return f"{user} · language mix", axes
 
@@ -282,7 +357,8 @@ def main(argv=None):
     p.add_argument("--size", type=int, default=440)
     p.add_argument("--rings", type=int, default=4)
     p.add_argument("--limit", type=int, default=7,
-                   help="max axes when using --github")
+                   help="max axes when using --github (out-of-range values "
+                        "fall back to all available languages)")
     p.add_argument("--exclude", default="html,css,shell,makefile,dockerfile,batchfile",
                    help="comma-separated languages to skip in --github mode")
     p.add_argument("--curve", type=float, default=0.5,
@@ -292,6 +368,14 @@ def main(argv=None):
     p.add_argument("--no-animate", dest="animate", action="store_false",
                    help="disable the grow-in animation")
     args = p.parse_args(argv)
+
+    # The fetch summary can contain non-ASCII (e.g. the 结果不完整 marker);
+    # never let a narrow console codepage crash the run.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
 
     if args.github:
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
