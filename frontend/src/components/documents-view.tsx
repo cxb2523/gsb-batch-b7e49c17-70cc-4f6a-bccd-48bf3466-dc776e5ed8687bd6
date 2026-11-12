@@ -28,15 +28,33 @@ export function DocumentsView({ sections: sectionsArg, selectedSection, onSelect
     }, [setResearchState, state])
 
     const currentSection = useMemo(() => {
-        if (streamingSection?.id && streamingSection.id !== (selectedSection as Section | undefined)?.id) {
-            return streamingSection
+        if (streamingSection?.id) {
+            // Rewrites keep the same section id, so merge the streamed values
+            // over the stored section instead of dropping them.
+            const stored = sectionsArg.find(s => s.id === streamingSection.id);
+            if (stored) {
+                return {
+                    ...stored,
+                    content: streamingSection.content ?? stored.content,
+                    footer: streamingSection.footer ?? stored.footer,
+                };
+            }
+            return streamingSection;
         }
         return selectedSection;
-    }, [streamingSection, selectedSection]);
+    }, [streamingSection, selectedSection, sectionsArg]);
 
     const sections = useMemo(() => {
         if (!streamingSection?.id) return sectionsArg;
-        if (sectionsArg.some(s => s.id === streamingSection.id)) return sectionsArg;
+        if (sectionsArg.some(s => s.id === streamingSection.id)) {
+            return sectionsArg.map(s => s.id === streamingSection.id
+                ? {
+                    ...s,
+                    content: streamingSection.content ?? s.content,
+                    footer: streamingSection.footer ?? s.footer,
+                }
+                : s);
+        }
         return [
             ...sectionsArg,
             streamingSection,

@@ -76,10 +76,14 @@ async def tavily_search(sub_queries: List[TavilyQuery], state):
         state["logs"][i]["done"] = True
         await copilotkit_emit_state(config, state)
 
-    for key,val in sources.items():
-        if not sources[key].get('title',None):
-            sources[key]['title'] = 'No Title, Invalid Link'
-
+    # Sources without a title get a recognizable placeholder that embeds their
+    # URL, so distinct sources never collapse into one indistinguishable label
+    # and every placeholder remains traceable back to its origin.
+    for key, val in sources.items():
+        if not val.get('title'):
+            val['title'] = f"Untitled source ({key})"
+        if not val.get('url'):
+            val['url'] = key
 
     state['sources'] = sources
 

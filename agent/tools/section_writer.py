@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, cast
+from typing import Optional, Dict, List, Tuple, cast
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_community.adapters.openai import convert_openai_messages
 from langchain_core.tools import tool
@@ -17,15 +17,57 @@ def WriteSection(title: str, content: str, section_number: int, footer: str = ""
 def generate_random_id(length=6):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
+def find_section_position(sections: List[dict], section_id: Optional[str]) -> Optional[int]:
+    """Return the list position of the section with the given id, or None.
+
+    Sections are always located by their stable ``id`` — never by using
+    ``idx`` as an array subscript, because the list order and the logical
+    ``idx`` ordering can diverge once sections are inserted or removed.
+    """
+    if not section_id:
+        return None
+    for pos, sec in enumerate(sections):
+        if sec.get("id") == section_id:
+            return pos
+    return None
+
+def upsert_section(sections: List[dict], section: dict) -> Tuple[List[dict], int, bool]:
+    """Insert or replace ``section`` in ``sections``.
+
+    - If a section with the same ``id`` already exists, it is replaced in
+      place (same list position) and never duplicated.
+    - Otherwise the new section is inserted so that the list stays ordered
+      by the logical ``idx`` field.
+
+    Returns ``(sections, position, existed)``.
+    """
+    position = find_section_position(sections, section.get("id"))
+    if position is not None:
+        sections[position] = section
+        return sections, position, True
+
+    insert_at = len(sections)
+    for pos, sec in enumerate(sections):
+        if sec.get("idx", 0) > section.get("idx", 0):
+            insert_at = pos
+            break
+    sections.insert(insert_at, section)
+    return sections, insert_at, False
+
 class SectionWriterInput(BaseModel):
     research_query: str = Field(description="The research query or topic for the section.")
     section_title: str = Field(description="The title of the specific section to write.")
     idx: int = Field(description="An index representing the order of this section (starting at 0")
+    section_id: Optional[str] = Field(
+        default=None,
+        description="The id of an existing section to rewrite in place. "
+                    "Always pass this when editing a section that already exists in the report; "
+                    "omit it only when creating a brand-new section.")
     state: Optional[Dict] = Field(description="State of the research")
 
 
 @tool("section_writer", args_schema=SectionWriterInput, return_direct=True)
-async def section_writer(research_query, section_title, idx, state):
+async def section_writer(research_query, section_title, idx, state, section_id=None):
     """Writes a specific section of a research report based on the query, section title, and provided sources."""
 
     config = RunnableConfig()
@@ -37,22 +79,41 @@ async def section_writer(research_query, section_title, idx, state):
     })
     await copilotkit_emit_state(config, state)
 
-    section_id = generate_random_id()
-    section = {
-        "title": section_title,
-        "content": "",
-        "footer": "",
-        "idx": idx,
-        "id": section_id,
-    }
+    state["sections"] = state.get("sections", [])
+    sections = state["sections"]
+
+    # Locate an existing section by its stable id (never by idx as a list index).
+    existing_position = find_section_position(sections, section_id)
+    section_exists = existing_position is not None
+
+    if section_exists:
+        # Rewrite: keep the existing section's identity (id) and logical order (idx).
+        existing = sections[existing_position]
+        section = {
+            "title": existing.get("title", section_title),
+            "content": existing.get("content", ""),
+            "footer": existing.get("footer", ""),
+            "idx": existing.get("idx", idx),
+            "id": existing["id"],
+        }
+    else:
+        # New section: reuse the caller-provided id if any (so repeated writes
+        # with the same id update instead of duplicating), else generate one.
+        section = {
+            "title": section_title,
+            "content": "",
+            "footer": "",
+            "idx": idx,
+            "id": section_id or generate_random_id(),
+        }
 
     content_state = {
-        "state_key": f"section_stream.content.{idx}.{section_id}.{section_title}",
+        "state_key": f"section_stream.content.{section['idx']}.{section['id']}.{section['title']}",
         "tool": "WriteSection",
         "tool_argument": "content"
     }
     footer_state = {
-        "state_key": f"section_stream.footer.{idx}.{section_id}.{section_title}",
+        "state_key": f"section_stream.footer.{section['idx']}.{section['id']}.{section['title']}",
         "tool": "WriteSection",
         "tool_argument": "footer"
     }
@@ -63,8 +124,7 @@ async def section_writer(research_query, section_title, idx, state):
     )
 
     outline = state.get("outline", {})
-    sources = state.get("sources").values()
-    section_exists = True if section['idx'] in [sec['idx'] for sec in state['sections']] else False
+    sources = state.get("sources", {}).values()
 
     if not section_exists:
         # Define the system and user prompts
@@ -94,7 +154,7 @@ async def section_writer(research_query, section_title, idx, state):
                 "- Add blank lines before and after math blocks\n\n"
                 "IMPORTANT RULES FOR REFERENCES:\n\n"
                 "1. Footnotes are only required when the section content references external sources or needs citations\n"
-                "2. If footnotes exist, they must be section-specific and start from [^1] in each section\n" 
+                "2. If footnotes exist, they must be section-specific and start from [^1] in each section\n"
                 "3. The same source may have different reference numbers in different sections\n"
                 "4. All references must be placed in the footer field, not in the content\n"
                 "5. Do not add separation lines between content and references\n"
@@ -107,7 +167,7 @@ async def section_writer(research_query, section_title, idx, state):
             "role": "user",
             "content": (
                 f"Today's date is {datetime.now().strftime('%d/%m/%Y')}.\n\n"
-                f"Research Query: {research_query}\n\n" 
+                f"Research Query: {research_query}\n\n"
                 f"Section Title: {section_title}\n\n"
                 f"Section Number: {idx}\n\n"
                 f"Sources:\n{sources}\n\n"
@@ -119,8 +179,8 @@ async def section_writer(research_query, section_title, idx, state):
             )
         }]
     else:
-        # get the current content of the section we want to update
-        current_section_state = state['sections'][section['idx']]
+        # get the current content of the section we want to update (located by id above)
+        current_section_state = section
         prompt = [{
             "role": "system",
             "content": (
@@ -163,10 +223,9 @@ async def section_writer(research_query, section_title, idx, state):
                 section["content"] = ai_message.tool_calls[0]["args"].get("content", "")
                 section["footer"] = ai_message.tool_calls[0]["args"].get("footer", "")
 
-        if section_exists:
-            state["sections"][section['idx']] = section
-        else:
-            state["sections"].append(section)
+        # Store the section: replace in place when the id already exists,
+        # otherwise insert it so sections stay ordered by idx.
+        upsert_section(sections, section)
 
         # Process each stream state
         stream_states = {

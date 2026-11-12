@@ -108,12 +108,17 @@ class ResearchAgent:
         # If the sections are present, we add them to the prompt
         if sections:
             report_content = "\n".join(
-                f"section {section['idx']} : {section['title']}\n"
+                f"section id: {section['id']} (idx {section['idx']}) : {section['title']}\n"
                 f"content : {section['content']}"
                 f"footer : {section['footer']}\n"
                 for section in sections
             )
             prompt_parts.append(f"**Report**:\n\n{report_content}")
+            prompt_parts.append(
+                "When the user asks to modify an existing section, call the section_writer tool "
+                "with that section's id as the section_id argument so the correct section is "
+                "updated in place. Omit section_id only when creating a brand-new section."
+            )
 
         return "\n".join(prompt_parts)
 
