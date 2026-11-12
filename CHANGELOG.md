@@ -4,6 +4,16 @@ All notable changes to GEO/AEO Tracker are documented here.
 
 ---
 
+## [Unreleased]
+
+### 🔒 Source citations are verified and normalized before display
+
+- **Inflated and unsafe source lists are fixed.** Every source attached to an AI answer now goes through one verifiable resolution in `lib/server/source-normalizer.ts`: up to 3 redirects are followed, and the starting URL plus every redirect target must pass the existing `assertPublicHttpUrl` SSRF guard. A short link that lands on `169.254.169.254`, localhost or any private/reserved address is rejected before it is ever fetched.
+- Sources are deduplicated by their **final** address — short links, tracking parameters (`utm_*`, `gclid`, …), fragments and http/https spellings of the same page now collapse to one entry, with the https spelling preferred.
+- Rejected candidates are counted by reason in a new `sourceDrops` field (`tooManyRedirects`, `nonPublic`, `resolveFailed`, `nonHttp`, plus `total`). The statistics are part of the cached result, so a cache hit returns identical numbers. When every source is rejected, `sources` is an empty array and the answer still returns normally; the existing error-record and no-answer throws are unchanged.
+
+---
+
 ## [CLI 1.9.1] - 2026-11-11
 
 - npm page: badges for version, Node, zero dependencies, AI engines, agent readiness, license and GitHub stars.

@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { fetchWithTimeout } from "./http";
+import {
+  normalizeSources,
+  type SourceDropStats,
+} from "./source-normalizer";
 
 const ProviderSchema = z.enum([
   "chatgpt",
@@ -59,7 +63,10 @@ type NormalizedScrapeResult = {
   provider: Provider;
   prompt: string;
   answer: string;
+  /** Verified final addresses only — each passed the public-URL SSRF check. */
   sources: string[];
+  /** Counts of candidate sources rejected during normalization, by reason. */
+  sourceDrops: SourceDropStats;
   snapshotId?: string;
   cached: boolean;
   raw: unknown;
@@ -489,32 +496,45 @@ export async function runAiScraper(
   // Extract sources from answer text
   const textSources = extractSourcesFromAnswer(answer);
 
-  // Also extract from Bright Data's structured citation fields
-  const structuredSources: string[] = [];
+  // Also extract from Bright Data's structured citation fields. Values are
+  // passed through unfiltered: non-http strings, non-string entries and
+  // object-wrapped values must reach the normalizer so they are counted as
+  // rejected rather than silently lost.
+  const structuredSources: unknown[] = [];
   for (const field of ["citations", "links_attached", "sources"]) {
     const arr = rawRecord[field];
     if (Array.isArray(arr)) {
       for (const item of arr) {
-        if (typeof item === "string" && item.startsWith("http")) {
+        if (typeof item === "string") {
           structuredSources.push(item);
         } else if (item && typeof item === "object") {
           const url = (item as Record<string, unknown>).url;
-          if (typeof url === "string" && url.startsWith("http")) {
-            structuredSources.push(url);
-          }
+          // Keep the value even when url is missing/null/non-string: the
+          // normalizer records it as a rejected non-http citation.
+          structuredSources.push(url ?? item);
+        } else {
+          // Numbers, booleans, null, undefined — counted, never thrown.
+          structuredSources.push(item);
         }
       }
     }
   }
 
-  // Merge and deduplicate
-  const allSources = [...new Set([...textSources, ...structuredSources])];
+  // Every candidate gets one verifiable resolution: redirects are followed,
+  // each hop passes assertPublicHttpUrl, and final addresses are deduped.
+  // Rejected candidates are counted by reason; an all-rejected list is empty
+  // rather than fatal.
+  const { sources, dropped } = await normalizeSources([
+    ...textSources,
+    ...structuredSources,
+  ]);
 
   const normalized: NormalizedScrapeResult = {
     provider: parsed,
     prompt: request.prompt,
     answer,
-    sources: allSources,
+    sources,
+    sourceDrops: dropped,
     snapshotId:
       typeof record.snapshot_id === "string" ? record.snapshot_id : undefined,
     cached: false,
