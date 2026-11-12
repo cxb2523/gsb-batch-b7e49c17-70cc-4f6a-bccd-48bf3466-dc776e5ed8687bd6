@@ -1,0 +1,8 @@
+# Data: fixture pages, page snapshots, recorded model answers, and generated demo data.
+fixtures/
+/demo/
+package-lock.json
+web/.svelte-kit/
+web/dev-fonts/
+# Markdown is wrapped by hand, and Prettier would pad its tables to the widest cell.
+*.md

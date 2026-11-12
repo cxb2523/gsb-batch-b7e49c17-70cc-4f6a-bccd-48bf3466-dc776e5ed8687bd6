@@ -1,0 +1,650 @@
+/**
+ * The content script. It extracts tables, asks the service worker for
+ * judgments, and shades the tables. It runs again when tables appear, change,
+ * or expand, and when a single-page app navigates.
+ *
+ * The script extracts and sends only tables that have come within about one
+ * screen of the viewport, and at most MAX_TABLES per page. Each request
+ * carries every table seen so far. Earlier tables hit the answer cache, and
+ * the scales shared across tables still see the whole set.
+ *
+ * The script never reads the extension settings, because they hold API keys.
+ * The worker says whether the page is on.
+ *
+ * The status for tests and debugging is in `<html data-pd-status>`. It starts
+ * as "working" and ends as "done", "error:<reason>", "off", "none", or "idle".
+ * "idle" means the page has tables but none is near the viewport yet.
+ */
+import { isolateJudgment } from "../core/isolate.ts";
+import { transposeSnapshot, type Orientation } from "../core/orient.ts";
+import { conventionForLang, normalizeLabel, parseNumber, stripNoise } from "../core/parse.ts";
+import { toCSV } from "../core/tabular.ts";
+import { attachControls, detachControls, type SortControlState, type SortOption } from "../dom/controls.ts";
+import { extractPage, transposeExtracted, type ExtractedTable } from "../dom/extract.ts";
+import { isPaginated } from "../dom/paginated.ts";
+import { canSortRows, restoreRows, sortRows } from "../dom/sort.ts";
+import { paintTable, unpaint } from "../dom/paint.ts";
+import { confirmReport } from "../dom/report.ts";
+import { toast } from "../dom/toast.ts";
+import type { TableJudgment } from "../core/types.ts";
+import { buildFlagReport } from "./flag-report.ts";
+import { MAX_HTML, type FlagCapture, type FlagReply } from "./flags.ts";
+import type { JudgeReply, PageConfig, PageState, ToContent, ToWorker, UserFlagReply } from "./messages.ts";
+import { afterSend, PACE_START, waitFor } from "./pace.ts";
+import type { TableChoice } from "./settings.ts";
+
+/** The cap is high. Baseball-Reference player pages, the busiest seen so far, have fewer than 30 tables. */
+const MAX_TABLES = 200;
+/** How far outside the viewport a table counts as "near". */
+const NEAR = "100% 0px";
+/** The script abandons a judgment that takes longer than this, for example after a worker restart. */
+const REPLY_TIMEOUT_MS = 60_000;
+
+const root = document.documentElement;
+const setStatus = (s: string) => {
+  root.dataset["pdStatus"] = s;
+};
+
+let enabled = false;
+let generation = 0;
+/** The generation of the reply on screen. Replies older than this are dropped. */
+let paintedGeneration = 0;
+/** The snapshot JSON of what is shaded now. A mutation round with the same snapshot does nothing. */
+let painted = "";
+/** One painted cell per table. If the page re-renders the rows, this cell leaves the document. */
+let sampleCell = new WeakMap<HTMLTableElement, HTMLElement>();
+/** The judgment that painted each table, and the model that made it. Flags report them. */
+let judged = new WeakMap<HTMLTableElement, TableJudgment>();
+let judgedBy = "";
+
+let seen = new WeakSet<HTMLTableElement>();
+let seenCount = 0;
+let capLogged = false;
+
+const send = <T>(msg: ToWorker): Promise<T> =>
+  Promise.race([
+    chrome.runtime.sendMessage(msg) as Promise<T>,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("timed out waiting for the worker")), REPLY_TIMEOUT_MS),
+    ),
+  ]);
+
+/** Keys a table by its content, not its position, so a choice stays with the table when the page moves it. */
+const fingerprint = (t: ExtractedTable): string => {
+  const text = `${t.snapshot.headers.join("␟")}␞${(t.snapshot.rows[0] ?? []).join("␟")}`;
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+};
+
+const isIntact = (t: ExtractedTable): boolean => {
+  if (t.element.dataset["pdTable"] === undefined) return false;
+  const sample = sampleCell.get(t.element);
+  return sample === undefined || (sample.isConnected && sample.dataset["pdT"] !== undefined);
+};
+
+/**
+ * Runs extraction and, if the tables changed, a judge request. `paced` marks a
+ * run that a page change triggered. Those runs follow pace.ts.
+ */
+const run = async (force = false, paced = false) => {
+  if (!enabled) return;
+  const gen = ++generation;
+  mutations.disconnect();
+  try {
+    await judgeAndPaint(gen, force, paced);
+  } catch (e) {
+    if (gen === generation) setStatus("error:internal");
+    console.info("[practical-data]", e);
+  } finally {
+    if (enabled) observeMutations();
+  }
+};
+
+const judgeAndPaint = async (gen: number, force: boolean, paced: boolean) => {
+  // extractPage extracts only the tables in `seen`. `nearby` watches the rest until they come near the viewport.
+  const extracted = extractPage(document, (el) => seen.has(el));
+  for (const el of extracted.elements) if (!seen.has(el)) nearby.observe(el);
+  if (extracted.elements.length === 0) {
+    setStatus("none");
+    return;
+  }
+  const nearbyTables = extracted.tables;
+  if (nearbyTables.length === 0) {
+    setStatus("idle");
+    return;
+  }
+  // Hidden tables are not sent. The others carry the orientation the user chose.
+  const tables = nearbyTables.filter((t) => choices[fingerprint(t)]?.hidden !== true);
+  const orientations: Record<string, Orientation> = {};
+  for (const t of tables) {
+    const o = choices[fingerprint(t)]?.orientation;
+    if (o !== undefined) orientations[t.snapshot.id] = o;
+  }
+  const page = { ...extracted.page, tables: tables.map((t) => t.snapshot) };
+  const key = JSON.stringify([page.tables, orientations]);
+  // The same text is not enough. Frameworks re-render tables or rows with the
+  // same content, and the new elements have no paint.
+  if (!force && key === painted && tables.every(isIntact)) return;
+  // Only new text costs model requests. A re-render with the same text hits the answer cache.
+  if (paced && key !== painted) pace = afterSend(pace, Date.now());
+
+  setStatus("working");
+  const reply = await send<JudgeReply>({ type: "judge", page, orientations });
+  // Drop a reply if a newer one is on screen. An older reply that arrives before
+  // the newest still paints, so tables shade while the user scrolls.
+  if (gen < paintedGeneration || !enabled) return;
+  if (!reply.ok) {
+    if (gen === generation) setStatus(`error:${reply.reason}`);
+    console.info("[practical-data]", reply.message);
+    return;
+  }
+  unpaint();
+  sampleCell = new WeakMap();
+  judged = new WeakMap();
+  judgedBy = reply.judgment.model;
+  const byId = new Map<string, ExtractedTable>(tables.map((t) => [t.snapshot.id, t]));
+  const groupSizes = new Map<string, number>();
+  for (const t of reply.judgment.tables) {
+    for (const e of t.encodings) if (e.group !== null) groupSizes.set(e.group, (groupSizes.get(e.group) ?? 0) + 1);
+  }
+  for (const t of reply.judgment.tables) {
+    const table = byId.get(t.id);
+    if (!table?.element.isConnected) continue;
+    // `judged` keeps the reply's judgment, so the bar still knows the table
+    // shares scales and can offer to rejoin them.
+    const shown = choices[fingerprint(table)]?.isolated === true ? isolateJudgment(t) : t;
+    paintTable(t.orientation === "rows" ? transposeExtracted(table) : table, shown, reply.palette, groupSizes);
+    judged.set(table.element, t);
+    const sample = table.element.querySelector<HTMLElement>("[data-pd-t]:not([data-pd-t=''])");
+    if (sample !== null) sampleCell.set(table.element, sample);
+    // A table with nothing shaded gets no controls bar. There is no shading to
+    // hide. The dev build's right-click menu can still flag such a table.
+    // A stored orientation keeps the bar: the user chose an orientation that
+    // shades nothing, and the bar is the only way back.
+    if (t.encodings.length > 0 || choices[fingerprint(table)]?.orientation !== undefined)
+      control(table, { orientation: t.orientation, hidden: false });
+    else uncontrol(table.element);
+  }
+  // Mark tables the judge skipped as handled, so that mutations don't send them again.
+  for (const t of tables) if (t.element.dataset["pdTable"] === undefined) t.element.dataset["pdTable"] = "";
+  for (const table of nearbyTables) {
+    const c = choices[fingerprint(table)];
+    if (c?.hidden === true) control(table, { orientation: c.orientation ?? "columns", hidden: true });
+  }
+  if (reply.judgment.failed.length > 0) console.info("[practical-data] tables not judged:", reply.judgment.failed);
+  pruneDetached();
+  painted = key;
+  paintedGeneration = gen;
+  if (gen === generation) setStatus("done");
+};
+
+// ── Per-table controls ──────────────────────────────────────────────────────
+
+/** The user's per-table choices for this page, kept until the browser session ends. */
+let choices: Record<string, TableChoice> = {};
+const keyOf = new WeakMap<HTMLTableElement, string>();
+const controlled = new Set<HTMLTableElement>();
+
+const choose = (table: HTMLTableElement, change: TableChoice) => {
+  const key = keyOf.get(table);
+  if (key === undefined) return;
+  choices = { ...choices, [key]: { ...choices[key], ...change } };
+  void send({ type: "saveTableChoices", url: location.href, choices }).catch(() => undefined);
+  void run(true);
+};
+
+const handlers = {
+  orient: (table: HTMLTableElement, orientation: Orientation) => choose(table, { orientation }),
+  hide: (table: HTMLTableElement, hidden: boolean) => choose(table, { hidden }),
+  sort: (table: HTMLTableElement, by: { col: number; dir: "asc" | "desc" } | null) => applySort(table, by),
+  copy: (table: HTMLTableElement) => copyTable(table),
+  isolate: (table: HTMLTableElement, isolated: boolean) => choose(table, { isolated }),
+  // The dev build files flags with its own token; the store build reports through the hosted endpoint.
+  flag:
+    PD_FLAGS_REPO === null
+      ? (table: HTMLTableElement) => void report(table)
+      : (table: HTMLTableElement) => void flag(table),
+};
+
+// ── Reports (store build) ───────────────────────────────────────────────────
+
+/** What the endpoint's error codes mean to the person who clicked. */
+const REPORT_NOTICES: Readonly<Record<string, string>> = {
+  flag_limit: "You've sent today's reports. It resets at midnight UTC.",
+  github: "Reporting is off right now. Try again later.",
+  network: "Couldn't reach the server. Check your connection and try again.",
+};
+
+/**
+ * The store build's "Looks wrong" flow: build the report, show all of it,
+ * send only what the person confirmed.
+ */
+const report = async (table: HTMLTableElement) => {
+  const now = extractPage(document, (el) => el === table).tables.find((t) => t.element === table);
+  if (now === undefined) {
+    toast("Couldn't read this table any more.");
+    return;
+  }
+  const kind = (table.dataset["pdEncoded"] ?? "") !== "" ? "shaded" : "unshaded";
+  const manifest = chrome.runtime.getManifest();
+  const page = { url: location.href, title: document.title, lang: document.documentElement.lang };
+  const choice = await confirmReport(buildFlagReport(now.snapshot, page, kind, manifest.version));
+  if (choice === null) return;
+  const confirmed = buildFlagReport(
+    now.snapshot,
+    { ...page, url: choice.includeUrl ? page.url : null },
+    kind,
+    manifest.version,
+    choice.note,
+  );
+  try {
+    const reply = await send<UserFlagReply>({ type: "userFlag", report: confirmed });
+    toast(reply.ok ? "Report sent. Thank you." : (REPORT_NOTICES[reply.reason] ?? "Couldn't send the report."));
+  } catch {
+    toast(REPORT_NOTICES["network"]!);
+  }
+};
+
+// ── Sorting ─────────────────────────────────────────────────────────────────
+
+/** The active sort of each table, for the bar's select. Sorting lasts until the page replaces the rows. */
+const sorted = new WeakMap<HTMLTableElement, { col: number; dir: "asc" | "desc" }>();
+
+/** A sort or restore mutates the page; this recomputes the keys that stop those mutations from re-judging. */
+const syncAfterSort = (table: HTMLTableElement) => {
+  const extracted = extractPage(document, (el) => seen.has(el));
+  const tables = extracted.tables.filter((t) => choices[fingerprint(t)]?.hidden !== true);
+  const orientations: Record<string, Orientation> = {};
+  for (const t of tables) {
+    const o = choices[fingerprint(t)]?.orientation;
+    if (o !== undefined) orientations[t.snapshot.id] = o;
+  }
+  painted = JSON.stringify([tables.map((t) => t.snapshot), orientations]);
+  const now = extracted.tables.find((t) => t.element === table);
+  const before = keyOf.get(table);
+  if (now !== undefined && before !== undefined) {
+    const after = fingerprint(now);
+    if (after !== before && choices[before] !== undefined) {
+      choices = { ...choices, [after]: choices[before]! };
+      void send({ type: "saveTableChoices", url: location.href, choices }).catch(() => undefined);
+    }
+    keyOf.set(table, after);
+  }
+};
+
+/** The sort keys for one column: parsed numbers, or an ordinal level's place in the judged order. */
+const sortKeys = (table: ExtractedTable, judgment: TableJudgment, col: number): (number | null)[] | null => {
+  const encoding = judgment.encodings.find((e) => e.col === col);
+  const cells = table.snapshot.rows.map((r) => r[col] ?? "");
+  if (encoding?.kind === "quantitative") {
+    const convention = conventionForLang(document.documentElement.lang);
+    return cells.map((c) => parseNumber(c, convention)?.value ?? null);
+  }
+  if (encoding?.kind === "ordinal") {
+    return cells.map((c) => {
+      const place = encoding.order.indexOf(normalizeLabel(c));
+      return place === -1 ? null : place;
+    });
+  }
+  return null;
+};
+
+const applySort = (table: HTMLTableElement, by: { col: number; dir: "asc" | "desc" } | null) => {
+  const judgment = judged.get(table);
+  if (judgment === undefined) return;
+  const extracted = extractPage(document, (el) => el === table).tables.find((t) => t.element === table);
+  if (extracted === undefined) return;
+  mutations.disconnect();
+  try {
+    if (by === null) {
+      restoreRows(table);
+      sorted.delete(table);
+    } else {
+      const keys = sortKeys(extracted, judgment, by.col);
+      // Totals rows keep their place; a sum sorted into the middle reads as a giant row.
+      const pinned = new Set(judgment.aggregateRows);
+      if (keys === null || keys.length !== extracted.snapshot.rows.length) return;
+      if (!sortRows(table, extracted.cells, keys, pinned, by.dir)) return;
+      sorted.set(table, by);
+    }
+    syncAfterSort(table);
+  } finally {
+    if (enabled) observeMutations();
+  }
+  control(extracted, { orientation: judgment.orientation, hidden: false });
+};
+
+/** Columns the bar offers to sort by: the judged quantitative and ordinal ones. */
+const sortState = (table: ExtractedTable, orientation: Orientation, hidden: boolean): SortControlState | null => {
+  if (orientation !== "columns" || hidden) return null;
+  const judgment = judged.get(table.element);
+  if (judgment === undefined) return null;
+  // A site with live sorting of its own keeps it; aria-sort marks the headers.
+  if (table.element.querySelector("thead [aria-sort]") !== null) return null;
+  if (!canSortRows(table.cells)) return null;
+  const options: SortOption[] = judgment.encodings
+    .filter((e) => e.kind === "quantitative" || e.kind === "ordinal")
+    .map((e) => ({ col: e.col, header: stripNoise(table.snapshot.headers[e.col] ?? "") }));
+  if (options.length === 0) return null;
+  return { options, active: sorted.get(table.element) ?? null, paginated: isPaginated(table.element) };
+};
+
+// ── Copying ─────────────────────────────────────────────────────────────────
+
+/** Writes through the clipboard API, or through a selection when the API is blocked. */
+const writeClipboard = async (text: string): Promise<boolean> => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.documentElement.append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+};
+
+/**
+ * Copies the table as the page shows it now: the extracted cell text, in the
+ * current row order, transposed when the table is judged row-oriented. The
+ * text is the page's own; parsed values never stand in for it.
+ */
+const copyTable = async (table: HTMLTableElement): Promise<boolean> => {
+  const now = extractPage(document, (el) => el === table).tables.find((t) => t.element === table);
+  if (now === undefined) return false;
+  // What you see is what you copy: rows the page hides stay out.
+  const rows = now.snapshot.rows.filter((_, i) => {
+    const row = now.cells[i]?.[0]?.closest("tr");
+    return row == null || row.checkVisibility();
+  });
+  const grid =
+    judged.get(table)?.orientation === "rows"
+      ? transposeSnapshot({ ...now.snapshot, rows })
+      : { ...now.snapshot, rows };
+  return writeClipboard(toCSV(grid.headers, grid.rows));
+};
+
+// ── Flags (dev build only) ──────────────────────────────────────────────────
+
+/** Reads what the extension sees and decided for one table. */
+const capture = (table: HTMLTableElement): FlagCapture => {
+  const now = extractPage(document, (el) => el === table).tables[0] ?? null;
+  const judgment = judged.get(table) ?? null;
+  const html = table.outerHTML;
+  return {
+    kind: judgment !== null && (table.dataset["pdEncoded"] ?? "") !== "" ? "shaded" : "unshaded",
+    url: location.href,
+    pageTitle: document.title,
+    status: root.dataset["pdStatus"] ?? "none",
+    table: now?.snapshot ?? null,
+    judgment,
+    model: judgment === null ? null : judgedBy,
+    html: html.slice(0, MAX_HTML),
+    htmlTruncated: html.length > MAX_HTML,
+    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+  };
+};
+
+const flag = async (table: HTMLTableElement) => {
+  const reply = send<FlagReply>({ type: "flag", capture: capture(table) });
+  // The worker takes the screenshot as soon as the message arrives. The notice
+  // waits, so it is not in the screenshot.
+  const pending = setTimeout(() => toast("Flagging…"), 400);
+  try {
+    const r = await reply;
+    clearTimeout(pending);
+    if (r.ok)
+      toast(`Flagged as #${r.issue}.`, {
+        href: `https://github.com/${PD_FLAGS_REPO}/issues/${r.issue}`,
+        label: "Open",
+      });
+    else toast(`Flag not filed: ${r.message}`);
+  } catch (e) {
+    clearTimeout(pending);
+    toast(`Flag not filed: ${String(e)}`);
+  }
+};
+
+/** The element under the last right-click, for the "Flag this table" menu item. */
+let rightClicked: Element | null = null;
+if (PD_FLAGS_REPO !== null) {
+  addEventListener(
+    "contextmenu",
+    (e) => {
+      const target = e.composedPath()[0];
+      rightClicked = target instanceof Element ? target : null;
+    },
+    { capture: true },
+  );
+}
+
+/** Comparing by rows makes sense only for a table with several value columns and few rows. */
+const MAX_ROWS_FOR_ROWS = 40;
+
+const control = (table: ExtractedTable, state: { orientation: Orientation; hidden: boolean }) => {
+  keyOf.set(table.element, fingerprint(table));
+  controlled.add(table.element);
+  const { headers, rows } = table.snapshot;
+  const canOrient = headers.length >= 3 && rows.length >= 2 && rows.length <= MAX_ROWS_FOR_ROWS;
+  const sort = sortState(table, state.orientation, state.hidden);
+  const copy = state.hidden ? null : { paginated: isPaginated(table.element) };
+  const judgment = judged.get(table.element);
+  // A hidden table has shading to show again; an unhidden one only has
+  // shading to hide when the current judgment shades something.
+  const shaded = state.hidden || (judgment !== undefined && judgment.encodings.length > 0);
+  const isolate =
+    !state.hidden && judgment !== undefined && judgment.encodings.some((e) => e.group !== null)
+      ? { isolated: choices[fingerprint(table)]?.isolated === true }
+      : null;
+  attachControls(table.element, { ...state, canOrient, shaded, sort, copy, isolate }, handlers);
+};
+
+/** Removes a table's controls when a new judgment leaves it unshaded. */
+const uncontrol = (table: HTMLTableElement) => {
+  detachControls(table);
+  controlled.delete(table);
+};
+
+const pruneDetached = () => {
+  for (const t of controlled) {
+    if (!t.isConnected) {
+      detachControls(t);
+      controlled.delete(t);
+      resized.unobserve(t);
+    }
+  }
+};
+
+const releaseControls = () => {
+  for (const t of controlled) detachControls(t);
+  controlled.clear();
+};
+
+// ── Change detection ────────────────────────────────────────────────────────
+
+let timer: ReturnType<typeof setTimeout> | undefined;
+const schedule = (delay: number) => {
+  clearTimeout(timer);
+  timer = setTimeout(() => void run(), delay);
+};
+
+/** Pacing for runs that page changes trigger. It lasts for the life of the document. */
+let pace = PACE_START;
+let changeTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Schedules a paced run after a page change. A pending run absorbs later
+ * changes, so a page that changes faster than the wait still gets shaded.
+ */
+const scheduleChange = () => {
+  if (changeTimer !== undefined) return;
+  changeTimer = setTimeout(
+    () => {
+      changeTimer = undefined;
+      void run(false, true);
+    },
+    waitFor(pace, Date.now()),
+  );
+};
+
+const nearby = new IntersectionObserver(
+  (entries) => {
+    let added = false;
+    for (const entry of entries) {
+      const table = entry.target as HTMLTableElement;
+      if (!entry.isIntersecting || seen.has(table)) continue;
+      nearby.unobserve(table);
+      if (seenCount >= MAX_TABLES) {
+        if (!capLogged)
+          console.info(`[practical-data] judged the first ${MAX_TABLES} tables on this page; skipping the rest.`);
+        capLogged = true;
+        continue;
+      }
+      seen.add(table);
+      seenCount++;
+      resized.observe(table);
+      added = true;
+    }
+    // The short delay batches the tables that one scroll reveals.
+    if (added) schedule(150);
+  },
+  { rootMargin: NEAR },
+);
+
+/**
+ * Collapsed tables, such as Wikipedia's [show] tables, and tables in inactive
+ * tabs have a visible header. The script judges them while their rows are
+ * hidden. Expanding them changes only classes and styles, which the mutation
+ * observer ignores, so a change in height triggers a new run. The new run
+ * sends nothing unless the visible text changed.
+ */
+const lastHeight = new WeakMap<Element, number>();
+const resized = new ResizeObserver((entries) => {
+  let changed = false;
+  for (const entry of entries) {
+    const height = entry.contentRect.height;
+    const before = lastHeight.get(entry.target);
+    lastHeight.set(entry.target, height);
+    if (before !== undefined && Math.abs(height - before) > 24) changed = true;
+  }
+  if (changed) scheduleChange();
+});
+
+const insideTable = (n: Node | null): boolean =>
+  n !== null && (n instanceof Element ? n : n.parentElement)?.closest("table") != null;
+
+/**
+ * Returns true if a mutation added or removed a table, or changed text inside
+ * one. Sorters and live tables rewrite cells in place, which adds Text nodes,
+ * not elements.
+ */
+const touchesTable = (m: MutationRecord): boolean => {
+  if (m.type === "characterData") return insideTable(m.target);
+  if (insideTable(m.target)) return true;
+  return [...m.addedNodes, ...m.removedNodes].some(
+    (n) => n instanceof Element && (n.tagName === "TABLE" || n.querySelector("table") !== null),
+  );
+};
+
+const mutations = new MutationObserver((records) => {
+  if (records.some(touchesTable)) scheduleChange();
+});
+const observeMutations = () =>
+  mutations.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+// ── Messages ────────────────────────────────────────────────────────────────
+
+const turnOff = () => {
+  generation++;
+  paintedGeneration = generation;
+  mutations.disconnect();
+  unpaint();
+  releaseControls();
+  painted = "";
+  setStatus("off");
+};
+
+chrome.runtime.onMessage.addListener((msg: ToContent, _sender, sendResponse) => {
+  if (msg.type === "state") {
+    const tables = [...document.querySelectorAll<HTMLElement>("table[data-pd-table]")];
+    sendResponse({
+      url: location.href,
+      enabled,
+      status: root.dataset["pdStatus"] ?? "none",
+      tables: tables.filter((t) => (t.dataset["pdEncoded"] ?? "") !== "").length,
+      columns: tables.reduce((n, t) => n + (t.dataset["pdEncoded"] ?? "").split("|").filter(Boolean).length, 0),
+    } satisfies PageState);
+    return false;
+  }
+  if (msg.type === "toggle") {
+    enabled = msg.enabled && !optedOut();
+    setPolling(enabled);
+    if (enabled) void run(true);
+    else turnOff();
+  } else if (msg.type === "repaint") {
+    void run(true);
+  } else if (PD_FLAGS_REPO !== null && msg.type === "flagAt") {
+    const table = rightClicked?.closest("table");
+    if (table == null) toast("Right-click inside a table to flag it.");
+    else void flag(table);
+  }
+  return false;
+});
+
+// ── Start, and restart on single-page-app navigation ────────────────────────
+
+/** A page opts out with `<meta name="practical-data" content="off">`. The demo site uses it, because it shades itself. */
+const optedOut = () => document.querySelector('meta[name="practical-data"][content="off" i]') !== null;
+
+const start = async () => {
+  const config = await send<PageConfig>({ type: "pageConfig", url: location.href }).catch((): PageConfig => ({
+    enabled: false,
+    choices: {},
+  }));
+  choices = config.choices;
+  enabled = config.enabled && !optedOut();
+  setPolling(enabled);
+  if (!enabled) {
+    setStatus("off");
+    return;
+  }
+  void run();
+};
+
+let lastHref = location.href;
+const onNavigate = () => {
+  if (location.href === lastHref) return;
+  lastHref = location.href;
+  // The same document shows a new page, so forget the old page's tables and choices.
+  turnOff();
+  seen = new WeakSet();
+  seenCount = 0;
+  capLogged = false;
+  nearby.disconnect();
+  void start();
+};
+const navigation = (globalThis as { navigation?: EventTarget }).navigation;
+// currententrychange fires for pushState, replaceState, and fragment changes.
+navigation?.addEventListener("currententrychange", onNavigate);
+navigation?.addEventListener("navigatesuccess", onNavigate);
+addEventListener("popstate", onNavigate);
+
+/**
+ * Polling catches routers that the Navigation API doesn't report. It runs only
+ * while the page is shaded, where a missed navigation would leave stale shading.
+ */
+let poll: ReturnType<typeof setInterval> | undefined;
+const setPolling = (on: boolean) => {
+  if (on && poll === undefined) poll = setInterval(onNavigate, 1000);
+  if (!on) {
+    clearInterval(poll);
+    poll = undefined;
+  }
+};
+
+void start();

@@ -1,0 +1,30 @@
+node_modules/
+.DS_Store
+dist/
+.env
+artifacts/
+dist-probe/
+dist-e2e/
+dist-dev/
+/site/
+.wrangler/
+launch/
+.impeccable/
+release/
+
+# SvelteKit
+web/.svelte-kit/
+
+# Tests site data (scripts/tests-data.ts)
+demo/tests/
+
+# Local only: trial fonts, the built Sheets add-on, agent worktrees.
+demo/fonts/
+web/dev-fonts/
+# Licensed web font: the Hoodzpah EULA forbids redistributing the files,
+# and this repository is public. Deploys get them from private storage.
+web/static/fonts/Cambridge-*
+static/fonts/HoodFonts*
+dist-sheets/
+.claude/
+.dev.vars

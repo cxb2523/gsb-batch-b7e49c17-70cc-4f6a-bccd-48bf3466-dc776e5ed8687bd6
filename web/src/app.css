@@ -1,0 +1,858 @@
+/*
+ * Digits: IBM Plex Mono's 0-9, first in the text stacks, so every numeral on
+ * the site is set in Plex without wrapping it in an element. unicode-range
+ * limits the face to digits; every other character falls through to the next
+ * font. The files are unmodified Plex Mono (OFL, static/fonts/).
+ */
+@font-face {
+  font-family: "Digits";
+  src: url("/fonts/IBMPlexMono-latin-300.woff2") format("woff2");
+  font-weight: 300;
+  font-display: swap;
+  unicode-range: U+0030-0039;
+}
+@font-face {
+  font-family: "Digits";
+  src: url("/fonts/IBMPlexMono-latin-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0030-0039;
+}
+@font-face {
+  font-family: "Digits";
+  src: url("/fonts/IBMPlexMono-latin-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+  unicode-range: U+0030-0039;
+}
+@font-face {
+  font-family: "Digits";
+  src: url("/fonts/IBMPlexMono-latin-600.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+  unicode-range: U+0030-0039;
+}
+
+/*
+ * Prociono (OFL, one weight), the text face, and IBM Plex Mono (OFL), the
+ * mono face, self-hosted from static/fonts/ so no request leaves the origin.
+ * The Plex rules reuse the same files as Digits above; unicode-range there
+ * is a rule property, not a file property.
+ */
+@font-face {
+  font-family: "Prociono";
+  src: url("/fonts/Prociono-latin-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-latin-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-latin-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-latin-600.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/*
+ * Georgia, adjusted to the metrics of the face it stands in for while that
+ * face loads, so the swap barely moves the page. The numbers come from the
+ * fonts' own tables: size-adjust is the ratio of a sample sentence's advance
+ * width to Georgia's, and the overrides are the face's ascent and descent
+ * divided by that ratio.
+ */
+@font-face {
+  font-family: "Prociono Fallback";
+  src: local("Georgia");
+  size-adjust: 97.74%;
+  ascent-override: 103.13%;
+  descent-override: 21.69%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Cambridge Fallback";
+  src: local("Georgia");
+  size-adjust: 97.46%;
+  ascent-override: 106.71%;
+  descent-override: 33.86%;
+  line-gap-override: 0%;
+}
+
+/*
+ * Cambridge Light (Hoodzpah), the display face, one licensed cut. The web
+ * EULA allows @font-face linking on this site only and forbids sharing the
+ * file, so it is git-ignored and must never reach the public repository.
+ * The dev server reads the local copy in static/fonts/; in production the
+ * site Worker (src/site/worker.ts) serves this path from a private R2
+ * bucket, so a deploy never needs the file.
+ */
+@font-face {
+  font-family: "Cambridge";
+  src: url("/fonts/Cambridge-Light.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --bg: #f4f0e8;
+  --paper: #fffdf8;
+  --ink: #1c1a17;
+  --muted: #6b655c;
+  --faint: #736c62;
+  --line: #e2dbcf;
+  --accent: #5b4bc4;
+  --accent-ink: #ffffff;
+  --hero: #121115;
+  --hero-ink: #f4f0e8;
+  --radius: 14px;
+  /*
+   * Type. Display is for headings; label is for table captions and headers;
+   * mono is for numbers, code, and the example tables. The adjusted Georgia
+   * fallbacks hold each face's metrics while it loads.
+   */
+  --font-text: "Digits", "Prociono", "Prociono Fallback", georgia, serif;
+  --font-display: "Digits", "Cambridge", "Cambridge Fallback", georgia, serif;
+  /* ui is for interactive controls: buttons, pickers, toggles. */
+  --font-ui: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: light;
+}
+/* Dark theme when the system prefers dark and the toggle is not light, or when the toggle is dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121115;
+    --paper: #1a191e;
+    --ink: #ece8e1;
+    --muted: #a39d93;
+    --faint: #8f897f;
+    --line: #2c2a31;
+    --accent: #9a8ef2;
+    --accent-ink: #121115;
+    /* --hero: #0b0a0d; */
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121115;
+  --paper: #1a191e;
+  --ink: #ece8e1;
+  --muted: #a39d93;
+  --faint: #8f897f;
+  --line: #2c2a31;
+  --accent: #9a8ef2;
+  --accent-ink: #121115;
+  /* --hero: #0b0a0d; */
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 var(--font-text);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+code {
+  font: 0.86em var(--font-mono);
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+/* ── Hero ── */
+.hero {
+  background: var(--hero);
+  color: var(--hero-ink);
+  padding: 72px 16px 64px;
+  position: relative;
+  overflow: hidden;
+  /* background-color: #fff; */
+  /* background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.26 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); */
+}
+/* The grid texture: procedural graph paper with a paper-like bend, drawn and
+   animated by HeroGrid.svelte's shader. Strongest toward the bottom right,
+   fading out before it reaches the top left. A canvas is a replaced element:
+   left/right don't stretch it the way inset would, so the 120% box is
+   spelled out. */
+.hero-grid {
+  position: absolute;
+  top: -10%;
+  left: -10%;
+  width: 120%;
+  height: 120%;
+  opacity: 0;
+  -webkit-mask-image: linear-gradient(to bottom, #000 15%, transparent 80%);
+  mask-image: linear-gradient(to bottom, #000 15%, transparent 80%);
+  pointer-events: none;
+  transition: opacity 0.6s;
+}
+.hero-grid.live {
+  opacity: 0.5;
+}
+.hero::after {
+  /* A band of the extension's palette along the bottom edge. */
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 6px;
+  background: linear-gradient(90deg, #a50026, #f46d43, #fee08b, #d9ef8b, #66bd63, #006837 60%, #9e9ac8, #54278f);
+}
+.hero-inner {
+  max-width: 1040px;
+  margin: 0 auto;
+  position: relative; /* keeps the text above the paper layer */
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  /* margin: 0 0 28px; */
+  font: 600 16px var(--font-ui);
+  letter-spacing: 0.01em;
+  color: #eee;
+  display: inline-block;
+}
+.brand img {
+  border-radius: 6px;
+  position: relative;
+  top: 4px;
+}
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+}
+h1 {
+  margin: 0;
+  font-size: clamp(42px, 7.4vw, 88px);
+  line-height: 0.98;
+  font-weight: 760;
+  letter-spacing: -0.035em;
+}
+.lede {
+  max-width: 60ch;
+  margin: 24px 0 0;
+  font-size: 19px;
+  color: #cfc9be;
+}
+
+.lede .conditional {
+  padding: 0 3px;
+  border-radius: 4px;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+.lede .conditional.high {
+  background-color: #ef444475; /* Example color for high conditional formatting */
+}
+.lede .conditional.low {
+  background-color: #22c55e75; /* Example color for low conditional formatting */
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 0 20px;
+  border-radius: 10px;
+  font: 600 15px var(--font-ui);
+  text-decoration: none;
+  border: 1px solid #3a3842;
+  color: var(--hero-ink);
+  background: #16151a;
+  transition:
+    transform 80ms,
+    background 120ms;
+}
+.button:hover {
+  background: #24222a;
+}
+.button:active {
+  transform: translateY(1px);
+}
+.button.primary {
+  background: #f4f0e8;
+  color: #16151a;
+  border-color: transparent;
+}
+.button.primary:hover {
+  background: #ffffff;
+}
+.button:focus-visible {
+  outline: 2px solid #9a8ef2;
+  outline-offset: 3px;
+}
+.button .gh {
+  margin-right: 9px;
+}
+.proof {
+  display: inline-block;
+  margin-top: 22px;
+  font-size: 15px;
+  color: #cfc9be;
+  text-decoration: none;
+}
+.proof strong {
+  color: var(--hero-ink);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.proof span {
+  color: #b9b0f5;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  margin-left: 4px;
+}
+.proof:hover span {
+  color: #ffffff;
+}
+.proof:focus-visible {
+  outline: 2px solid #9a8ef2;
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+/* ── Controls ── */
+.controls {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* Side padding matches main's content edge: centered 1040px plus its 16px gutter. */
+  padding: 12px max(16px, calc((100vw - 1040px) / 2 + 16px));
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+.segmented label {
+  position: relative;
+}
+.segmented input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.segmented span {
+  display: block;
+  padding: 6px 13px;
+  border-radius: 7px;
+  font: 500 13.5px/1.6 var(--font-ui);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 120ms,
+    color 120ms;
+}
+.segmented input:checked + span {
+  background: var(--ink);
+  color: var(--bg);
+}
+.segmented input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* Hidden on screen, read by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── Examples ── */
+.example {
+  padding: 56px 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+.example header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+.example h3 {
+  margin: 0;
+  font-size: clamp(26px, 3.4vw, 34px);
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+.caption {
+  max-width: 68ch;
+  margin: 10px 0 6px;
+  color: var(--muted);
+}
+.source {
+  display: inline-block;
+  margin-bottom: 18px;
+  font: 13px var(--font-mono);
+  color: var(--faint);
+}
+/* The caption's link row: the checks link and the live page, kept apart. */
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin: 0 0 18px;
+}
+.sources .source {
+  margin-bottom: 0;
+}
+.sources .sep {
+  color: var(--faint);
+  opacity: 0.55;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  margin: 0 -16px 14px;
+  padding: 0 16px;
+  -webkit-overflow-scrolling: touch;
+}
+.example table {
+  border-collapse: collapse;
+  min-width: 100%;
+  background: var(--paper);
+  font: 14px/1.4 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.example caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0 0 8px;
+  font: 600 13px var(--font-mono);
+  color: var(--muted);
+}
+.example th,
+.example td {
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.example th {
+  font: 600 11.5px var(--font-mono);
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--paper);
+}
+.example tbody tr:last-child td {
+  border-bottom: 0;
+}
+.example tfoot td {
+  background: color-mix(in srgb, var(--accent) 7%, var(--paper));
+  border-top: 2px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  vertical-align: top;
+  white-space: normal;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.example tfoot .k {
+  display: block;
+  font: 650 12px var(--font-ui);
+  color: var(--accent);
+}
+.example tfoot .d {
+  display: block;
+  font: 11.5px/1.45 var(--font-ui);
+  color: var(--muted);
+}
+.example tfoot td.off .k {
+  color: var(--faint);
+  font-weight: 500;
+}
+
+/* ── How / install ── */
+.how,
+.install {
+  padding: 72px 0 8px;
+}
+h2 {
+  margin: 0 0 28px;
+  font-size: clamp(30px, 4vw, 44px);
+  font-weight: 740;
+  letter-spacing: -0.03em;
+}
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  counter-reset: step;
+}
+.steps > li {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px;
+  counter-increment: step;
+}
+.steps h3 {
+  margin: 6px 0 8px;
+  font-size: 22px;
+  font-weight: 700;
+}
+.steps p {
+  margin: 0;
+  color: var(--muted);
+}
+.questions {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 14.5px;
+}
+.questions li + li {
+  margin-top: 4px;
+}
+
+.install ol {
+  margin: 0;
+  padding-left: 22px;
+  font-size: 17px;
+}
+.install li + li {
+  margin-top: 8px;
+}
+.note {
+  color: var(--muted);
+  max-width: 70ch;
+  margin-top: 18px;
+}
+.proof + .proof {
+  margin-left: 20px;
+}
+.tldr {
+  padding: 64px 0 8px;
+  /* The anchor jump from the hero must clear the sticky palette bar. */
+  scroll-margin-top: 72px;
+}
+.tldr ul {
+  margin: 0;
+  padding-left: 22px;
+  font-size: 17px;
+  max-width: 75ch;
+}
+.tldr li + li {
+  margin-top: 10px;
+}
+
+/* ── Open source ── */
+.open {
+  margin-top: 72px;
+  padding: 40px;
+  border-radius: calc(var(--radius) + 6px);
+  background: var(--hero);
+  color: var(--hero-ink);
+}
+.open h2 {
+  margin-bottom: 14px;
+  line-height: 1.05;
+}
+.open-head p {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 18px;
+  color: #cfc9be;
+}
+.open a {
+  color: var(--hero-ink);
+}
+.terminal {
+  margin-top: 32px;
+  border-radius: 12px;
+  background: #000;
+  border: 1px solid #2c2a31;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.terminal pre {
+  margin: 0;
+  padding: 18px 20px;
+}
+.terminal code {
+  background: none;
+  padding: 0;
+  font: 14px/1.75 var(--font-mono);
+  color: #e8e4dc;
+}
+.terminal .prompt {
+  color: #66bd63;
+  user-select: none;
+}
+.open-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+  margin: 26px 0 0;
+  font-size: 15px;
+}
+.open-links a:not(.text-button) {
+  color: #a7a196;
+}
+.open-links a:not(.text-button):hover {
+  color: var(--hero-ink);
+}
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font: 600 15px var(--font-ui);
+  background: #f4f0e8;
+  color: #16151a !important;
+  font-weight: 620;
+  text-decoration: none;
+}
+.text-button:hover {
+  background: #fff;
+}
+.text-button:focus-visible {
+  outline: 2px solid #9a8ef2;
+  outline-offset: 3px;
+}
+
+.footer-brand {
+  margin: 0 0 6px;
+  color: var(--ink);
+}
+.signoff {
+  margin: 0 0 14px;
+  color: var(--muted);
+}
+footer {
+  max-width: 1040px;
+  margin: 64px auto 0;
+  padding: 24px 16px 48px;
+  border-top: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 14px;
+}
+
+@media (max-width: 760px) {
+  .hero {
+    padding: 56px 16px 52px;
+  }
+  br.wide {
+    display: none;
+  }
+  .lede {
+    font-size: 17px;
+  }
+  .steps,
+  .stats {
+    grid-template-columns: 1fr;
+  }
+  .open {
+    padding: 28px 20px;
+    margin-left: -8px;
+    margin-right: -8px;
+  }
+  .text-button {
+    width: 100%;
+    justify-content: center;
+  }
+  .terminal code {
+    font-size: 12.5px;
+  }
+  .terminal pre {
+    padding: 16px;
+  }
+  .actions .button {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+
+/* ── Palette picker ── */
+.palettes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+.palettes label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 7px;
+  border-radius: 7px;
+  cursor: pointer;
+  font: 500 13px/1.6 var(--font-ui);
+  color: var(--muted);
+}
+.palettes input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.palettes .swatch {
+  width: 26px;
+  height: 10px;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent);
+}
+.palettes label:has(input:checked) {
+  background: var(--ink);
+  color: var(--bg);
+}
+.palettes label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.control-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.theme-toggle {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  width: 46px;
+  height: 26px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line);
+  cursor: pointer;
+}
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.theme-toggle .knob {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--bg);
+  transition: transform 160ms;
+}
+.theme-toggle .knob.dark {
+  transform: translateX(20px);
+}
+.theme-toggle svg {
+  width: 13px;
+  height: 13px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle .knob {
+    transition: none;
+  }
+}
+@media (max-width: 760px) {
+  .controls {
+    position: static;
+  }
+  .control-group {
+    flex-wrap: wrap;
+  }
+}
+
+/* ── Cambridge typography. The display face ships one cut: Light 300. ── */
+/* .hero .lede {
+  font-family: var(--font-display);
+  font-weight: 300;
+} */
+h1,
+h2,
+h3,
+.example h3,
+.steps h3,
+.open h2 {
+  font-family: var(--font-display);
+  font-weight: 300;
+  letter-spacing: -0.05em;
+  word-spacing: 0.08em;
+}
+h1 {
+  line-height: 1.02;
+}
+.stats dt {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.proof strong {
+  font-weight: 600;
+}

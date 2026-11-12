@@ -1,0 +1,98 @@
+/** The toolbar popup. It shows what is shaded on the page and has switches for the page and the site. */
+import { lowAllowanceNote, quotaMessage, type StoredAllowance } from "./allowance.ts";
+import type { PageState, ToContent, ToWorker } from "./messages.ts";
+import { isPagePaused, isPrivateHost, loadSettings, siteEnabled } from "./settings.ts";
+
+const summary = document.querySelector<HTMLParagraphElement>("#summary")!;
+const allowanceNote = document.querySelector<HTMLParagraphElement>("#allowance")!;
+const page = document.querySelector<HTMLInputElement>("#page")!;
+const site = document.querySelector<HTMLInputElement>("#site")!;
+
+// `?tab=<id>` targets a given tab. The e2e harness opens the popup as a page and uses it.
+const forced = Number(new URLSearchParams(location.search).get("tab"));
+const [tab] =
+  Number.isInteger(forced) && forced > 0
+    ? [await chrome.tabs.get(forced)]
+    : await chrome.tabs.query({ active: true, currentWindow: true });
+
+const query = async (): Promise<PageState | undefined> =>
+  tab?.id === undefined
+    ? undefined
+    : ((await chrome.tabs.sendMessage(tab.id, { type: "state" } satisfies ToContent).catch(() => undefined)) as
+        PageState | undefined);
+
+const first = await query();
+const url = first?.url ?? tab?.url ?? "";
+const host = /^https?:|^file:/.test(url) ? new URL(url).hostname || "local files" : "";
+
+const ERRORS: Readonly<Record<string, string>> = {
+  missing_config: "Add an API key in Options.",
+  quota: quotaMessage("quota", new Date()),
+  quota_everyone: quotaMessage("quota_everyone", new Date()),
+  rate_limited: "Busy right now; try again in a minute.",
+};
+
+const describe = (s: PageState | undefined, paused: boolean, siteOff: boolean, everywhere: boolean): string => {
+  if (siteOff && everywhere && isPrivateHost(host))
+    return `Off on ${host}. Sites on a local or private network are off until you turn them on.`;
+  if (siteOff) return `Off on ${host}.`;
+  if (paused) return "Off on this page.";
+  if (s === undefined) return "Not available on this page.";
+  if (s.status === "working") return "Reading tables…";
+  if (s.status.startsWith("error:")) return ERRORS[s.status.slice("error:".length)] ?? "Couldn't reach the model.";
+  if (s.columns === 0) return s.status === "none" ? "No tables on this page." : "No comparable columns yet.";
+  return `${s.columns} column${s.columns === 1 ? "" : "s"} shaded in ${s.tables} table${s.tables === 1 ? "" : "s"}.`;
+};
+
+const refresh = async () => {
+  const [settings, paused] = await Promise.all([loadSettings(), isPagePaused(url)]);
+  const siteOff = !siteEnabled(settings, host);
+  const state = await query();
+  site.checked = !siteOff;
+  page.checked = !paused && !siteOff;
+  page.disabled = siteOff || state === undefined;
+  site.disabled = host === "";
+  document.querySelector("#site-label")!.textContent =
+    host === "" ? "Shade tables on this site" : `Shade tables on ${host}`;
+  summary.textContent = describe(state, paused, siteOff, settings.mode === "everywhere");
+  // With the free provider, show a note when little of today's allowance is left.
+  // Skip it when the summary already says the allowance is spent.
+  const { allowance } = (await chrome.storage.local.get("allowance")) as { allowance?: StoredAllowance };
+  const note =
+    settings.provider === "hosted" && !state?.status.startsWith("error:quota")
+      ? lowAllowanceNote(allowance, new Date())
+      : null;
+  allowanceNote.textContent = note ?? "";
+  allowanceNote.hidden = note === null;
+};
+
+const send = (msg: ToWorker) => chrome.runtime.sendMessage(msg);
+
+page.addEventListener("change", async () => {
+  if (tab?.id !== undefined) await send({ type: "setPagePaused", tabId: tab.id, url, paused: !page.checked });
+  await refresh();
+});
+site.addEventListener("change", async () => {
+  if (tab?.id !== undefined) await send({ type: "setSiteEnabled", tabId: tab.id, host, enabled: site.checked });
+  await refresh();
+});
+document.querySelector("#privacy")!.addEventListener("click", (ev) => {
+  ev.preventDefault();
+  void chrome.runtime.openOptionsPage();
+});
+document.querySelector("#options")!.addEventListener("click", (ev) => {
+  ev.preventDefault();
+  void chrome.runtime.openOptionsPage();
+});
+const commands = await chrome.commands.getAll();
+const shortcut = commands.find((c) => c.name === "toggle-page")?.shortcut;
+document.querySelector("#shortcut")!.textContent = shortcut ? `${shortcut} toggles this page` : "";
+
+document.querySelector("#build")!.textContent =
+  `Build ${chrome.runtime.getManifest().version_name ?? chrome.runtime.getManifest().version}`;
+await refresh();
+// Flush styles so the initial state appears without animation, then enable transitions.
+void document.body.offsetHeight;
+document.body.classList.add("ready");
+// The page may still be reading tables, so refresh once more after opening.
+setTimeout(() => void refresh(), 1200);

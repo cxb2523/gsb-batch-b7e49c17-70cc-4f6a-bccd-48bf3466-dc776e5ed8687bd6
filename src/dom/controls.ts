@@ -1,0 +1,343 @@
+/**
+ * Per-table controls. A small bar appears at the top-right corner of a judged
+ * table while the mouse pointer is over it. The bar switches the shading
+ * between columns and rows, or hides the shading for that table. The bar is in
+ * a shadow root, so page CSS does not reach it. It is positioned over the page
+ * and does not change the table's layout.
+ */
+import type { Orientation } from "../core/orient.ts";
+
+export interface SortOption {
+  /** Index into the table snapshot's headers. */
+  readonly col: number;
+  readonly header: string;
+}
+
+export interface SortControlState {
+  readonly options: readonly SortOption[];
+  /** The active sort, or null for the page's own order. */
+  readonly active: { readonly col: number; readonly dir: "asc" | "desc" } | null;
+  /** True when the table shows one page of a longer set, so a sort orders only this page. */
+  readonly paginated: boolean;
+}
+
+export interface CopyControlState {
+  /** True when the table shows one page of a longer set, so a copy takes only this page. */
+  readonly paginated: boolean;
+}
+
+export interface TableControlState {
+  readonly orientation: Orientation;
+  readonly hidden: boolean;
+  /** True when the bar shows the Columns and Rows buttons. */
+  readonly canOrient: boolean;
+  /** Sortable columns, or null when the table cannot be sorted. */
+  readonly sort: SortControlState | null;
+  /** The copy control, or null when the table cannot be copied. */
+  readonly copy: CopyControlState | null;
+  /** The shared-scale toggle, or null when no column shares a scale with another table. */
+  readonly isolate: { readonly isolated: boolean } | null;
+  /** True when the table has shading to hide, or hidden shading to show again. */
+  readonly shaded: boolean;
+}
+
+export interface TableControlHandlers {
+  readonly orient: (table: HTMLTableElement, orientation: Orientation) => void;
+  readonly hide: (table: HTMLTableElement, hidden: boolean) => void;
+  readonly sort?: (table: HTMLTableElement, by: { col: number; dir: "asc" | "desc" } | null) => void;
+  /** Copies the table's text to the clipboard as CSV. Resolves false when the copy failed. */
+  readonly copy?: (table: HTMLTableElement) => Promise<boolean>;
+  /** Takes the table off the page's shared scales, or puts it back. */
+  readonly isolate?: (table: HTMLTableElement, isolated: boolean) => void;
+  /** Flags the table as judged wrongly. Only the dev build has it. */
+  readonly flag?: (table: HTMLTableElement) => void;
+}
+
+const CSS = `
+:host { all: initial; }
+.bar {
+  position: fixed; z-index: 2147483645; display: none; align-items: center; gap: 6px;
+  padding: 4px; border-radius: 9px; background: rgb(22 22 26 / 0.96); color: #f3f1ec;
+  font: 12px/1 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 8px 22px rgb(0 0 0 / 0.28);
+}
+.bar.open { display: flex; }
+.label { padding: 0 4px 0 6px; color: #a7a196; }
+.seg { display: inline-flex; padding: 2px; border-radius: 7px; background: rgb(255 255 255 / 0.08); }
+button {
+  all: unset; cursor: pointer; padding: 5px 9px; border-radius: 6px; color: #d9d4ca;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+button svg { flex: none; }
+button:hover { background: rgb(255 255 255 / 0.1); color: #fff; }
+button[aria-pressed="true"] { background: #f3f1ec; color: #16151a; }
+button:focus-visible { outline: 2px solid #8f82f0; outline-offset: 1px; }
+.sep { width: 1px; height: 16px; background: rgb(255 255 255 / 0.14); }
+/*
+ * The bar's grammar: a segmented pair toggles a view, a filled chip with a
+ * leading glyph and a caret opens choices, and a plain chip with an icon
+ * performs an action. New controls follow it.
+ */
+select {
+  all: unset; box-sizing: border-box; cursor: pointer; max-width: 170px; padding: 5px 22px 5px 26px;
+  border-radius: 6px; color: #d9d4ca;
+  background-color: rgb(255 255 255 / 0.08);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 9.5v-7M1.5 4.5l2-2 2 2M8.5 2.5v7M6.5 7.5l2 2 2-2' fill='none' stroke='%23d9d4ca' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 3l2.5 2.6L6.5 3' fill='none' stroke='%23a7a196' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: 8px center, calc(100% - 7px) center;
+  background-repeat: no-repeat;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+select:hover { background-color: rgb(255 255 255 / 0.12); color: #fff; }
+select:focus-visible { outline: 2px solid #8f82f0; outline-offset: 1px; }
+option { background: #1d1c21; color: #f3f1ec; }
+.note { padding: 0 6px; color: #a7a196; }
+`;
+
+/** Inline icons for action chips. Stroke follows the text color, so hover brightens them with the label. */
+const SVG = (paths: string) =>
+  `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICONS = {
+  /** An open eye: show the shading again. */
+  eye: SVG(
+    '<path d="M1 6c1.7-2.3 3.4-3.4 5-3.4S9.3 3.7 11 6c-1.7 2.3-3.4 3.4-5 3.4S2.7 8.3 1 6Z"/><circle cx="6" cy="6" r="1.5"/>',
+  ),
+  /** A struck eye: hide the shading. */
+  eyeOff: SVG(
+    '<path d="M1 6c1.7-2.3 3.4-3.4 5-3.4S9.3 3.7 11 6c-1.7 2.3-3.4 3.4-5 3.4S2.7 8.3 1 6Z"/><circle cx="6" cy="6" r="1.5"/><path d="M2.2 10.3 9.8 1.7"/>',
+  ),
+  /** A small flag: report wrong shading. */
+  flag: SVG('<path d="M3 11V1.5"/><path d="M3 2h5.6L7.3 4l1.3 2H3"/>'),
+  /** Two sheets: copy the table. */
+  copy: SVG(
+    '<rect x="4" y="4" width="7" height="7" rx="1"/><path d="M2 8c-.55 0-1-.45-1-1V2c0-.55.45-1 1-1h5c.55 0 1 .45 1 1"/>',
+  ),
+  /** A chain: the table shares its scales with the page again. */
+  link: SVG('<path d="M5 8.5H3.5a2.5 2.5 0 0 1 0-5H5"/><path d="M7 3.5h1.5a2.5 2.5 0 1 1 0 5H7"/><path d="M4.5 6h3"/>'),
+  /** A struck chain: scale this table by its own values. */
+  linkOff: SVG(
+    '<path d="M5 8.5H3.5a2.5 2.5 0 0 1 0-5H5"/><path d="M7 3.5h1.5a2.5 2.5 0 1 1 0 5H7"/><path d="M2.2 10.3 9.8 1.7"/>',
+  ),
+} as const;
+
+let bar: { host: HTMLElement; el: HTMLDivElement } | null = null;
+let current: { table: HTMLTableElement; state: TableControlState; handlers: TableControlHandlers } | null = null;
+let hideTimer: ReturnType<typeof setTimeout> | undefined;
+let scrollWatched = false;
+
+const ensureBar = () => {
+  if (bar !== null && bar.host.isConnected) return bar;
+  const host = document.createElement("span");
+  host.setAttribute("data-pd-controls", "");
+  // Page rules that match the host (`span { display: block }`) outrank `:host`.
+  // An important inline declaration outranks them, so the host takes no space.
+  host.style.setProperty("all", "initial", "important");
+  const root = host.attachShadow({ mode: "open" });
+  root.innerHTML = `<style>${CSS}</style><div class="bar" role="toolbar" aria-label="Table shading"></div>`;
+  document.documentElement.append(host);
+  const el = root.querySelector<HTMLDivElement>(".bar")!;
+  el.addEventListener("pointerenter", () => clearTimeout(hideTimer));
+  el.addEventListener("pointerleave", scheduleHide);
+  bar = { host, el };
+  if (!scrollWatched)
+    addEventListener("scroll", () => bar?.el.classList.remove("open"), { passive: true, capture: true });
+  scrollWatched = true;
+  return bar;
+};
+
+function scheduleHide() {
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => bar?.el.classList.remove("open"), 350);
+}
+
+let flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** A short-lived note after an action, such as "Copied". A re-render replaces it. */
+const flash = (after: HTMLElement, text: string) => {
+  clearTimeout(flashTimer);
+  bar?.el.querySelector(".note.flash")?.remove();
+  const note = document.createElement("span");
+  note.className = "note flash";
+  note.textContent = text;
+  after.after(note);
+  if (current !== null) place(current.table);
+  flashTimer = setTimeout(() => {
+    note.remove();
+    if (current !== null && bar?.el.classList.contains("open") === true) place(current.table);
+  }, 1800);
+};
+
+const render = () => {
+  if (current === null) return;
+  const { el } = ensureBar();
+  const { table, state, handlers } = current;
+  el.replaceChildren();
+  const button = (label: string, pressed: boolean | null, onClick: () => void, icon?: string) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    if (icon !== undefined) b.innerHTML = icon;
+    b.append(label);
+    if (pressed !== null) b.setAttribute("aria-pressed", String(pressed));
+    b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      onClick();
+    });
+    return b;
+  };
+  if (state.canOrient && !state.hidden) {
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = "Compare";
+    const seg = document.createElement("span");
+    seg.className = "seg";
+    seg.append(
+      button("Columns", state.orientation === "columns", () => handlers.orient(table, "columns")),
+      button("Rows", state.orientation === "rows", () => handlers.orient(table, "rows")),
+    );
+    const sep = document.createElement("span");
+    sep.className = "sep";
+    el.append(label, seg, sep);
+  }
+  const { sort } = state;
+  if (sort !== null && handlers.sort !== undefined && !state.hidden) {
+    const onSort = handlers.sort;
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Sort rows");
+    const option = (value: string, label: string, selected: boolean) => {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      o.selected = selected;
+      return o;
+    };
+    select.append(option("", "Page order", sort.active === null));
+    for (const { col, header } of sort.options) {
+      const name = header === "" ? `Column ${col + 1}` : header;
+      select.append(
+        option(`${col}:asc`, `${name} ↑`, sort.active?.col === col && sort.active.dir === "asc"),
+        option(`${col}:desc`, `${name} ↓`, sort.active?.col === col && sort.active.dir === "desc"),
+      );
+    }
+    select.addEventListener("click", (ev) => ev.stopPropagation());
+    select.addEventListener("change", () => {
+      const [col, dir] = select.value.split(":");
+      onSort(table, select.value === "" ? null : { col: Number(col), dir: dir === "asc" ? "asc" : "desc" });
+    });
+    el.append(select);
+    if (sort.paginated && sort.active !== null) {
+      const note = document.createElement("span");
+      note.className = "note";
+      note.textContent = "sorting this page only";
+      el.append(note);
+    }
+    const sep = document.createElement("span");
+    sep.className = "sep";
+    el.append(sep);
+  }
+  const { copy } = state;
+  if (copy !== null && handlers.copy !== undefined && !state.hidden) {
+    const onCopy = handlers.copy;
+    const b = button(
+      "",
+      null,
+      () =>
+        void onCopy(table).then((ok) => {
+          flash(b, ok ? (copy.paginated ? "Copied — this page only" : "Copied") : "Couldn't copy");
+        }),
+      ICONS.copy,
+    );
+    b.setAttribute("aria-label", "Copy as CSV");
+    b.title = "Copy as CSV";
+    const sep = document.createElement("span");
+    sep.className = "sep";
+    el.append(b, sep);
+  }
+  const { isolate } = state;
+  if (isolate !== null && handlers.isolate !== undefined && !state.hidden) {
+    const onIsolate = handlers.isolate;
+    const sep = document.createElement("span");
+    sep.className = "sep";
+    el.append(
+      button(
+        isolate.isolated ? "Share scales" : "Isolate scales",
+        null,
+        () => onIsolate(table, !isolate.isolated),
+        isolate.isolated ? ICONS.link : ICONS.linkOff,
+      ),
+      sep,
+    );
+  }
+  if (state.shaded) {
+    el.append(
+      button(
+        state.hidden ? "Show shading" : "Hide shading",
+        null,
+        () => handlers.hide(table, !state.hidden),
+        state.hidden ? ICONS.eye : ICONS.eyeOff,
+      ),
+    );
+  }
+  const { flag } = handlers;
+  if (flag !== undefined) {
+    const sep = document.createElement("span");
+    sep.className = "sep";
+    el.append(
+      sep,
+      button("Looks wrong", null, () => flag(table), ICONS.flag),
+    );
+  }
+  // A skipped control can leave a separator leading, trailing, or doubled.
+  for (const sep of el.querySelectorAll(".sep")) {
+    const before = sep.previousElementSibling;
+    if (before === null || before.classList.contains("sep") || sep.nextElementSibling === null) sep.remove();
+  }
+};
+
+const place = (table: HTMLTableElement) => {
+  const { el } = ensureBar();
+  el.classList.add("open");
+  const r = table.getBoundingClientRect();
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const top = r.top - h - 6 >= 4 ? r.top - h - 6 : Math.max(4, r.top + 6);
+  el.style.top = `${top}px`;
+  el.style.left = `${Math.min(Math.max(4, r.right - w), innerWidth - w - 4)}px`;
+};
+
+const attached = new WeakMap<HTMLTableElement, { state: TableControlState; detach: () => void }>();
+
+/** Attaches controls to a judged table, or updates the state of controls already attached. */
+export const attachControls = (table: HTMLTableElement, state: TableControlState, handlers: TableControlHandlers) => {
+  const existing = attached.get(table);
+  if (existing !== undefined) {
+    existing.state = state;
+    if (current?.table === table) {
+      current = { table, state, handlers };
+      render();
+    }
+    return;
+  }
+  const entry = { state, detach: () => {} };
+  const enter = (ev: PointerEvent) => {
+    if (ev.pointerType !== "mouse") return;
+    clearTimeout(hideTimer);
+    current = { table, state: entry.state, handlers };
+    render();
+    place(table);
+  };
+  table.addEventListener("pointerenter", enter);
+  table.addEventListener("pointerleave", scheduleHide);
+  entry.detach = () => {
+    table.removeEventListener("pointerenter", enter);
+    table.removeEventListener("pointerleave", scheduleHide);
+  };
+  attached.set(table, entry);
+};
+
+/** Removes the controls from a table, and hides the bar if it shows that table. */
+export const detachControls = (table: HTMLTableElement) => {
+  attached.get(table)?.detach();
+  attached.delete(table);
+  if (current?.table === table) bar?.el.classList.remove("open");
+};

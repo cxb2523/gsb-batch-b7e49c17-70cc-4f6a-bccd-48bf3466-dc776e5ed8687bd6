@@ -1,0 +1,80 @@
+<!-- One home page example. Shows its tables, shaded by the extension's painter, and the judgment on each column. -->
+<script lang="ts">
+  import type { PaletteId } from "../../../src/core/palettes.ts";
+  import type { ColumnEncoding, SkippedColumn } from "../../../src/core/types.ts";
+  import { columnSummary, groupSizes, type DemoSection } from "./demo.ts";
+  import { shade } from "./shade.ts";
+
+  interface Props {
+    readonly section: DemoSection;
+    readonly palette: PaletteId;
+    readonly colored: boolean;
+    readonly theme: string;
+  }
+  const { section: s, palette, colored, theme }: Props = $props();
+
+  const groups = $derived(groupSizes(s.judgment));
+  const host = (url: string) => new URL(url).hostname.replace(/^www\./, "");
+
+  type Row = { header: string; e: ColumnEncoding | undefined; skipped: SkippedColumn | undefined };
+  const rowsOf = (t: number): Row[] =>
+    s.page.tables[t]!.headers.map((header, col) => ({
+      header,
+      e: s.judgment.tables[t]!.encodings.find((x) => x.col === col),
+      skipped: s.judgment.tables[t]!.skipped.find((x) => x.col === col),
+    }));
+</script>
+
+<article class="example" id={s.section.id}>
+  <header>
+    <h3>{s.section.heading}</h3>
+  </header>
+  <p class="caption">{s.section.caption}</p>
+  <p class="sources">
+    <a class="source" href={s.section.checks}>docs/tests</a>
+    {#if s.section.source !== ""}
+      <span class="sep" aria-hidden="true">·</span>
+      <a class="source" href={s.section.source} rel="noopener">view it live at {host(s.section.source)}</a>
+    {:else}
+      <span class="sep" aria-hidden="true">·</span>
+      <span class="source">synthetic test page</span>
+    {/if}
+  </p>
+
+  {#each s.page.tables as t, ti (t.id)}
+    {@const j = s.judgment.tables[ti]!}
+    <div class="table-scroll">
+      <table use:shade={{ id: t.id, judgment: j, palette, groupSizes: groups, colored, theme }}>
+        {#if t.title !== null}<caption>{t.title}</caption>{/if}
+        <thead>
+          <tr
+            >{#each t.headers as h, hi (hi)}<th scope="col">{h}</th>{/each}</tr
+          >
+        </thead>
+        <tbody>
+          {#each t.rows as row, ri (ri)}
+            <tr
+              >{#each row as cell, ci (ci)}<td>{cell}</td>{/each}</tr
+            >
+          {/each}
+        </tbody>
+        <!-- The extractor skips <tfoot>, so the strip is never read as data. -->
+        <tfoot>
+          <tr>
+            {#each rowsOf(ti) as r, ci (ci)}
+              {@const sum = columnSummary(r.e, r.skipped)}
+              <td class:off={!sum.on}><span class="k">{sum.kind}</span><span class="d">{sum.detail}</span></td>
+            {/each}
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    {#if j.aggregateRows.length > 0}
+      <p class="note">
+        Rows judged to be totals and kept out of the scale: {j.aggregateRows
+          .map((r) => `"${t.rows[r]?.[0] ?? r}"`)
+          .join(", ")}.
+      </p>
+    {/if}
+  {/each}
+</article>
