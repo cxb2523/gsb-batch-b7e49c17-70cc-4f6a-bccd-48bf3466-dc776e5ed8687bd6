@@ -1,0 +1,64 @@
+name: sync-health
+
+# Weekly, Thursday 02:17 UTC = 10:17 in Beijing. Off the hour on purpose:
+# GitHub's scheduler queues hard at :00 and can run 20+ minutes late.
+on:
+  schedule:
+    - cron: "17 2 * * 4"
+  # Also run when this pipeline itself changes, so the first deploy already has
+  # data and a fix gets exercised immediately. Data commits below do not match
+  # these paths, so there is no loop.
+  push:
+    paths:
+      - "scripts/sync-health.mjs"
+      - ".github/workflows/sync-health.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-health
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Pull the status API
+        run: node scripts/sync-health.mjs
+
+      - name: Rebuild the city data
+        run: node scripts/build-blogs.mjs --remote
+
+      - name: Commit the snapshot
+        id: commit
+        run: |
+          # Only the health snapshot decides whether this is news. blogs.json is
+          # rewritten on every run (it carries a generatedAt), so it must not be
+          # the trigger or we would redeploy daily for nothing.
+          if [ -z "$(git status --porcelain data/health.json)" ]; then
+            echo "health.json unchanged — skipping commit"
+            exit 0
+          fi
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          git config user.name "blog-city-bot"
+          git config user.email "blog-city-bot@users.noreply.github.com"
+          git add data/health.json src/data/blogs.json
+          git commit -m "chore(data): sync blog health"
+          git push
+
+      # Push already triggers Cloudflare Pages by webhook. This is a belt-and-
+      # braces trigger in case a delivery gets dropped; skipped when the secret
+      # is not configured.
+      - name: Trigger the Pages build
+        if: steps.commit.outputs.pushed == 'true' && env.CF_DEPLOY_HOOK != ''
+        env:
+          CF_DEPLOY_HOOK: ${{ secrets.CF_DEPLOY_HOOK }}
+        run: curl -fsS -X POST "$CF_DEPLOY_HOOK" > /dev/null
