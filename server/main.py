@@ -491,7 +491,15 @@ def cast_vote(
         raise HTTPException(status_code=404, detail="Proposal not found")
     if proposal.status != "open":
         raise HTTPException(status_code=400, detail=f"Already {proposal.status}")
-        
+
+    # The voter must belong to the group that owns this proposal.
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.group_id == proposal.group_id,
+        models.GroupMember.user_id == req.voter_id,
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=403, detail="Access denied: you are not a member of this group.")
+
     existing_vote = db.query(models.Vote).filter(models.Vote.proposal_id == req.proposal_id, models.Vote.voter_id == req.voter_id).first()
     if existing_vote:
         raise HTTPException(status_code=400, detail="Already voted")
@@ -520,14 +528,20 @@ def cast_vote(
             new_status = "rejected"
             
     if new_status == "executed":
-        # Group trade execution (simplified logic)
+        # Group trade execution. If the group cannot afford the trade (BUY)
+        # or does not hold enough shares (SELL), no funds or holdings are
+        # touched and the proposal is rejected instead of executed.
+        group = proposal.group
         try:
-            group = proposal.group
             quote = yf.Ticker(f"{proposal.ticker}.NS").info
             price = quote.get("regularMarketPrice", proposal.price_at_proposal)
-            cost = price * proposal.quantity
-            
-            if proposal.action == "BUY" and group.virtual_corpus >= cost:
+        except Exception as e:
+            print("Group trade quote fetch failed, falling back to proposal price", e)
+            price = proposal.price_at_proposal
+        cost = price * proposal.quantity
+
+        if proposal.action == "BUY":
+            if group.virtual_corpus >= cost:
                 group.virtual_corpus -= cost
                 gholding = db.query(models.GroupHolding).filter(models.GroupHolding.group_id == group.id, models.GroupHolding.ticker == proposal.ticker).first()
                 if gholding:
@@ -535,16 +549,18 @@ def cast_vote(
                     gholding.quantity += proposal.quantity
                 else:
                     db.add(models.GroupHolding(group_id=group.id, ticker=proposal.ticker, quantity=proposal.quantity, avg_buy_price=price))
-            elif proposal.action == "SELL":
+            else:
+                new_status = "rejected"
+        elif proposal.action == "SELL":
+            gholding = db.query(models.GroupHolding).filter(models.GroupHolding.group_id == group.id, models.GroupHolding.ticker == proposal.ticker).first()
+            if gholding and gholding.quantity >= proposal.quantity:
                 group.virtual_corpus += cost
-                gholding = db.query(models.GroupHolding).filter(models.GroupHolding.group_id == group.id, models.GroupHolding.ticker == proposal.ticker).first()
-                if gholding:
-                    if gholding.quantity == proposal.quantity:
-                        db.delete(gholding)
-                    else:
-                        gholding.quantity -= proposal.quantity
-        except Exception as e:
-            print("Group trade execution failed", e)
+                if gholding.quantity == proposal.quantity:
+                    db.delete(gholding)
+                else:
+                    gholding.quantity -= proposal.quantity
+            else:
+                new_status = "rejected"
             
     proposal.status = new_status
     db.commit()
