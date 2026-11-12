@@ -4,40 +4,9 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { intercept } from "./support.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const fx = n => JSON.parse(readFileSync(join(HERE, "fixtures", n + ".json"), "utf-8"));
-
-/* URL 片段 → fixture 文件名（与 app.js ENDPOINTS 一一对应） */
-const FIXTURES = {
-  "rankings/models?view=day": "usage",
-  "rankings/benchmarks": "bench",
-  "rankings/model-rankings-chart": "trend",
-  "rankings/discovery": "disc",
-  "rankings/task-spend": "spend",
-  "rankings/performance": "perf",
-  "rankings/programming-language": "prog",
-  "rankings/natural-language": "nl",
-  "rankings/context-length": "ctx",
-  "rankings/images": "images",
-  "rankings/tools": "tools",
-  "rankings/video-output-hours": "video",
-  "catalog/models": "catalog",
-};
-
-async function intercept(page, mode = "replay") {
-  await page.route(/https:\/\/fonts\.(loli\.net|googleapis\.com|gstatic\.com)\//, route => route.abort());
-  await page.route("**/openrouter.ai/**", async route => {
-    if (mode === "abort") return route.abort();
-    const url = route.request().url();
-    for (const [needle, name] of Object.entries(FIXTURES)) {
-      if (url.includes(needle)) {
-        return route.fulfill({ contentType: "application/json", body: JSON.stringify(fx(name)) });
-      }
-    }
-    return route.fulfill({ status: 404, body: "{}", contentType: "application/json" });
-  });
-}
 
 test("冒烟：数据管线走通、渲染零异常、分类榜可切换", async ({ page }) => {
   const pageErrors = [];

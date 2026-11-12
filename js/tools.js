@@ -144,27 +144,50 @@ function renderCn() {
 }
 
 /* ---------------- 降价榜（每日 CI 快照 diff） ---------------- */
+const PRICE_ERRORS = {
+  insufficient: '快照不足两份：每日 CI 自动存一份成本快照，目前有效快照还不够两份，攒够后这里会出现降价榜。',
+  corrupted: '快照文件损坏：最近的快照缺少有效 cost 数据，跳过损坏文件后仍凑不齐两份，等 CI 下次写入修复。',
+  fetch: '快照读取失败：无法获取快照数据，请稍后重试。<br>（Streamlit 内嵌版读不到静态文件，请用静态版查看）',
+};
+const isPosNum = v => typeof v === 'number' && Number.isFinite(v) && v > 0;
+const isValidSnap = s => s && typeof s === 'object' && s.cost && typeof s.cost === 'object' && !Array.isArray(s.cost);
+async function fetchJson(url) {
+  const r = await fetch(url, { cache: 'no-cache' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
 async function loadSnapshots() {
   if (priceCache.data && Date.now() - priceCache.t < 600000) return priceCache.data;
-  const idx = await (await fetch('data/snapshots/index.json', { cache: 'no-cache' })).json();
-  const files = (idx.files || []).filter(f => f !== 'index.json').sort().slice(-8);
-  if (files.length < 2) throw new Error('快照不足两份');
-  const prev = await (await fetch('data/snapshots/' + files[files.length - 2], { cache: 'no-cache' })).json();
-  const cur = await (await fetch('data/snapshots/' + files[files.length - 1], { cache: 'no-cache' })).json();
-  if (!prev.cost || !cur.cost) throw new Error('快照缺 cost 字段');
-  priceCache = { t: Date.now(), data: { prev, cur } };
+  let idx;
+  try { idx = await fetchJson('data/snapshots/index.json'); }
+  catch { throw new Error('fetch'); }
+  const files = ((idx && idx.files) || []).filter(f => f !== 'index.json').sort();
+  if (files.length < 2) throw new Error('insufficient');
+  // 从最新往前找两份有效快照：缺 cost / cost 不是对象的跳过，单份读失败也继续向前
+  const valid = [];
+  let corrupted = false, fetchFailed = false;
+  for (let i = files.length - 1; i >= 0 && valid.length < 2; i--) {
+    let s;
+    try { s = await fetchJson('data/snapshots/' + files[i]); }
+    catch { fetchFailed = true; continue; }
+    if (isValidSnap(s)) valid.push({ date: s.date || files[i].replace(/\.json$/, ''), cost: s.cost });
+    else corrupted = true;
+  }
+  if (valid.length < 2) throw new Error(fetchFailed ? 'fetch' : corrupted ? 'corrupted' : 'insufficient');
+  priceCache = { t: Date.now(), data: { prev: valid[1], cur: valid[0] } };
   return priceCache.data;
 }
 async function renderPrice() {
   const el = $('#tool-price');
   let d;
   try { d = await loadSnapshots(); }
-  catch {
-    el.innerHTML = '<div class="ph">快照积累中：每日 CI 自动存一份成本快照，攒够两份后这里会出现降价榜。<br>（Streamlit 内嵌版读不到静态文件，请用静态版查看）</div>';
+  catch (e) {
+    el.innerHTML = `<div class="ph">${PRICE_ERRORS[e.message] || PRICE_ERRORS.fetch}</div>`;
     return;
   }
+  // 只纳入两期都是正数的模型：0 与负值一律排除，不计入涨跌榜
   const rows = Object.entries(d.cur.cost)
-    .filter(([k, v]) => d.prev.cost[k] != null && d.prev.cost[k] > 0 && v > 0)
+    .filter(([k, v]) => isPosNum(v) && isPosNum(d.prev.cost[k]))
     .map(([k, v]) => ({ k, v, prev: d.prev.cost[k], pct: (v - d.prev.cost[k]) / d.prev.cost[k] }));
   const falls = rows.filter(r => r.pct < -0.001).sort((a, b) => a.pct - b.pct).slice(0, 10);
   const rises = rows.filter(r => r.pct > 0.001).sort((a, b) => b.pct - a.pct).slice(0, 5);
@@ -172,8 +195,8 @@ async function renderPrice() {
     list.map(r => `<tr data-slug="${esc(r.k)}"><td>${esc(nameOf(r.k))}</td><td>${fmtUsd(r.prev)}</td><td>${fmtUsd(r.v)}</td>` +
       `<td class="${r.pct < 0 ? 'down' : 'up'}">${r.pct > 0 ? '+' : ''}${(r.pct*100).toFixed(1)}%</td></tr>`).join('') + '</tbody></table>';
   el.innerHTML = `<div class="duel-share">对比区间 <b>${esc(d.prev.date)}</b> → <b>${esc(d.cur.date)}</b></div>` +
-    (falls.length ? `<h3 class="tool-h">降价 Top 10</h3>${table(falls)}` : '<div class="ph">区间内无降价记录</div>') +
-    (rises.length ? `<h3 class="tool-h">涨价 Top 5</h3>${table(rises)}` : '');
+    `<h3 class="tool-h">降价 Top 10</h3>` + (falls.length ? table(falls) : '<div class="ph">区间内无降价记录</div>') +
+    `<h3 class="tool-h">涨价 Top 5</h3>` + (rises.length ? table(rises) : '<div class="ph">区间内无涨价记录</div>');
 }
 
 /* ---------------- 算笔账 ---------------- */

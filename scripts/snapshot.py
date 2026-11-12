@@ -5,6 +5,7 @@ index.json。前端「降价榜」读最近两份做 diff——纯静态站用 g
 零第三方依赖：python3 scripts/snapshot.py
 """
 import json
+import math
 import re
 import urllib.request
 from datetime import date
@@ -46,7 +47,8 @@ def main():
     clean = {}
     for k, v in cost.items():
         b = base_slug(k)
-        if v:
+        # 写入前丢弃非正数价格（0 / 负值 / 非数值），避免前端 diff 算出离谱涨跌幅
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
             clean[b] = min(v, clean[b]) if b in clean else v  # 同 base 取最低价
     today = str(date.today())
     DIR.mkdir(parents=True, exist_ok=True)
