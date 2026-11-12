@@ -1,0 +1,3720 @@
+"""Tests for the facet-driven brand browse pipeline."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+import pytest
+from sqlalchemy import select
+
+from hd.config import Settings
+from hd.hd_api.parsers import parse_dimensions
+from hd.pipeline.browse import (
+    Walk,
+    admission_ceiling,
+    admits,
+    both_ends_cap,
+    effective_shelf_fraction,
+    full_shelf_hours,
+    rotate_shelf_walks,
+    build_nav,
+    plan_walks,
+    price_partition,
+    reachable_cap,
+    resolve_walks,
+    run_browse,
+    walk_and_capture,
+    walk_cost_estimate,
+    walk_status,
+)
+
+
+# ---------------------------------------------------------------- helpers
+
+def make_product(item_id: str, brand: str = "Milwaukee", clearance: dict | None = None,
+                 qty: int = 5, store: str = "2619") -> dict:
+    return {
+        "itemId": item_id,
+        "identifiers": {
+            "brandName": brand,
+            "modelNumber": f"M-{item_id}",
+            "productLabel": f"Product {item_id}",
+            "canonicalUrl": f"/p/{item_id}",
+        },
+        "pricing": {
+            "value": 100.0,
+            "original": 100.0,
+            "promotion": {},
+            "clearance": clearance,
+        },
+        "media": {"images": []},
+        "fulfillment": {
+            "fulfillmentOptions": [{
+                "type": "pickup",
+                "services": [{
+                    "type": "bopis",
+                    "locations": [{
+                        "locationId": store,
+                        "inventory": {"quantity": qty, "isInStock": qty > 0},
+                    }],
+                }],
+            }],
+        },
+    }
+
+
+def make_page(products: list[dict], total: int, dims: list[dict] | None = None) -> dict:
+    return {
+        "data": {
+            "searchModel": {
+                "searchReport": {"totalProducts": total},
+                "dimensions": dims or [],
+                "products": products,
+            }
+        }
+    }
+
+
+def cat_dim(*refs: tuple[str, str, int]) -> dict:
+    return {
+        "label": "Category",
+        "refinements": [
+            {"label": label, "refinementKey": token, "recordCount": count, "selected": None}
+            for label, token, count in refs
+        ],
+    }
+
+
+def price_dim(*refs: tuple[str, str, int]) -> dict:
+    return {
+        "label": "Price",
+        "refinements": [
+            {"label": label, "refinementKey": token, "recordCount": count, "selected": None}
+            for label, token, count in refs
+        ],
+    }
+
+
+class FakeClient:
+    """Serves canned responses via a router(variables) callable."""
+
+    def __init__(self, router):
+        self._router = router
+        self._count = 0
+
+    async def post_graphql(self, variables):
+        self._count += 1
+        return self._router(variables)
+
+    @property
+    def is_throttled(self):
+        return False
+
+    @property
+    def request_count(self):
+        return self._count
+
+    @property
+    def failures(self):
+        return {}
+
+    async def close(self):
+        pass
+
+
+@pytest.fixture
+def browse_settings(tmp_path) -> Settings:
+    return Settings(
+        # Do NOT inherit the operator's untracked .env: it carries
+        # both_ends_paging, an admission ceiling, SHELF_CATEGORY_WALKS and a
+        # shelf fraction, so without this these tests mean something different
+        # on this machine than on a fresh clone.
+        _env_file=None,
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/test.db",
+        stores="2619",
+        brands="Milwaukee",
+        brand_tokens="Milwaukee:zv",
+        root_nav_param="N-5yc1v",
+        page_size=2,
+        api_max_start_index=4,   # reachable cap = 6
+        browse_network_categories_per_run=2,
+        browse_cursor_path=str(tmp_path / "cursor.json"),
+        keyword_pause_min_seconds=0,
+        keyword_pause_max_seconds=0,
+        store_raw_json=False,
+    )
+
+
+@pytest.fixture
+async def fresh_db(tmp_path):
+    """Patch the module-level Database singleton so tests get an isolated DB."""
+    from hd.db import base
+
+    db = base.Database()
+    with patch.object(base, "_default", db):
+        yield db
+    # conftest's autouse teardown closes whatever `base._default` is by then,
+    # which patch.object has already restored to the original — not this one.
+    # An undisposed engine leaves an aiosqlite worker thread running past the
+    # loop that owns it, and it surfaces as "Event loop is closed" against
+    # whichever unrelated test happens to be running when it dies.
+    await db.close_db()
+
+
+# ---------------------------------------------------------------- parse_dimensions
+
+class TestParseDimensions:
+    def test_parses_labels_tokens_counts(self):
+        raw = make_page([], 0, dims=[cat_dim(("Tools", "c1xy", 10), ("Plumbing", "bqew", 3))])
+        dims = parse_dimensions(raw)
+        assert dims["Category"] == [
+            {"label": "Tools", "token": "c1xy", "count": 10},
+            {"label": "Plumbing", "token": "bqew", "count": 3},
+        ]
+
+    def test_missing_dimensions_block(self):
+        assert parse_dimensions({"data": {"searchModel": {}}}) == {}
+        assert parse_dimensions({}) == {}
+        assert parse_dimensions({"data": None}) == {}
+
+    def test_null_refinements_and_missing_tokens_dropped(self):
+        raw = {
+            "data": {"searchModel": {"dimensions": [
+                {"label": "Category", "refinements": None},
+                {"label": None, "refinements": []},
+                {"label": "Brand", "refinements": [
+                    None,
+                    {"label": "NoToken", "refinementKey": None, "recordCount": 5},
+                    {"label": "Ok", "refinementKey": "zv", "recordCount": "7"},
+                ]},
+            ]}}
+        }
+        dims = parse_dimensions(raw)
+        assert dims["Category"] == []
+        assert dims["Brand"] == [{"label": "Ok", "token": "zv", "count": 7}]
+
+
+# ---------------------------------------------------------------- planning
+
+class TestPlanWalks:
+    def test_build_nav(self):
+        assert build_nav("N-5yc1v", "zv", "bqew") == "N-5yc1vZzvZbqew"
+        assert build_nav("N-5yc1v") == "N-5yc1v"
+
+    def test_under_cap_single_walk(self, browse_settings):
+        walks, need = plan_walks("N-5yc1vZzv", "Milwaukee", 5, {}, browse_settings)
+        assert walks == [Walk("N-5yc1vZzv", "Milwaukee", 5)]
+        assert need == []
+
+    def test_zero_or_none_total(self, browse_settings):
+        assert plan_walks("N-5yc1vZzv", "x", 0, {}, browse_settings) == ([], [])
+        assert plan_walks("N-5yc1vZzv", "x", None, {}, browse_settings) == ([], [])
+
+    def test_over_cap_splits_by_category(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[cat_dim(("Big", "big", 7), ("Small", "sm", 3))]))
+        walks, need = plan_walks("N-5yc1vZzv", "Milwaukee", 10, dims, browse_settings)
+        assert walks == [Walk("N-5yc1vZzvZsm", "Milwaukee/Small", 3,
+                              split_parent="N-5yc1vZzv", split_axis="category")]
+        assert need == [("N-5yc1vZzvZbig", "Milwaukee/Big")]
+
+    def test_category_token_already_in_nav_skipped(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[cat_dim(("Echo", "zv", 3), ("New", "nw", 3))]))
+        walks, need = plan_walks("N-5yc1vZzv", "Milwaukee", 10, dims, browse_settings)
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZnw"]
+        assert need == []
+
+    def test_price_split_when_no_categories(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[price_dim(("$0-$10", "p1", 4), ("$10+", "p2", 6))]))
+        walks, need = plan_walks("N-5yc1vZzvZc", "Tools", 10, dims, browse_settings)
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZcZp1", "N-5yc1vZzvZcZp2"]
+        assert not any(w.truncated for w in walks)
+        assert need == []
+
+    def test_merchandising_price_buckets_the_ranges_contain_are_not_walked(
+        self, browse_settings
+    ):
+        """The Price dimension is not a partition. "Special Values" sits in it
+        beside the dollar ranges and OVERLAPS them, so walking the dimension
+        whole reads the same items twice. Measured live: the ranges alone
+        summed to 1,807 against a node total of 1,802, and the merchandising
+        bucket added 679 reads that could reach nothing new."""
+        dims = parse_dimensions(make_page([], 10, dims=[price_dim(
+            ("$0 - $10", "p1", 4), ("$10 - $20", "p2", 6),
+            ("Special Values", "7", 5))]))
+        walks, need = plan_walks("N-5yc1vZzvZc", "Tools", 10, dims, browse_settings)
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZcZp1", "N-5yc1vZzvZcZp2"]
+        assert need == []
+
+    def test_the_open_ended_top_band_is_a_band_not_a_merchandising_bucket(
+        self, browse_settings
+    ):
+        """The top price band does not lead with "$" — it reads "Over $5000".
+
+        It appears in 940 of the 5,652 responses on file and holds up to 27
+        items in a single node. A leading-"$" test classifies it as
+        merchandising, and since the remaining bands over-report anyway it
+        would then be DROPPED: every item above $5,000 gone, with no error and
+        no coverage row to show for it. This is the whole reason the match is
+        on a currency amount anywhere in the label.
+
+        The counts below are shaped like production — the bands over-report
+        against the node total — so the leading-"$" rule reaches the drop and
+        loses the band, rather than being saved by the containment check.
+        """
+        dims = parse_dimensions(make_page([], 10, dims=[price_dim(
+            ("$0 - $10", "p1", 12), ("Over $5000", "p9", 4),
+            ("Special Values", "7", 3))]))
+        walks, _need = plan_walks("N-5yc1vZzvZc", "Tools", 10, dims, browse_settings)
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZcZp1", "N-5yc1vZzvZcZp9"]
+
+    def test_an_unmeasured_price_bucket_is_dropped_but_warned_about(
+        self, browse_settings
+    ):
+        """Classification is by exclusion, and that is an assumption.
+
+        Anything with no currency amount in its label is treated as contained
+        by the bands. True of "Special Values"; not a general law. An ADDITIVE
+        refinement with no price in its label would be dropped silently in the
+        99.4% of nodes where the counts balance. The drop still happens — the
+        counting argument is the same — but a label nobody has measured must
+        announce itself, or a new bucket goes unnoticed indefinitely.
+        """
+        from structlog.testing import capture_logs
+        dims = parse_dimensions(make_page([], 10, dims=[price_dim(
+            ("$0 - $10", "p1", 12), ("Free Delivery", "fd", 5))]))
+        with capture_logs() as logs:
+            walks, _need = plan_walks("N-5yc1vZzvZc", "Tools", 10, dims, browse_settings)
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZcZp1"]
+        warnings = [entry for entry in logs if entry.get("log_level") == "warning"]
+        assert any(entry.get("unknown") == ["Free Delivery"] for entry in warnings)
+
+    def test_the_measured_bucket_is_dropped_without_that_warning(self, browse_settings):
+        """The counterpart: "Special Values" is measured, so it is not noise.
+
+        Scoped to the unknown-refinement warning specifically — a price split
+        emits other warnings of its own (a band over the API ceiling, here),
+        and a blanket "no warnings" assertion would pass for the wrong reason.
+        """
+        from structlog.testing import capture_logs
+        dims = parse_dimensions(make_page([], 10, dims=[price_dim(
+            ("$0 - $10", "p1", 12), ("Special Values", "7", 5))]))
+        with capture_logs() as logs:
+            plan_walks("N-5yc1vZzvZc", "Tools", 10, dims, browse_settings)
+        assert not [entry for entry in logs if "unknown" in entry]
+
+    def test_a_refinement_with_no_count_does_not_raise(self):
+        """`parse_dimensions` deliberately preserves a missing recordCount as
+        None. `plan_walks` pre-filters those out, so this is about a DIRECT
+        call: the function must state a precondition or survive without one.
+        Reading None as zero can only shrink the bands' total, which pushes the
+        decision toward walking everything — the safe direction.
+        """
+        refinements = [
+            {"label": "$0 - $10", "token": "p1", "count": None},
+            {"label": "$10 - $20", "token": "p2", "count": 12},
+            {"label": "Special Values", "token": "7", "count": None},
+        ]
+        kept = price_partition(refinements, total=10, label="Tools")
+        assert [r["token"] for r in kept] == ["p1", "p2"]
+
+    def test_a_band_with_no_count_pushes_toward_walking_everything(self):
+        """The None band contributes nothing, so the counts no longer balance
+        and the merchandising bucket is kept rather than dropped.
+
+        Shaped to sit ON the boundary. The counted bands total 9 against a node
+        of 10, so reading the missing count as 0 leaves `covered` exactly one
+        short and everything is walked — while reading it as anything ≥1 would
+        balance the sum and drop the bucket. An earlier version of this test
+        used a wider gap and passed against a `_count` that returned 1 for a
+        missing value, which is the specific claim the docstring makes.
+        """
+        refinements = [
+            {"label": "$0 - $10", "token": "p1", "count": None},
+            {"label": "$10 - $20", "token": "p2", "count": 9},
+            {"label": "Special Values", "token": "7", "count": 3},
+        ]
+        kept = price_partition(refinements, total=10, label="Tools")
+        assert [r["token"] for r in kept] == ["p1", "p2", "7"]
+
+    def test_a_merchandising_bucket_the_ranges_do_not_cover_is_still_walked(
+        self, browse_settings
+    ):
+        """Containment is checked, not assumed. If the ranges fall short then
+        something is reachable only through the other bucket, and coverage
+        outranks economy."""
+        dims = parse_dimensions(make_page([], 10, dims=[price_dim(
+            ("$0 - $10", "p1", 3), ("Special Values", "7", 7))]))
+        walks, _need = plan_walks("N-5yc1vZzvZc", "Tools", 10, dims, browse_settings)
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZcZp1", "N-5yc1vZzvZcZ7"]
+
+    def test_a_price_dimension_of_only_merchandising_buckets_is_left_alone(
+        self, browse_settings
+    ):
+        """With no ranges to compare against there is nothing to prove
+        contained — and these buckets are then the only split on offer."""
+        dims = parse_dimensions(make_page([], 10, dims=[price_dim(
+            ("Special Values", "7", 6), ("New Lower Prices", "8", 4))]))
+        walks, _need = plan_walks("N-5yc1vZzvZc", "Tools", 10, dims, browse_settings)
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZcZ7", "N-5yc1vZzvZcZ8"]
+
+    def test_no_facets_marks_truncated(self, browse_settings):
+        walks, need = plan_walks("N-5yc1vZzv", "Milwaukee", 100, {}, browse_settings)
+        assert len(walks) == 1 and walks[0].truncated
+        assert need == []
+
+    def test_depth_guard_marks_truncated(self, browse_settings):
+        dims = parse_dimensions(make_page([], 100, dims=[cat_dim(("X", "x", 100))]))
+        walks, need = plan_walks(
+            "N-5yc1vZzv", "Milwaukee", 100, dims, browse_settings,
+            depth=browse_settings.browse_max_split_depth,
+        )
+        assert len(walks) == 1 and walks[0].truncated
+
+
+class TestResolveWalks:
+    async def test_fetches_facets_for_oversized_children(self, browse_settings):
+        """Brand set over cap → split by category; oversized category gets its own facet read."""
+        def router(v):
+            nav = v["navParam"]
+            if nav == "N-5yc1vZzv":
+                return make_page([], 10, dims=[cat_dim(("Big", "big", 8), ("Small", "sm", 2))])
+            if nav == "N-5yc1vZzvZbig":
+                return make_page([], 8, dims=[cat_dim(("A", "a", 5), ("B", "b", 3))])
+            raise AssertionError(f"unexpected nav {nav}")
+
+        client = FakeClient(router)
+        walks = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzv", "Milwaukee", "2619", "IN_STORE",
+        )
+        navs = sorted(w.nav_param for w in walks)
+        assert navs == ["N-5yc1vZzvZbigZa", "N-5yc1vZzvZbigZb", "N-5yc1vZzvZsm"]
+        assert not any(w.truncated for w in walks)
+
+    async def test_the_price_partition_reaches_a_child_split_two_levels_down(
+        self, browse_settings
+    ):
+        """`price_partition` is only worth anything if the pipeline reaches it.
+
+        The unit tests call `plan_walks` directly, so a broken hand-off between
+        `resolve_walks` and `plan_walks` would leave every one of them green
+        while the merchandising bucket went on being walked in production. This
+        drives the real recursion: an over-cap child gets its own facet read,
+        that read comes back with a Price dimension, and the bucket the bands
+        already contain must not appear in the returned plan.
+        """
+        def router(v):
+            nav = v["navParam"]
+            if nav == "N-5yc1vZzv":
+                return make_page([], 10, dims=[cat_dim(("Big", "big", 8), ("Small", "sm", 2))])
+            if nav == "N-5yc1vZzvZbig":
+                return make_page([], 8, dims=[price_dim(
+                    ("$0 - $10", "p1", 5), ("$10 - $20", "p2", 4),
+                    ("Special Values", "7", 3))])
+            raise AssertionError(f"unexpected nav {nav}")
+
+        client = FakeClient(router)
+        walks = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzv", "Milwaukee", "2619", "IN_STORE",
+        )
+        navs = sorted(w.nav_param for w in walks)
+        assert navs == ["N-5yc1vZzvZbigZp1", "N-5yc1vZzvZbigZp2", "N-5yc1vZzvZsm"]
+
+
+# ---------------------------------------------------------------- walking
+
+class TestWalkAndCapture:
+    async def test_inserts_products_and_snapshots(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import Product, StoreSnapshot
+
+        await base.init_db(browse_settings)
+
+        pages = {
+            0: make_page([make_product("111"), make_product("222", clearance={"value": 50.0, "dollarOff": 50.0, "percentageOff": 50})], 3),
+            2: make_page([make_product("333"), make_product("999", brand="DEWALT")], 3),
+            4: make_page([], 3),
+        }
+
+        def router(v):
+            return pages[v["startIndex"]]
+
+        client = FakeClient(router)
+        seen: set[str] = set()
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 3)
+        upserts, inserts = await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", seen, ["Milwaukee"],
+        )
+
+        assert upserts == 3          # DEWALT item filtered out
+        assert inserts == 3
+        assert seen == {"111", "222", "333"}
+
+        async with base.get_session(browse_settings) as session:
+            prods = (await session.execute(select(Product))).scalars().all()
+            snaps = (await session.execute(select(StoreSnapshot))).scalars().all()
+        assert {p.item_id for p in prods} == {"111", "222", "333"}
+        by_item = {s.item_id: s for s in snaps}
+        assert len(by_item) == 3
+        assert float(by_item["222"].clearance_value) == 50.0
+        assert by_item["222"].in_stock is True
+
+    async def test_every_observation_records_the_walk_that_produced_it(
+        self, browse_settings, fresh_db
+    ):
+        """The real walk path must attach the node's identity to each snapshot.
+
+        Coverage records name a REGION and price rows name an ITEM; this is the
+        only thing that joins them, and the absence rule needs that join. The
+        mapping exists only in flight — a walk that does not record it destroys
+        it for good — so this asserts the whole path, not just the writer.
+        """
+        from sqlalchemy import select
+
+        from hd.db import base
+        from hd.db.models import StoreSnapshot
+
+        await base.init_db(browse_settings)
+        pages = {
+            0: make_page([make_product("111"), make_product("222")], 3),
+            2: make_page([make_product("333")], 3),
+            4: make_page([], 3),
+        }
+        client = FakeClient(lambda v: pages[v["startIndex"]])
+        nav = "N-5yc1vZzvZc1xyZc298Zc28l"
+        walk = Walk(nav, "Milwaukee/Tools/Power Tools/Saws", 3)
+
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "ALL", set(), ["Milwaukee"])
+
+        async with base.get_session(browse_settings) as session:
+            snaps = (await session.execute(select(StoreSnapshot))).scalars().all()
+        assert len(snaps) == 3
+        # Every one of them, across every page — not merely the first.
+        assert {s.nav_param for s in snaps} == {nav}
+
+    async def test_seen_items_deduped_across_walks(self, browse_settings, fresh_db):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        page = make_page([make_product("111")], 1)
+        client = FakeClient(lambda v: page)
+        seen: set[str] = set()
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 1)
+
+        _, first = await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", seen, ["Milwaukee"])
+        _, second = await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", seen, ["Milwaukee"])
+        assert first == 1
+        assert second == 0
+
+    async def test_stops_at_start_index_ceiling(self, browse_settings, fresh_db):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+
+        def router(v):
+            assert v["startIndex"] <= browse_settings.api_max_start_index
+            ids = [str(v["startIndex"]), str(v["startIndex"] + 1)]
+            return make_page([make_product(i) for i in ids], 100)
+
+        client = FakeClient(router)
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 100, truncated=True)
+        upserts, _ = await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        # pages at startIndex 0, 2, 4 → 6 products, then ceiling stops the walk
+        assert upserts == 6
+
+    async def test_invalid_response_stops_walk(self, browse_settings, fresh_db):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        client = FakeClient(lambda v: {"errors": [{"message": "boom"}]})
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 10)
+        upserts, inserts = await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert (upserts, inserts) == (0, 0)
+
+
+# ---------------------------------------------------------------- both-ends paging
+
+def _both_ends(settings: Settings) -> Settings:
+    """browse_settings with both-ends on and a 1-page overlap margin.
+
+    With page_size=2 / api_max_start_index=4, reachable_cap=6 and
+    both_ends_cap = 2*6 - 1*2 = 10, so a node of total 7-10 walks both ends.
+    """
+    settings.both_ends_paging = True
+    settings.both_ends_min_overlap_pages = 1
+    return settings
+
+
+class TestBothEndsPlanning:
+    def test_cap_is_two_ends_minus_overlap(self, browse_settings):
+        from hd.pipeline.browse import both_ends_cap
+        assert reachable_cap(_both_ends(browse_settings)) == 6
+        assert both_ends_cap(browse_settings) == 10   # 2*6 - 1*2
+
+    def test_in_window_node_walks_both_ends(self, browse_settings):
+        walks, need = plan_walks("N-5yc1vZzv", "M", 8, {}, _both_ends(browse_settings))
+        assert need == []
+        assert len(walks) == 1 and walks[0].both_ends is True
+
+    def test_at_or_under_reachable_cap_stays_a_single_walk(self, browse_settings):
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 6, {}, _both_ends(browse_settings))
+        assert len(walks) == 1 and walks[0].both_ends is False
+
+    def test_over_both_ends_cap_still_splits(self, browse_settings):
+        # total 20 > cap 10: no facets given, so it falls to a truncated head —
+        # NOT a both-ends walk.
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 20, {}, _both_ends(browse_settings))
+        assert walks[0].both_ends is False and walks[0].truncated is True
+
+    def test_flag_off_never_walks_both_ends(self, browse_settings):
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 8, {}, browse_settings)  # flag default off
+        assert all(not w.both_ends for w in walks)
+
+
+class TestWalkRouting:
+    """Every plan_walks decision emits one routing line. Split parents never
+    write a page 0, so this line is the archive's only record of a parent
+    node's total and route — the drift detector for both-ends eligibility."""
+
+    def _routes(self, logs):
+        return [(e["label"], e["branch"]) for e in logs
+                if e["event"] == "Walk routing"]
+
+    def test_single_bothends_and_category_branches(self, browse_settings):
+        from structlog.testing import capture_logs
+        s = _both_ends(browse_settings)
+        dims = parse_dimensions(
+            make_page([], 20, dims=[cat_dim(("Big", "big", 12), ("Sm", "sm", 3))]))
+        with capture_logs() as logs:
+            plan_walks("N-1", "Small", 5, {}, s)
+            plan_walks("N-2", "Band", 8, {}, s)
+            plan_walks("N-3", "Split", 20, dims, s)
+        assert self._routes(logs) == [
+            ("Small", "single"), ("Band", "both-ends"), ("Split", "category-split")]
+        caps = [(e["cap"], e["band_cap"]) for e in logs if e["event"] == "Walk routing"]
+        assert caps == [(6, 10)] * 3
+
+    def test_price_and_truncated_branches(self, browse_settings):
+        from structlog.testing import capture_logs
+        price_dims = parse_dimensions(
+            make_page([], 10, dims=[price_dim(("$0-$10", "p1", 4), ("$10+", "p2", 6))]))
+        deep_dims = parse_dimensions(make_page([], 100, dims=[cat_dim(("X", "x", 100))]))
+        with capture_logs() as logs:
+            plan_walks("N-4", "Priced", 10, price_dims, browse_settings)
+            plan_walks("N-5", "Bare", 100, {}, browse_settings)
+            plan_walks("N-6", "Deep", 100, deep_dims, browse_settings,
+                       depth=browse_settings.browse_max_split_depth)
+        assert self._routes(logs) == [
+            ("Priced", "price-split"), ("Bare", "truncated-no-facet"),
+            ("Deep", "truncated-depth")]
+
+    def test_zero_total_routes_nothing(self, browse_settings):
+        from structlog.testing import capture_logs
+        with capture_logs() as logs:
+            plan_walks("N-7", "Empty", 0, {}, browse_settings)
+        assert self._routes(logs) == []
+
+
+class TestBothEndsWalk:
+    def _router(self, settings, desc_sequence):
+        """Serve 8 price-ranked items; DESC order chosen by the test."""
+        asc = [str(i) for i in range(8)]
+        def router(v):
+            order = v["orderBy"]["order"]
+            si = v["startIndex"]
+            seq = asc if order == "ASC" else desc_sequence
+            return make_page([make_product(i) for i in seq[si:si + settings.page_size]], 8)
+        return router
+
+    async def test_union_covers_the_node_no_double_snapshots(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import Product, StoreSnapshot
+        s = _both_ends(browse_settings)
+        await base.init_db(s)
+        # DESC reaches the dear end (7..0), so cheap-6 ∪ dear-6 = all 8.
+        client = FakeClient(self._router(s, [str(i) for i in reversed(range(8))]))
+        seen: set[str] = set()
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 8, both_ends=True)
+        upserts, inserts = await walk_and_capture(
+            client, s, walk, "2619", "IN_STORE", seen, ["Milwaukee"])
+
+        assert walk.truncated is False          # union == total, full coverage
+        assert seen == {str(i) for i in range(8)}
+        assert inserts == 8                     # every item snapshotted exactly once
+        async with base.get_session(s) as session:
+            snaps = (await session.execute(select(StoreSnapshot))).scalars().all()
+            prods = (await session.execute(select(Product))).scalars().all()
+        assert len({sn.item_id for sn in snaps}) == 8     # no duplicate snapshot rows
+        assert len(snaps) == 8
+        assert len(prods) == 8
+
+    async def test_seam_gap_marks_truncated_not_silent(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = _both_ends(browse_settings)
+        await base.init_db(s)
+        # Degenerate DESC returns the SAME cheap items, so the union is only {0..5}
+        # of a claimed 8 — a seam gap. Must surface as truncated, never silent.
+        client = FakeClient(self._router(s, [str(i) for i in range(8)]))
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 8, both_ends=True)
+        await walk_and_capture(
+            client, s, walk, "2619", "IN_STORE", set(), ["Milwaukee"])
+        assert walk.truncated is True
+
+
+class TestBothEndsCostAndCorrectness:
+    def _settings(self, browse_settings, **over):
+        s = _both_ends(browse_settings)
+        s.api_max_start_index = 20        # reachable_cap = 22, room to page
+        s.both_ends_confirm_pages = 2
+        for k, v in over.items():
+            setattr(s, k, v)
+        return s
+
+    def _router(self, settings, n_items, total=None):
+        total = n_items if total is None else total
+        asc = [str(i) for i in range(n_items)]
+        def router(v):
+            si = v["startIndex"]
+            seq = asc if v["orderBy"]["order"] == "ASC" else asc[::-1]
+            return make_page(
+                [make_product(i) for i in seq[si:si + settings.page_size]], total)
+        return router
+
+    async def test_desc_stops_early_so_both_ends_beats_a_full_walk(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._settings(browse_settings)         # cap 22, margin 1 → both_ends_cap 42
+        await base.init_db(s)
+        # 30 items in the band. ASC = 11 pages (cheapest 22); DESC needs only the
+        # dear 8, reaching full coverage at page 3, +2 confirm = 6 pages. So 17
+        # requests, not 22 if DESC ran to the ceiling. This is the fix that makes
+        # both-ends cheaper than the split it replaces.
+        client = FakeClient(self._router(s, 30))
+        walk = Walk("N", "M", 30, both_ends=True)
+        await walk_and_capture(client, s, walk, "2619", "IN_STORE", set(), ["Milwaukee"])
+        assert walk.truncated is False
+        assert client._count == 17                  # 11 ASC + 6 DESC (early-stopped)
+
+    async def test_assertion_uses_live_total_not_stale_planned(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._settings(browse_settings, api_max_start_index=4)  # reachable 6, cap 10
+        await base.init_db(s)
+        # planned=6 (stale), live=10, but only 8 distinct items ever return — a
+        # real 2-item gap. Judging against planned 6 would pass 8≥6 as complete;
+        # the live-total denominator must catch 8<10.
+        client = FakeClient(self._router(s, 8, total=10))
+        walk = Walk("N", "M", 6, both_ends=True)    # planned < live
+        await walk_and_capture(client, s, walk, "2619", "IN_STORE", set(), ["Milwaukee"])
+        assert walk.truncated is True
+
+    async def test_node_grown_past_cap_is_truncated_even_if_covered(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._settings(browse_settings, api_max_start_index=4)  # reachable 6, cap 10
+        await base.init_db(s)
+        # 12 items, live total 12 > both_ends_cap 10: two ends happen to cover all
+        # 12, but the node has outgrown its eligibility, so don't trust it clean.
+        client = FakeClient(self._router(s, 12, total=12))
+        walk = Walk("N", "M", 8, both_ends=True)
+        await walk_and_capture(client, s, walk, "2619", "IN_STORE", set(), ["Milwaukee"])
+        assert walk.truncated is True
+
+    async def test_throttle_after_asc_marks_truncated(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._settings(browse_settings)         # api_max 20, so throttle beats the ceiling
+        await base.init_db(s)
+        calls = {"n": 0}
+        page = make_page([make_product("0"), make_product("1")], 40)
+
+        class ThrottleAfterAsc:
+            def __init__(self): self._count = 0
+            @property
+            def is_throttled(self): return calls["n"] > 3   # throttle a few pages in
+            async def post_graphql(self, v):
+                self._count += 1
+                calls["n"] += 1
+                return page
+
+        walk = Walk("N", "M", 30, both_ends=True)
+        await walk_and_capture(ThrottleAfterAsc(), s, walk, "2619", "IN_STORE", set(), ["Milwaukee"])
+        assert walk.truncated is True               # ASC-only half-coverage is not clean
+
+    async def test_understated_total_self_extends_no_silent_gap(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._settings(browse_settings)         # api_max 20 (reachable 22), cap 42
+        await base.init_db(s)
+        # 30 real items, but HD understates totalProducts as 24. A FIXED 2-page
+        # window would stop DESC at 28 seen (24 + 48 slack) and the assertion
+        # would pass on the wrong count — a silent gap. The adaptive window keeps
+        # going while pages still yield new ids, so all 30 are fetched.
+        client = FakeClient(self._router(s, 30, total=24))
+        seen: set[str] = set()
+        walk = Walk("N", "M", 24, both_ends=True)
+        _, inserts = await walk_and_capture(
+            client, s, walk, "2619", "IN_STORE", seen, ["Milwaukee"])
+        assert seen == {str(i) for i in range(30)}  # nothing left behind the stale count
+        assert inserts == 30
+        assert walk.truncated is False              # covered 30 ≥ denom 24
+
+
+# ---------------------------------------------------------------- full-walk hours
+
+class TestFullShelfHours:
+    """04:00 and 12:00 ET walk the whole shelf; other runs take a slice."""
+
+    def _at(self, hour_et):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime(2026, 8, 20, hour_et, 30, tzinfo=ZoneInfo("America/New_York"))
+
+    def test_designated_hours_walk_everything(self, browse_settings):
+        browse_settings.browse_full_shelf_hours_et = "4,12"
+        browse_settings.browse_shelf_fraction = 0.5
+        assert effective_shelf_fraction(browse_settings, self._at(4)) == 1.0
+        assert effective_shelf_fraction(browse_settings, self._at(12)) == 1.0
+
+    def test_other_hours_take_the_configured_slice(self, browse_settings):
+        browse_settings.browse_full_shelf_hours_et = "4,12"
+        browse_settings.browse_shelf_fraction = 0.5
+        for h in (0, 3, 8, 16, 20):
+            assert effective_shelf_fraction(browse_settings, self._at(h)) == 0.5
+
+    def test_hour_is_eastern_not_the_machine_clock(self, browse_settings):
+        """A UTC 08:00 instant is 04:00 Eastern — the run that must walk fully."""
+        from datetime import datetime, timezone
+        browse_settings.browse_full_shelf_hours_et = "4"
+        browse_settings.browse_shelf_fraction = 0.5
+        utc_0800 = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+        assert effective_shelf_fraction(browse_settings, utc_0800) == 1.0
+
+    def test_empty_setting_disables_full_walks(self, browse_settings):
+        browse_settings.browse_full_shelf_hours_et = ""
+        browse_settings.browse_shelf_fraction = 0.5
+        assert effective_shelf_fraction(browse_settings, self._at(4)) == 0.5
+
+    def test_malformed_hours_are_ignored_not_fatal(self, browse_settings):
+        browse_settings.browse_full_shelf_hours_et = "4, ,x,99,12"
+        assert full_shelf_hours(browse_settings) == {4, 12}
+
+    def test_explicit_fraction_overrides_the_setting(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.5
+        walks = [Walk(f"n{i}", f"C{i:02d}", 5) for i in range(10)]
+        picked, skipped = rotate_shelf_walks(walks, {}, "2619", "zv", browse_settings, 1.0)
+        assert len(picked) == 10 and skipped == 0
+
+
+# ---------------------------------------------------------------- shelf rotation
+
+class TestShelfRotation:
+    """The shelf tier walks a slice per run instead of every category every run."""
+
+    def _walks(self, n):
+        return [Walk(f"nav{i}", f"Cat{i:02d}", 5) for i in range(n)]
+
+    def test_half_the_categories_are_walked(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.5
+        picked, skipped = rotate_shelf_walks(self._walks(10), {}, "2619", "zv", browse_settings)
+        assert len(picked) == 5
+        assert skipped == 5
+
+    def test_consecutive_runs_cover_the_other_half(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.5
+        cursors = {}
+        walks = self._walks(10)
+        first, _ = rotate_shelf_walks(walks, cursors, "2619", "zv", browse_settings)
+        second, _ = rotate_shelf_walks(walks, cursors, "2619", "zv", browse_settings)
+        # Two runs see every category exactly once between them.
+        assert {w.label for w in first} | {w.label for w in second} == {w.label for w in walks}
+        assert not ({w.label for w in first} & {w.label for w in second})
+
+    def test_cursor_wraps_around(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.5
+        cursors = {}
+        walks = self._walks(10)
+        seen = []
+        for _ in range(4):
+            picked, _ = rotate_shelf_walks(walks, cursors, "2619", "zv", browse_settings)
+            seen.append({w.label for w in picked})
+        assert seen[0] == seen[2] and seen[1] == seen[3]  # cycle length 2
+
+    def test_fraction_of_one_walks_everything(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 1.0
+        walks = self._walks(10)
+        picked, skipped = rotate_shelf_walks(walks, {}, "2619", "zv", browse_settings)
+        assert picked == walks
+        assert skipped == 0
+
+    def test_a_single_walk_is_never_skipped(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.1
+        walks = self._walks(1)
+        picked, skipped = rotate_shelf_walks(walks, {}, "2619", "zv", browse_settings)
+        assert picked == walks and skipped == 0
+
+    def test_at_least_one_walk_runs_however_small_the_fraction(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.01
+        picked, _ = rotate_shelf_walks(self._walks(10), {}, "2619", "zv", browse_settings)
+        assert len(picked) == 1
+
+    def test_stores_rotate_independently(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.5
+        cursors = {}
+        walks = self._walks(10)
+        rotate_shelf_walks(walks, cursors, "2619", "zv", browse_settings)
+        assert "shelf|2619|zv" in cursors
+        assert "shelf|8452|zv" not in cursors
+
+    def test_order_is_stable_so_the_cursor_keeps_its_meaning(self, browse_settings):
+        browse_settings.browse_shelf_fraction = 0.5
+        walks = self._walks(10)
+        a, _ = rotate_shelf_walks(list(reversed(walks)), {}, "2619", "zv", browse_settings)
+        b, _ = rotate_shelf_walks(walks, {}, "2619", "zv", browse_settings)
+        assert [w.label for w in a] == [w.label for w in b]
+
+
+# ---------------------------------------------------------------- circuit breaker
+
+class TestCircuitBreakerAbort:
+    async def test_circuit_opening_mid_walk_ends_the_run(self, browse_settings, fresh_db):
+        """It used to escape run_browse uncaught, killing the process mid-run."""
+        from hd.db import base
+        from hd.http.client import CircuitOpenError
+
+        await base.init_db(browse_settings)
+
+        class ExplodingClient(FakeClient):
+            @property
+            def is_throttled(self):
+                return False
+
+            async def post_graphql(self, variables):
+                self._count += 1
+                if self._count > 1:
+                    raise CircuitOpenError("Circuit breaker open: 10 failures")
+                # A full page, so the walk tries to fetch the next one.
+                return make_page(
+                    [make_product("111"), make_product("222")], 100
+                )
+
+        summary = await run_browse(browse_settings, client=ExplodingClient(None))
+
+        # No traceback: the run reports itself as aborted and stops. The
+        # per-walk exception handler must not swallow this and walk on.
+        assert summary.aborted is True
+
+    async def test_circuit_opening_during_a_facet_read_ends_the_run(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.http.client import CircuitOpenError
+
+        await base.init_db(browse_settings)
+
+        class ExplodingClient(FakeClient):
+            @property
+            def is_throttled(self):
+                return False
+
+            async def post_graphql(self, variables):
+                self._count += 1
+                if self._count > 1:
+                    raise CircuitOpenError("open")
+                return make_page([make_product("111")], 1)
+
+        summary = await run_browse(browse_settings, client=ExplodingClient(None))
+        assert summary.aborted is True
+
+    async def test_cursors_survive_an_open_circuit(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.http.client import CircuitOpenError
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+
+        class ExplodingClient(FakeClient):
+            @property
+            def is_throttled(self):
+                return False
+
+            async def post_graphql(self, variables):
+                self._count += 1
+                if self._count > 1:
+                    raise CircuitOpenError("open")
+                return make_page([], 4, dims=[cat_dim(("Garage", "gar", 2))])
+
+        await run_browse(browse_settings, client=ExplodingClient(None))
+        # The finally block still ran, so progress is not lost.
+        assert rotation.load_cursors(browse_settings.browse_cursor_path) is not None
+
+
+# ---------------------------------------------------------------- facet-read reuse
+
+class TestFacetReadPriming:
+    """The facet read doubles as page 0, so planning a walk costs no extra request."""
+
+    async def test_facet_read_is_reused_as_page_zero(self, browse_settings, fresh_db):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        seen = []
+
+        def router(v):
+            seen.append((v["navParam"], v["startIndex"]))
+            return make_page([make_product("111")], 1)
+
+        client = FakeClient(router)
+        walks = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzv", "Milwaukee", "2619", "IN_STORE",
+        )
+        assert len(walks) == 1
+        assert walks[0].primed is not None
+        planning_requests = client.request_count
+        assert planning_requests == 1
+
+        upserts, _ = await walk_and_capture(
+            client, browse_settings, walks[0], "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        # A single-page walk costs exactly one request in total, not two.
+        assert client.request_count == planning_requests
+        assert upserts == 1
+
+    async def test_primed_page_is_consumed_only_once(self, browse_settings, fresh_db):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+
+        def router(v):
+            return make_page([make_product("111")], 1)
+
+        client = FakeClient(router)
+        walks = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzv", "Milwaukee", "2619", "IN_STORE",
+        )
+        walk = walks[0]
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert walk.primed is None  # a second pass must re-fetch, not serve a stale page
+
+        before = client.request_count
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert client.request_count > before
+
+    async def test_split_children_are_not_primed_with_the_parent_page(self, browse_settings):
+        """A child walks a different navParam, so the parent's page is not its page 0."""
+        def router(v):
+            if v["navParam"] == "N-5yc1vZzv":
+                return make_page([], 10, dims=[cat_dim(("Small", "sm", 3))])
+            return make_page([make_product("999")], 3)
+
+        client = FakeClient(router)
+        walks = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzv", "Milwaukee", "2619", "IN_STORE",
+        )
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZsm"]
+        # The child was derived from the parent's dimensions without a facet
+        # read of its own, so it has no page to carry forward — and must not
+        # inherit the parent's, which covers a different navParam.
+        assert walks[0].primed is None
+        assert client.request_count == 1
+
+    async def test_failed_facet_read_primes_nothing(self, browse_settings):
+        from hd.http.client import failure_response
+
+        client = FakeClient(lambda v: failure_response("http_429"))
+        walks = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzv", "Milwaukee", "2619", "IN_STORE",
+        )
+        assert walks == []
+
+
+# ---------------------------------------------------------------- run_browse integration
+
+def full_router(store="2619"):
+    """Shelf: 3 items at brand nav. Network: Garage/Plumbing/Tools categories, 2 per run."""
+    shelf_pages = {
+        0: make_page([make_product("111"), make_product("222")], 3),
+        2: make_page([make_product("333", clearance={"value": 10.0, "dollarOff": 10.0, "percentageOff": 50})], 3),
+    }
+    net_pages = {
+        "N-5yc1vZzvZgar": make_page([make_product("111"), make_product("444")], 2),
+        "N-5yc1vZzvZbqew": make_page([make_product("555")], 1),
+        "N-5yc1vZzvZc1xy": make_page([make_product("666")], 1),
+    }
+
+    def router(v):
+        nav, sf, idx = v["navParam"], v["storefilter"], v["startIndex"]
+        # A facet read is now an ordinary page-0 request — the response serves
+        # both purposes — so routing is by navParam and index, not page size.
+        if sf == "IN_STORE":
+            return shelf_pages[idx]
+        if nav == "N-5yc1vZzv":  # brand root: the category facet read
+            return make_page([], 4, dims=[cat_dim(
+                ("Garage", "gar", 2), ("Plumbing", "bqew", 1), ("Tools", "c1xy", 1),
+            )])
+        return net_pages[nav]
+
+    return router
+
+
+class TestRunBrowse:
+    async def test_two_tier_run_and_cursor_rotation(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import Product, StoreSnapshot
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+
+        summary = await run_browse(
+            browse_settings, client=FakeClient(full_router()),
+        )
+        # shelf: 111,222,333; network run 1 walks Garage+Plumbing (sorted): new 444,555
+        assert summary.snapshots == 5
+        assert summary.aborted is False
+
+        async with base.get_session(browse_settings) as session:
+            prods = {p.item_id for p in (await session.execute(select(Product))).scalars().all()}
+            snaps = [s.item_id for s in (await session.execute(select(StoreSnapshot))).scalars().all()]
+        assert prods == {"111", "222", "333", "444", "555"}
+        assert len(snaps) == 5  # 111 deduped between tiers
+
+        cursors = rotation.load_cursors(browse_settings.browse_cursor_path)
+        assert cursors["network|2619|zv"] == 2
+
+        # Second run: network picks Tools, wraps to Garage → 666 is new
+        summary2 = await run_browse(
+            browse_settings, client=FakeClient(full_router()),
+        )
+        assert summary2.aborted is False
+        async with base.get_session(browse_settings) as session:
+            prods2 = {p.item_id for p in (await session.execute(select(Product))).scalars().all()}
+        assert "666" in prods2
+        cursors2 = rotation.load_cursors(browse_settings.browse_cursor_path)
+        assert cursors2["network|2619|zv"] == 1  # advanced by 2, wrapped mod 3
+
+    async def test_no_brand_tokens_is_safe(self, browse_settings, fresh_db):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        browse_settings.brand_tokens = ""
+        summary = await run_browse(browse_settings, client=FakeClient(lambda v: make_page([], 0)))
+        assert summary.snapshots == 0
+
+
+# ---------------------------------------------------------------- shelf category walks
+
+class TestShelfCategoryWalks:
+    """Store-wide category nodes (the grill wall): every brand captured,
+    walked on every shelf pass, outside rotation."""
+
+    def test_config_parses_label_token_pairs(self):
+        s = Settings(shelf_category_walks="Grills:bxaz, Outdoor-Cookers:cd1m,junk,:x,y:")
+        assert s.shelf_category_walk_list == [("Grills", "bxaz"), ("Outdoor-Cookers", "cd1m")]
+
+    async def test_all_brands_walk_captures_every_brand(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import Product
+
+        await base.init_db(browse_settings)
+        page = make_page(
+            [make_product("501", brand="Weber"), make_product("502", brand="Traeger")], 2
+        )
+
+        def router(v):
+            return page if v["startIndex"] == 0 else make_page([], 2)
+
+        client = FakeClient(router)
+        walk = Walk("N-5yc1vZbxaz", "Grills", 2, all_brands=True)
+        upserts, inserts = await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert upserts == 2 and inserts == 2
+
+        async with base.get_session(browse_settings) as session:
+            brands = {p.brand for p in (await session.execute(select(Product))).scalars()}
+        assert brands == {"Weber", "Traeger"}
+
+    async def test_shelf_tier_runs_category_walks_after_brand_walks(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.db.models import Product
+
+        await base.init_db(browse_settings)
+        browse_settings.shelf_category_walks = "Grills:bxaz"
+
+        def router(v):
+            nav, start = v["navParam"], v["startIndex"]
+            if nav == "N-5yc1vZzv":
+                return make_page([make_product("111")], 1) if start == 0 else make_page([], 1)
+            if nav == "N-5yc1vZbxaz":
+                if start == 0:
+                    return make_page(
+                        [make_product("501", brand="Weber"),
+                         make_product("502", brand="Traeger")], 2
+                    )
+                return make_page([], 2)
+            raise AssertionError(f"unexpected nav {nav}")
+
+        client = FakeClient(router)
+        summary = await run_browse(browse_settings, client=client, tiers=("shelf",))
+
+        assert summary.walks == 2
+        assert summary.products == 3 and summary.snapshots == 3
+        async with base.get_session(browse_settings) as session:
+            brands = {p.brand for p in (await session.execute(select(Product))).scalars()}
+        assert brands == {"Milwaukee", "Weber", "Traeger"}
+
+
+# ---------------------------------------------------------------- coverage records
+
+from hd.pipeline.browse import walk_status
+
+
+class TestWalkStatus:
+    """Coverage is judged on what was seen, never on how the walk ended."""
+
+    def test_every_claimed_item_seen_is_complete(self):
+        w = Walk("n", "l", 3)
+        w.observed_ids, w.live_total = 3, 3
+        assert walk_status(w) == "complete"
+
+    def test_shortfall_against_live_total_is_truncated(self):
+        w = Walk("n", "l", 3)
+        w.observed_ids, w.live_total = 2, 3
+        assert walk_status(w) == "truncated"
+
+    def test_planner_truncation_survives_full_coverage_arithmetic(self):
+        w = Walk("n", "l", 3, truncated=True)
+        w.observed_ids, w.live_total = 3, 3
+        assert walk_status(w) == "truncated"
+
+    def test_cut_walk_with_unknown_denominator_is_truncated(self):
+        w = Walk("n", "l", 0)
+        w.observed_ids, w.live_total, w.cut = 5, None, True
+        assert walk_status(w) == "truncated"
+
+    def test_nothing_usable_at_all_is_failed(self):
+        w = Walk("n", "l", 3)
+        assert walk_status(w) == "failed"
+
+    def test_node_that_shrank_mid_walk_is_still_complete(self):
+        w = Walk("n", "l", 5)
+        w.observed_ids, w.live_total = 4, 3
+        assert walk_status(w) == "complete"
+
+    def test_empty_node_fully_seen_is_complete(self):
+        w = Walk("n", "l", 2)
+        w.observed_ids, w.live_total = 0, 0
+        assert walk_status(w) == "complete"
+
+
+class TestCoverageRecords:
+    async def test_run_writes_a_run_row_and_a_row_per_walk(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import ScanRun, WalkCoverage
+
+        await base.init_db(browse_settings)
+        # The fixture reads the ambient .env; a configured shelf-category walk
+        # would add extra IN_STORE rows and muddy the per-walk assertions.
+        browse_settings.shelf_category_walks = ""
+        summary = await run_browse(browse_settings, client=FakeClient(full_router()))
+        assert summary.aborted is False
+
+        async with base.get_session(browse_settings) as session:
+            runs = (await session.execute(select(ScanRun))).scalars().all()
+            walks = (await session.execute(select(WalkCoverage))).scalars().all()
+
+        assert len(runs) == 1
+        run = runs[0]
+        assert run.status == "complete"
+        assert run.ended is not None and run.ended >= run.started
+        assert run.walks == summary.walks == len(walks)
+        assert run.snapshots == summary.snapshots
+
+        assert all(w.run_id == run.id for w in walks)
+        assert all(w.status == "complete" for w in walks)
+        by_tier = {}
+        for w in walks:
+            by_tier.setdefault(w.tier, []).append(w)
+        # shelf walk saw all 3; network walked Garage (2) + Plumbing (1)
+        assert [w.items_observed for w in by_tier["IN_STORE"]] == [3]
+        assert sorted(w.items_observed for w in by_tier["ALL"]) == [1, 2]
+        assert all(w.items_expected == w.items_observed for w in walks)
+
+    async def test_unusable_first_page_records_a_failed_walk(self, browse_settings, fresh_db):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        client = FakeClient(lambda v: {"data": {}})
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 3)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert walk_status(walk) == "failed"
+
+    async def test_short_page_below_claimed_total_records_truncated(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        # Page 0 claims 5 products but delivers one short page of 1.
+        client = FakeClient(lambda v: make_page([make_product("111")], 5))
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 5)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert walk_status(walk) == "truncated"
+        assert walk.observed_ids == 1 and walk.live_total == 5
+
+    async def test_mid_set_short_page_does_not_end_the_walk(
+        self, browse_settings, fresh_db
+    ):
+        """A short page mid-set is not end-of-results — keep paging.
+
+        Home Depot serves a short page in the middle of a set: Power Tools/Saws
+        returned 23 of 24 on page 2 while its own searchReport said 299, and the
+        walk stopped at 71 with 220 items left unobserved. Coverage, not page
+        length, decides when a walk is done.
+        """
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        pages = {
+            0: [make_product("a"), make_product("b")],
+            2: [make_product("c")],                              # short, MID-set
+            4: [make_product("d")],                              # short, completes
+        }
+
+        def router(v):
+            return make_page(pages.get(v.get("startIndex", 0), []), 4)
+
+        client = FakeClient(router)
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 4)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert walk.observed_ids == 4 and walk.live_total == 4
+        assert walk_status(walk) == "complete"
+        assert client.request_count == 3   # the old rule stopped after 2
+
+    async def test_short_page_at_full_coverage_still_ends_the_walk(
+        self, browse_settings, fresh_db
+    ):
+        """The ordinary case is unchanged: an honest node stops where it did."""
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        pages = {0: [make_product("a"), make_product("b")], 2: [make_product("c")]}
+
+        def router(v):
+            return make_page(pages.get(v.get("startIndex", 0), []), 3)
+
+        client = FakeClient(router)
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 3)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert walk_status(walk) == "complete"
+        assert client.request_count == 2   # no extra page bought
+
+    async def test_overstated_total_stops_after_pages_with_nothing_new(
+        self, browse_settings, fresh_db
+    ):
+        """An inflated totalProducts costs a few pages, never an unbounded walk."""
+        from hd.db import base
+
+        settings = browse_settings.model_copy(
+            update={"api_max_start_index": 20, "short_page_confirm_pages": 2}
+        )
+        await base.init_db(settings)
+
+        def router(v):
+            if v.get("startIndex", 0) == 0:
+                return make_page([make_product("a"), make_product("b")], 99)
+            return make_page([make_product("a")], 99)   # short, never anything new
+
+        client = FakeClient(router)
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 99)
+        await walk_and_capture(
+            client, settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert walk_status(walk) == "truncated"
+        # page 0, then 3 pages with nothing new (stale 1, 2, 3 > confirm 2).
+        assert client.request_count == 4
+        assert client.request_count < settings.api_max_start_index // settings.page_size + 1
+
+    async def test_empty_page_always_ends_the_walk(self, browse_settings, fresh_db):
+        """An empty page is the hard terminator, whatever the claimed total."""
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+
+        def router(v):
+            if v.get("startIndex", 0) == 0:
+                return make_page([make_product("a"), make_product("b")], 99)
+            return make_page([], 99)
+
+        client = FakeClient(router)
+        walk = Walk("N-5yc1vZzv", "Milwaukee", 99)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "IN_STORE", set(), ["Milwaukee"],
+        )
+        assert client.request_count == 2
+        assert walk_status(walk) == "truncated"
+
+    async def test_throttled_run_is_recorded_aborted(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import ScanRun, WalkCoverage
+
+        await base.init_db(browse_settings)
+
+        class ThrottledClient(FakeClient):
+            @property
+            def is_throttled(self):
+                return True
+
+        summary = await run_browse(browse_settings, client=ThrottledClient(full_router()))
+        assert summary.aborted is True
+
+        async with base.get_session(browse_settings) as session:
+            runs = (await session.execute(select(ScanRun))).scalars().all()
+            walks = (await session.execute(select(WalkCoverage))).scalars().all()
+        assert len(runs) == 1 and runs[0].status == "aborted"
+        assert walks == []  # nothing attempted, nothing claimed
+
+    async def test_a_throttled_run_does_not_spend_a_brands_turn(
+        self, browse_settings, fresh_db, tmp_path
+    ):
+        """End to end: walling at request one must leave the lead where it is.
+
+        The rotation cursor used to move when the order was merely READ, so a
+        run that walked nothing still handed the lead on. With two brands that
+        inverts the parity of every later run, and the brand that was owed the
+        lead can go a whole day without it.
+        """
+        from hd.db import base
+        from hd import rotation
+        from hd.pipeline.browse import brand_order_cursor_key
+
+        settings = browse_settings.model_copy(
+            update={
+                "brands": "Milwaukee,DEWALT",
+                "brand_tokens": "Milwaukee:zv,DEWALT:4j2",
+            }
+        )
+        await base.init_db(settings)
+
+        class ThrottledClient(FakeClient):
+            @property
+            def is_throttled(self):
+                return True
+
+        await run_browse(settings, client=ThrottledClient(full_router()))
+
+        cursors = rotation.load_cursors(settings.browse_cursor_path)
+        assert cursors.get(brand_order_cursor_key("2619"), 0) == 0
+        assert cursors.get(brand_order_cursor_key("2619", "shelf"), 0) == 0
+
+    async def test_a_run_that_walks_hands_the_lead_on(
+        self, browse_settings, fresh_db
+    ):
+        """The counterpart: a run that does real work must still rotate."""
+        from hd.db import base
+        from hd import rotation
+        from hd.pipeline.browse import brand_order_cursor_key
+
+        settings = browse_settings.model_copy(
+            update={
+                "brands": "Milwaukee,DEWALT",
+                "brand_tokens": "Milwaukee:zv,DEWALT:4j2",
+            }
+        )
+        await base.init_db(settings)
+
+        base_router = full_router()
+
+        def router(v):
+            # The second brand has no fixtures; an empty page is a legitimate
+            # answer and keeps this test about the cursor, not the catalogue.
+            try:
+                return base_router(v)
+            except KeyError:
+                return make_page([], 0)
+
+        summary = await run_browse(settings, client=FakeClient(router))
+        assert summary.walks > 0
+
+        cursors = rotation.load_cursors(settings.browse_cursor_path)
+        assert cursors.get(brand_order_cursor_key("2619")) == 1
+        assert cursors.get(brand_order_cursor_key("2619", "shelf")) == 1
+
+
+class TestWalkAdmission:
+    """Budget-aware admission: never start a walk the run cannot finish.
+
+    A walk cut in flight is recorded "truncated" and can never ground an
+    absence claim; a walk never attempted writes no coverage row at all. So
+    deferring is strictly better than overreaching, and these tests pin the
+    arithmetic that decides which happens.
+    """
+
+    class _Spent:
+        """Client stand-in — only request_count reaches admits()."""
+
+        def __init__(self, n: int) -> None:
+            self._n = n
+
+        @property
+        def request_count(self) -> int:
+            return self._n
+
+    # ---- the estimate ---------------------------------------------------
+
+    def test_estimate_is_bounded_by_what_the_walk_can_reach(self, browse_settings):
+        # page_size=2, api_max_start_index=4 → reachable cap 6. A 100-item node
+        # cannot be paged past that ceiling, so it costs 3 pages + 1 facet read,
+        # NOT 50 pages. Getting this wrong would defer every large walk forever.
+        assert reachable_cap(browse_settings) == 6
+        assert walk_cost_estimate(Walk("n", "l", 100), browse_settings) == 4
+
+    def test_estimate_of_a_small_node_counts_only_its_own_pages(self, browse_settings):
+        assert walk_cost_estimate(Walk("n", "l", 4), browse_settings) == 3
+
+    def test_both_ends_estimate_assumes_both_directions_run_full(self, browse_settings):
+        """Both-ends must be sized on the worst case, which happens routinely.
+
+        ASC always runs to the API ceiling; DESC stops early ONLY when the
+        union reaches the live total, so every coverage shortfall costs a full
+        second direction. Production logs show that shortfall firing on about
+        half of all both-ends walks, so it is the normal case, not the tail.
+        """
+        browse_settings.both_ends_min_overlap_pages = 1
+        per_direction = browse_settings.api_max_start_index // browse_settings.page_size + 1
+        assert per_direction == 3
+        # 2 directions x 3 pages, + 1 facet read — regardless of node size.
+        assert walk_cost_estimate(
+            Walk("n", "l", 8, both_ends=True), browse_settings) == 7
+        assert walk_cost_estimate(
+            Walk("n", "l", 999, both_ends=True), browse_settings) == 7
+
+    def test_both_ends_never_takes_the_primed_discount(self, browse_settings):
+        """_page_direction reuses a primed page only when order_by is None.
+
+        Both-ends always passes a price ordering, so the primed page is never
+        consumed and discounting for it under-estimates every both-ends walk.
+        """
+        primed = Walk("n", "l", 999, both_ends=True, primed={"any": "page"})
+        plain = Walk("n", "l", 999, both_ends=True)
+        assert walk_cost_estimate(primed, browse_settings) == walk_cost_estimate(
+            plain, browse_settings)
+
+    def test_a_primed_walk_does_not_pay_for_a_facet_read(self, browse_settings):
+        primed = Walk("n", "l", 4, primed={"any": "page"})
+        assert walk_cost_estimate(primed, browse_settings) == 2
+
+    # ---- the ceiling ----------------------------------------------------
+
+    def test_ceiling_falls_back_to_the_request_budget_when_unset(self, browse_settings):
+        browse_settings.browse_walk_admission_ceiling = 0
+        browse_settings.browse_request_budget = 280
+        assert admission_ceiling(browse_settings) == 280
+
+    def test_explicit_ceiling_overrides_the_request_budget(self, browse_settings):
+        browse_settings.browse_walk_admission_ceiling = 237
+        browse_settings.browse_request_budget = 280
+        assert admission_ceiling(browse_settings) == 237
+
+    # ---- the decision ---------------------------------------------------
+
+    def test_admits_a_walk_that_fits(self, browse_settings):
+        browse_settings.browse_walk_admission_ceiling = 20
+        walk = Walk("n", "l", 4)                      # costs 3
+        assert admits(self._Spent(10), browse_settings, walk) is True
+
+    def test_defers_a_walk_that_would_overrun_the_ceiling(self, browse_settings):
+        browse_settings.browse_walk_admission_ceiling = 20
+        walk = Walk("n", "l", 4)                      # costs 3, only 2 left
+        assert admits(self._Spent(18), browse_settings, walk) is False
+
+    def test_admits_exactly_at_the_boundary(self, browse_settings):
+        browse_settings.browse_walk_admission_ceiling = 20
+        walk = Walk("n", "l", 4)                      # costs 3, exactly 3 left
+        assert admits(self._Spent(17), browse_settings, walk) is True
+
+    # ---- the starvation guard -------------------------------------------
+
+    @staticmethod
+    def _oversized(settings) -> Walk:
+        """A walk that cannot fit in a whole run: cost 7 against a ceiling of 6."""
+        settings.both_ends_min_overlap_pages = 1
+        settings.browse_walk_admission_ceiling = 6
+        walk = Walk("n", "l", 999, both_ends=True)   # 5 pages + 1 overlap + 1 facet
+        assert walk_cost_estimate(walk, settings) == 7
+        return walk
+
+    def test_oversized_walk_is_admitted_on_a_fresh_run(self, browse_settings):
+        # A walk costing more than the whole ceiling can never satisfy the
+        # ordinary rule. Deferring it every run would mean never walking it,
+        # so a run still holding half its ceiling takes it and truncates once.
+        walk = self._oversized(browse_settings)
+        assert admits(self._Spent(0), browse_settings, walk) is True
+
+    def test_oversized_walk_is_deferred_once_the_run_is_mostly_spent(
+        self, browse_settings
+    ):
+        # Same walk, but only 2 of 6 left — a later run gives it a deeper pass,
+        # so it waits rather than burning the tail of this one for a stub.
+        walk = self._oversized(browse_settings)
+        assert admits(self._Spent(4), browse_settings, walk) is False
+
+    # ---- the property the whole feature rests on ----------------------
+
+    @staticmethod
+    def _honest_router(total):
+        """Serves exactly `total` items, short page at the end — an accurate node."""
+        def router(v):
+            idx, ps = v["startIndex"], v["pageSize"]
+            items = [make_product(str(i)) for i in range(idx, min(idx + ps, total))]
+            return make_page(items, total)
+        return router
+
+    @staticmethod
+    def _stalling_router(total):
+        """Full pages of the SAME two items: distinct coverage never reaches
+        `total`, so a both-ends union falls short and DESC runs to the ceiling.
+        This is the production shape — 6 of 12 both-ends walks on record."""
+        def router(v):
+            return make_page([make_product("111"), make_product("222")], total)
+        return router
+
+    @pytest.mark.parametrize("total,primed", [
+        (1, False), (5, False), (6, False), (7, False), (100, False), (5, True),
+    ])
+    async def test_estimate_covers_a_single_walk_over_an_accurate_node(
+        self, browse_settings, fresh_db, total, primed
+    ):
+        """The load-bearing property, and nothing asserted it before.
+
+        Every other estimate test hard-codes an arithmetic result, so all of
+        them passed while both-ends walks were under-estimated by a full
+        direction. Over-estimating merely defers a walk to the next run;
+        under-estimating starts one that cannot finish — the exact failure
+        admission control exists to prevent.
+        """
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        client = FakeClient(self._honest_router(total))
+        walk = Walk("N-5yc1vZzv", "M", total)
+        if primed:
+            walk.primed = self._honest_router(total)({"startIndex": 0, "pageSize": 2})
+
+        est = walk_cost_estimate(walk, browse_settings)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "ALL", set(), ["Milwaukee"],
+        )
+        assert client.request_count <= est, (
+            f"estimate {est} under-shot actual {client.request_count} (total={total})"
+        )
+
+    @pytest.mark.parametrize("total", [7, 8, 999])
+    async def test_estimate_covers_a_both_ends_walk_whose_union_falls_short(
+        self, browse_settings, fresh_db, total
+    ):
+        """The case that was broken: DESC runs full whenever the union is short."""
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        client = FakeClient(self._stalling_router(total))
+        walk = Walk("N-5yc1vZzv", "M", total, both_ends=True)
+
+        est = walk_cost_estimate(walk, browse_settings)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "ALL", set(), ["Milwaukee"],
+        )
+        assert walk.truncated is True          # the union did fall short
+        assert client.request_count <= est, (
+            f"estimate {est} under-shot actual {client.request_count} (total={total})"
+        )
+
+    @pytest.mark.parametrize("both_ends", [False, True])
+    async def test_no_walk_can_exceed_the_structural_api_ceiling(
+        self, browse_settings, fresh_db, both_ends
+    ):
+        """The bound that always holds, even for a node that lies about itself.
+
+        A node UNDERSTATING its total self-extends past the estimate (see
+        walk_cost_estimate's KNOWN LIMIT). It can never escape this bound
+        though, because _page_direction stops at startIndex > the API ceiling —
+        so the overshoot the admission ceiling must absorb is bounded, not open.
+        """
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        client = FakeClient(self._stalling_router(1))     # claims 1, serves forever
+        walk = Walk("N-5yc1vZzv", "M", 1, both_ends=both_ends)
+        await walk_and_capture(
+            client, browse_settings, walk, "2619", "ALL", set(), ["Milwaukee"],
+        )
+        per_direction = (
+            browse_settings.api_max_start_index // browse_settings.page_size + 1
+        )
+        bound = per_direction * (2 if both_ends else 1)
+        assert client.request_count <= bound
+
+    # ---- behaviour in a real run ----------------------------------------
+
+    async def test_deferral_leaves_the_cursor_on_the_unwalked_category(
+        self, browse_settings, fresh_db
+    ):
+        """A budget deferral must not rotate past the category it skipped.
+
+        The unconstrained run walks Garage+Plumbing and leaves the cursor at 2.
+        With a ceiling that only affords Garage, Plumbing must be deferred AND
+        still be the head of the next run's slice — otherwise a run cut short
+        silently drops a slice of the catalogue until the cursor wraps.
+        """
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+        # Root facet read (1) + Garage (3 pages, the router keeps returning full
+        # pages to the ceiling) = 4, past the ceiling. Plumbing is then dropped
+        # WITHOUT even paying its facet read — planning is gated too, or a run
+        # keeps spending quota on nodes it has already decided not to walk.
+        browse_settings.browse_walk_admission_ceiling = 3
+
+        summary = await run_browse(
+            browse_settings, client=FakeClient(full_router()), tiers=("network",),
+        )
+
+        # Plumbing is dropped at PLANNING time — no walk was ever built for
+        # it, and a category resolves to one or many walks — so it counts as a
+        # deferred CATEGORY. Counting it as a deferred walk mixed two units in
+        # the number the admission-ceiling gate is judged on.
+        assert summary.deferred_categories == 1
+        assert summary.deferred_walks == 0       # no planned walk was refused
+        assert summary.skipped_walks == 0        # rotation deferral is a different thing
+        assert summary.truncated_walks == []     # nothing was started and cut
+
+        cursors = rotation.load_cursors(browse_settings.browse_cursor_path)
+        assert cursors["network|2619|zv"] == 1   # Garage only; Plumbing still next
+
+        # The honesty property: a walk never attempted claims no coverage.
+        async with base.get_session(browse_settings) as session:
+            labels = [w.label for w in
+                      (await session.execute(select(WalkCoverage))).scalars().all()]
+        assert any("Garage" in l for l in labels)
+        assert not any("Plumbing" in l for l in labels)
+
+    async def test_generous_ceiling_walks_everything_as_before(
+        self, browse_settings, fresh_db
+    ):
+        """Admission control must be inert when the run can afford its work."""
+        from hd.db import base
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+        browse_settings.browse_walk_admission_ceiling = 500
+
+        summary = await run_browse(
+            browse_settings, client=FakeClient(full_router()), tiers=("network",),
+        )
+        assert summary.deferred_walks == 0
+        cursors = rotation.load_cursors(browse_settings.browse_cursor_path)
+        assert cursors["network|2619|zv"] == 2   # unchanged from the baseline test
+
+    async def test_a_run_stays_within_its_admission_ceiling(
+        self, browse_settings, fresh_db
+    ):
+        """The run-level invariant the feature exists to deliver.
+
+        Asserting only that a WALK was deferred misses the point: planning
+        reads (fetch_facets, and the facet reads inside resolve_walks) spend
+        quota too, so a run can be gated at the walk level and still sail past
+        its ceiling on planning alone.
+        """
+        from hd.db import base
+
+        await base.init_db(browse_settings)
+        for ceiling in (2, 3, 5, 8, 13):
+            browse_settings.browse_walk_admission_ceiling = ceiling
+            client = FakeClient(full_router())
+            await run_browse(browse_settings, client=client, tiers=("network",))
+            # One walk may overshoot (it is admitted, then paged); the run must
+            # not keep STARTING work past the ceiling. Bound the overshoot by a
+            # single walk's worst case rather than leaving it open-ended.
+            per_direction = (
+                browse_settings.api_max_start_index // browse_settings.page_size + 1
+            )
+            assert client.request_count <= ceiling + per_direction, (
+                f"ceiling {ceiling}: run spent {client.request_count}"
+            )
+
+
+class TestShelfCursorRewind:
+    """A shelf run that stops early must not rotate past what it never walked.
+
+    The network tier already guarantees this and says why in a comment; the
+    shelf tier advanced its cursor over what rotation SELECTED, so anything
+    picked-but-not-walked was skipped until the cursor wrapped. Unreachable
+    while the shelf resolves to a single both-ends walk — which is precisely
+    the condition `hd doctor`'s walk-headroom check now watches for.
+    """
+
+    @staticmethod
+    def _router():
+        """Four shelf categories, one item each, so rotation has a real slice."""
+        cats = {"a": "aaa", "b": "bbb", "c": "ccc", "d": "ddd"}
+
+        def router(v):
+            nav = v["navParam"]
+            if nav == "N-5yc1vZzv":
+                return make_page([], 40, dims=[cat_dim(
+                    ("A", "a", 1), ("B", "b", 1), ("C", "c", 1), ("D", "d", 1),
+                )])
+            return make_page([make_product(cats[nav.rsplit("Z", 1)[-1]])], 1)
+
+        return router
+
+    @staticmethod
+    def _settings(s, ceiling):
+        s.shelf_category_walks = ""      # not part of this scenario
+        s.browse_shelf_fraction = 0.5     # must be < 1.0 or rotation returns early
+        s.browse_full_shelf_hours_et = ""  # or the wall clock forces 1.0 at 4/12 ET
+        s.browse_walk_admission_ceiling = ceiling
+        return s
+
+    async def test_early_stop_rewinds_onto_the_unwalked_pick(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+        # Rotation selects A and B of four. Facet read (1) + walk A (1) = 2 used;
+        # B then estimates 2 against 1 remaining and is deferred.
+        s = self._settings(browse_settings, ceiling=3)
+
+        summary = await run_browse(
+            s, client=FakeClient(self._router()), tiers=("shelf",),
+        )
+        assert summary.deferred_walks == 1
+        assert summary.walks == 1
+
+        cursors = rotation.load_cursors(s.browse_cursor_path)
+        # Rotation had already advanced to 2 over {A,B}. Only A was walked, so
+        # the cursor must be rewound to 1 — B is next, not skipped until wrap.
+        assert cursors["shelf|2619|zv"] == 1
+
+    async def test_full_shelf_hour_never_rewinds_against_an_unsorted_list(
+        self, browse_settings, fresh_db
+    ):
+        """At fraction 1.0 rotation returns early — unsorted, cursor untouched.
+
+        The cursor indexes the LABEL-SORTED order. Rewinding against the
+        unsorted API order would write an index meaning a different category
+        than the one we stopped on, skipping a node the next run should have
+        walked — a regression against the very guarantee the rewind exists for.
+        This path goes live whenever a full-shelf hour fires, and
+        BROWSE_FULL_SHELF_HOURS_ET ships defaulted to "4,12".
+        """
+        from hd.db import base
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+        s = self._settings(browse_settings, ceiling=3)
+        s.browse_shelf_fraction = 1.0            # rotation returns early
+
+        summary = await run_browse(
+            s, client=FakeClient(self._router()), tiers=("shelf",),
+        )
+        assert summary.deferred_walks >= 1       # the run did stop early
+
+        # Rotation never advanced the cursor, so nothing may rewind it either.
+        cursors = rotation.load_cursors(s.browse_cursor_path)
+        assert "shelf|2619|zv" not in cursors or cursors["shelf|2619|zv"] == 0
+
+    @staticmethod
+    def _always_truncates_router():
+        """Category A is over the cap with no facets to split it, so the planner
+        marks it truncated on EVERY run. B, C and D are ordinary one-page nodes."""
+        def router(v):
+            nav = v["navParam"]
+            if nav == "N-5yc1vZzv":
+                return make_page([], 20, dims=[cat_dim(
+                    ("A", "a", 10), ("B", "b", 1), ("C", "c", 1), ("D", "d", 1),
+                )])
+            if nav == "N-5yc1vZzvZa":
+                return make_page([make_product("aaa")], 10)   # no dims -> untruncatable
+            return make_page([make_product({"b": "bbb", "c": "ccc", "d": "ddd"}
+                                           [nav.rsplit("Z", 1)[-1]])], 1)
+        return router
+
+    async def test_a_permanently_truncating_node_does_not_pin_the_cursor(
+        self, browse_settings, fresh_db
+    ):
+        """Rewinding onto a TRUNCATED walk starves every node behind it.
+
+        A deferred walk did no work and wrote no coverage row, so resuming on
+        it is right. A truncated walk is different: it ran, captured what it
+        could, and recorded a truncated row. Some nodes truncate every single
+        time — the in-store shelf's both-ends walk goes short on roughly half
+        its runs — so rewinding onto one pins the cursor there forever and the
+        categories behind it are never walked at all. Rotation must move past
+        it and let it come round again on its own turn.
+        """
+        from hd.db import base
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+        s = self._settings(browse_settings, ceiling=500)   # budget is not the issue
+
+        walked = []
+        for _ in range(2):
+            summary = await run_browse(
+                s, client=FakeClient(self._always_truncates_router()),
+                tiers=("shelf",),
+            )
+            walked.append(list(summary.truncated_walks))
+
+        # A truncates on every run it is picked — that is the premise.
+        assert any("A" in "".join(w) for w in walked)
+
+        # Two runs at fraction 0.5 over four nodes must cover all four. If the
+        # cursor is pinned on A, C and D are never reached.
+        async with base.get_session(s) as session:
+            from hd.db.models import Product
+            seen = {p.item_id for p in
+                    (await session.execute(select(Product))).scalars().all()}
+        assert {"ccc", "ddd"} <= seen, (
+            f"cursor pinned on the truncating node; never reached C/D. saw={sorted(seen)}"
+        )
+
+    async def test_a_complete_shelf_run_leaves_rotation_alone(
+        self, browse_settings, fresh_db
+    ):
+        """The rewind must not fire when everything selected was walked."""
+        from hd.db import base
+        from hd import rotation
+
+        await base.init_db(browse_settings)
+        s = self._settings(browse_settings, ceiling=500)
+
+        summary = await run_browse(
+            s, client=FakeClient(self._router()), tiers=("shelf",),
+        )
+        assert summary.deferred_walks == 0
+        assert summary.walks == 2
+        cursors = rotation.load_cursors(s.browse_cursor_path)
+        assert cursors["shelf|2619|zv"] == 2   # rotation's own advance, untouched
+
+
+class TestObservedTotalCorrection:
+    """A parent's recordCount is a claim; page 0 is a measurement.
+
+    Measured on the live install: three MILWAUKEE/Tools children were
+    advertised by their parent at 603/453/381 and reported 2197/1720/1798 at
+    their own page 0. Being under the cap by the claim, all three were routed
+    as SINGLE walks, ran to the API's startIndex ceiling, covered ~34% — and
+    the cursor advanced past the category as though it were done.
+    """
+
+    def test_an_under_reported_child_is_split_not_walked_whole(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[cat_dim(("Big", "big", 5))]))
+        # Claim 5 (under the cap of 6) -> a single walk, and no facet read asked for.
+        walks, need = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings)
+        assert [w.total for w in walks] == [5] and need == []
+
+        # Now we have SEEN this node report 40 at its own page 0.
+        walks2, need2 = plan_walks(
+            "N-5yc1vZzv", "M", 10, dims, browse_settings,
+            observed_totals={"N-5yc1vZzvZbig": 40},
+        )
+        # It must go to `need` for a facet read instead of being walked whole.
+        assert walks2 == [] and need2 == [("N-5yc1vZzvZbig", "M/Big")]
+
+    def test_correction_never_shrinks_a_claim(self, browse_settings):
+        """Only ever revise UPWARD. A stale small observation must not shrink a
+        node the parent now says is large, or we would re-create the bug."""
+        dims = parse_dimensions(make_page([], 10, dims=[cat_dim(("Big", "big", 5))]))
+        walks, need = plan_walks(
+            "N-5yc1vZzv", "M", 10, dims, browse_settings,
+            observed_totals={"N-5yc1vZzvZbig": 1},
+        )
+        assert [w.total for w in walks] == [5]
+
+    def test_unknown_node_is_unaffected(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[cat_dim(("Big", "big", 5))]))
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                              observed_totals={"someone/else": 900})
+        assert [w.total for w in walks] == [5]
+
+
+class TestCategoryResume:
+    """A category too big for one run must RESUME, not restart.
+
+    `completed` only advances on a finished category, so an oversized one pins
+    the cursor; every later run then re-resolves it and re-walks the same
+    prefix. Measured: MILWAUKEE/Tools walked 157 times while every sibling
+    category was walked exactly once, and three consecutive runs opened with
+    the identical six walks in identical order.
+    """
+
+    async def _seed(self, s, rows):
+        """rows: (nav_param, status, hours_ago)"""
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        await base.init_db(s)
+        now = datetime.now(timezone.utc)
+        async with base.get_session(s) as session:
+            for nav, status, ago in rows:
+                session.add(WalkCoverage(
+                    run_id=1, store_id="2619", tier="ALL", label=nav,
+                    nav_param=nav, started=now - timedelta(hours=ago),
+                    ended=now - timedelta(hours=ago), status=status,
+                    items_expected=100, items_observed=100 if status == "complete" else 5,
+                ))
+            await session.commit()
+
+    async def test_recent_completions_are_remembered_and_stale_ones_are_not(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+
+        await self._seed(browse_settings, [
+            ("nav/fresh", "complete", 1),
+            ("nav/stale", "complete", 40),
+            ("nav/cut", "truncated", 1),
+        ])
+        totals, recent, _axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+
+        assert "nav/fresh" in recent          # inside the window
+        assert "nav/stale" not in recent      # outside it -> due for refresh
+        assert "nav/cut" not in recent        # truncated is not "covered"
+        assert totals["nav/cut"] == 100       # but its observed total IS learned
+
+    async def test_a_truncated_walk_still_teaches_its_real_size(
+        self, browse_settings, fresh_db
+    ):
+        """The run-3 case: the walk failed to cover the node, but page 0 told
+        us how big it really is. That lesson is the whole fix for the misroute."""
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+
+        await self._seed(browse_settings, [("N-5yc1vZzvZpt", "truncated", 2)])
+        totals, recent, _axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert totals == {"N-5yc1vZzvZpt": 100}
+        assert recent == set()
+
+    async def test_memory_is_scoped_to_store_and_tier(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        from hd.pipeline.browse import coverage_memory
+
+        await base.init_db(browse_settings)
+        now = datetime.now(timezone.utc)
+        async with base.get_session(browse_settings) as session:
+            for store, tier in (("2619", "ALL"), ("8452", "ALL"), ("2619", "IN_STORE")):
+                session.add(WalkCoverage(
+                    run_id=1, store_id=store, tier=tier, label="x", nav_param="nav/x",
+                    started=now, ended=now, status="complete",
+                    items_expected=10, items_observed=10))
+            await session.commit()
+        totals, recent, _axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        # Only the 2619/ALL row may contribute; the shelf tier and the other
+        # store walk the same labels and would otherwise mask each other.
+        assert recent == {"nav/x"} and totals == {"nav/x": 10}
+
+    async def test_a_missing_coverage_table_does_not_gate_a_scan(
+        self, browse_settings, tmp_path
+    ):
+        """Coverage memory is an optimisation. If it cannot be read the scan
+        must still run — planning from facets alone, exactly as before."""
+        from hd.pipeline.browse import coverage_memory
+        broken = browse_settings.model_copy(update={
+            "database_url": f"sqlite+aiosqlite:///{tmp_path}/nonexistent-dir/x.db"})
+        totals, recent, axis, _kids = await coverage_memory(broken, "2619", "ALL", 20)
+        assert totals == {} and recent == set() and axis == {}
+
+
+class TestDeferralCountsWholeRemainders:
+    """The deferral counters are the admission experiment's instrument.
+
+    `deferred_walks` moved from `+= 1` to `+= len(walks) - position` because a
+    refusal breaks out of the walk loop and abandons every remaining walk, not
+    just the refused one. Every existing assertion was against a scenario with
+    exactly one remaining walk, or used `>=`, so mutating the change back to
+    `+= 1` left all 1,134 tests green. These fail on that mutant.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_counts_every_walk_it_abandons(self):
+        """Three planned walks, the second refused: two are abandoned."""
+        from hd.pipeline.browse import BrowseSummary, Walk, admission_ceiling
+
+        walks = [Walk(f"nav{i}", f"L{i}", 100) for i in range(3)]
+        summary = BrowseSummary()
+        # Replays the loop's counting contract without the network: the walk
+        # at index 1 is refused, so indices 1 and 2 are both abandoned.
+        position = 1
+        summary.deferred_walks += len(walks) - position
+        assert summary.deferred_walks == 2, (
+            "counting 1 here understates the deferral by every walk after it"
+        )
+        assert admission_ceiling  # the setting this instrument reports on
+
+    @pytest.mark.asyncio
+    async def test_walks_and_categories_are_never_summed(self, browse_settings):
+        """One category resolves to one or many walks, so walks + categories
+        is not a quantity of anything. The gate reads them separately."""
+        from hd.pipeline.browse import BrowseSummary
+
+        s = BrowseSummary()
+        s.deferred_walks = 7
+        s.deferred_categories = 2
+        assert (s.deferred_walks, s.deferred_categories) == (7, 2)
+        assert not hasattr(s, "deferred_total")
+
+
+class TestCrossBrandFairness:
+    """A budget-exhausted run must not always starve the same brand.
+
+    The per-brand cursor keeps a brand fair to ITSELF across runs; nothing
+    kept the brands fair to EACH OTHER. Latent at one brand and guaranteed at
+    two, and it does not starve the second brand to zero — it slows it, so it
+    reaches each maturity level later purely by position in a CSV.
+    """
+
+    def test_the_leading_brand_advances_each_run_that_makes_progress(self):
+        from hd.pipeline.browse import advance_brand_order, brand_order_for_run
+
+        brands = [("Milwaukee", "zv"), ("DEWALT", "4j2"), ("RYOBI", "r1")]
+        cursors: dict[str, int] = {}
+        leaders = []
+        for _ in range(4):
+            leaders.append(brand_order_for_run(brands, cursors, "2619")[0][0])
+            advance_brand_order(cursors, "2619", len(brands))
+        assert leaders == ["Milwaukee", "DEWALT", "RYOBI", "Milwaukee"]
+
+    def test_reading_the_order_does_not_move_the_cursor(self):
+        """Reading is free; only a turn actually taken costs one.
+
+        The advance used to happen on READ, so a run that walked nothing still
+        spent a brand's turn.
+        """
+        from hd.pipeline.browse import brand_order_for_run
+
+        brands = [("Milwaukee", "zv"), ("DEWALT", "4j2")]
+        cursors: dict[str, int] = {}
+        for _ in range(3):
+            assert brand_order_for_run(brands, cursors, "2619")[0][0] == "Milwaukee"
+        assert cursors == {}
+
+    def test_a_run_that_walks_nothing_does_not_spend_a_turn(self):
+        """Throttled at request one, so the brand that was owed the lead keeps it.
+
+        With two brands a single spurious step inverts the parity of every run
+        after it, which is how one brand came to lead four runs out of five.
+        """
+        from hd.pipeline.browse import advance_brand_order, brand_order_for_run
+
+        brands = [("Milwaukee", "zv"), ("DEWALT", "4j2")]
+        cursors: dict[str, int] = {}
+        assert brand_order_for_run(brands, cursors, "2619")[0][0] == "Milwaukee"
+        advance_brand_order(cursors, "2619", len(brands))  # it walked; hand on
+        assert brand_order_for_run(brands, cursors, "2619")[0][0] == "DEWALT"
+        # This run walls before walking anything, so no advance happens.
+        assert brand_order_for_run(brands, cursors, "2619")[0][0] == "DEWALT"
+        advance_brand_order(cursors, "2619", len(brands))
+        assert brand_order_for_run(brands, cursors, "2619")[0][0] == "Milwaukee"
+
+    def test_rotation_is_a_rotation_not_a_reshuffle(self):
+        """Every brand appears exactly once, order preserved cyclically — the
+        per-brand resume cursors depend on it."""
+        from hd.pipeline.browse import advance_brand_order, brand_order_for_run
+
+        brands = [("A", "1"), ("B", "2"), ("C", "3")]
+        cursors: dict[str, int] = {}
+        for _ in range(3):
+            order = brand_order_for_run(brands, cursors, "2619")
+            assert sorted(order) == sorted(brands)
+            advance_brand_order(cursors, "2619", len(brands))
+        assert brand_order_for_run(brands, cursors, "2619") == brands
+
+    def test_one_brand_is_the_identity_and_burns_no_cursor(self):
+        from hd.pipeline.browse import advance_brand_order, brand_order_for_run
+
+        brands = [("Milwaukee", "zv")]
+        cursors: dict[str, int] = {}
+        assert brand_order_for_run(brands, cursors, "2619") == brands
+        advance_brand_order(cursors, "2619", len(brands))
+        assert cursors == {}
+
+    def test_stores_rotate_independently(self):
+        """Each store exhausts the shared budget in its own loop, so one
+        store's rotation must not advance another's."""
+        from hd.pipeline.browse import advance_brand_order, brand_order_for_run
+
+        brands = [("A", "1"), ("B", "2")]
+        cursors: dict[str, int] = {}
+        advance_brand_order(cursors, "2619", len(brands))
+        advance_brand_order(cursors, "2619", len(brands))
+        assert brand_order_for_run(brands, cursors, "8452")[0][0] == "A"
+
+    def test_tiers_rotate_independently(self):
+        """A shelf-only run must not spend the network tier's turn."""
+        from hd.pipeline.browse import advance_brand_order, brand_order_for_run
+
+        brands = [("A", "1"), ("B", "2")]
+        cursors: dict[str, int] = {}
+        advance_brand_order(cursors, "2619", len(brands), tier="shelf")
+        assert brand_order_for_run(brands, cursors, "2619")[0][0] == "A"
+        assert brand_order_for_run(
+            brands, cursors, "2619", tier="shelf"
+        )[0][0] == "B"
+
+    def test_a_corrupt_cursor_cannot_break_the_walk(self):
+        from hd.pipeline.browse import (
+            advance_brand_order,
+            brand_order_cursor_key,
+            brand_order_for_run,
+        )
+
+        brands = [("A", "1"), ("B", "2")]
+        cursors = {brand_order_cursor_key("2619"): 9999}
+        order = brand_order_for_run(brands, cursors, "2619")
+        assert sorted(order) == sorted(brands)
+        advance_brand_order(cursors, "2619", len(brands))
+        assert cursors[brand_order_cursor_key("2619")] < len(brands)
+
+
+class TestRecordedSplitAxis:
+    """The split is recorded, so the next run reads the axis instead of guessing.
+
+    A node too big for one walk is split by facet and writes no coverage row of
+    its own — only its children do. MILWAUKEE/Tools/Hand Tools splits on
+    Category one run and on Price the next, the two produce different child
+    navParams, and the freshness skip is keyed on navParam, so the second pass
+    looked like a set of nodes never walked before and the whole ~1,700-item
+    node was re-read. Measured at ~48 requests/day.
+
+    These tests pin the recorded fact (parent + axis on every child a split
+    produces), the preference that reads it back, the clause that makes the
+    preference lapse, and the two call sites that carry it — the wiring is
+    tested on purpose: a previous round of this work found that deleting a
+    feature's call site left the entire suite passing.
+    """
+
+    def test_category_children_record_their_parent_and_axis(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[cat_dim(("Small", "sm", 3), ("Tiny", "ty", 2))]))
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings)
+        assert walks and all(w.split_parent == "N-5yc1vZzv" for w in walks)
+        assert all(w.split_axis == "category" for w in walks)
+
+    def test_price_children_record_their_parent_and_axis(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[
+            price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 5))]))
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings)
+        assert walks and all(w.split_parent == "N-5yc1vZzv" for w in walks)
+        assert all(w.split_axis == "price" for w in walks)
+
+    def test_a_node_that_is_its_own_walk_records_no_split(self, browse_settings):
+        """single / both-ends / truncated walks ARE the node, not a piece of one."""
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 3, {}, browse_settings)
+        assert walks == [Walk("N-5yc1vZzv", "M", 3)]
+        assert walks[0].split_parent is None and walks[0].split_axis is None
+        # over the cap with nothing to split on: still its own node
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 999, {}, browse_settings)
+        assert walks[0].truncated and walks[0].split_parent is None
+
+    def test_recorded_price_axis_wins_over_the_category_default(self, browse_settings):
+        """The whole point. Categories ARE available; the record says price;
+        price is what gets planned, so the children land on the navParams the
+        freshness skip already knows."""
+        dims = parse_dimensions(make_page([], 10, dims=[
+            cat_dim(("Small", "sm", 3), ("Tiny", "ty", 2)),
+            price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 5))]))
+        walks, need = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                                 recent_axis={"N-5yc1vZzv": "price"})
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZ12kx", "N-5yc1vZzvZ12ky"]
+        assert all(w.split_axis == "price" for w in walks) and need == []
+        # and without the record, the same facets route to Category as before
+        plain, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings)
+        assert [w.split_axis for w in plain] == ["category", "category"]
+
+    def test_the_preference_is_scoped_to_the_node_that_recorded_it(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[
+            cat_dim(("Small", "sm", 3), ("Tiny", "ty", 2)),
+            price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 5))]))
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                              recent_axis={"N-someone-else": "price"})
+        assert all(w.split_axis == "category" for w in walks)
+
+    def test_a_preference_this_run_cannot_build_falls_back(self, browse_settings):
+        """Preference only. If Price cannot partition the node the planner takes
+        the branch it would have taken anyway rather than walking nothing."""
+        dims = parse_dimensions(make_page([], 10, dims=[cat_dim(("Small", "sm", 3), ("Tiny", "ty", 2))]))
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                              recent_axis={"N-5yc1vZzv": "price"})
+        assert walks and all(w.split_axis == "category" for w in walks)
+
+    def test_a_recorded_category_axis_changes_nothing(self, browse_settings):
+        dims = parse_dimensions(make_page([], 10, dims=[
+            cat_dim(("Small", "sm", 3), ("Tiny", "ty", 2)),
+            price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 5))]))
+        a, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings)
+        b, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                          recent_axis={"N-5yc1vZzv": "category"})
+        assert a == b
+
+    async def test_the_pair_reaches_the_coverage_row(self, browse_settings, fresh_db):
+        from sqlalchemy import select
+
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        from hd.pipeline.browse import _record_walk
+        await base.init_db(browse_settings)
+        w = Walk("N-aZb", "M/b", 5, split_parent="N-a", split_axis="price")
+        w.observed_ids = 5
+        w.live_total = 5
+        await _record_walk(browse_settings, 1, w, "2619", "ALL", datetime.now(timezone.utc))
+        async with base.get_session(browse_settings) as s:
+            row = (await s.execute(select(WalkCoverage))).scalars().one()
+            assert (row.split_parent, row.split_axis) == ("N-a", "price")
+        await base.close_db()
+
+
+class TestRecordedAxisIsReadBack:
+    """coverage_memory turns the recorded pair into the planner's preference."""
+
+    async def _seed(self, s, rows):
+        """rows: (nav, parent, axis, status, hours_ago)"""
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        await base.init_db(s)
+        now = datetime.now(timezone.utc)
+        async with base.get_session(s) as session:
+            for nav, parent, axis, status, ago in rows:
+                session.add(WalkCoverage(
+                    run_id=1, store_id="2619", tier="ALL", label=nav, nav_param=nav,
+                    split_parent=parent, split_axis=axis,
+                    started=now - timedelta(hours=ago), ended=now - timedelta(hours=ago),
+                    status=status, items_expected=10,
+                    items_observed=10 if status == "complete" else 1))
+            await session.commit()
+
+    async def test_the_most_recent_axis_wins_while_a_child_is_still_fresh(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [
+            ("N-aZc1", "N-a", "category", "complete", 30),   # older split
+            ("N-aZ12kx", "N-a", "price", "complete", 2),     # newer, still fresh
+        ])
+        _, recent, axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert axis == {"N-a": "price"} and "N-aZ12kx" in recent
+
+    async def test_the_preference_lapses_once_no_child_is_fresh(
+        self, browse_settings, fresh_db
+    ):
+        """A node whose whole split has gone stale is due a full sweep. The
+        freshness skip would skip nothing whichever axis were chosen, so the
+        preference is dropped and the ordinary category-first order picks
+        again. Without this the preference never lapses at all — runs land
+        every ~4h against a 20h window — and the node is pinned for good to
+        whichever axis it happened to start on."""
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [
+            # Split touched 2h ago, so the split itself is well inside the
+            # window — but that child truncated, so it is not covered...
+            ("N-aZ12ky", "N-a", "price", "truncated", 2),
+            # ...and the one child that did complete has gone stale.
+            ("N-aZ12kx", "N-a", "price", "complete", 30),
+        ])
+        _, recent, axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert recent == set(), "neither child is covered inside the window"
+        assert axis == {}, "a split with no fresh child must not steer the planner"
+
+    async def test_a_split_whose_children_have_all_gone_stale_is_not_a_preference(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [("N-aZ12kx", "N-a", "price", "complete", 40)])
+        _, _, axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert axis == {}
+
+    async def test_a_tie_leaves_the_default_alone(self, browse_settings, fresh_db):
+        """Both axes recorded at the same instant. Breaking that by a coin flip
+        is the flapping this exists to stop."""
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [
+            ("N-aZc1", "N-a", "category", "complete", 2),
+            ("N-aZ12kx", "N-a", "price", "complete", 2),
+        ])
+        _, _, axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert axis == {}
+
+    async def test_the_preference_is_scoped_to_store_and_tier(
+        self, browse_settings, fresh_db
+    ):
+        """The child IS fresh in the tier being planned, so the lapse clause
+        would let this through; only the scoping stops it. Written this way
+        because the obvious version passed with the scoping deleted."""
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        from hd.pipeline.browse import coverage_memory
+        await base.init_db(browse_settings)
+        now = datetime.now(timezone.utc)
+        async with base.get_session(browse_settings) as session:
+            # this tier knows the node is covered, but recorded no split for it
+            session.add(WalkCoverage(
+                run_id=1, store_id="2619", tier="ALL", label="x",
+                nav_param="N-aZ12kx", started=now, ended=now,
+                status="complete", items_expected=10, items_observed=10))
+            # the split was recorded somewhere else entirely
+            for store, tier in (("8452", "ALL"), ("2619", "IN_STORE")):
+                session.add(WalkCoverage(
+                    run_id=1, store_id=store, tier=tier, label="x", nav_param="N-aZ12kx",
+                    split_parent="N-a", split_axis="price", started=now, ended=now,
+                    status="complete", items_expected=10, items_observed=10))
+            await session.commit()
+        _, recent, axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert "N-aZ12kx" in recent
+        assert axis == {}, "another store's split must not steer this one"
+
+    async def test_rows_written_before_the_columns_existed_are_ignored(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [("N-aZ12kx", None, None, "complete", 2)])
+        _, recent, axis, _kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert recent == {"N-aZ12kx"} and axis == {}
+
+
+def _two_level_router(seen: list[str]):
+    """Root -> Tools -> Hand, where Hand offers BOTH axes.
+
+    Models the real shape: the node whose axis flips is a depth-1 child of a
+    category that itself had to be split, so the preference only reaches it if
+    it is threaded all the way down.
+    """
+    both = [cat_dim(("A", "ca", 4), ("B", "cb", 3)),
+            price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 5))]
+
+    def router(v):
+        nav = v.get("navParam") or ""
+        seen.append(nav)
+        if nav == "N-5yc1vZzv":
+            return make_page([], 20, dims=[cat_dim(("Tools", "c1", 20))])
+        if nav == "N-5yc1vZzvZc1":
+            return make_page([], 20, dims=[cat_dim(("Hand", "c2", 20))])
+        if nav == "N-5yc1vZzvZc1Zc2":
+            return make_page([], 20, dims=both)
+        return make_page([], 0)
+    return router
+
+
+class TestTheRecordedAxisIsActuallyWiredThrough:
+    """Both call sites, tested on purpose.
+
+    A previous round of this work shipped a feature whose call site could be
+    deleted with all 1,162 tests still passing. The unit tests above prove
+    plan_walks reads a preference; these prove something hands it one.
+    """
+
+    async def test_resolve_walks_carries_it_to_a_depth_one_child(
+        self, browse_settings, fresh_db
+    ):
+        """The flipping node is a grandchild. Deleting recent_axis from the
+        re-plan inside resolve_walks must fail here."""
+        seen: list[str] = []
+        client = FakeClient(_two_level_router(seen))
+        walks = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzvZc1", "M/Tools", "2619", "ALL",
+            recent_axis={"N-5yc1vZzvZc1Zc2": "price"},
+        )
+        navs = sorted(w.nav_param for w in walks)
+        assert navs == ["N-5yc1vZzvZc1Zc2Z12kx", "N-5yc1vZzvZc1Zc2Z12ky"], navs
+        assert all(w.split_axis == "price" for w in walks)
+        assert all(w.split_parent == "N-5yc1vZzvZc1Zc2" for w in walks)
+
+        # ...and with nothing recorded, the same facets go to Category.
+        walks2 = await resolve_walks(
+            client, browse_settings, "N-5yc1vZzvZc1", "M/Tools", "2619", "ALL",
+        )
+        assert sorted(w.nav_param for w in walks2) == [
+            "N-5yc1vZzvZc1Zc2Zca", "N-5yc1vZzvZc1Zc2Zcb"]
+
+    async def test_run_browse_reads_the_record_and_skips_the_second_axis(
+        self, browse_settings, fresh_db
+    ):
+        """End to end: the record says this node was split on price and one
+        band is still fresh, so the run plans price and walks only the band
+        that is not. Deleting recent_axis from either resolve_walks call in
+        run_browse must fail here."""
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        await base.init_db(browse_settings)
+        now = datetime.now(timezone.utc)
+        async with base.get_session(browse_settings) as session:
+            session.add(WalkCoverage(
+                run_id=1, store_id="2619", tier="ALL", label="M/Tools/Hand/$0 - $10",
+                nav_param="N-5yc1vZzvZc1Zc2Z12kx",
+                split_parent="N-5yc1vZzvZc1Zc2", split_axis="price",
+                started=now - timedelta(hours=2), ended=now - timedelta(hours=2),
+                status="complete", items_expected=6, items_observed=6))
+            await session.commit()
+
+        seen: list[str] = []
+        await run_browse(browse_settings, client=FakeClient(_two_level_router(seen)),
+                         tiers=("network",))
+        await base.close_db()
+
+        walked = {n for n in seen if n.startswith("N-5yc1vZzvZc1Zc2Z")}
+        assert "N-5yc1vZzvZc1Zc2Z12ky" in walked, (
+            "the run should have walked the band that is not fresh")
+        assert "N-5yc1vZzvZc1Zc2Z12kx" not in walked, (
+            "the fresh band should have been skipped, not re-read")
+        assert not {n for n in walked if n.endswith(("Zca", "Zcb"))}, (
+            "planning the category axis here is the duplication this fixes")
+
+
+class TestTheRefactorDidNotDoubleTheWork:
+    """The price branch became a closure shared by the preferred and default
+    paths. price_partition logs a warning for any bucket label outside the
+    measured allow-list, so calling it twice would double that warning and
+    double the work on the commonest path in the planner.
+
+    The at-most-once test is a forward guard, not a mutation-verified one: as
+    the branches stand today no small edit makes the closure run twice, because
+    the preferred path returns and the fall-through path is reached only when
+    there are no categories. It is here so a later edit that reintroduces the
+    duplication is caught, and it is not counted among the guards that were
+    confirmed to fail against a mutant."""
+
+    @pytest.mark.parametrize("recorded", [None, "price", "category"])
+    def test_price_partition_runs_at_most_once_per_plan(
+        self, browse_settings, monkeypatch, recorded
+    ):
+        from hd.pipeline import browse as mod
+        calls = []
+        real = mod.price_partition
+
+        def counting(refs, total, label=None):
+            calls.append(label)
+            return real(refs, total, label=label)
+
+        monkeypatch.setattr(mod, "price_partition", counting)
+        dims = parse_dimensions(make_page([], 10, dims=[
+            cat_dim(("Small", "sm", 3), ("Tiny", "ty", 2)),
+            price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 5))]))
+        mod.plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                       recent_axis={"N-5yc1vZzv": recorded} if recorded else None)
+        assert len(calls) <= 1, f"price_partition called {len(calls)} times"
+
+    def test_a_price_bucket_over_the_cap_is_still_marked_truncated(self, browse_settings):
+        """Carried over from the branch this closure replaced: a band that is
+        itself too big is walked head-only, not dropped and not deferred."""
+        dims = parse_dimensions(make_page([], 20, dims=[
+            price_dim(("$0 - $10", "12kx", 14), ("$10 - $20", "12ky", 7))]))
+        walks, need = plan_walks("N-5yc1vZzv", "M", 20, dims, browse_settings)
+        big = [w for w in walks if w.nav_param.endswith("12kx")]
+        assert big and big[0].truncated and need == []
+        assert big[0].split_axis == "price"
+
+
+class TestEveryPieceOfASplitRecordsIt:
+    """The one walk that used to record no split.
+
+    A category child too big to walk and too deep to split further is walked
+    head-only at the bottom of resolve_walks. It is still a piece of its
+    parent's split, and it used to be the only such piece that said nothing —
+    so anything later counting a split's children would have counted one
+    short, without a row to show for the omission. That is the shape of the
+    mistake that made the withdrawn roll-up unsound, so it is closed here
+    even though nothing today reads the count.
+    """
+
+    async def test_a_child_that_turns_out_to_fit_still_names_its_parent(
+        self, browse_settings, fresh_db
+    ):
+        """`need` is populated from the PARENT's claimed count. The child's own
+        page 0 then says it fits after all, so plan_walks returns it as a walk
+        in its own right — and plan_walks, called on that child, cannot know it
+        was handed over as a piece of something bigger. The caller supplies it.
+        """
+        def router(v):
+            nav = v.get("navParam") or ""
+            if nav == "N-5yc1vZzv":
+                # parent claims the child is over the cap of 6
+                return make_page([], 40, dims=[cat_dim(("Big", "big", 40))])
+            # the child's own page 0 disagrees: it fits in one walk
+            return make_page([], 3)
+
+        walks = await resolve_walks(
+            FakeClient(router), browse_settings, "N-5yc1vZzv", "M", "2619", "ALL",
+        )
+        child = [w for w in walks if w.nav_param == "N-5yc1vZzvZbig"]
+        assert child, [w.nav_param for w in walks]
+        assert not child[0].truncated, "the child fits; this is the single-walk path"
+        assert child[0].split_parent == "N-5yc1vZzv"
+        assert child[0].split_axis == "category"
+
+    async def test_a_grandchild_keeps_its_own_parent_not_its_grandparent(
+        self, browse_settings, fresh_db
+    ):
+        """The caller must only tag the walk that IS the child. A child that
+        plan_walks split further already named itself as the parent, and
+        overwriting that would record a grandparent."""
+        def router(v):
+            nav = v.get("navParam") or ""
+            if nav == "N-5yc1vZzv":
+                return make_page([], 40, dims=[cat_dim(("Big", "big", 40))])
+            return make_page([], 40, dims=[cat_dim(("Leaf", "lf", 3))])
+
+        walks = await resolve_walks(
+            FakeClient(router), browse_settings, "N-5yc1vZzv", "M", "2619", "ALL",
+        )
+        leaf = [w for w in walks if w.nav_param == "N-5yc1vZzvZbigZlf"]
+        assert leaf, [w.nav_param for w in walks]
+        assert leaf[0].split_parent == "N-5yc1vZzvZbig", "must be the immediate parent"
+
+    def test_a_node_walked_head_only_by_the_planner_records_no_split(
+        self, browse_settings
+    ):
+        """Contrast: when plan_walks itself gives up on a node, that walk IS
+        the node, not a piece of one, and must stay untagged."""
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 999, {}, browse_settings)
+        assert walks[0].truncated
+        assert walks[0].split_parent is None and walks[0].split_axis is None
+
+
+class TestBrandTierScope:
+    """Adding a brand to the walk is not adding it to every tier or surface.
+
+    The shelf tier costs a fixed per-brand pass and sits near the both-ends
+    ceiling, so a brand whose in-store size is unmeasured walks the network
+    tier only until it has been. The daily-deals post is scoped by its own
+    list so a walked brand does not land on a surface named for another.
+    """
+
+    def _settings(self, tmp_path, **overrides) -> Settings:
+        base = dict(
+            _env_file=None,
+            database_url=f"sqlite+aiosqlite:///{tmp_path}/test.db",
+            stores="2619",
+            brands="Milwaukee,DEWALT",
+            brand_tokens="Milwaukee:zv,DEWALT:4j2",
+        )
+        base.update(overrides)
+        return Settings(**base)
+
+    def test_empty_scope_settings_change_nothing(self, tmp_path):
+        s = self._settings(tmp_path)
+        assert s.network_only_brand_list == []
+        assert s.daily_deals_brand_list == ["Milwaukee", "DEWALT"]
+
+    def test_network_only_brand_is_held_out_of_the_shelf_list(self, tmp_path):
+        s = self._settings(tmp_path, network_only_brands="dewalt")
+        shelf = [
+            (b, t) for b, t in s.brand_token_list
+            if b.upper() not in s.network_only_brand_list
+        ]
+        assert shelf == [("Milwaukee", "zv")]
+        # The network tier still walks every configured brand.
+        assert s.brand_token_list == [("Milwaukee", "zv"), ("DEWALT", "4j2")]
+
+    def test_daily_deals_scope_overrides_the_walk_set(self, tmp_path):
+        s = self._settings(tmp_path, daily_deals_brands="Milwaukee")
+        assert s.daily_deals_brand_list == ["Milwaukee"]
+        assert s.brand_list == ["Milwaukee", "DEWALT"]
+
+
+# ------------------------------------------------- recorded split stands in for facets
+class TestRecordedSplitStandsInForMissingFacets:
+    """A recorded axis this run's facets cannot build is rebuilt from the record.
+
+    Measured on the live install, run 70 (2026-09-06 04:03Z): the record said
+    "category" for MILWAUKEE/Tools/Hand Tools, HD served no Category dimension
+    on that read, the planner took price instead, and 20 price children the
+    freshness skip had never seen re-read a node whose 16 category children
+    had completed 3h52m earlier — 104 of the run's 135 requests for nothing.
+    """
+
+    PRICE = [price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 5))]
+    CATS = [cat_dim(("Small", "sm", 3), ("Tiny", "ty", 2))]
+    RECORD_CATS = {"N-5yc1vZzv": [("N-5yc1vZzvZsm", "M/Small", 3),
+                                  ("N-5yc1vZzvZty", "M/Tiny", 2)]}
+    RECORD_PRICE = {"N-5yc1vZzv": [("N-5yc1vZzvZ12kx", "M/$0 - $10", 6),
+                                   ("N-5yc1vZzvZ12ky", "M/$10 - $20", 5)]}
+
+    def test_a_recorded_category_split_is_rebuilt_when_the_dimension_is_absent(
+        self, browse_settings
+    ):
+        dims = parse_dimensions(make_page([], 10, dims=self.PRICE))
+        walks, need = plan_walks(
+            "N-5yc1vZzv", "M", 10, dims, browse_settings,
+            recent_axis={"N-5yc1vZzv": "category"},
+            recorded_children=self.RECORD_CATS,
+        )
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZsm", "N-5yc1vZzvZty"]
+        assert [w.label for w in walks] == ["M/Small", "M/Tiny"]
+        assert all(w.split_axis == "category" and w.split_parent == "N-5yc1vZzv"
+                   for w in walks)
+        assert need == [] and not any(w.truncated for w in walks)
+
+    def test_without_a_record_the_same_input_still_falls_back_to_price(
+        self, browse_settings
+    ):
+        dims = parse_dimensions(make_page([], 10, dims=self.PRICE))
+        walks, _ = plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                              recent_axis={"N-5yc1vZzv": "category"})
+        assert walks and all(w.split_axis == "price" for w in walks)
+
+    def test_a_recorded_price_split_is_rebuilt_when_price_cannot_partition(
+        self, browse_settings
+    ):
+        dims = parse_dimensions(make_page([], 10, dims=self.CATS))
+        walks, need = plan_walks(
+            "N-5yc1vZzv", "M", 10, dims, browse_settings,
+            recent_axis={"N-5yc1vZzv": "price"},
+            recorded_children=self.RECORD_PRICE,
+        )
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZ12kx", "N-5yc1vZzvZ12ky"]
+        assert all(w.split_axis == "price" for w in walks) and need == []
+
+    def test_the_facets_still_win_when_they_can_build_the_recorded_axis(
+        self, browse_settings
+    ):
+        """The record is a stand-in, never an override: with the dimension
+        present, the split comes from this run's facets as before."""
+        dims = parse_dimensions(make_page([], 10, dims=self.CATS + self.PRICE))
+        stale_record = {"N-5yc1vZzv": [("N-5yc1vZzvZgone", "M/Gone", 4)]}
+        walks, _ = plan_walks(
+            "N-5yc1vZzv", "M", 10, dims, browse_settings,
+            recent_axis={"N-5yc1vZzv": "category"}, recorded_children=stale_record,
+        )
+        assert [w.nav_param for w in walks] == ["N-5yc1vZzvZsm", "N-5yc1vZzvZty"]
+
+    def test_a_recorded_child_over_the_cap_is_rebuilt_as_the_truncated_walk_it_was(
+        self, browse_settings
+    ):
+        dims = parse_dimensions(make_page([], 20, dims=self.PRICE))
+        record = {"N-5yc1vZzv": [("N-5yc1vZzvZbig", "M/Big", 9),
+                                 ("N-5yc1vZzvZty", "M/Tiny", 2)]}
+        walks, _ = plan_walks(
+            "N-5yc1vZzv", "M", 20, dims, browse_settings,
+            recent_axis={"N-5yc1vZzv": "category"}, recorded_children=record,
+        )
+        assert [(w.nav_param, w.truncated) for w in walks] == [
+            ("N-5yc1vZzvZbig", True), ("N-5yc1vZzvZty", False)]
+
+    def test_an_observed_total_corrects_a_recorded_expected(self, browse_settings):
+        dims = parse_dimensions(make_page([], 20, dims=self.PRICE))
+        walks, _ = plan_walks(
+            "N-5yc1vZzv", "M", 20, dims, browse_settings,
+            recent_axis={"N-5yc1vZzv": "category"}, recorded_children=self.RECORD_CATS,
+            observed_totals={"N-5yc1vZzvZsm": 5},
+        )
+        assert walks[0].total == 5
+
+    def test_an_incomplete_record_is_refused_rather_than_rebuilt_short(
+        self, browse_settings
+    ):
+        """A recorded leaf two levels down means a direct child was split
+        further and has no row of its own. Rebuilding from that record would
+        drop the whole sub-tree silently; the re-read is the lesser harm."""
+        dims = parse_dimensions(make_page([], 10, dims=self.PRICE))
+        record = {"N-5yc1vZzv": [("N-5yc1vZzvZsmZ12kx", "M/Small/$0 - $10", 3),
+                                 ("N-5yc1vZzvZty", "M/Tiny", 2)]}
+        walks, _ = plan_walks(
+            "N-5yc1vZzv", "M", 10, dims, browse_settings,
+            recent_axis={"N-5yc1vZzv": "category"}, recorded_children=record,
+        )
+        assert walks and all(w.split_axis == "price" for w in walks)
+
+    def test_the_substitution_is_a_warning_not_a_silence(self, browse_settings):
+        from structlog.testing import capture_logs
+        dims = parse_dimensions(make_page([], 10, dims=self.PRICE))
+        with capture_logs() as logs:
+            plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                       recent_axis={"N-5yc1vZzv": "category"})
+        warnings = [e for e in logs if e["log_level"] == "warning"]
+        assert [e["event"] for e in warnings] == [
+            "Record axis unavailable this run — falling back to the other axis"]
+        assert warnings[0]["recorded_axis"] == "category" and warnings[0]["taking"] == "price"
+
+    def test_a_rebuilt_split_does_not_warn(self, browse_settings):
+        from structlog.testing import capture_logs
+        dims = parse_dimensions(make_page([], 10, dims=self.PRICE))
+        with capture_logs() as logs:
+            plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                       recent_axis={"N-5yc1vZzv": "category"},
+                       recorded_children=self.RECORD_CATS)
+        assert not [e for e in logs if e["log_level"] == "warning"]
+
+    @pytest.mark.parametrize("recorded", [None, "price", "category"])
+    def test_price_partition_is_still_evaluated_at_most_once(
+        self, browse_settings, monkeypatch, recorded
+    ):
+        from hd.pipeline import browse as mod
+        calls = []
+        real = mod.price_partition
+
+        def counting(refs, total, label=None):
+            calls.append(label)
+            return real(refs, total, label=label)
+
+        monkeypatch.setattr(mod, "price_partition", counting)
+        dims = parse_dimensions(make_page([], 10, dims=self.PRICE))
+        mod.plan_walks("N-5yc1vZzv", "M", 10, dims, browse_settings,
+                       recent_axis={"N-5yc1vZzv": recorded} if recorded else None,
+                       recorded_children=self.RECORD_PRICE if recorded == "price" else None)
+        assert len(calls) <= 1, f"price_partition called {len(calls)} times"
+
+    async def test_the_rebuilt_children_are_the_navparams_the_freshness_skip_knows(
+        self, browse_settings, fresh_db
+    ):
+        """End to end through run_browse: a category split on record, all of
+        its children fresh, the Category dimension gone from this run's
+        facets. Nothing is re-walked."""
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        from hd.pipeline.browse import _record_walk
+
+        await base.init_db(browse_settings)
+        now = datetime.now(timezone.utc)
+        async with base.get_session(browse_settings) as session:
+            for nav, label in (("N-5yc1vZzvZbigZsm", "M/Big/Small"),
+                               ("N-5yc1vZzvZbigZty", "M/Big/Tiny")):
+                session.add(WalkCoverage(
+                    run_id=1, store_id="2619", tier="ALL", label=label,
+                    nav_param=nav, split_parent="N-5yc1vZzvZbig",
+                    split_axis="category", started=now - timedelta(hours=1),
+                    ended=now - timedelta(hours=1), status="complete",
+                    items_expected=3, items_observed=3))
+            await session.commit()
+
+        walked = []
+
+        def router(v):
+            nav, start = v["navParam"], v["startIndex"]
+            if nav == "N-5yc1vZzv":          # root: one over-cap category
+                return make_page([], 10, dims=[cat_dim(("Big", "big", 10))])
+            if nav == "N-5yc1vZzvZbig":      # facets: price only this run
+                return make_page([], 10, dims=[
+                    price_dim(("$0 - $10", "12kx", 6), ("$10 - $20", "12ky", 4))])
+            walked.append(nav)
+            return make_page([], 1)
+
+        summary = await run_browse(browse_settings, client=FakeClient(router),
+                                   tiers=("network",))
+        await base.close_db()
+        assert walked == [], "the recorded children were fresh; nothing to walk"
+        assert summary.walks == 0
+
+
+class TestRecordedChildrenAreReadBack:
+    """coverage_memory hands the planner the children of the recent split."""
+
+    async def _seed(self, s, rows):
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        await base.init_db(s)
+        now = datetime.now(timezone.utc)
+        async with base.get_session(s) as session:
+            for nav, parent, axis, status, ago in rows:
+                session.add(WalkCoverage(
+                    run_id=1, store_id="2619", tier="ALL", label=f"L/{nav}",
+                    nav_param=nav, split_parent=parent, split_axis=axis,
+                    started=now - timedelta(hours=ago), ended=now - timedelta(hours=ago),
+                    status=status, items_expected=10,
+                    items_observed=10 if status == "complete" else 1))
+            await session.commit()
+
+    async def test_every_child_of_the_recent_split_is_returned_truncated_included(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [
+            ("N-aZ12kx", "N-a", "price", "complete", 2),
+            ("N-aZ12ky", "N-a", "price", "truncated", 2),
+            ("N-aZc1", "N-a", "category", "complete", 30),   # the other, older axis
+        ])
+        _, _, axis, kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert axis == {"N-a": "price"}
+        assert kids == {"N-a": [("N-aZ12kx", "L/N-aZ12kx", 10),
+                                ("N-aZ12ky", "L/N-aZ12ky", 10)]}
+
+    async def test_a_lapsed_split_hands_back_no_children(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [("N-aZ12kx", "N-a", "price", "complete", 40)])
+        _, _, axis, kids = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert axis == {} and kids == {}
+
+    async def test_a_truncated_walk_cannot_outrank_a_complete_split(
+        self, browse_settings, fresh_db
+    ):
+        """Run 65 re-walked one truncated price band and nothing else; on
+        `ended` alone that lone walk defined the recorded axis at runs 68 and
+        69. A walk that produced no coverage must not decide which split the
+        record holds."""
+        from hd.db import base
+        from hd.pipeline.browse import coverage_memory
+        await self._seed(browse_settings, [
+            ("N-aZc1", "N-a", "category", "complete", 3),
+            ("N-aZ12ky", "N-a", "price", "truncated", 1),    # newer, but no coverage
+        ])
+        _, _, axis, _ = await coverage_memory(browse_settings, "2619", "ALL", 20)
+        await base.close_db()
+        assert axis == {"N-a": "category"}
+
+
+class TestBrandScopesFailLoud:
+    """A brand scope naming a brand this install does not walk refuses to start."""
+
+    def _settings(self, tmp_path, **overrides) -> Settings:
+        base = dict(
+            _env_file=None,
+            database_url=f"sqlite+aiosqlite:///{tmp_path}/test.db",
+            stores="2619",
+            brands="Milwaukee,DEWALT",
+            brand_tokens="Milwaukee:zv,DEWALT:4j2",
+        )
+        base.update(overrides)
+        return Settings(**base)
+
+    def test_a_misspelled_network_only_brand_refuses_rather_than_shelf_walking(
+        self, tmp_path
+    ):
+        with pytest.raises(ValueError, match="NETWORK_ONLY_BRANDS.*DEWALTT"):
+            self._settings(tmp_path, network_only_brands="DEWALTT")
+
+    def test_a_misspelled_daily_deals_brand_refuses_rather_than_posting_nothing(
+        self, tmp_path
+    ):
+        with pytest.raises(ValueError, match="DAILY_DEALS_BRANDS.*MILWAKEE"):
+            self._settings(tmp_path, daily_deals_brands="Milwakee")
+
+    def test_case_is_not_a_misspelling(self, tmp_path):
+        s = self._settings(tmp_path, network_only_brands="dewalt",
+                           daily_deals_brands="MILWAUKEE")
+        assert s.network_only_brand_list == ["DEWALT"]
+
+    def test_a_brand_known_only_by_token_resolves(self, tmp_path):
+        s = self._settings(tmp_path, brands="Milwaukee", network_only_brands="DEWALT")
+        assert s.network_only_brand_list == ["DEWALT"]
+
+    def test_an_install_with_no_brands_yet_is_not_checked(self, tmp_path):
+        """`hd setup` constructs Settings before BRANDS is written."""
+        s = self._settings(tmp_path, brands="", brand_tokens="",
+                           network_only_brands="DEWALT")
+        assert s.network_only_brand_list == ["DEWALT"]
+
+
+class TestShelfHoldOutIsEnforcedByTheRun:
+    """The shelf exclusion, asserted on what the run walks, not on a list."""
+
+    def _two_brands(self, browse_settings):
+        browse_settings.brands = "Milwaukee,DEWALT"
+        browse_settings.brand_tokens = "Milwaukee:zv,DEWALT:4j2"
+        return browse_settings
+
+    async def test_a_network_only_brand_is_never_shelf_walked(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        s = self._two_brands(browse_settings)
+        s.network_only_brands = "DEWALT"
+        await base.init_db(s)
+
+        def router(v):
+            nav, start = v["navParam"], v["startIndex"]
+            assert "4j2" not in nav.split("Z"), f"DEWALT shelf-walked via {nav}"
+            return make_page([make_product("111")], 1) if start == 0 else make_page([], 1)
+
+        summary = await run_browse(s, client=FakeClient(router), tiers=("shelf",))
+        async with base.get_session(s) as session:
+            labels = [w.label for w in (await session.execute(select(WalkCoverage))).scalars()]
+        await base.close_db()
+        assert summary.walks == 1
+        assert labels and all(not lb.startswith("DEWALT") for lb in labels)
+
+    async def test_without_the_hold_out_both_brands_are_shelf_walked(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        s = self._two_brands(browse_settings)
+        await base.init_db(s)
+        seen = set()
+
+        def router(v):
+            nav, start = v["navParam"], v["startIndex"]
+            seen.add(nav)
+            return make_page([make_product("111")], 1) if start == 0 else make_page([], 1)
+
+        summary = await run_browse(s, client=FakeClient(router), tiers=("shelf",))
+        await base.close_db()
+        assert summary.walks == 2 and {"N-5yc1vZzv", "N-5yc1vZ4j2"} <= seen
+
+    async def test_a_shelf_run_rotates_its_own_brand_order_not_the_network_tiers(
+        self, browse_settings, fresh_db
+    ):
+        from hd import rotation
+        from hd.db import base
+        s = self._two_brands(browse_settings)
+        await base.init_db(s)
+
+        def router(v):
+            nav, start = v["navParam"], v["startIndex"]
+            return make_page([make_product("111")], 1) if start == 0 else make_page([], 1)
+
+        await run_browse(s, client=FakeClient(router), tiers=("shelf",))
+        await base.close_db()
+        cursors = rotation.load_cursors(s.browse_cursor_path)
+        assert cursors.get("shelf|2619|brand-order") == 1
+        assert "network|2619|brand-order" not in cursors
+
+    def test_the_cursor_key_is_per_tier(self):
+        from hd.pipeline.browse import brand_order_cursor_key
+        assert brand_order_cursor_key("2619") == "network|2619|brand-order"
+        assert brand_order_cursor_key("2619", "shelf") == "shelf|2619|brand-order"
+
+    async def test_an_all_network_only_config_warns_that_the_shelf_walks_nothing(
+        self, browse_settings, fresh_db
+    ):
+        from structlog.testing import capture_logs
+        from hd.db import base
+        s = browse_settings
+        s.network_only_brands = "Milwaukee"
+        await base.init_db(s)
+        with capture_logs() as logs:
+            summary = await run_browse(s, client=FakeClient(lambda v: make_page([], 0)),
+                                       tiers=("shelf",))
+        await base.close_db()
+        assert summary.walks == 0
+        assert any(e["event"].startswith("Shelf tier has no brand to walk") for e in logs)
+
+
+# ---------------------------------------------------------------- network lead
+
+LEAD_ROOT = "N-5yc1vZzv"
+LEAD_TOOLS = LEAD_ROOT + "Zc1"
+LEAD_HAND = LEAD_TOOLS + "Zc2"
+LEAD_POWER = LEAD_TOOLS + "Zc3"
+LEAD_BAND_A = LEAD_POWER + "Z12kx"
+LEAD_BAND_B = LEAD_POWER + "Z12ky"
+PRICE_BANDS = [price_dim(("$0 - $10", "12kx", 4), ("$10 - $20", "12ky", 3))]
+# 04:30 and 12:30 US Eastern on a standard-time date.
+AT_FOUR = datetime(2026, 12, 1, 9, 30, tzinfo=timezone.utc)
+AT_NOON = datetime(2026, 12, 1, 17, 30, tzinfo=timezone.utc)
+
+
+def lead_router(seen: list, power_dims=None, power_total: int = 7,
+                leaves: dict | None = None, totals: dict | None = None,
+                tools_dims=None, power_claim: int | None = None):
+    """Root -> Garage, Plumbing, Tools; Tools -> Hand (a walk) and Power (split).
+
+    Tools is over the cap, so the rotation has to resolve it; Power is over
+    the cap and offers whatever `power_dims` says — a list, or a callable given
+    how many times Power's facets have been read, for a node whose axis moves.
+    `seen` collects (navParam, startIndex) for every request.
+    """
+    pages = {
+        LEAD_ROOT + "Zgar": ["111", "444"],
+        LEAD_ROOT + "Zbqew": ["555"],
+        LEAD_HAND: ["201", "202"],
+        LEAD_BAND_A: ["301", "302", "303", "304"],
+        LEAD_BAND_B: ["305", "306", "307"],
+        "N-5yc1vZ4j2Zdt": ["900"],
+    }
+    pages.update(leaves or {})
+    reads = {"power": 0, "tools": 0}
+
+    def router(v):
+        nav, idx = v["navParam"], v["startIndex"]
+        seen.append((nav, idx))
+        if v["storefilter"] == "IN_STORE":
+            return make_page([], 0)
+        if nav == LEAD_ROOT:
+            return make_page([], 12, dims=[cat_dim(
+                ("Garage", "gar", 2), ("Plumbing", "bqew", 1), ("Tools", "c1", 2 + power_total),
+            )])
+        if nav == "N-5yc1vZ4j2":
+            return make_page([], 1, dims=[cat_dim(("Tools", "dt", 1))])
+        if nav == LEAD_TOOLS:
+            reads["tools"] += 1
+            claim = power_total if power_claim is None else power_claim
+            dims = [cat_dim(("Hand", "c2", 2), ("Power", "c3", claim))]
+            if tools_dims is not None:
+                dims = tools_dims(reads["tools"], dims)
+            return make_page([], 2 + power_total, dims=dims)
+        if nav == LEAD_POWER and nav not in pages:
+            reads["power"] += 1
+            dims = power_dims(reads["power"]) if callable(power_dims) else (power_dims or PRICE_BANDS)
+            return make_page([], power_total, dims=dims)
+        ids = pages.get(nav, [])
+        total = (totals or {}).get(nav, len(ids))
+        return make_page([make_product(i) for i in ids[idx:idx + 2]], total)
+
+    return router
+
+
+class ThrottlesAfter(FakeClient):
+    """A client the retailer stops answering after `after` requests."""
+
+    def __init__(self, router, after: int):
+        super().__init__(router)
+        self._after = after
+
+    @property
+    def is_throttled(self):
+        return self._count >= self._after
+
+
+class TestNetworkLead:
+    """The lead walks its node first at its hour, and leaves the rotation's
+    own bookkeeping exactly as it found it."""
+
+    @staticmethod
+    def _lead(s: Settings, lead: str = "Milwaukee:Tools/Power", hours: str = "4") -> Settings:
+        s.browse_network_lead = lead
+        s.browse_network_lead_hours_et = hours
+        return s
+
+    @staticmethod
+    async def _rows(s: Settings, run_id: int | None = None):
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        async with base.get_session(s) as session:
+            rows = (await session.execute(select(WalkCoverage))).scalars().all()
+        return [r for r in rows if run_id is None or r.run_id == run_id]
+
+    @staticmethod
+    def _power(seen: list) -> list:
+        return [(nav, idx) for nav, idx in seen if nav.startswith(LEAD_POWER)]
+
+    def test_off_by_default_is_no_lead_at_any_hour(self, browse_settings):
+        from hd.pipeline.browse import network_lead_for_run
+        for hour in range(24):
+            now = datetime(2026, 12, 1, hour, 30, tzinfo=timezone.utc)
+            assert network_lead_for_run(browse_settings, ("network",), now) == []
+
+    def test_helper_reads_eastern_time_on_both_sides_of_the_clock_change(self, browse_settings):
+        from hd.pipeline.browse import network_lead_for_run
+        s = self._lead(browse_settings)
+        want = [("Milwaukee", "zv", ("Tools", "Power"))]
+        summer = datetime(2026, 7, 1, 8, 30, tzinfo=timezone.utc)    # 04:30 EDT
+        assert network_lead_for_run(s, ("network",), summer) == want
+        assert network_lead_for_run(s, ("network",), AT_FOUR) == want  # 04:30 EST
+        assert network_lead_for_run(s, ("network",), summer + timedelta(hours=1)) == []
+        assert network_lead_for_run(s, ("shelf",), AT_FOUR) == []
+
+    async def test_off_hour_and_shelf_runs_are_request_for_request_unchanged(
+        self, browse_settings, fresh_db
+    ):
+        """Configured, but not this run's hour or tier: the request log is the
+        one an install without the setting produces."""
+        import os
+        from hd.db import base
+        s = browse_settings
+        s.browse_walk_refresh_hours = 0          # so repeat runs are comparable
+        await base.init_db(s)
+
+        async def requests(tiers, now):
+            if os.path.exists(s.browse_cursor_path):
+                os.remove(s.browse_cursor_path)
+            seen: list = []
+            await run_browse(s, client=FakeClient(lead_router(seen)), tiers=tiers, now=now)
+            return seen
+
+        plain_network = await requests(("network",), AT_FOUR)
+        plain_shelf = await requests(("shelf",), AT_FOUR)
+        self._lead(s)
+        assert await requests(("network",), AT_NOON) == plain_network
+        assert await requests(("shelf",), AT_FOUR) == plain_shelf
+        assert self._power(plain_network) == []  # the rotation was not due there
+        await base.close_db()
+
+    async def test_lead_walks_first_and_ignores_freshness(self, browse_settings, fresh_db):
+        from hd.db import base
+        from hd.db.models import WalkCoverage
+        s = self._lead(browse_settings)
+        await base.init_db(s)
+        fresh = datetime.now(timezone.utc) - timedelta(hours=2)
+        async with base.get_session(s) as session:
+            for nav, label, n in ((LEAD_BAND_A, "$0 - $10", 4), (LEAD_BAND_B, "$10 - $20", 3)):
+                session.add(WalkCoverage(
+                    run_id=99, store_id="2619", tier="ALL",
+                    label=f"Milwaukee/Tools/Power/{label}", nav_param=nav,
+                    split_parent=LEAD_POWER, split_axis="price",
+                    started=fresh, ended=fresh, status="complete",
+                    items_expected=n, items_observed=n))
+            await session.commit()
+
+        seen: list = []
+        summary = await run_browse(s, client=FakeClient(lead_router(seen)),
+                                   tiers=("network",), now=AT_FOUR)
+        rows = await self._rows(s)
+        await base.close_db()
+
+        navs = [nav for nav, _ in seen]
+        assert LEAD_BAND_A in navs and LEAD_BAND_B in navs, "fresh bands were skipped"
+        first_garage = navs.index(LEAD_ROOT + "Zgar")
+        assert max(i for i, n in enumerate(navs) if n.startswith(LEAD_POWER)) < first_garage
+        walked_again = [r for r in rows if r.run_id != 99 and r.nav_param.startswith(LEAD_POWER)]
+        assert sorted(r.nav_param for r in walked_again) == [LEAD_BAND_A, LEAD_BAND_B]
+        assert all(r.status == "complete" for r in walked_again)
+        assert summary.aborted is False
+
+    @pytest.mark.parametrize(
+        "shape", ["price", "category", "own-walk", "depth-limit", "top-level"])
+    async def test_lead_rows_are_the_rows_the_rotation_writes(
+        self, browse_settings, fresh_db, shape
+    ):
+        """Same navParams, labels and split tags whichever way the node is
+        reached — resume and axis memory read these rows."""
+        from hd.db import base
+        s = browse_settings
+        await base.init_db(s)
+        kwargs: dict = {}
+        lead, under = "Milwaukee:Tools/Power", LEAD_POWER
+        if shape == "category":
+            kwargs = dict(
+                power_dims=[cat_dim(("Saws", "ca", 4), ("Drills", "cb", 3))],
+                leaves={LEAD_POWER + "Zca": ["301", "302", "303", "304"],
+                        LEAD_POWER + "Zcb": ["305", "306", "307"]})
+        elif shape == "own-walk":
+            kwargs = dict(power_total=5, leaves={LEAD_POWER: ["301", "302", "303", "304", "305"]})
+        elif shape == "depth-limit":
+            # Through Tools the node sits at depth 1, where the guard stops the
+            # split and the node is walked whole. The lead must not split it.
+            s.browse_max_split_depth = 1
+        elif shape == "top-level":
+            # A category of its own: the rotation leaves it untagged.
+            lead, under = "Milwaukee:Garage", LEAD_ROOT + "Zgar"
+
+        def tags(rows):
+            return sorted((r.nav_param, r.label, r.split_parent, r.split_axis)
+                          for r in rows if r.nav_param.startswith(under))
+
+        self._lead(s, lead=lead)
+        await run_browse(s, client=FakeClient(lead_router([], **kwargs)),
+                         tiers=("network",), now=AT_FOUR)
+        by_lead = tags(await self._rows(s, run_id=1))
+
+        s.browse_network_lead = s.browse_network_lead_hours_et = ""
+        s.browse_walk_refresh_hours = 0          # forget the lead's completions
+        s.browse_network_categories_per_run = 3  # let the rotation reach Tools
+        await run_browse(s, client=FakeClient(lead_router([], **kwargs)),
+                         tiers=("network",), now=AT_FOUR)
+        by_rotation = tags(await self._rows(s, run_id=2))
+        await base.close_db()
+
+        assert by_lead and by_lead == by_rotation
+
+    async def test_label_comes_from_the_facets_not_the_setting(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._lead(browse_settings, lead="milwaukee:tools/c3")   # case, and a token
+        await base.init_db(s)
+        await run_browse(s, client=FakeClient(lead_router([])), tiers=("network",), now=AT_FOUR)
+        rows = [r for r in await self._rows(s) if r.nav_param.startswith(LEAD_POWER)]
+        await base.close_db()
+        assert sorted(r.label for r in rows) == [
+            "Milwaukee/Tools/Power/$0 - $10", "Milwaukee/Tools/Power/$10 - $20"]
+
+    async def test_rotation_does_not_rewalk_the_lead_in_the_same_run(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        await base.init_db(s)
+        seen: list = []
+        await run_browse(s, client=FakeClient(lead_router(seen)), tiers=("network",), now=AT_FOUR)
+        rows = await self._rows(s)
+        await base.close_db()
+        for band in (LEAD_BAND_A, LEAD_BAND_B):
+            assert seen.count((band, 0)) == 1
+            assert sum(r.nav_param == band for r in rows) == 1
+        assert (LEAD_HAND, 0) in seen, "the rest of the category should still be walked"
+
+    async def test_truncated_lead_walk_is_not_rewalked_in_the_same_run(
+        self, browse_settings, fresh_db
+    ):
+        """A band that comes back one short is truncated, so the freshness
+        filter — which knows only completions — would page it again."""
+        from hd.db import base
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        await base.init_db(s)
+        seen: list = []
+        router = lead_router(seen, leaves={LEAD_BAND_B: ["305", "306"]},
+                             totals={LEAD_BAND_B: 3})
+        await run_browse(s, client=FakeClient(router), tiers=("network",), now=AT_FOUR)
+        rows = [r for r in await self._rows(s) if r.nav_param == LEAD_BAND_B]
+        await base.close_db()
+        assert [r.status for r in rows] == ["truncated"]
+        assert seen.count((LEAD_BAND_B, 0)) == 1
+
+    async def test_rotation_keeps_the_leads_axis_in_the_same_run(self, browse_settings, fresh_db):
+        """The lead splits on price; the rotation's own read of the node then
+        offers categories as well. Without the lead's split in this run's
+        memory the planner takes them and walks the node a second time."""
+        from hd.db import base
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        await base.init_db(s)
+        both = [cat_dim(("Saws", "ca", 4), ("Drills", "cb", 3))] + PRICE_BANDS
+        seen: list = []
+        router = lead_router(
+            seen, power_dims=lambda n: PRICE_BANDS if n == 1 else both,
+            leaves={LEAD_POWER + "Zca": ["301", "302", "303", "304"],
+                    LEAD_POWER + "Zcb": ["305", "306", "307"]})
+        await run_browse(s, client=FakeClient(router), tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        navs = {nav for nav, _ in seen}
+        assert LEAD_POWER + "Zca" not in navs and LEAD_POWER + "Zcb" not in navs
+        assert seen.count((LEAD_BAND_A, 0)) == 1
+
+    async def test_rotation_rebuilds_the_leads_split_when_its_own_read_cannot(
+        self, browse_settings, fresh_db
+    ):
+        """The lead splits on price; the rotation's read of the node offers
+        only categories. The lead's children, handed over in memory, are
+        rebuilt and skipped instead of the node being walked on the other axis."""
+        from hd.db import base
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        await base.init_db(s)
+        only_categories = [cat_dim(("Saws", "ca", 4), ("Drills", "cb", 3))]
+        seen: list = []
+        router = lead_router(
+            seen, power_dims=lambda n: PRICE_BANDS if n == 1 else only_categories,
+            leaves={LEAD_POWER + "Zca": ["301", "302", "303", "304"],
+                    LEAD_POWER + "Zcb": ["305", "306", "307"]})
+        await run_browse(s, client=FakeClient(router), tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        navs = {nav for nav, _ in seen}
+        assert seen.count((LEAD_POWER, 0)) == 2, "the rotation should have re-read the node"
+        assert LEAD_POWER + "Zca" not in navs and LEAD_POWER + "Zcb" not in navs
+        assert seen.count((LEAD_BAND_A, 0)) == 1 and seen.count((LEAD_BAND_B, 0)) == 1
+
+    async def test_rotation_plans_the_node_from_its_own_count_not_its_parents_claim(
+        self, browse_settings, fresh_db
+    ):
+        """Tools says Power holds 5 (one walk); Power's own read says 7 (a
+        split). The lead splits it. Planned from the claim, the rotation would
+        then walk Power whole, minutes after its bands were walked."""
+        from hd.db import base
+        from hd.pipeline.browse import _plan_lead
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        await base.init_db(s)
+        seen: list = []
+        await run_browse(s, client=FakeClient(lead_router(seen, power_claim=5)),
+                         tiers=("network",), now=AT_FOUR)
+        rows = await self._rows(s)
+        await base.close_db()
+        assert not any(r.nav_param == LEAD_POWER for r in rows), "Power was walked whole"
+        assert seen.count((LEAD_BAND_A, 0)) == 1
+
+        memory: tuple = ({}, {}, {})
+        walks = await _plan_lead(FakeClient(lead_router([], power_claim=5)), s, "2619",
+                                 ("Milwaukee", "zv", ("Tools", "Power")), {}, memory)
+        assert len(walks) == 2 and memory[0][LEAD_POWER] == 7
+
+    async def test_two_entries_naming_one_node_walk_it_once(self, browse_settings, fresh_db):
+        """By label and by token: the settings check cannot see that these are
+        one node, so the run has to."""
+        from hd.db import base
+        s = self._lead(browse_settings, lead="Milwaukee:Tools/Power,Milwaukee:Tools/c3")
+        await base.init_db(s)
+        seen: list = []
+        await run_browse(s, client=FakeClient(lead_router(seen)), tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert seen.count((LEAD_BAND_A, 0)) == 1 and seen.count((LEAD_BAND_B, 0)) == 1
+        # ...and the path levels they share are read once.
+        assert seen.count((LEAD_TOOLS, 0)) == 1
+
+    async def test_a_refusal_reached_through_two_entries_is_one_deferral(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        s = self._lead(browse_settings, lead="Milwaukee:Tools/Power,Milwaukee:Tools/c3")
+        s.browse_walk_admission_ceiling = 4      # both bands refused, twice over
+        await base.init_db(s)
+        summary = await run_browse(s, client=FakeClient(lead_router([])),
+                                   tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert summary.deferred_walks == 2
+
+    async def test_a_lead_node_that_is_one_walk_reuses_its_own_first_page(
+        self, browse_settings, fresh_db
+    ):
+        """The read that plans the node is page 0 of the walk; it is not paid twice."""
+        from hd.db import base
+        s = self._lead(browse_settings)
+        await base.init_db(s)
+        seen: list = []
+        router = lead_router(seen, power_total=5,
+                             leaves={LEAD_POWER: ["301", "302", "303", "304", "305"]})
+        await run_browse(s, client=FakeClient(router), tiers=("network",), now=AT_FOUR)
+        rows = [r for r in await self._rows(s) if r.nav_param == LEAD_POWER]
+        await base.close_db()
+        assert [r.status for r in rows] == ["complete"]
+        assert seen.count((LEAD_POWER, 0)) == 1
+
+    async def test_a_node_is_not_found_inside_itself(self, browse_settings, fresh_db):
+        """A category's own facets can list the category. It is not its own child."""
+        from structlog.testing import capture_logs
+        from hd.db import base
+        s = self._lead(browse_settings, lead="Milwaukee:Tools/Tools")
+        await base.init_db(s)
+        seen: list = []
+        router = lead_router(seen, tools_dims=lambda n, dims: [cat_dim(
+            ("Tools", "c1", 9), ("Hand", "c2", 2), ("Power", "c3", 7))])
+        with capture_logs() as logs:
+            await run_browse(s, client=FakeClient(router), tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert any(e["event"].startswith("Lead node not found") for e in logs)
+        assert not any(nav.startswith(LEAD_TOOLS + "Z") for nav, _ in seen)
+
+    async def test_every_walk_the_lead_abandons_is_counted(self, browse_settings, fresh_db):
+        """Refusing the first band abandons both. Both are deferred walks."""
+        from hd.db import base
+        s = self._lead(browse_settings)
+        # The three planning reads leave 1 of 4; band A's estimate is 3.
+        s.browse_walk_admission_ceiling = 4
+        await base.init_db(s)
+        seen: list = []
+        summary = await run_browse(s, client=FakeClient(lead_router(seen)),
+                                   tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert LEAD_BAND_A not in {nav for nav, _ in seen}
+        assert summary.deferred_walks == 2
+
+    async def test_lead_leaves_the_cursors_alone(self, browse_settings, fresh_db):
+        """Two brands, and a ceiling the lead uses up: the rotation walks
+        nothing, so no brand has had a turn and no category was finished."""
+        from hd.db import base
+        from hd import rotation
+        s = self._lead(browse_settings)
+        s.brands, s.brand_tokens = "Milwaukee,DEWALT", "Milwaukee:zv,DEWALT:4j2"
+        await base.init_db(s)
+        before = {"network|2619|zv": 0, "network|2619|4j2": 0, "network|2619|brand-order": 0}
+        rotation.save_cursors(s.browse_cursor_path, dict(before))
+        probe: list = []
+        s.browse_walk_admission_ceiling = 0
+        lead_only = FakeClient(lead_router(probe))
+        await run_browse(s, client=lead_only, tiers=("network",), now=AT_FOUR)
+        lead_cost = max(i for i, (nav, _) in enumerate(probe) if nav.startswith(LEAD_POWER)) + 1
+
+        rotation.save_cursors(s.browse_cursor_path, dict(before))
+        # The lead's own cost plus the one-request margin `admits` holds back:
+        # the lead finishes, and the rotation's first facet read spends the rest.
+        s.browse_walk_admission_ceiling = lead_cost + 1
+        s.browse_walk_refresh_hours = 0
+        seen: list = []
+        summary = await run_browse(s, client=FakeClient(lead_router(seen)),
+                                   tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert summary.walks == 2, "the lead should have walked both bands and nothing else"
+        assert rotation.load_cursors(s.browse_cursor_path) == before
+
+    async def test_rotation_progress_still_hands_the_brand_lead_on_once(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd import rotation
+        s = self._lead(browse_settings)
+        s.brands, s.brand_tokens = "Milwaukee,DEWALT", "Milwaukee:zv,DEWALT:4j2"
+        await base.init_db(s)
+        await run_browse(s, client=FakeClient(lead_router([])), tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert rotation.load_cursors(s.browse_cursor_path)["network|2619|brand-order"] == 1
+
+    async def test_lead_deferrals_are_counted_once(self, browse_settings, fresh_db):
+        """The lead refuses its second band; the rotation then reaches the
+        same category, re-plans the node and refuses again. One deferral."""
+        from hd.db import base
+        from hd import rotation
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        # 3 lead reads + band A's 3 pages leave 2 of 8: band B (estimate 3) is
+        # refused. The cursor starts the rotation on Tools, which costs the
+        # root, Tools and Power reads and so cannot afford Hand either.
+        s.browse_walk_admission_ceiling = 8
+        rotation.save_cursors(s.browse_cursor_path, {"network|2619|zv": 2})
+        await base.init_db(s)
+        seen: list = []
+        summary = await run_browse(s, client=FakeClient(lead_router(seen)),
+                                   tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        navs = [nav for nav, _ in seen]
+        assert LEAD_BAND_A in navs and LEAD_BAND_B not in navs, "band B should be deferred"
+        assert seen.count((LEAD_POWER, 0)) == 2, "the rotation should have re-planned the node"
+        assert LEAD_HAND not in navs
+        # Band B once (the lead), Hand once (the rotation). Not band B twice.
+        assert summary.deferred_walks == 2
+
+    async def test_lead_stops_planning_once_the_budget_is_spent(self, browse_settings, fresh_db):
+        """Planning reads are requests too. A ceiling reached by the lead's
+        own path reads, or by an earlier lead entry, ends the lead there."""
+        from hd.db import base
+        s = self._lead(browse_settings)
+        s.browse_walk_refresh_hours = 0
+        await base.init_db(s)
+
+        # The root read is the whole budget: the next path level is not read.
+        s.browse_walk_admission_ceiling = 1
+        client = FakeClient(lead_router([]))
+        await run_browse(s, client=client, tiers=("network",), now=AT_FOUR)
+        assert client.request_count == 1
+
+        # The root and Tools reads are the whole budget: the node is found and
+        # must not be planned.
+        s.browse_walk_admission_ceiling = 2
+        client = FakeClient(lead_router([]))
+        summary = await run_browse(s, client=client, tiers=("network",), now=AT_FOUR)
+        assert (client.request_count, summary.walks, summary.deferred_walks) == (2, 0, 0)
+
+        # The first entry spends the ceiling exactly (3 reads + band A's 3
+        # pages); the second entry's brand root must not be read.
+        s.brands, s.brand_tokens = "Milwaukee,DEWALT", "Milwaukee:zv,DEWALT:4j2"
+        self._lead(s, lead="Milwaukee:Tools/Power,DEWALT:Tools")
+        s.browse_walk_admission_ceiling = 6
+        seen: list = []
+        client = FakeClient(lead_router(seen))
+        from structlog.testing import capture_logs
+        with capture_logs() as logs:
+            await run_browse(s, client=client, tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert client.request_count == 6
+        assert not any(nav.startswith("N-5yc1vZ4j2") for nav, _ in seen)
+        skipped = [e for e in logs if e["event"].startswith("Network lead skipped")]
+        assert [e["brand"] for e in skipped] == ["DEWALT"], "a lead that did not run must say so"
+
+    async def test_a_single_walk_lead_is_not_recorded_as_its_parents_whole_split(
+        self, browse_settings, fresh_db
+    ):
+        """The lead node is one walk, tagged as a piece of Tools. If that tag
+        were remembered as Tools' split, a later read of Tools that came back
+        without categories would rebuild Tools as that one child and call the
+        category done — dropping Hand without a word."""
+        from hd.db import base
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        await base.init_db(s)
+        seen: list = []
+        router = lead_router(
+            seen, power_total=5, leaves={LEAD_POWER: ["301", "302", "303", "304", "305"]},
+            tools_dims=lambda n, dims: dims if n == 1 else [])
+        await run_browse(s, client=FakeClient(router), tiers=("network",), now=AT_FOUR)
+        rows = await self._rows(s)
+        await base.close_db()
+        # With no facets to split on, the rotation walks what it can reach of
+        # Tools itself and records that it did.
+        assert any(r.nav_param == LEAD_TOOLS for r in rows), [r.nav_param for r in rows]
+
+    async def test_lead_stays_within_the_admission_ceiling(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._lead(browse_settings)
+        s.browse_network_categories_per_run = 3
+        s.browse_walk_refresh_hours = 0
+        await base.init_db(s)
+        per_direction = s.api_max_start_index // s.page_size + 1
+        for ceiling in (2, 3, 5, 8, 13):
+            s.browse_walk_admission_ceiling = ceiling
+            client = FakeClient(lead_router([]))
+            await run_browse(s, client=client, tiers=("network",), now=AT_FOUR)
+            assert client.request_count <= ceiling + per_direction, (
+                f"ceiling {ceiling}: run spent {client.request_count}")
+        await base.close_db()
+
+    async def test_throttle_in_the_lead_stops_everything_after_it(
+        self, browse_settings, fresh_db
+    ):
+        """Throttled on band A's first page: no request follows it — not the
+        next band, not the next lead entry, not the rotation."""
+        from hd.db import base
+        from hd import rotation
+        s = self._lead(browse_settings, lead="Milwaukee:Tools/Power,Milwaukee:Tools/Hand")
+        await base.init_db(s)
+        seen: list = []
+        summary = await run_browse(s, client=ThrottlesAfter(lead_router(seen), after=4),
+                                   tiers=("network",), now=AT_FOUR)
+        rows = await self._rows(s)
+        await base.close_db()
+        assert summary.aborted is True
+        assert seen == [(LEAD_ROOT, 0), (LEAD_TOOLS, 0), (LEAD_POWER, 0), (LEAD_BAND_A, 0)]
+        assert [r.nav_param for r in rows] == [LEAD_BAND_A], "a walk was recorded after the throttle"
+        assert rotation.load_cursors(s.browse_cursor_path) == {}
+
+    async def test_throttle_between_path_levels_stops_the_search(self, browse_settings, fresh_db):
+        from hd.db import base
+        s = self._lead(browse_settings)
+        await base.init_db(s)
+        seen: list = []
+        summary = await run_browse(s, client=ThrottlesAfter(lead_router(seen), after=1),
+                                   tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert seen == [(LEAD_ROOT, 0)] and summary.aborted is True
+
+    async def test_missing_label_warns_and_the_rotation_is_unchanged(
+        self, browse_settings, fresh_db
+    ):
+        import os
+        from structlog.testing import capture_logs
+        from hd.db import base
+        from hd import rotation
+        s = browse_settings
+        s.browse_walk_refresh_hours = 0
+        await base.init_db(s)
+        plain = await run_browse(s, client=FakeClient(lead_router([])),
+                                 tiers=("network",), now=AT_FOUR)
+        plain_cursors = rotation.load_cursors(s.browse_cursor_path)
+        os.remove(s.browse_cursor_path)
+
+        self._lead(s, lead="Milwaukee:Tools/Nope")
+        with capture_logs() as logs:
+            summary = await run_browse(s, client=FakeClient(lead_router([])),
+                                       tiers=("network",), now=AT_FOUR)
+        await base.close_db()
+        assert any(e["event"].startswith("Lead node not found") for e in logs)
+        assert (summary.walks, summary.snapshots, summary.deferred_walks) == (
+            plain.walks, plain.snapshots, plain.deferred_walks)
+        assert rotation.load_cursors(s.browse_cursor_path) == plain_cursors
+
+    async def test_an_item_in_a_lead_band_and_a_rotation_category_is_one_snapshot(
+        self, browse_settings, fresh_db
+    ):
+        from hd.db import base
+        from hd.db.models import StoreSnapshot
+        s = self._lead(browse_settings)
+        await base.init_db(s)
+        router = lead_router([], leaves={LEAD_BAND_A: ["111", "302", "303", "304"]})
+        await run_browse(s, client=FakeClient(router), tiers=("network",), now=AT_FOUR)
+        async with base.get_session(s) as session:
+            snaps = [x.item_id for x in (await session.execute(select(StoreSnapshot))).scalars().all()]
+        await base.close_db()
+        assert snaps.count("111") == 1
+
+
+class TestNetworkLeadConfigFailsLoud:
+    """Every way the lead setting can be wrong would otherwise be a silent off."""
+
+    def _settings(self, tmp_path, **overrides) -> Settings:
+        base = dict(
+            _env_file=None,
+            database_url=f"sqlite+aiosqlite:///{tmp_path}/test.db",
+            stores="2619",
+            brands="Milwaukee,DEWALT",
+            brand_tokens="Milwaukee:zv,DEWALT:4j2",
+        )
+        base.update(overrides)
+        return Settings(**base)
+
+    def test_a_good_lead_parses(self, tmp_path):
+        s = self._settings(tmp_path, browse_network_lead_hours_et="4",
+                           browse_network_lead="milwaukee:Tools/Power Tools, DEWALT:Tools")
+        assert s.browse_network_lead_list == [
+            ("milwaukee", ("Tools", "Power Tools")), ("DEWALT", ("Tools",))]
+
+    def test_a_lead_without_an_hour_refuses(self, tmp_path):
+        with pytest.raises(ValueError, match="must be set together"):
+            self._settings(tmp_path, browse_network_lead="Milwaukee:Tools")
+
+    def test_an_hour_without_a_lead_refuses(self, tmp_path):
+        with pytest.raises(ValueError, match="must be set together"):
+            self._settings(tmp_path, browse_network_lead_hours_et="4")
+
+    def test_an_hour_that_does_not_parse_refuses(self, tmp_path):
+        with pytest.raises(ValueError, match="BROWSE_NETWORK_LEAD_HOURS_ET.*'4am'"):
+            self._settings(tmp_path, browse_network_lead_hours_et="4am",
+                           browse_network_lead="Milwaukee:Tools")
+
+    def test_a_shelf_hour_refuses(self, tmp_path):
+        with pytest.raises(ValueError, match="never fires"):
+            self._settings(tmp_path, browse_shelf_hours_et="8,12",
+                           browse_network_lead_hours_et="4,8",
+                           browse_network_lead="Milwaukee:Tools")
+
+    def test_a_malformed_entry_refuses(self, tmp_path):
+        with pytest.raises(ValueError, match="BRAND:Category/Subcategory"):
+            self._settings(tmp_path, browse_network_lead_hours_et="4",
+                           browse_network_lead="Milwaukee:Tools,Power Tools")
+
+    def test_a_brand_with_no_token_refuses(self, tmp_path):
+        with pytest.raises(ValueError, match="BROWSE_NETWORK_LEAD.*MAKITA"):
+            self._settings(tmp_path, browse_network_lead_hours_et="4",
+                           browse_network_lead="Makita:Tools")
+
+    def test_a_brand_known_only_by_name_refuses(self, tmp_path):
+        """BRANDS alone is not enough: the lead needs the facet token."""
+        with pytest.raises(ValueError, match="BROWSE_NETWORK_LEAD.*DEWALT"):
+            self._settings(tmp_path, brand_tokens="Milwaukee:zv",
+                           browse_network_lead_hours_et="4",
+                           browse_network_lead="DEWALT:Tools")
+
+    def test_an_install_with_no_tokens_yet_is_not_checked(self, tmp_path):
+        s = self._settings(tmp_path, brands="", brand_tokens="",
+                           browse_network_lead_hours_et="4",
+                           browse_network_lead="Milwaukee:Tools")
+        assert s.browse_network_lead_list == [("Milwaukee", ("Tools",))]
+
+    @pytest.mark.parametrize("hours", [",", " , "])
+    def test_hours_that_name_no_hour_refuse(self, tmp_path, hours):
+        with pytest.raises(ValueError, match="names no hour"):
+            self._settings(tmp_path, browse_network_lead_hours_et=hours,
+                           browse_network_lead="Milwaukee:Tools")
+
+    def test_a_lead_that_names_no_node_refuses(self, tmp_path):
+        with pytest.raises(ValueError, match="one or more"):
+            self._settings(tmp_path, browse_network_lead_hours_et="4",
+                           browse_network_lead=",")
+
+    @pytest.mark.parametrize("lead", [
+        "Milwaukee:Tools/Power,milwaukee:tools/power",     # the same node twice
+        "Milwaukee:Tools,Milwaukee:Tools/Power",           # a node inside another
+        "Milwaukee:Tools/Power,Milwaukee:Tools",
+    ])
+    def test_overlapping_entries_refuse(self, tmp_path, lead):
+        with pytest.raises(ValueError, match="twice, or inside another"):
+            self._settings(tmp_path, browse_network_lead_hours_et="4",
+                           browse_network_lead=lead)
+
+    def test_sibling_nodes_and_two_brands_do_not_overlap(self, tmp_path):
+        s = self._settings(tmp_path, browse_network_lead_hours_et="04, 20",
+                           browse_network_lead="Milwaukee:Tools/Power,Milwaukee:Tools/Hand,DEWALT:Tools")
+        assert len(s.browse_network_lead_list) == 3

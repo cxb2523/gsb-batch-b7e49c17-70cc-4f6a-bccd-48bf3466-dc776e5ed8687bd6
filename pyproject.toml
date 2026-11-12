@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hd-clearance-monitor"
+version = "0.2.0"
+description = "Track Home Depot clearance, price drops and stock for any brand at your local stores"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
+    "aiosqlite",
+    "pydantic-settings>=2.0",
+    "typer>=0.12",
+    "structlog>=24.0",
+    "rich",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.29"]
+dashboard = ["nicegui>=2.0"]
+dev = [
+    "httpx",  # test doubles only; the scanner itself sends through curl
+    "pytest",
+    "pytest-asyncio",
+    "pytest-mock",
+]
+
+[project.scripts]
+hd = "hd.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

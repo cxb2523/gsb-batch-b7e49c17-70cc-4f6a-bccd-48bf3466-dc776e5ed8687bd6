@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project-specific
+.env
+dev.db
+# WAL leaves two sidecar files beside any SQLite database.
+*.db-wal
+*.db-shm
+# Runtime request metrics, not source.
+diagnostics/*.jsonl
+hd_launchd.*.log
+hd_dashboard.*.log
+.hd_notify_cursor
+.hd_rotation_cursor
+.hd_browse_cursor
+.hd_dailydeals_cursor
+.hd_dailydeals_cursor.lock
+.hd_canvas_id
+.env.bak*
+hd_prune.*.log
+raw_responses/
+screenshots/
+*.png
+.playwright-mcp/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+.hd_throttle_cooldown
+.hd_health_state
+
+# Stray empty scratch database.
+x.db
