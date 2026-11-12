@@ -1,0 +1,196 @@
+# CI / CD
+
+aislop runs the same gate everywhere. `aislop ci` scans, prints JSON, and exits non-zero when the score drops below your threshold or any error-severity diagnostic is present. The set-and-forget command is `npx --yes aislop@latest ci`: it always runs the latest published CLI, so there is no version to bump.
+
+## Fastest path: `aislop init`
+
+Run `npx aislop init` and answer "yes" to the GitHub Actions workflow prompt. It writes `.aislop/config.yml` and `.github/workflows/aislop.yml` for you. Commit both and your quality gate is live.
+
+`.github/workflows/aislop.yml` is the workflow file (it must live under `.github/workflows/`). `.aislop/config.yml` is the policy file: thresholds, engines, scoring, and telemetry live there.
+
+## GitHub Actions
+
+```yaml
+# .github/workflows/aislop.yml
+name: aislop
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npx --yes aislop@latest ci
+```
+
+Prefer the Marketplace Action? It wraps `setup-node` and runs the same gate. From v0.18.1, the CLI version it runs follows the ref in `uses:` unless `version` is set. Tags before v0.18.1 run the latest CLI unless `version` is set.
+
+| `uses:` ref | CLI version |
+|---|---|
+| `@v1`, `@main`, other branches | latest release |
+| a release tag, e.g. `@v0.18.1` | `0.18.1` |
+| a commit SHA | the `package.json` version at that commit |
+
+Pinning a release tag or SHA gives reproducible builds, and Dependabot's `github-actions` updates bump the Action and the CLI together, so there is no separate version to remember:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: scanaislop/aislop@v0.20.0   # or @v1 to always run the latest release
+```
+
+Set `version` only to run a different CLI than the ref implies. An explicit `version` always wins, so Dependabot bumps to `uses:` no longer change the CLI.
+
+## GitLab CI
+
+```yaml
+# .gitlab-ci.yml
+aislop:
+  image: node:24
+  script:
+    - npx --yes aislop@latest ci
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+```
+
+## CircleCI
+
+```yaml
+# .circleci/config.yml
+version: 2.1
+jobs:
+  aislop:
+    docker:
+      - image: cimg/node:24.0
+    steps:
+      - checkout
+      - run: npx --yes aislop@latest ci
+workflows:
+  quality-gate:
+    jobs:
+      - aislop
+```
+
+## Bitbucket Pipelines
+
+Bitbucket clones shallow by default and exposes the PR target branch as `$BITBUCKET_PR_DESTINATION_BRANCH`. Fetch the base, then gate on only the changed files (see [PR-scoped gating](#pr-scoped-gating)):
+
+```yaml
+# bitbucket-pipelines.yml
+pipelines:
+  pull-requests:
+    "**":
+      - step:
+          name: aislop gate
+          image: node:24
+          clone:
+            depth: full   # branch diffs need history
+          script:
+            - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH"
+            - npx --yes aislop@latest ci --changes --base FETCH_HEAD
+```
+
+Bitbucket's clone has only the source branch, so `git fetch origin <branch>` sets `FETCH_HEAD` without creating `origin/<branch>` — diff against `FETCH_HEAD` directly.
+
+## Pre-commit hook
+
+Scan only staged files to keep commits clean:
+
+```bash
+npx aislop scan --staged
+```
+
+## PR-scoped gating
+
+A plain `--changes` diffs the working tree against `HEAD`, so in CI (where PR changes are already committed) it sees nothing. Pass `--base <ref>` to diff against the target branch instead. Both `scan` and `ci` accept `--changes` and `--base`, so you can gate a PR on only the files it touches:
+
+```bash
+npx aislop ci --changes --base origin/main
+```
+
+The base ref must exist in the checkout. With a full clone, `origin/<branch>` works directly; on a shallow or single-branch clone, run `git fetch origin <branch>` and pass `--base FETCH_HEAD` (the fetch sets `FETCH_HEAD` without creating `origin/<branch>`). If an explicit `--base` cannot be resolved, the run fails instead of silently passing an empty scan. The score gate and exit code behave exactly as a full `ci` run.
+
+## Quality gate
+
+Set a minimum score in `.aislop/config.yml`:
+
+```yaml
+ci:
+  failBelow: 70
+  format: json
+```
+
+The CI command exits 1 when the score drops below `failBelow`, or when any error-severity diagnostic is present.
+
+Format and lint checks for Python, Go, Rust, Ruby, PHP, Java, C/C++, and C# (with `projectEvaluation`) need their tools (`ruff`, `golangci-lint`, `gofmt`, `clippy`, `cppcheck`, and so on) on `PATH`. When one is missing, those checks do not run and the score does not include them. Tools that only run under certain conditions, such as `clang-format` with a `.clang-format` file, `clang-tidy` with a `compile_commands.json`, `google-java-format` when the build configures it, or `checkstyle` with a project `checkstyle.xml`, are reported only when those conditions hold. The scan output names the missing tools, and `aislop doctor` shows how to install them (`aislop-tools` installs the bundled `ruff` and `golangci-lint`). To fail CI instead of scoring a partial scan, set:
+
+```yaml
+ci:
+  failOnMissingTools: true
+```
+
+## Baseline: fail only on new findings
+
+Adopting aislop on an existing codebase does not have to block CI until every finding is fixed. A baseline records the findings you accept today, and `aislop ci` then fails only on findings that are not in it.
+
+```bash
+aislop baseline write   # record every current finding in .aislop/ci-baseline.json
+```
+
+Commit the file and point the config at it:
+
+```yaml
+ci:
+  baseline: .aislop/ci-baseline.json
+```
+
+With a baseline configured, `scan` and `ci` match each finding against it:
+
+- A finding is matched on its rule, its file, and the text of the reported line (whitespace-insensitive), not its line number, so edits elsewhere in the file do not re-raise it. File-level findings such as `complexity/file-too-large` or `security/vulnerable-dependency` match on rule, file, and message, so a different vulnerable package is a new finding. Repeated identical findings are counted, so a second copy of an accepted finding is new. `baseline write` refuses to record a scan where an engine failed or a required tool is missing.
+- CI exits 1 when any finding is not in the baseline, whatever its severity, or when the score drops below `failBelow`. Accepted findings alone do not fail CI.
+- The score still counts every finding, accepted or not.
+- Entries that no longer occur are reported as stale. Run `aislop baseline prune` to remove them; prune never adds entries, so the baseline only shrinks as findings are fixed. Entries for an engine that was skipped or missing a tool are never treated as stale, a line-level entry only becomes stale once its line is gone from the file (or the file is deleted), and a file-level entry from an external tool (formatter, linter, dependency audit, or knip) only becomes stale once its file is deleted. A tool that fails quietly therefore cannot make `prune` drop entries.
+- With `--changes` or `--staged`, stale entries are only reported for files in the scanned scope.
+
+This file is separate from `.aislop/baseline.json`, the score snapshot that `aislop hook baseline` writes for agent hooks; `aislop baseline write` refuses to write to that path.
+
+If the configured file is missing or invalid, the run prints a warning and treats every finding as new. In JSON output, matched diagnostics carry `"baselined": true` and a `baseline` object reports `path`, `status`, `accepted`, `new`, and `stale`.
+
+## JSON output
+
+Both `aislop ci` and `aislop scan --json` emit structured JSON for parsing in CI. Example shape (values illustrative):
+
+```json
+{
+  "schemaVersion": "1",
+  "cliVersion": "<version>",
+  "score": 87,
+  "label": "Healthy",
+  "engines": {
+    "format":       { "issues": 0, "skipped": false, "elapsed": 406 },
+    "lint":         { "issues": 0, "skipped": false, "elapsed": 378 },
+    "code-quality": { "issues": 1, "skipped": false, "elapsed": 812 },
+    "ai-slop":      { "issues": 2, "skipped": false, "elapsed": 455 },
+    "security":     { "issues": 0, "skipped": false, "elapsed": 1103 }
+  },
+  "diagnostics": [ ... ]
+}
+```
+
+An engine that crashed during the scan also carries `"failed": true`. A `skipped` engine without `failed` was skipped on purpose, and its `skipReason` says why. When a tool needed for a detected language is not installed, the engine lists it in `missingTools`, even if the engine still ran for other languages:
+
+```json
+"engines": {
+  "format": { "issues": 0, "skipped": true, "elapsed": 0, "skipReason": "missing tools: ruff", "missingTools": ["ruff"] },
+  "lint":   { "issues": 3, "skipped": false, "elapsed": 412, "missingTools": ["ruff"] }
+}
+```
+
+An engine skipped only because the scan has no files it applies to has no `missingTools`.

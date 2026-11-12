@@ -1,0 +1,123 @@
+import { findMissingTools, type ToolRequirement, withMissingTools } from "../missing-tools.js";
+import type { Diagnostic, Engine, EngineContext, EngineResult } from "../types.js";
+import { runBiomeFormat } from "./biome.js";
+import { hasClangFormatConfig, runClangFormat } from "./clang-format.js";
+import { runDotnetFormat } from "./dotnet-format.js";
+import { runGenericFormatter } from "./generic.js";
+import { runGofmt } from "./gofmt.js";
+import { detectJavaFormatStyle } from "../java-targets.js";
+import { runJavaFormat } from "./java-format.js";
+import { runRuffFormat } from "./ruff-format.js";
+
+const FORMAT_TOOL_REQUIREMENTS: readonly ToolRequirement[] = [
+	{ language: "python", tool: "ruff" },
+	{ language: "go", tool: "gofmt" },
+	{ language: "rust", tool: "cargo" },
+	{ language: "rust", tool: "rustfmt" },
+	{ language: "ruby", tool: "rubocop" },
+	{ language: "php", tool: "php-cs-fixer" },
+	{
+		language: "java",
+		tool: "google-java-format",
+		applies: (context) => detectJavaFormatStyle(context.rootDirectory) !== null,
+	},
+	{
+		language: "csharp",
+		tool: "dotnet",
+		applies: (context) => context.config.lint.csharp?.projectEvaluation === true,
+	},
+	{
+		language: "cpp",
+		tool: "clang-format",
+		applies: (context) => hasClangFormatConfig(context.rootDirectory),
+	},
+];
+
+export const formatEngine: Engine = {
+	name: "format",
+
+	async run(context: EngineContext): Promise<EngineResult> {
+		const diagnostics: Diagnostic[] = [];
+		const { languages, installedTools } = context;
+
+		const promises: Promise<Diagnostic[]>[] = [];
+
+		if (languages.includes("typescript") || languages.includes("javascript")) {
+			promises.push(runBiomeFormat(context));
+		}
+
+		if (languages.includes("python") && installedTools.ruff) {
+			promises.push(runRuffFormat(context));
+		}
+
+		if (languages.includes("go") && installedTools.gofmt) {
+			promises.push(runGofmt(context));
+		}
+
+		if (languages.includes("rust") && installedTools.cargo && installedTools.rustfmt) {
+			promises.push(runGenericFormatter(context, "rust"));
+		}
+
+		if (languages.includes("ruby") && installedTools.rubocop) {
+			promises.push(runGenericFormatter(context, "ruby"));
+		}
+
+		if (languages.includes("php") && installedTools["php-cs-fixer"]) {
+			promises.push(runGenericFormatter(context, "php"));
+		}
+
+		if (
+			languages.includes("java") &&
+			installedTools["google-java-format"] &&
+			detectJavaFormatStyle(context.rootDirectory) !== null
+		) {
+			promises.push(runJavaFormat(context));
+		}
+
+		if (
+			languages.includes("csharp") &&
+			installedTools.dotnet &&
+			context.config.lint.csharp?.projectEvaluation === true
+		) {
+			promises.push(runDotnetFormat(context));
+		}
+
+		if (languages.includes("cpp") && installedTools["clang-format"]) {
+			promises.push(runClangFormat(context));
+		}
+
+		// No formatter matched the detected languages/installed tools. Report this as
+		// skipped (mirroring `doctor`) rather than returning an empty result, which the
+		// scan summary would otherwise launder into a misleading "done (0 issues)".
+		const missingTools = findMissingTools(context, FORMAT_TOOL_REQUIREMENTS);
+		if (promises.length === 0) {
+			return withMissingTools(
+				{
+					engine: "format",
+					diagnostics,
+					elapsed: 0,
+					skipped: true,
+					skipReason: "no formatter for the detected languages",
+				},
+				missingTools,
+			);
+		}
+
+		const results = await Promise.allSettled(promises);
+		for (const result of results) {
+			if (result.status === "fulfilled") {
+				diagnostics.push(...result.value);
+			}
+		}
+
+		return withMissingTools(
+			{
+				engine: "format",
+				diagnostics,
+				elapsed: 0,
+				skipped: false,
+			},
+			missingTools,
+		);
+	},
+};

@@ -1,0 +1,215 @@
+import { describe, expect, it } from "vitest";
+import { extractProviderOutputMetadata } from "../../src/agents/provider-metadata.js";
+import { formatProviderOutputLine } from "../../src/agents/provider-output.js";
+
+describe("provider output formatting", () => {
+	it("passes through plain text provider output", () => {
+		expect(formatProviderOutputLine("edited src/a.ts")).toBe("edited src/a.ts");
+	});
+
+	it("summarizes assistant JSON content", () => {
+		expect(
+			formatProviderOutputLine(
+				JSON.stringify({
+					type: "assistant",
+					message: { content: [{ type: "text", text: "I fixed the import." }] },
+				}),
+			),
+		).toBe("assistant: I fixed the import.");
+	});
+
+	it("summarizes tool and command JSON events", () => {
+		expect(
+			formatProviderOutputLine(
+				JSON.stringify({
+					type: "assistant",
+					message: { content: [{ type: "tool_use", name: "Edit" }] },
+				}),
+			),
+		).toBe("tool: Edit");
+		expect(formatProviderOutputLine(JSON.stringify({ type: "exec", command: "pnpm test" }))).toBe(
+			"exec: pnpm test",
+		);
+	});
+
+	it("summarizes provider lifecycle events", () => {
+		expect(formatProviderOutputLine(JSON.stringify({ type: "system", subtype: "init" }))).toBe(
+			"session initialized",
+		);
+		expect(formatProviderOutputLine(JSON.stringify({ type: "result", subtype: "success" }))).toBe(
+			"result: success",
+		);
+	});
+
+	it("extracts token usage and file paths from provider JSON", () => {
+		const metadata = extractProviderOutputMetadata(
+			JSON.stringify({
+				type: "turn.completed",
+				usage: {
+					input_tokens: 1200,
+					cached_input_tokens: 400,
+					output_tokens: 80,
+				},
+				item: {
+					type: "file_change",
+					path: "src/app.ts",
+				},
+			}),
+		);
+
+		expect(metadata.usage).toMatchObject({
+			inputTokens: 1200,
+			cachedInputTokens: 400,
+			outputTokens: 80,
+			totalTokens: 1680,
+		});
+		expect(metadata.files).toEqual(["src/app.ts"]);
+	});
+
+	it("does not create zero-token usage for command-only events", () => {
+		const metadata = extractProviderOutputMetadata(
+			JSON.stringify({
+				type: "item.completed",
+				command: "sed -n 1,80p src/app.ts",
+			}),
+		);
+
+		expect(metadata.usage).toBeUndefined();
+	});
+
+	it("extracts Claude-style final cost and cache token usage", () => {
+		const metadata = extractProviderOutputMetadata(
+			JSON.stringify({
+				type: "result",
+				total_cost_usd: 0.0123,
+				usage: {
+					input_tokens: 100,
+					cache_read_input_tokens: 250,
+					cache_creation_input_tokens: 50,
+					output_tokens: 25,
+				},
+			}),
+		);
+
+		expect(metadata.usage).toMatchObject({
+			inputTokens: 100,
+			cachedInputTokens: 300,
+			outputTokens: 25,
+			totalTokens: 425,
+			costUsd: 0.0123,
+		});
+	});
+
+	it("counts a pi tool call once, from its execution event, not the streamed toolcall", () => {
+		const lines = [
+			JSON.stringify({
+				type: "message_update",
+				usage: { totalTokens: 900 },
+				assistantMessageEvent: { type: "toolcall_start", id: "t1", toolName: "edit" },
+			}),
+			JSON.stringify({ type: "tool_execution_start", toolCallId: "t1", toolName: "edit" }),
+		].map(formatProviderOutputLine);
+		expect(lines.filter((line) => line?.startsWith("tool:"))).toEqual(["tool: edit"]);
+	});
+
+	it("renders pi tool execution events and completion state", () => {
+		expect(
+			formatProviderOutputLine(
+				JSON.stringify({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash" }),
+			),
+		).toBe("tool: bash");
+		expect(formatProviderOutputLine(JSON.stringify({ type: "tool_execution_end", isError: false }))).toBe(
+			"tool done",
+		);
+		expect(formatProviderOutputLine(JSON.stringify({ type: "tool_execution_end", isError: true }))).toBe(
+			"tool done (error)",
+		);
+	});
+
+	it("extracts token usage from pi message_end events, not partial message_update ones", () => {
+		const metadata = extractProviderOutputMetadata(
+			JSON.stringify({
+				type: "message_end",
+				usage: { input: 500, output: 120, cached: 0, total: 620 },
+				assistantMessageEvent: {
+					type: "toolcall_start",
+					id: "t1",
+					toolName: "write",
+					args: { path: "src/pi-edit.ts" },
+				},
+			}),
+		);
+
+		expect(metadata.usage).toMatchObject({ inputTokens: 500, outputTokens: 120, totalTokens: 620 });
+		expect(metadata.files).toEqual(["src/pi-edit.ts"]);
+	});
+
+	it("records pi's cached token count", () => {
+		const metadata = extractProviderOutputMetadata(
+			JSON.stringify({
+				type: "message_end",
+				usage: { in: 900, out: 100, cached: 400, total: 1400 },
+			}),
+		);
+		expect(metadata.usage).toMatchObject({ cachedInputTokens: 400 });
+	});
+
+	it("ignores partial pi usage and marks final usage as per response", () => {
+		const usage = { input: 500, output: 120, total: 620 };
+		const partial = extractProviderOutputMetadata(
+			JSON.stringify({ type: "message_update", usage }),
+		);
+		const final = extractProviderOutputMetadata(JSON.stringify({ type: "message_end", usage }));
+		expect(partial.usage).toBeUndefined();
+		expect(final.usageScope).toBe("response");
+	});
+
+	it("labels only assistant pi message_end events as assistant output", () => {
+		const end = (role: string) =>
+			formatProviderOutputLine(
+				JSON.stringify({ type: "message_end", message: { role, content: "fix the slop" } }),
+			);
+		expect(end("user")).toBeNull();
+		expect(end("toolResult")).toBeNull();
+		expect(end("assistant")).toBe("assistant: fix the slop");
+	});
+
+	it("suppresses pi text delta message_update events", () => {
+		expect(
+			formatProviderOutputLine(
+				JSON.stringify({
+					type: "message_update",
+					usage: { in: 10, out: 2, total: 12 },
+					assistantMessageEvent: { type: "text", text: "partial delta" },
+				}),
+			),
+		).toBeNull();
+	});
+
+	it("extracts pi usage cost from a nested cost total", () => {
+		const metadata = extractProviderOutputMetadata(
+			JSON.stringify({
+				type: "message_end",
+				usage: {
+					input: 500,
+					output: 120,
+					total: 620,
+					cost: { input: 0.01, output: 0.02, total: 0.03 },
+				},
+			}),
+		);
+
+		expect(metadata.usage).toMatchObject({ totalTokens: 620, costUsd: 0.03 });
+	});
+
+	it("extracts pi usage cost from the plain cost field", () => {
+		const metadata = extractProviderOutputMetadata(
+			JSON.stringify({
+				type: "message_end",
+				usage: { in: 500, out: 120, cached: 0, total: 620, cost: 0.0123 },
+				}),
+			);
+
+		expect(metadata.usage).toMatchObject({ totalTokens: 620, costUsd: 0.0123 });
+	});
+});
