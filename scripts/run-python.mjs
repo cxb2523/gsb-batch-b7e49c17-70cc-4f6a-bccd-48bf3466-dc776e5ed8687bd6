@@ -16,10 +16,11 @@ const localPython = path.join(
 const executable = fs.existsSync(localPython)
   ? localPython
   : process.env.DASH_PYTHON || 'python';
+// Avoid `shell: true` on Windows: it concatenates arguments without
+// quoting, so values containing spaces (e.g. `-m "not browser"`) split.
 const result = spawnSync(executable, process.argv.slice(2), {
   cwd: packageRoot,
   stdio: 'inherit',
-  shell: process.platform === 'win32',
 });
 
 if (result.error) {
