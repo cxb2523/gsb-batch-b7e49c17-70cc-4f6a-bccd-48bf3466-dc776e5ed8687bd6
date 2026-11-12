@@ -38,6 +38,10 @@ build:
 lint:
 	npx eslint src --fix
 
+## Run offline tests
+test:
+	node --import ./test/register.mjs --test test/drop-handler.test.mjs
+
 start-client:
 	php -S 0.0.0.0:8000 -t build
 

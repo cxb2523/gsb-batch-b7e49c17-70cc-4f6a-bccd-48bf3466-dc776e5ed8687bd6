@@ -3,6 +3,10 @@ import HeadRequest from '@client/http/HeadRequest';
 
 const FILENAME_MATCHER = /^\/?(.+)\.(\w+)$/i;
 
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'mkv'];
+const VTT_TYPES = ['text/vtt'];
+const SRT_TYPES = ['text/srt', 'application/x-subrip'];
+
 export default class DropHandler {
     constructor(store, converter, youtube) {
         this.store = store;
@@ -64,45 +68,24 @@ export default class DropHandler {
 
     handleFile(file) {
         const { name, type } = file;
+        const kind = this.resolveFileKind(file);
 
-        switch (type) {
-            case 'video/webm':
-            case 'video/mp4':
-            case 'video/quicktime':
+        switch (kind) {
+            case 'video':
                 this.handleVideo(file);
-                break;
-
-            case 'text/vtt':
-                this.handleSubtitle(file);
-                break;
-
-            case 'text/srt':
-                this.handleSrtSubtitle(file);
-                break;
-
-            default:
-                if (type) {
-                    console.info(`File type "${type}" not supported.`);
-                }
-        }
-
-        const extension = this.getExtention(name);
-
-        switch (extension) {
-            case 'srt':
-                this.handleSrtSubtitle(file);
                 break;
 
             case 'vtt':
                 this.handleSubtitle(file);
                 break;
 
-            case 'mkv':
-                this.handleVideo(file);
+            case 'srt':
+                this.handleSrtSubtitle(file);
                 break;
 
             default:
-                console.info(`File extension "${extension}" not supported.`);
+                console.info(`File "${name}" of type "${type}" not supported.`);
+                break;
         }
     }
 
@@ -112,7 +95,7 @@ export default class DropHandler {
         const action = isFileFromServer ? completeVideoFromFile : loadVideoFromFile;
 
         this.store.dispatch(
-            action(URL.createObjectURL(file), file.name, file.size, file.type)
+            action(URL.createObjectURL(file), file.name, file.type)
         );
     }
 
@@ -147,45 +130,123 @@ export default class DropHandler {
 
         if (href) {
             return new HeadRequest(href, ['Content-Type', 'Content-Length'], ([type]) => {
-                switch (type) {
-                    case 'video/webm':
-                    case 'video/mp4':
-                    case 'application/octet-stream':
+                const kind = this.resolveUrlKind(pathname, type);
+
+                switch (kind) {
+                    case 'video':
                         this.handleVideoUrl(href, pathname, type);
                         break;
 
-                    case 'text/vtt':
-                        this.handleSubtitleUrl(href, pathname, type);
-                        break;
-
-                    case 'text/srt':
-                        this.handleSrtSubtitleUrl(href, pathname, type);
-                        break;
-                }
-
-                switch (this.getExtention(pathname)) {
                     case 'vtt':
                         this.handleSubtitleUrl(href, pathname, type);
                         break;
 
                     case 'srt':
-                        this.handleSrtSubtitleUrl(href, pathname, type);
+                        this.handleSrtSubtitleUrl(href);
+                        break;
+
+                    default:
+                        console.info(`Url "${value}" of type "${type}" not supported.`);
                         break;
                 }
-
-                console.info(`Url "${value}" of type "${type}" not supported.`);
             }, error => console.error(error));
         }
     }
 
+    /**
+     * Determine how a local file should be handled.
+     * The extension takes precedence over the MIME type reported by the browser:
+     * browsers often report .mkv or .srt files as application/octet-stream or
+     * another generic type. The MIME type is only used as a fallback when the
+     * extension is unknown.
+     */
+    resolveFileKind(file) {
+        const extensionKind = this.getExtensionKind(this.getExtention(file.name));
+
+        if (extensionKind) {
+            return extensionKind;
+        }
+
+        return this.getTypeKind(file.type);
+    }
+
+    /**
+     * Determine how a pasted URL should be handled.
+     * Content-Type returned by a HEAD request is frequently wrong for subtitles
+     * (text/plain, application/octet-stream, ...), so the URL path extension
+     * takes precedence. A generic binary type is only used as a video fallback
+     * when the URL has no known extension.
+     */
+    resolveUrlKind(pathname, type) {
+        const extensionKind = this.getExtensionKind(this.getExtention(pathname));
+
+        if (extensionKind) {
+            return extensionKind;
+        }
+
+        return this.getTypeKind(type, true);
+    }
+
+    getExtensionKind(extension) {
+        if (VIDEO_EXTENSIONS.includes(extension)) {
+            return 'video';
+        }
+
+        if (extension === 'vtt') {
+            return 'vtt';
+        }
+
+        if (extension === 'srt') {
+            return 'srt';
+        }
+
+        return null;
+    }
+
+    getTypeKind(type, allowGenericBinary = false) {
+        const mime = this.normalizeType(type);
+
+        if (!mime) {
+            return null;
+        }
+
+        if (mime.startsWith('video/') || (allowGenericBinary && mime === 'application/octet-stream')) {
+            return 'video';
+        }
+
+        if (VTT_TYPES.includes(mime)) {
+            return 'vtt';
+        }
+
+        if (SRT_TYPES.includes(mime)) {
+            return 'srt';
+        }
+
+        return null;
+    }
+
+    normalizeType(type) {
+        if (typeof type !== 'string') {
+            return null;
+        }
+
+        const mime = type.split(';')[0].trim().toLowerCase();
+
+        return mime || null;
+    }
+
     getExtention(filename) {
+        if (typeof filename !== 'string') {
+            return null;
+        }
+
         const matches = filename.match(FILENAME_MATCHER);
 
         if (!matches) {
             return null;
         }
 
-        return matches[2];
+        return matches[2].toLowerCase();
     }
 
     getUrl(value) {

@@ -3,7 +3,7 @@
   "version": "1.0.1",
   "description": "Synchronized video player for watching videos together remotely.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --import ./test/register.mjs --test test/drop-handler.test.mjs"
   },
   "author": "Thomas Jarrand <thomas.jarrand@gmail.com> (https://thomas.jarrand.fr)",
   "license": "MIT",
