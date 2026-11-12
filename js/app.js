@@ -1,0 +1,880 @@
+/* LLMRANKS · AI 大模型实时战力榜
+ * 数据源：OpenRouter 公开前端接口（CORS 全开，纯静态可跑）
+ *  - rankings/models?view=day   24h 逐模型用量
+ *  - rankings/benchmarks        AA 智能/编程/智能体分 + Design Arena 各项 ELO + 成本
+ *  - rankings/model-rankings-chart  30 天头部模型趋势
+ *  - rankings/discovery         周涨幅/爆发/厂商份额
+ *  - rankings/task-spend        30 天任务花费占比
+ *  - rankings/performance       P50 延迟 / 吞吐
+ *  - rankings/<category>        编程/自然语言/长上下文/图像/工具/视频 分类用量
+ *  - catalog/models             全量模型目录（懒加载：名称/上架时间/上下文）
+ */
+(() => {
+'use strict';
+
+const API = 'https://openrouter.ai/api/frontend/v1/';
+const ENDPOINTS = {
+  usage:     API + 'rankings/models?view=day',
+  bench:     API + 'rankings/benchmarks',
+  trend:     API + 'rankings/model-rankings-chart',
+  disc:      API + 'rankings/discovery',
+  spend:     API + 'rankings/task-spend',
+  perf:      API + 'rankings/performance',
+  prog:      API + 'rankings/programming-language',
+  nl:        API + 'rankings/natural-language',
+  ctx:       API + 'rankings/context-length',
+  images:    API + 'rankings/images',
+  tools:     API + 'rankings/tools',
+  video:     API + 'rankings/video-output-hours',
+};
+const CATALOG_URL = API + 'catalog/models';
+const REFRESH_SEC = 300;
+
+/* ---------------- 小工具 ---------------- */
+const $ = s => document.querySelector(s);
+const PAL = [
+  '#6f9bc4', // 花青
+  '#e0b04a', // 藤黄
+  '#63a583', // 石绿
+  '#a87ab0', // 紫棠
+  '#c99a5f', // 赭石
+  '#a0a858', // 苔绿
+  '#7ec8c0', // 青碧
+  '#9aa8d4', // 青金
+  '#d4c9a2', // 月白
+];
+const TIP = { backgroundColor:'#26221b', borderColor:'#454036', textStyle:{color:'#ddd6c4',fontSize:12}, confine:true, extraCssText:'box-shadow:0 4px 16px rgba(0,0,0,.45);' };
+const AXIS_C = line => ({ axisLine:{lineStyle:{color:'#454036'}}, axisTick:{show:false}, axisLabel:{color:'#a89f8a',fontSize:11}, splitLine: line?{lineStyle:{color:'#322d25'}}:{show:false} });
+
+const fmtTok  = n => n >= 1e12 ? (n/1e12).toFixed(2)+' 万亿' : n >= 1e8 ? (n/1e8).toFixed(1)+' 亿' : n >= 1e4 ? (n/1e4).toFixed(1)+' 万' : String(Math.round(n));
+const fmtReq  = n => n >= 1e8 ? (n/1e8).toFixed(2)+'亿' : n >= 1e4 ? (n/1e4).toFixed(1)+'万' : String(Math.round(n));
+const fmtUsd  = n => n >= 1 ? '$'+n.toFixed(2) : '$'+n.toFixed(4);
+const bjTime  = () => new Date().toLocaleString('zh-CN', { hour12:false });   // 访客本地时区
+const isNarrow = () => window.matchMedia('(max-width: 640px)').matches;   // 手机端图表参数收窄
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------------- 名称/ slug 解析 ---------------- */
+const AUTHORS = {
+  openai:'OpenAI', deepseek:'DeepSeek', 'z-ai':'Z.ai', 'x-ai':'xAI', google:'Google', anthropic:'Anthropic',
+  moonshotai:'Moonshot AI', qwen:'Qwen', meta:'Meta', mistralai:'Mistral AI', minimax:'MiniMax',
+  bytedance:'ByteDance', 'alibaba':'Alibaba', tencent:'Tencent', baidu:'Baidu', xiaomi:'Xiaomi',
+  nvidia:'NVIDIA', microsoft:'Microsoft', 'amazon':'Amazon', cohere:'Cohere', ai21:'AI21',
+  perplexity:'Perplexity', openrouter:'OpenRouter', inclusionai:'InclusionAI', stepfun:'StepFun',
+  thudm:'THUDM', nexai:'Nex AI', 'stealth':'Stealth', sakana:'Sakana AI', kwaivgi:'Kuaishou',
+};
+const authorName  = a => AUTHORS[a] || (a ? a.charAt(0).toUpperCase()+a.slice(1) : '');
+/* 真实品牌色：图表里的厂商颜色与其官方识别色一致 */
+const BRAND = {
+  anthropic:'#d97757',  // Claude 橘
+  'z-ai':'#4d7cfe',     // 智谱 GLM 蓝
+  deepseek:'#5a7dff',   // DeepSeek 蓝
+  openai:'#10a37f',     // OpenAI 绿
+  google:'#4285f4',     // Google 蓝
+  'x-ai':'#b8bfca',     // xAI 银灰
+  meta:'#4a8cf0',       // Meta 蓝
+  qwen:'#8b5cf6',       // 通义 紫
+  mistralai:'#fa6c3c',  // Mistral 橙
+  moonshotai:'#6b7cff', // Kimi 蓝
+  minimax:'#e05a6d',    // MiniMax 红
+  bytedance:'#3c8cff',  // 豆包 蓝
+  tencent:'#5a6cf0',    // 混元 蓝紫
+  baidu:'#4a63e8',      // 文心 蓝
+  nvidia:'#76b900',     // NVIDIA 绿
+  microsoft:'#00a4ef',  // 微软蓝
+  amazon:'#ff9900',     // Amazon 橙
+  xiaomi:'#ff6900',     // 小米橙
+  alibaba:'#ff8a00',    // 阿里橙
+  perplexity:'#3fa8a0', // Perplexity 青
+};
+const authorColor = a => {
+  if (BRAND[a]) return BRAND[a];
+  let h = 0;
+  for (const c of String(a)) h = (h*31+c.charCodeAt(0))>>>0;
+  return PAL[h%PAL.length];
+};
+const baseSlug = s => String(s||'').split(':')[0].replace(/-(19|20)\d{6}.*$/, '');
+
+/* ---------------- 全局数据 ---------------- */
+const D = { usage:[], bench:null, trend:[], disc:null, spend:null, perf:[], cats:{}, catalog:null };
+if (typeof window !== 'undefined') window.__D = D;
+const nameIdx = { base2aa:{}, base2da:{}, cost:{} };   // 由 bench 填充
+const chartInstances = {};
+let usageMetric = 'tokens';
+let activeCat = 'prog';
+let countdown = REFRESH_SEC;
+let loading = false;
+
+function nameOf(slug) {
+  const cat = D.catalog;
+  if (cat) {
+    const hit = cat.bySlug[slug] || cat.byBase[baseSlug(slug)];
+    if (hit) return hit.replace(/\s*[（(](?:batch|free|thinking|search)[)）]\s*$/i, '');   // 剥变体后缀（兼容全角括号），全站显示统一
+  }
+  const b = baseSlug(slug);
+  if (nameIdx.base2aa[b]) {
+    const e = nameIdx.base2aa[b];
+    const any = e.intelligence || e.coding || e.agentic;
+    if (any && any.name) return any.name;
+  }
+  if (nameIdx.base2da[b]) {
+    const any = Object.values(nameIdx.base2da[b])[0];
+    if (any && any.name) return any.name;
+  }
+  const [auth, ...rest] = String(slug).split('/');
+  const toks = rest.join('/').split('-').filter(t => t && !/^(19|20)\d{6}/.test(t) && !/^\d{3,8}$/.test(t));
+  const pretty = toks.map(t => /^\d/.test(t) || /[.\d]/.test(t) ? t.toUpperCase() : t.charAt(0).toUpperCase()+t.slice(1)).join(' ');
+  return (rest.length ? authorName(auth)+' ' : '') + (pretty || slug);
+}
+/* 全站统一的用量口径：按模型（base）聚合全部变体行。
+ * 页面榜 / KPI 魁首 / 拓印卡 / 详情弹层共用，保证数字处处一致。 */
+function aggregateUsage() {
+  const m = {};
+  D.usage.forEach(r => {
+    const b = baseSlug(r.model_permaslug);
+    const o = m[b] || (m[b] = { slug: b, tok: 0, req: 0, stdTok: 0, freeTok: 0, batchTok: 0 });
+    const t = r.total_prompt_tokens + r.total_completion_tokens;
+    o.tok += t; o.req += r.count || 0;
+    if (r.variant === 'free') o.freeTok += t;
+    if (r.variant === 'batch') o.batchTok += t;
+    if (r.variant === 'standard') o.stdTok += t;
+  });
+  return Object.values(m);
+}
+const authorOf = slug => String(slug).includes('/') ? String(slug).split('/')[0] : '';
+
+/* 单模型全维度数据聚合：详情弹层 / 对比器 / 拓印卡共用的唯一事实来源 */
+function modelFacts(slug) {
+  const base = baseSlug(slug);
+  const f = { slug: String(slug), base, name: nameOf(slug), author: authorOf(slug) };
+  f.cost = nameIdx.cost[base] ?? null;
+  const aa = nameIdx.base2aa[base] || {};
+  f.aa = { intelligence: aa.intelligence ? aa.intelligence.score : null,
+           coding: aa.coding ? aa.coding.score : null, agentic: aa.agentic ? aa.agentic.score : null };
+  f.da = {};
+  Object.entries(nameIdx.base2da[base] || {}).forEach(([k, v]) => { f.da[k] = { elo: v.score, win: v.win }; });
+  let tok = 0, req = 0;
+  D.usage.forEach(r => { if (baseSlug(r.model_permaslug) === base) { tok += r.total_prompt_tokens+r.total_completion_tokens; req += r.count || 0; if (r.variant === 'free') f.hasFree = true; if (r.variant === 'batch') f.hasBatch = true; } });
+  f.tok24h = tok; f.req24h = req;
+  const perfCands = D.perf.filter(x => baseSlug(x.slug) === base && x.p50_latency);
+  const p = perfCands.sort((a, b) => (b.request_count || 0)-(a.request_count || 0))[0];
+  if (p) { f.p50 = p.p50_latency; f.tps = p.p50_throughput; f.fastProv = p.best_latency_provider; f.fastPrice = p.best_latency_price; }
+  if (D.catalog) {
+    const raw = D.catalog.raw.filter(m => !m.hidden && (m.slug === f.slug || baseSlug(m.slug) === base));
+    const m = raw.find(x => x.slug === f.slug) || raw.find(x => !/free|batch/i.test(x.name)) || raw[0];
+    if (m) { f.ctx = m.context_length || null; f.created = m.created_at || null; }
+  }
+  return f;
+}
+
+/* ---------------- 加载 ---------------- */
+function unwrap(j) { const d = j && j.data !== undefined ? j.data : j; return Array.isArray(d) ? d : (d && d.data !== undefined ? d.data : d); }
+function emptyPayload(j) {
+  const d = unwrap(j);
+  if (d == null) return true;
+  if (Array.isArray(d)) return d.length === 0;
+  if (typeof d === 'object') return Object.keys(d).length === 0;
+  return false;
+}
+async function getJSON(url, tries = 3, validate) {
+  for (let a = 1; a <= tries; a++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30000);
+    try {
+      const r = await fetch(url, { cache:'no-cache', signal: ac.signal });
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      const j = await r.json();
+      if (validate && validate(j)) throw new Error('空数据响应');
+      return j;
+    } catch (e) {
+      if (a === tries) throw e;
+      await new Promise(res => setTimeout(res, 600*a));
+    } finally { clearTimeout(timer); }
+  }
+}
+async function pool(items, fn, limit = 3) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: limit }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      try { out[idx] = { status:'fulfilled', value: await fn(items[idx]) }; }
+      catch (e) { out[idx] = { status:'rejected', reason: e }; }
+    }
+  }));
+  return out;
+}
+function loadbar(p) { const b = $('#loadbar'); b.style.opacity = 1; b.style.width = (p*100)+'%'; if (p >= 1) setTimeout(() => { b.style.opacity = 0; b.style.width = 0; }, 400); }
+
+function cacheGet() {
+  try {
+    const c = JSON.parse(sessionStorage.getItem('llmranks') || 'null');
+    if (c && Date.now()-c.t < 120000) return c.d;
+  } catch {}
+  return null;
+}
+function cachePut(d) { try { sessionStorage.setItem('llmranks', JSON.stringify({ t:Date.now(), d })); } catch {} }
+
+async function fetchAll(force) {
+  if (loading) return;
+  loading = true; $('#btn-refresh').classList.add('spin');
+  if (!force) { const c = cacheGet(); if (c) { Object.assign(D, c); afterPrimary(); loading=false; $('#btn-refresh').classList.remove('spin'); lazyCatalog(); return; } }
+  try {
+    loadbar(0.05);
+    const keys = Object.keys(ENDPOINTS);
+    const results = await pool(keys.map(k => ENDPOINTS[k]), u => getJSON(u, 3, emptyPayload));
+    loadbar(0.7);
+    keys.forEach((k, i) => {
+      if (results[i].status === 'fulfilled') D[k] = unwrap(results[i].value);
+      else window.__errs = (window.__errs || []).concat('fetch '+k+': '+results[i].reason);
+    });
+    D.cats = { prog:D.prog, nl:D.nl, ctx:D.ctx, images:D.images, tools:D.tools, video:D.video };
+    // 缓存合并后的完整快照：部分接口失败时，缺口沿用上次的好数据
+    cachePut({ usage:D.usage, bench:D.bench, trend:D.trend, disc:D.disc, spend:D.spend, perf:D.perf, cats:D.cats });
+    afterPrimary();
+    loadbar(1);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    loading = false; $('#btn-refresh').classList.remove('spin');
+  }
+}
+
+/* bench 归一化：aa 榜 / DA 榜 / 成本 全部按 baseSlug 建索引 */
+function prepareBench() {
+  const b = D.bench || {};
+  const aa = b.aaData || {};
+  nameIdx.base2aa = {};
+  ['intelligence','coding','agentic'].forEach(k => {
+    (aa[k] || []).forEach(m => {
+      const base = baseSlug(m.permaslug || m.uid);
+      const name = (m.aa_name || '').replace(/\s*\([^)]*\)\s*$/, '');
+      if (!nameIdx.base2aa[base]) nameIdx.base2aa[base] = {};
+      nameIdx.base2aa[base][k] = { score:m.score, name };
+    });
+  });
+  nameIdx.base2da = {};
+  const da = b.daData || {};
+  Object.keys(da).forEach(k => {
+    da[k].forEach(m => {
+      const base = baseSlug(m.permaslug || m.openrouter_id);
+      if (!nameIdx.base2da[base]) nameIdx.base2da[base] = {};
+      nameIdx.base2da[base][k] = { score:m.score, name:m.display_name, win:m.win_rate };
+    });
+  });
+  // cost 归并为 base 级最低价：原始字典约六成键带日期（同模型多版本价不同），
+  // 不归并则弹层/性价比/对比器取到哪个版本看键命中运气。与降价榜快照同口径。
+  nameIdx.cost = {};
+  Object.entries(b.costPerRequest || {}).forEach(([k, v]) => {
+    if (!v) return;
+    const b2 = baseSlug(k);
+    nameIdx.cost[b2] = Math.min(v, nameIdx.cost[b2] ?? Infinity);
+  });
+}
+
+/* catalog 懒加载 → 名称升级后重渲染 */
+async function lazyCatalog() {
+  if (D.catalog) return;
+  try {
+    const list = await getJSON(CATALOG_URL);
+    const arr = Array.isArray(list) ? list : (list.data || []);
+    const bySlug = {}, byBase = {};
+    arr.forEach(m => {
+      if (m.hidden) return;
+      const n = m.short_name || m.name || '';
+      if (n) { bySlug[m.slug] = n; if (m.permaslug) bySlug[m.permaslug] = n; byBase[baseSlug(m.slug)] = n; }
+    });
+    D.catalog = { bySlug, byBase, raw: arr };
+    renderNewModels();
+    renderAll();
+  } catch (e) { console.warn('catalog 加载失败', e); }
+}
+
+/* ---------------- 图表注册 ---------------- */
+function chart(id) {
+  if (typeof echarts === 'undefined') { $('#'+id).innerHTML = '<div class="ph">图表库加载失败，请检查网络后刷新</div>'; return null; }
+  if (!chartInstances[id] || chartInstances[id].isDisposed()) {
+    const el = $('#'+id);
+    el.innerHTML = '';
+    chartInstances[id] = echarts.init(el, { animation: !matchMedia('(prefers-reduced-motion: reduce)').matches }, { renderer:'canvas' });
+  }
+  return chartInstances[id];
+}
+const safe = (name, fn) => { try { fn(); } catch (e) { console.error('[llmranks]', name, e); window.__errs = (window.__errs || []).concat(name+': '+e.message+' @ '+(e.stack||'').split('\n')[1]); } };
+/* 图形点击 → 模型详情弹层（弹层本体在 js/card.js） */
+const openCardSlug = (s, el) => { if (s && window.MB && window.MB.openCard) window.MB.openCard(s, el); };
+
+/* ---------- KPI ---------- */
+function renderKPI() {
+  const rows = D.usage; if (!rows.length) return;
+  const tok  = rows.reduce((s, r) => s + r.total_prompt_tokens + r.total_completion_tokens, 0);
+  const req  = rows.reduce((s, r) => s + (r.count || 0), 0);
+  const freeTok = rows.filter(r => r.variant === 'free').reduce((s, r) => s + r.total_prompt_tokens + r.total_completion_tokens, 0);
+  const bases = new Set(rows.map(r => baseSlug(r.model_permaslug)));
+  const top = aggregateUsage().sort((a, b) => b.tok-a.tok)[0];
+  const cards = $('#kpis').children;
+  cards[0].classList.remove('skeleton'); cards[0].querySelector('.kpi-value').textContent = fmtTok(tok);
+  cards[0].querySelector('.kpi-sub').textContent = tok > 0 ? '免费变体占 '+(freeTok/tok*100).toFixed(1)+'%' : '';
+  cards[1].classList.remove('skeleton'); cards[1].querySelector('.kpi-value').textContent = fmtReq(req);
+  cards[1].querySelector('.kpi-sub').textContent = '≈ '+fmtReq(req/86400)+' 次/秒';
+  cards[2].classList.remove('skeleton'); cards[2].querySelector('.kpi-value').textContent = bases.size;
+  cards[2].querySelector('.kpi-sub').textContent = '24h 内有调用的模型';
+  cards[3].classList.remove('skeleton'); cards[3].querySelector('.kpi-value').textContent = nameOf(top.slug);
+  cards[3].querySelector('.kpi-sub').textContent = authorName(authorOf(top.slug))+' · '+fmtTok(top.tok);
+}
+
+/* ---------- 用量总榜 ---------- */
+function renderUsage() {
+  const c = chart('chart-usage'); if (!c || !D.usage.length) return;
+  const byTok = r => r.total_prompt_tokens + r.total_completion_tokens;
+  const agg = aggregateUsage();
+  const total = D.usage.reduce((s, r) => s + byTok(r), 0);
+  const metric = r => usageMetric === 'tokens' ? r.tok : r.req;
+  const rows = agg.sort((a, b) => metric(b)-metric(a)).slice(0, 12);
+  const names = rows.map(r => nameOf(r.slug));
+  const vals  = rows.map(r => metric(r));
+  const fmtr  = usageMetric === 'tokens' ? fmtTok : fmtReq;
+  $('#usage-sub').textContent = `24 小时真实${usageMetric === 'tokens' ? ' Token 消耗' : '请求次数'} · Top 12`;
+  c.setOption({
+    tooltip: Object.assign({ trigger:'axis', axisPointer:{type:'shadow'}, formatter(ps) {
+      const r = rows[ps[0].dataIndex];
+      const mix = r.tok > 0
+        ? [r.stdTok > 0 ? '标准 '+(r.stdTok/r.tok*100).toFixed(0)+'%' : '',
+           r.freeTok > 0 ? 'free '+(r.freeTok/r.tok*100).toFixed(0)+'%' : '',
+           r.batchTok > 0 ? 'batch '+(r.batchTok/r.tok*100).toFixed(0)+'%' : ''].filter(Boolean).join(' · ')
+        : '';
+      return `<b>${esc(nameOf(r.slug))}</b><br>` +
+        `${esc(r.slug)}<br>Token：${fmtTok(r.tok)}（占全平台 ${(r.tok/total*100).toFixed(1)}%）<br>请求：${fmtReq(r.req)} 次` +
+        (mix ? `<br><span style="color:#7a9a8e">变体构成：${mix}</span>` : '') +
+        `<br>厂商：${esc(authorName(authorOf(r.slug)))}`;
+    } }, TIP),
+    grid: { left:8, right: isNarrow()?54:90, top:10, bottom:10, containLabel:true },
+    xAxis: Object.assign(AXIS_C(true), { type:'value', splitNumber: isNarrow()?3:null, axisLabel:{ color:'#a89f8a', fontSize:isNarrow()?10:11, hideOverlap:true, formatter:fmtr } }),
+    yAxis: Object.assign(AXIS_C(false), { type:'category', inverse:true, data:names, axisLabel:{ color:'#ddd6c4', fontSize:12, width: isNarrow()?126:170, overflow:'break', lineHeight:15 } }),
+    series: [{
+      type:'bar', data:vals, barWidth:'56%',
+      label: { show:true, position:'right', color:'#a89f8a', fontSize:11, formatter: p => fmtr(p.value) },
+      itemStyle: { borderRadius:[0, 2, 2, 0], color: p => authorColor(authorOf(rows[p.dataIndex].slug)) },
+    }],
+  }, { notMerge:true });
+  c.off('click'); c.on('click', p => { if (p.componentType === 'series') openCardSlug(rows[p.dataIndex].slug, c.getDom()); });
+}
+
+/* ---------- 分项王者 ---------- */
+function kingCard(cat, src, model, scoreLine, slug, opts) {
+  return `<div class="king${opts && opts.top1 ? ' top1' : ''}" data-slug="${esc(slug)}" role="button" tabindex="0" aria-label="查看${esc(model)}的${esc(cat)}评测详情">
+    <div class="k-cat">${esc(cat)}<span class="k-src">${esc(src)}</span></div>
+    <div class="k-model">${esc(model)}</div>
+    <div class="k-score">${scoreLine}</div>
+  </div>`;
+}
+function renderKings() {
+  const aa = (D.bench || {}).aaData || {};
+  const el = $('#kings'); let html = '';
+  const aaMeta = { intelligence:['综合智能', 'AA 智能指数'], coding:['编程', 'AA 编程分'], agentic:['智能体任务', 'AA 智能体分'] };
+  ['intelligence','coding','agentic'].forEach(k => {
+    const list = [...(aa[k] || [])].sort((a, b2) => b2.score-a.score);
+    if (!list.length) return;
+    const m = list[0];
+    html += kingCard(aaMeta[k][0], aaMeta[k][1], nameOf(m.permaslug || m.uid), `分数 <b>${m.score.toFixed(1)}</b><small>/100</small>`, m.permaslug, { top1:k === 'intelligence' });
+  });
+  el.innerHTML = html || '<div class="ph">暂无评测数据</div>';
+}
+
+/* ---------- 维度之最：每个维度只列最强的那个模型 ---------- */
+function renderDimTable() {
+  if (!D.usage.length || !D.bench) return;
+  const b = D.bench || {}; const aa = b.aaData || {}; const da = b.daData || {};
+  const byTok = r => r.total_prompt_tokens + r.total_completion_tokens;
+  const usageBase = {};
+  D.usage.forEach(r => { const k = baseSlug(r.model_permaslug); usageBase[k] = (usageBase[k] || 0)+byTok(r); });
+  const top1 = arr => [...(arr || [])].sort((a, b2) => b2.score-a.score)[0];
+  const rows = [];
+  const uTop = Object.keys(usageBase).sort((a, b2) => usageBase[b2]-usageBase[a])[0];
+  if (uTop) rows.push(['24h 用量', uTop, fmtTok(usageBase[uTop]), '真实 Token']);
+  [['intelligence','综合智能'], ['coding','编程'], ['agentic','智能体任务']].forEach(([k, label]) => {
+    const m = top1(aa[k]);
+    if (m) rows.push([label, m.permaslug || m.uid, m.score.toFixed(1)+' / 100', 'Artificial Analysis']);
+  });
+  [['models-website','网页开发'], ['models-dataviz','数据可视化'], ['models-gamedev','游戏开发'], ['models-uicomponent','UI 组件'], ['models-svg','SVG 绘图'], ['models-3d','3D 建模'], ['agents-agenticslides(html)','演示幻灯片']].forEach(([k, label]) => {
+    const m = top1(da[k]);
+    if (m) rows.push([label, m.permaslug, 'ELO '+Math.round(m.score)+' · 胜率 '+(m.win_rate != null ? m.win_rate.toFixed(0)+'%' : '--'), 'Design Arena']);
+  });
+  const best = [...(aa.intelligence || [])].sort((a, b2) => b2.score-a.score).slice(0, 30)
+    .map(m => ({ ...m, cost: nameIdx.cost[baseSlug(m.permaslug)] }))
+    .filter(m => m.cost != null).sort((a, b2) => a.cost-b2.cost)[0];
+  if (best) rows.push(['性价比', best.permaslug, fmtUsd(best.cost)+' / 次 · 智能 '+best.score.toFixed(1), '成本 × 智能']);
+  const cl = (D.disc && D.disc.climbing || []).filter(x => x.weeklyTokens > 1e11).sort((a, b2) => b2.changePercent-a.changePercent)[0];
+  if (cl) rows.push(['周涨幅', cl.variantPermaslug, growTxt(cl.changePercent, cl.weeklyTokens, cl.prevWeeklyTokens)+' · 周 '+fmtTok(cl.weeklyTokens), 'OpenRouter']);
+  $('#dimtable').innerHTML = `<table class="dim-t"><thead><tr><th>维度</th><th>最强模型</th><th>数值</th><th class="th-src">数据源</th></tr></thead><tbody>` +
+    rows.map(r => `<tr data-slug="${esc(r[1])}" tabindex="0" aria-label="查看${esc(nameOf(r[1]))}的${esc(r[0])}详情"><td class="td-cat">${esc(r[0])}</td><td class="td-model">${esc(nameOf(r[1]))}<span class="td-author">${esc(authorName(authorOf(r[1])))}</span></td><td class="td-val">${esc(r[2])}</td><td class="td-src">${esc(r[3])}</td></tr>`).join('') +
+    `</tbody></table>`;
+}
+
+/* ---------- 性价比散点 ---------- */
+function renderValue() {
+  const c = chart('chart-value'); if (!c || !D.bench) return;
+  const pts = [...((D.bench.aaData || {}).intelligence || [])]
+    .map(m => {
+      const base = baseSlug(m.permaslug);
+      return { slug:m.permaslug, score:m.score, cost:nameIdx.cost[base] };
+    })
+    .filter(m => m.cost != null && m.cost > 0);
+  if (!pts.length) return;
+  const usageBase = {};
+  D.usage.forEach(r => { usageBase[baseSlug(r.model_permaslug)] = (usageBase[baseSlug(r.model_permaslug)] || 0)+r.total_prompt_tokens+r.total_completion_tokens; });
+  const data = pts.map(m => ({
+    name:m.slug, value:[m.cost, m.score, usageBase[baseSlug(m.slug)] || 0],
+  }));
+  const yMax = Math.max(...data.map(d => d.value[1]));
+  const labelSet = new Set([...data].sort((a, b) => b.value[1]-a.value[1]).slice(0, 5).map(d => d.name)
+    .concat([...data].sort((a, b) => a.value[0]-b.value[0]).slice(0, 3).map(d => d.name)));
+  // 顶部点的标签放下方，避免被画布上缘裁剪
+  data.forEach((d, i) => { if (pts[i].score >= yMax-4) d.label = { position:'bottom' }; });
+  const labTxt = s => nameOf(s).replace(/\s*\([^)]*\)/g, '').slice(0, 18);
+  c.setOption({
+    tooltip: Object.assign({ formatter(p) {
+      const v = p.value;
+      return `<b>${esc(nameOf(p.name))}</b><br>单请求成本：${fmtUsd(v[0])}<br>智能指数：${v[1].toFixed(1)}<br>24h Token：${fmtTok(v[2])}`;
+    } }, TIP),
+    grid: { left:10, right: isNarrow()?56:110, top:30, bottom:10, containLabel:true },
+    legend: { show:false },
+    xAxis: Object.assign(AXIS_C(true), { type:'log', min: v => v.min/2, max: v => v.max*2, axisLabel:{ color:'#a89f8a', fontSize:10.5, formatter:v => '$'+v } }),
+    yAxis: Object.assign(AXIS_C(true), { type:'value', min:'dataMin', max:'dataMax', axisLabel:{ color:'#a89f8a', fontSize:10.5 } }),
+    series: [{
+      type:'scatter', data,
+      symbolSize: d => Math.min(34, 6+Math.sqrt(d[2])/32000),
+      itemStyle: { color: p => authorColor(authorOf(p.name)), borderColor:'rgba(221,214,196,.45)', borderWidth: p => labelSet.has(p.name) ? 2 : 1 },
+      label: { show:true, fontSize:10.5, color:'#b5ad99', formatter:p => labelSet.has(p.name) ? labTxt(p.name) : '' },
+      labelLayout: { hideOverlap:true, moveOverlap:'shiftY' },
+      emphasis: { scale:1.15 },
+    }],
+  }, { notMerge:true });
+  c.off('click'); c.on('click', p => { if (p.componentType === 'series') openCardSlug(p.name, c.getDom()); });
+}
+
+/* ---------- 速度榜 ---------- */
+function renderSpeed() {
+  const c = chart('chart-speed'); if (!c || !D.perf.length) return;
+  const rows = [...D.perf].filter(p => p.p50_latency && p.p50_throughput).sort((a, b) => (b.request_count||0)-(a.request_count||0)).slice(0, 24);
+  if (!rows.length) return;
+  const maxReq = rows[0].request_count || 1;
+  const labelSet = new Set([...rows].sort((a, b) => b.p50_throughput-a.p50_throughput).slice(0, 3).map(r => r.slug)
+    .concat([...rows].sort((a, b) => a.p50_latency-b.p50_latency).slice(0, 2).map(r => r.slug)));
+  const tMax = Math.max(...rows.map(r => r.p50_throughput));
+  c.setOption({
+    tooltip: Object.assign({ formatter(p) {
+      const r = rows[p.dataIndex];
+      return `<b>${esc(nameOf(r.slug))}</b><br>P50 延迟：${(r.p50_latency/1000).toFixed(2)} s<br>P50 吞吐：${Math.round(r.p50_throughput)} tok/s<br>请求数：${fmtReq(r.request_count||0)}<br>最快线路：${esc(r.best_latency_provider || '--')}（${fmtUsd(r.best_latency_price||0)}/M）`;
+    } }, TIP),
+    grid: { left:10, right: isNarrow()?56:90, top:30, bottom:10, containLabel:true },
+    xAxis: Object.assign(AXIS_C(true), { type:'log', axisLabel:{ color:'#a89f8a', fontSize:10.5, formatter:v => v >= 1000 ? (v/1000)+'s' : v } }),
+    yAxis: Object.assign(AXIS_C(true), { type:'value', axisLabel:{ color:'#a89f8a', fontSize:10.5 } }),
+    series: [{
+      type:'scatter',
+      data: rows.map(r => ({ value:[r.p50_latency, r.p50_throughput, r.request_count], name:r.slug,
+        label:{ position: r.p50_throughput >= tMax-8 ? 'bottom' : 'top' },
+        itemStyle:{ color: authorColor(authorOf(r.slug)), borderColor: labelSet.has(r.slug) ? '#c74a3c' : 'rgba(221,214,196,.45)', borderWidth: labelSet.has(r.slug) ? 2 : 1 } })),
+      symbolSize: d => 7+Math.sqrt(d[2]/maxReq)*22,
+      label: { show:true, fontSize:10.5, color:'#b5ad99', formatter:p => labelSet.has(p.name) ? nameOf(p.name).replace(/\s*\([^)]*\)/g, '').slice(0, 18) : '' },
+      labelLayout: { hideOverlap:true, moveOverlap:'shiftY' },
+    }],
+  }, { notMerge:true });
+  c.off('click'); c.on('click', p => { if (p.componentType === 'series') openCardSlug(p.name, c.getDom()); });
+}
+
+/* ---------- 趋势 ---------- */
+function renderTrend() {
+  const c = chart('chart-trend'); if (!c || !Array.isArray(D.trend) || !D.trend.length) return;
+  let rows = D.trend.slice(-30);   // 标题「30 天」，接口给 53 天，裁齐
+  // 末尾当天数据未跑完（总量 < 峰值 30%）则不画，避免全线坠零
+  const dayTotals = rows.map(d => Object.values(d.ys || {}).reduce((s, v) => s+v, 0));
+  const mxDay = Math.max(...dayTotals, 1);
+  while (rows.length > 1 && dayTotals[rows.length-1] < mxDay*0.3) rows = rows.slice(0, -1);
+  const dates = rows.map(d => d.x.slice(5));
+  const sums = {};
+  rows.forEach(d => Object.entries(d.ys || {}).forEach(([s, v]) => { if (s !== 'Others') sums[s] = (sums[s] || 0)+v; }));
+  const top = Object.keys(sums).sort((a, b) => sums[b]-sums[a]).slice(0, 6);
+  c.setOption({
+    tooltip: Object.assign({ trigger:'axis' }, TIP),
+    legend: { type:'scroll', top:0, textStyle:{ color:'#b5ad99', fontSize:11 }, pageIconColor:'#c74a3c', pageTextStyle:{color:'#a89f8a'} },
+    grid: { left:10, right:20, top:38, bottom:6, containLabel:true },
+    xAxis: Object.assign({ type:'category', boundaryGap:false, data:dates }, AXIS_C(true)),
+    yAxis: Object.assign(AXIS_C(true), { type:'value', axisLabel:{ color:'#a89f8a', fontSize:11, formatter:fmtTok } }),
+    series: top.map(s => ({
+      name: nameOf(s), type:'line', smooth:true, showSymbol:false,
+      data: rows.map(d => d.ys[s] || null),
+      lineStyle:{ width:1.8, color:authorColor(authorOf(s)) }, itemStyle:{ color:authorColor(authorOf(s)) },
+      emphasis:{ focus:'series' },
+    })),
+  }, { notMerge:true });
+  c.off('click'); c.on('click', p => { if (p.componentType === 'series' && top[p.seriesIndex]) openCardSlug(top[p.seriesIndex], c.getDom()); });
+}
+
+/* ---------- 厂商份额 ---------- */
+function renderVendors() {
+  const c = chart('chart-vendors'); if (!c || !D.disc || !Array.isArray(D.disc.authors)) return;
+  const rows = [...D.disc.authors].sort((a, b) => b.weeklyTokens-a.weeklyTokens).slice(0, 10);
+  const nar = isNarrow();
+  c.setOption({
+    tooltip: Object.assign({ trigger:'item', formatter(p) {
+      const r = rows[p.dataIndex];
+      const g = r.changePercent != null ? (r.changePercent >= 0 ? '<span style="color:#e0654f">+'+(r.changePercent*100).toFixed(1)+'%</span>' : '<span style="color:#8d8677">'+(r.changePercent*100).toFixed(1)+'%</span>') : '';
+      const shareSum = rows.reduce((s, x) => s + (x.share || 0), 0);
+      const tail = 100 - shareSum;
+      const sane = shareSum > 50 && shareSum <= 102;   // 边缘节点偶发坏 share，异常时跳过份额行
+      return `<b>${esc(authorName(r.author))}</b><br>周 Token：${fmtTok(r.weeklyTokens)}` +
+        (sane ? `<br>份额：${(r.share*100).toFixed(1)}% ${g ? '· 环比 '+g : ''}` +
+          (tail > 0.05 ? `<br><span style="color:#7a7260">其余长尾厂商合计 ${tail.toFixed(1)}%（未展示）</span>` : '') : '<br><span style="color:#7a7260">份额数据波动中</span>');
+    } }, TIP),
+    legend: nar
+      ? { orient:'horizontal', bottom:0, left:'center', textStyle:{ color:'#b5ad99', fontSize:10 }, itemWidth:10, itemHeight:10 }
+      : { orient:'vertical', right:0, top:'middle', textStyle:{ color:'#b5ad99', fontSize:11 }, itemWidth:10, itemHeight:10 },
+    series: [{
+      type:'pie', center: nar ? ['50%', '38%'] : ['32%', '52%'], radius: nar ? ['36%', '56%'] : ['48%', '72%'],
+      data: rows.map(r => ({ name:authorName(r.author), value:r.weeklyTokens, itemStyle:{ color:authorColor(r.author) } })),
+      label: { show:true, position:'center', formatter:'厂商\n格局', fontSize:14, color:'#a89f8a', lineHeight:20 },
+      itemStyle: { borderColor:'#1d1a15', borderWidth:2, borderRadius:4 },
+      emphasis: { scaleSize:5 },
+    }],
+  }, { notMerge:true });
+}
+
+/* ---------- 任务花费 ---------- */
+/* 涨幅文案：统一百分比（千分位分隔，近零基数的暴涨也会得出大数，但口径全站一致） */
+const growTxt = (cp, weekly, prev) => {
+  if (!(prev > 0) || !isFinite(cp)) return '+NEW';
+  return (cp >= 0 ? '+' : '') + Math.round(cp * 100).toLocaleString('zh-CN') + '%';
+};
+const TASK_CN = { code:'代码', data:'数据', agent:'智能体', general:'通用', creative:'创意', research:'研究', marketing:'营销', education:'教育' };
+function renderSpendTask() {
+  const c = chart('chart-spend'); if (!c || !D.spend || !D.spend.spend) return;
+  const rows = D.spend.spend.macroCategories || [];
+  const nar = isNarrow();
+  c.setOption({
+    tooltip: Object.assign({ trigger:'item', formatter:p => `<b>${esc(p.name)}</b><br>占 30 天花费 ${p.value}%` }, TIP),
+    legend: nar
+      ? { orient:'horizontal', bottom:0, left:'center', textStyle:{ color:'#b5ad99', fontSize:10 }, itemWidth:10, itemHeight:10 }
+      : { orient:'vertical', right:0, top:'middle', textStyle:{ color:'#b5ad99', fontSize:11 }, itemWidth:10, itemHeight:10 },
+    series: [{
+      type:'pie', center: nar ? ['50%', '38%'] : ['32%', '52%'], radius: nar ? ['36%', '56%'] : ['48%', '72%'],
+      data: rows.map((r, i) => ({ name:TASK_CN[r.key] || r.label || r.key, value:+(r.spendShare*100).toFixed(1), itemStyle:{ color:PAL[(i+1)%PAL.length] } })),
+      label: { show:true, position:'center', formatter:'30 天\n任务花费', fontSize:14, color:'#a89f8a', lineHeight:20 },
+      itemStyle: { borderColor:'#1d1a15', borderWidth:2, borderRadius:4 },
+      emphasis: { scaleSize:5 },
+    }],
+  }, { notMerge:true });
+}
+
+/* ---------- 分类用量榜 ---------- */
+const CATS = [
+  { key:'prog',   label:'编程' },
+  { key:'nl',     label:'自然语言' },
+  { key:'ctx',    label:'长上下文' },
+  { key:'images', label:'图像' },
+  { key:'tools',  label:'工具调用' },
+  { key:'video',  label:'视频生成', unit:'小时' },
+];
+function renderCatTabs() {
+  $('#cat-tabs').innerHTML = CATS.map(c2 => `<button class="tab${c2.key === activeCat ? ' on' : ''}" data-cat="${c2.key}" aria-pressed="${c2.key === activeCat}">${c2.label}</button>`).join('');
+  $('#cat-tabs').querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => {
+    activeCat = btn.dataset.cat;
+    $('#cat-tabs').querySelectorAll('.tab').forEach(b => { b.classList.toggle('on', b === btn); b.setAttribute('aria-pressed', b === btn); });
+    renderCat();
+  }));
+}
+function renderCat() {
+  const def = CATS.find(c2 => c2.key === activeCat);
+  const arr = D.cats[activeCat];
+  const c = chart('chart-cat'); if (!c || !Array.isArray(arr) || !arr.length) return;
+  const last = arr[arr.length-1];
+  const total = Object.values(last.ys || {}).reduce((s, v) => s+v, 0);
+  const rows = Object.entries(last.ys || {}).filter(([s]) => s !== 'Others').sort((a, b) => b[1]-a[1]).slice(0, 8);
+  const fmtr = def.unit ? (v => v.toFixed(0)+' '+def.unit) : fmtTok;
+  $('#cat-sub').textContent = `${def.label} · ${last.x} · 当日总量 ${fmtr(total)}`;
+  c.setOption({
+    tooltip: Object.assign({ trigger:'axis', axisPointer:{type:'shadow'}, formatter(ps) {
+      const r = rows[ps[0].dataIndex];
+      return `<b>${esc(nameOf(r[0]))}</b><br>${def.unit ? '时长' : 'Token'}：${fmtr(r[1])}<br>占${esc(def.label)}类：${(r[1]/total*100).toFixed(1)}%`;
+    } }, TIP),
+    grid: { left:8, right: isNarrow()?54:90, top:10, bottom:10, containLabel:true },
+    xAxis: Object.assign(AXIS_C(true), { type:'value', splitNumber: isNarrow()?3:null, axisLabel:{ color:'#a89f8a', fontSize:isNarrow()?10:11, hideOverlap:true, formatter:fmtr } }),
+    yAxis: Object.assign(AXIS_C(false), { type:'category', inverse:true, data:rows.map(r => nameOf(r[0])), axisLabel:{ color:'#ddd6c4', fontSize:12.5, width: isNarrow()?126:170, overflow:'break', lineHeight:16 } }),
+    series: [{
+      type:'bar', data:rows.map(r => r[1]), barWidth:'56%',
+      label: { show:true, position:'right', color:'#a89f8a', fontSize:11, formatter:p => fmtr(p.value) },
+      itemStyle: { borderRadius:[0, 2, 2, 0], color: p => authorColor(authorOf(rows[p.dataIndex][0])) },
+    }],
+  }, { notMerge:true });
+  c.off('click'); c.on('click', p => { if (p.componentType === 'series') openCardSlug(rows[p.dataIndex][0], c.getDom()); });
+}
+
+/* ---------- 本周黑马 ---------- */
+function sparkline(series, color) {
+  const vs = series.map(s => s.tokens || 0);
+  if (vs.length < 2) return '';
+  const w = 220, h = 34, mx = Math.max(...vs, 1);
+  const pts = vs.map((v, i) => `${(i/(vs.length-1)*w).toFixed(1)},${(h-3-(v/mx)*(h-8)).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"/></svg>`;
+}
+function renderRisers() {
+  const d = D.disc;
+  const el = $('#risers');
+  if (!d) { el.innerHTML = '<div class="ph">暂无数据</div>'; return; }
+  const items = [];
+  (d.climbing || []).filter(x => x.weeklyTokens > 1e11).sort((a, b) => b.changePercent-a.changePercent).slice(0, 4)
+    .forEach(x => items.push({ ...x, tag:'黑马' }));
+  (d.breakouts || []).slice(0, 2).forEach(x => items.push({ ...x, tag:'爆发' }));
+  if (!items.length) { el.innerHTML = '<div class="ph">暂无数据</div>'; return; }
+  el.innerHTML = items.map(x => {
+    const g = growTxt(x.changePercent, x.weeklyTokens, x.prevWeeklyTokens);
+    return `<div class="riser" data-slug="${esc(x.variantPermaslug)}">
+      <div class="r-head"><span class="r-name">${esc(nameOf(x.variantPermaslug))}<span class="r-tag">${x.tag}</span></span>
+      <span class="r-grow">${g}</span></div>
+      <div class="r-tok">周 Token ${fmtTok(x.weeklyTokens)} · 上周 ${fmtTok(x.prevWeeklyTokens || 0)}</div>
+      ${sparkline(x.series || x.dailySeries || [], '#c74a3c')}
+    </div>`;
+  }).join('');
+}
+
+/* ---------- 新模型（懒加载 catalog 后） ---------- */
+function renderNewModels() {
+  if (!D.catalog) return;
+  const cut = Date.now()-14*86400000;
+  const rows = D.catalog.raw
+    .filter(m => !m.hidden && new Date(m.created_at).getTime() > cut && m.name && !/batch|free/i.test(m.name))
+    .sort((a, b) => new Date(b.created_at)-new Date(a.created_at)).slice(0, 12);
+  if (!rows.length) return;
+  $('#sec-new').hidden = false;
+  $('#newmodels').innerHTML = rows.map(m => {
+    const ctx = m.context_length ? (m.context_length >= 1e6 ? (m.context_length/1e6).toFixed(1).replace(/\.0$/, '')+'M' : Math.round(m.context_length/1000)+'K') : '--';
+    const mod = (m.output_modalities || []).filter(x => x !== 'text').join('/');
+    return `<div class="nm" data-slug="${esc(m.slug)}">
+      <div class="n-name">${esc(m.short_name || m.name)}</div>
+      <div class="n-meta"><span>${esc(m.author_display_name || authorName(m.author))}</span><span>${m.created_at.slice(5, 10)} 上架</span><span>上下文 ${ctx}</span>${mod ? `<span class="n-mod">${esc(mod)}</span>` : ''}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ---------- 汇总渲染 ---------- */
+let searchModels = [];
+function renderModelSearch() {
+  const slugs = [...aggregateUsage().sort((a, b) => b.tok-a.tok).map(r => r.slug),
+    ...Object.keys(nameIdx.base2aa), ...Object.keys(nameIdx.base2da),
+    ...Object.keys((D.catalog || {}).bySlug || {})];
+  searchModels = [...new Set(slugs.map(baseSlug))].map(slug => ({ slug, name:nameOf(slug) }));
+  $('#model-options').innerHTML = searchModels.map(m => `<option value="${esc(m.slug)}">${esc(m.name)}</option>`).join('');
+}
+
+/* 图表动态摘要：canvas 内容读屏器无法朗读，渲染后把榜首写成一句 aria-label */
+function updateChartA11y() {
+  if (D.usage.length) {
+    const tokens = usageMetric === 'tokens';
+    const top = aggregateUsage().sort((a, b) => tokens ? b.tok-a.tok : b.req-a.req)[0];
+    $('#chart-usage').setAttribute('aria-label', `用量总榜条形图：24 小时 Top 12，当前第一 ${nameOf(top.slug)}，${tokens ? fmtTok(top.tok)+' Token' : fmtReq(top.req)+' 次请求'}`);
+  }
+  if (D.disc && Array.isArray(D.disc.authors) && D.disc.authors.length) {
+    const top = [...D.disc.authors].sort((a, b) => b.weeklyTokens-a.weeklyTokens)[0];
+    $('#chart-vendors').setAttribute('aria-label', `厂商份额环形图：近 7 天 Token 占比，当前第一 ${authorName(top.author)}，份额 ${(top.share*100).toFixed(1)}%`);
+  }
+  const arr = D.cats[activeCat];
+  if (Array.isArray(arr) && arr.length) {
+    const last = arr[arr.length-1];
+    const rows = Object.entries(last.ys || {}).filter(([s]) => s !== 'Others').sort((a, b) => b[1]-a[1]);
+    if (rows.length) $('#chart-cat').setAttribute('aria-label', `分类用量榜条形图（${CATS.find(c => c.key === activeCat).label}）：当前第一 ${nameOf(rows[0][0])}`);
+  }
+}
+function afterPrimary() {
+  prepareBench();
+  renderAll();
+  $('#updated-time').textContent = bjTime();
+  countdown = REFRESH_SEC;
+}
+function renderAll() {
+  safe('kpi', renderKPI); safe('usage', renderUsage); safe('kings', renderKings); safe('dimtable', renderDimTable);
+  safe('value', renderValue); safe('speed', renderSpeed); safe('trend', renderTrend);
+  safe('vendors', renderVendors); safe('spend', renderSpendTask); safe('cattabs', renderCatTabs); safe('cat', renderCat); safe('risers', renderRisers);
+  safe('a11y', updateChartA11y);
+  safe('search', renderModelSearch);
+  (window.MB ? window.MB.subscribers : []).forEach(f => safe('sub', f));
+}
+
+/* tab 组键盘导航：方向键移动焦点并触发（事件委托挂在容器上，cat-tabs 重写 innerHTML 不丢监听） */
+function tabKeys(el) {
+  el.addEventListener('keydown', e => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const btns = [...el.querySelectorAll('.tab')];
+    const cur = btns.indexOf(document.activeElement);
+    if (cur < 0) return;
+    e.preventDefault();
+    const to = btns[(cur + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1) + btns.length) % btns.length];
+    to.focus(); to.click();
+  });
+}
+tabKeys($('#usage-tabs'));
+tabKeys($('#cat-tabs'));
+
+/* ---------- 事件 & 启动 ---------- */
+/* 毛笔字体兜底：loli 镜像不可用时补一个 Google Fonts 源（fonts.ready 后检测） */
+if (typeof document.fonts !== 'undefined') document.fonts.ready.then(() => {
+  if (!document.fonts.check('16px "Ma Shan Zheng"')) {
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@600&display=swap';
+    document.head.appendChild(l);
+  }
+});
+
+$('#usage-tabs').querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => {
+  usageMetric = btn.dataset.metric;
+  $('#usage-tabs').querySelectorAll('.tab').forEach(b => { b.classList.toggle('on', b === btn); b.setAttribute('aria-pressed', b === btn); });
+  renderUsage();
+  updateChartA11y();
+}));
+$('#btn-refresh').addEventListener('click', () => { countdown = REFRESH_SEC; fetchAll(true); });
+
+document.addEventListener('click', e => {
+  const link = e.target.closest('.topbar a[href^="#"], .skip-link');
+  if (!link || window.parent === window) return;
+  const target = document.getElementById(link.getAttribute('href').slice(1));
+  if (!target) return;
+  // srcdoc 的 # 链接会解析成宿主页地址；直接滚动，避免重载内嵌页面。
+  e.preventDefault();
+  target.scrollIntoView({ block:'start' });
+});
+
+$('#model-search').addEventListener('submit', e => {
+  e.preventDefault();
+  const input = $('#model-query');
+  const query = input.value.trim().toLowerCase();
+  const model = searchModels.find(m => m.slug.toLowerCase() === query || m.name.toLowerCase() === query);
+  if (!model) {
+    input.setAttribute('aria-invalid', 'true');
+    $('#model-search-status').textContent = searchModels.length ? '未找到该模型，请从候选列表中选择完整名称或 slug。' : '模型列表仍在加载，请稍后重试。';
+    return;
+  }
+  input.removeAttribute('aria-invalid');
+  $('#model-search-status').textContent = `已找到 ${model.name}，可在详情中加入对比。`;
+  openCardSlug(model.slug, input);
+});
+$('#model-query').addEventListener('input', e => {
+  e.target.removeAttribute('aria-invalid');
+  $('#model-search-status').textContent = '支持名称或 slug，回车查看详情。';
+});
+
+let rsz;
+window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(() => Object.values(chartInstances).forEach(c => c.resize()), 200); });
+
+setInterval(() => {
+  if (document.hidden) return;   // 后台标签页不倒数不空转
+  countdown--;
+  $('#countdown').textContent = countdown > 0 ? Math.floor(countdown/60)+':'+String(countdown%60).padStart(2, '0') : '刷新中…';
+  if (countdown <= 0) { countdown = REFRESH_SEC; fetchAll(true); }
+}, 1000);
+$('#foot-time').textContent = bjTime();
+
+fetchAll(false).then(() => lazyCatalog());
+/* PWA：仅独立打开的安全上下文页面注册（localhost 视为安全；Streamlit iframe 内不注册） */
+const SECURE_CTX = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+if (window.parent === window && 'serviceWorker' in navigator && SECURE_CTX) {
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    // 新 SW 激活即自动刷新一次，让用户无需手动刷两遍才能看到新版
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'activated' && !sessionStorage.getItem('mubang-sw-reloaded')) {
+          sessionStorage.setItem('mubang-sw-reloaded', '1');
+          location.reload();
+        }
+      });
+    });
+  }).catch(() => {});
+}
+/* 安装指引：Android/桌面走 beforeinstallprompt 原生弹窗；iOS 手动弹卡片教操作。
+ * 已安装（standalone）或 Streamlit iframe 内不显示；「7 天不再提示」记 localStorage。 */
+(() => {
+  if (window.parent !== window || !SECURE_CTX) return;
+  if (matchMedia('(display-mode: standalone)').matches || navigator.standalone) return;
+  const IS_IOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (IS_IOS && +(localStorage.getItem('mubang-install-hide') || 0) > Date.now()) return;
+  let deferred = null;
+  const btn = document.createElement('button');
+  btn.id = 'btn-install';
+  btn.className = 'btn-refresh';
+  btn.textContent = '⤓ 安装';
+  btn.title = '把墨榜添加到主屏幕 / 桌面';
+  const slot = document.querySelector('.topmeta');
+  if (!slot) return;
+  slot.appendChild(btn);
+  btn.addEventListener('click', () => {
+    if (deferred) { deferred.prompt(); deferred = null; return; }
+    showTip();   // iOS 等无原生弹窗的平台：手动指引
+  });
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferred = e;
+    if (!IS_IOS) btn.textContent = '⤓ 安装';
+  });
+  function showTip() {
+    if ($('#install-tip')) return;
+    const tip = document.createElement('div');
+    tip.id = 'install-tip';
+    tip.innerHTML = `<div class="it-card">
+      <b class="it-title">把墨榜装到主屏幕</b>
+      <ol><li>点浏览器底部工具栏的<b>分享</b>按钮 <span class="it-key">↑</span></li>
+      <li>下滑选「<b>添加到主屏幕</b>」</li>
+      <li>确认后桌面出现水墨图标，点开即全屏运行</li></ol>
+      <div class="it-acts"><label class="it-never"><input type="checkbox" id="it-never"> 7 天不再提示</label>
+      <button id="it-ok" class="btn-refresh">知道了</button></div></div>`;
+    document.body.appendChild(tip);
+    requestAnimationFrame(() => tip.classList.add('show'));
+    $('#it-ok').addEventListener('click', () => {
+      if ($('#it-never').checked) localStorage.setItem('mubang-install-hide', String(Date.now() + 7 * 86400000));
+      tip.classList.remove('show');
+      setTimeout(() => tip.remove(), 350);
+    });
+  }
+})();
+if (typeof window !== 'undefined') window.__render = () => { prepareBench(); renderAll(); };
+/* 公共 API：js/tools.js、js/card.js 按序消费（零构建的多文件拆分，无打包器） */
+if (typeof window !== 'undefined') window.MB = {
+  D, nameOf, authorName, authorOf, authorColor, baseSlug, esc,
+  fmtTok, fmtReq, fmtUsd, bjTime, modelFacts, chart, isNarrow,
+  aggregateUsage, openCardSlug, subscribers: [],
+};
+/* 弹层打开前清掉所有图表 tooltip：触摸设备上 tooltip 会残留并盖住弹层遮罩 */
+function hideAllTips() {
+  Object.values(chartInstances).forEach(c => {
+    try { c.dispatchAction({ type: 'hideTip' }); } catch {}
+  });
+}
+if (typeof window !== 'undefined') window.MB.hideAllTips = hideAllTips;
+/* HTML 里的模型名统一点击 → 详情弹层（king 卡 / 维度之最 / 黑马 / 新模型） */
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-slug]');
+  if (t) openCardSlug(t.dataset.slug, t);
+});
+document.addEventListener('keydown', e => {
+  const t = e.target.closest('[data-slug][tabindex="0"]');
+  if (t && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    openCardSlug(t.dataset.slug, t);
+  }
+});
+
+/* Streamlit 内嵌时把 iframe 撑到页面真实高度（sandbox 带 allow-same-origin，可直接改 frameElement） */
+if (typeof window !== 'undefined' && window.parent !== window) {
+  const fitFrame = () => {
+    try {
+      const fe = window.frameElement;
+      const h = document.body.scrollHeight;
+      if (fe && h > 600) fe.style.height = (h + 40) + 'px';
+    } catch {}
+  };
+  window.MB.fitFrame = fitFrame;
+  document.addEventListener('toggle', fitFrame, true);
+  window.addEventListener('load', fitFrame);
+  window.addEventListener('resize', fitFrame);
+  setInterval(() => { if (!document.hidden) fitFrame(); }, 1500);
+}
+})();

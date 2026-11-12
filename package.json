@@ -1,0 +1,15 @@
+{
+  "name": "ai-model-rankings",
+  "private": true,
+  "description": "LLMRANKS 大模型战力榜（纯静态站）",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "playwright test --grep-invert @live",
+    "test:live": "playwright test --grep @live"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "eslint": "10.11.0"
+  }
+}

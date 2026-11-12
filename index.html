@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨榜 · AI 大模型实时战力谱</title>
+<meta name="description" content="基于 OpenRouter 实时数据的 AI 大模型水墨战力谱：用量总榜、分项王者、维度之最、性价比与速度，一看就知道当下哪个模型哪方面最强。">
+<meta name="theme-color" content="#1d1a15">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="墨榜">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%23b03a2e'/%3E%3Ctext x='50' y='72' font-size='58' text-anchor='middle' fill='%23f7f3ea' font-family='KaiTi'%3E%E6%A6%9C%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.loli.net/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="loadbar"></div>
+<a class="skip-link" href="#sec-usage">跳到用量总榜</a>
+
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="overview-link" href="#overview">概览</a>
+    <nav class="section-nav" aria-label="页面分区">
+      <a href="#sec-usage">用量总榜</a>
+      <a href="#sec-capability">能力评测</a>
+      <a href="#sec-analysis">成本与速度</a>
+      <a href="#sec-trend">趋势洞察</a>
+      <a href="#sec-category">分类用量</a>
+      <a href="#sec-tools">工具箱</a>
+    </nav>
+    <div class="topmeta">
+      <button id="btn-refresh" class="btn-refresh" title="立即刷新数据">⟳ 刷新</button>
+      <button id="btn-stamp" class="btn-refresh" title="把今日榜一拓印成水墨卡">拓印</button>
+    </div>
+  </div>
+</header>
+
+<section class="hero" id="overview" aria-label="墨榜概览">
+  <div class="sun" aria-hidden="true"></div>
+  <svg class="mountains" viewBox="0 0 1440 250" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M0 250 L0 196 L110 148 L196 200 L318 96 L430 186 L560 128 L688 196 L820 150 L940 198 L1064 158 L1188 202 L1310 172 L1440 196 L1440 250 Z" fill="rgba(232,226,210,.07)"/>
+    <path d="M0 250 L0 226 L170 178 L320 222 L470 168 L640 218 L810 176 L980 220 L1150 184 L1320 218 L1440 200 L1440 250 Z" fill="rgba(232,226,210,.11)"/>
+    <path d="M0 250 L0 238 L260 214 L520 236 L820 216 L1120 238 L1440 224 L1440 250 Z" fill="rgba(232,226,210,.17)"/>
+  </svg>
+  <div class="wrap hero-in">
+    <div class="hero-title">
+      <h1 class="brush">墨榜</h1>
+      <span class="hero-seal">战力</span>
+      <div class="hero-sub">
+        <p class="tagline">AI 大模型实时战力谱</p>
+        <p class="hero-intro">用量看热度，评测看能力，成本与速度辅助选型。</p>
+      </div>
+    </div>
+    <div class="data-status">
+      <a class="badge-src" href="https://openrouter.ai/rankings" target="_blank" rel="noopener">数据源 · OpenRouter</a>
+      <span class="upd">更新于 <b id="updated-time">--</b></span>
+      <span class="upd">自动刷新 <b id="countdown">--</b></span>
+    </div>
+    <div class="kpis" id="kpis">
+      <div class="kpi skeleton"><div class="kpi-label">24h Token 消耗</div><div class="kpi-value">--</div><div class="kpi-sub"></div></div>
+      <div class="kpi skeleton"><div class="kpi-label">24h 请求次数</div><div class="kpi-value">--</div><div class="kpi-sub"></div></div>
+      <div class="kpi skeleton"><div class="kpi-label">活跃模型</div><div class="kpi-value">--</div><div class="kpi-sub"></div></div>
+      <div class="kpi skeleton"><div class="kpi-label">当前用量魁首</div><div class="kpi-value kpi-model">--</div><div class="kpi-sub"></div></div>
+    </div>
+  </div>
+  <svg class="brushline" viewBox="0 0 1200 18" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M6 9 C 200 3 420 14 640 8 C 860 3 1020 13 1194 7" stroke="rgba(221,214,196,.38)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path d="M40 11 C 300 7 600 12 1160 9" stroke="rgba(221,214,196,.15)" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  </svg>
+</section>
+
+<main class="wrap">
+
+  <!-- 用量总榜 -->
+  <section class="card" id="sec-usage" aria-labelledby="usage-title">
+    <div class="card-head">
+      <h2 id="usage-title">用量总榜<span class="h-sub" id="usage-sub">24 小时真实 Token 消耗 · Top 12</span></h2>
+      <div class="tabs" id="usage-tabs" role="group" aria-label="用量指标切换">
+        <button class="tab on" data-metric="tokens" aria-pressed="true">Tokens</button>
+        <button class="tab" data-metric="requests" aria-pressed="false">请求次数</button>
+      </div>
+    </div>
+    <form class="model-search" id="model-search" role="search" aria-label="查找模型">
+      <label for="model-query">查找模型</label>
+      <div class="search-inputs">
+        <input id="model-query" list="model-options" placeholder="输入模型名称或 slug" aria-describedby="model-search-status" autocomplete="off" required>
+        <datalist id="model-options"></datalist>
+        <button class="btn-refresh" type="submit">查看详情</button>
+      </div>
+      <p id="model-search-status" role="status">支持名称或 slug，回车查看详情。</p>
+    </form>
+    <div class="chart tall" id="chart-usage" role="img" aria-label="用量总榜条形图：24 小时 Token 消耗或请求次数 Top 12"><div class="ph">加载中…</div></div>
+  </section>
+
+  <!-- 核心能力摘要与完整维度合并，减少重复浏览 -->
+  <section class="card" id="sec-capability" aria-labelledby="capability-title">
+    <div class="card-head"><h2 id="capability-title">能力评测<span class="h-sub">综合智能、编程、智能体任务的领先模型</span></h2></div>
+    <div class="kings" id="kings"><div class="ph">加载中…</div></div>
+    <details class="dimension-details" id="dimensions">
+      <summary>查看全部维度之最<span>开发、创作、性价比与周涨幅</span></summary>
+      <div class="dimtable" id="dimtable"><div class="ph">加载中…</div></div>
+    </details>
+  </section>
+
+  <div class="grid2" id="sec-analysis" role="group" aria-label="成本与速度">
+    <!-- 性价比 -->
+    <section class="card">
+      <div class="card-head"><h2>性价比图<span class="h-sub">单请求成本 vs 智能指数 · 越靠左上越值</span></h2></div>
+      <div class="chart sq" id="chart-value" role="img" aria-label="性价比散点图：单请求成本与智能指数，气泡大小为用量"><div class="ph">加载中…</div></div>
+    </section>
+    <!-- 速度 -->
+    <section class="card">
+      <div class="card-head"><h2>速度榜<span class="h-sub">P50 延迟 vs 吞吐 · 气泡大小为请求量</span></h2></div>
+      <div class="chart sq" id="chart-speed" role="img" aria-label="速度散点图：P50 延迟与吞吐，气泡大小为请求量"><div class="ph">加载中…</div></div>
+    </section>
+  </div>
+
+  <!-- 趋势 -->
+  <section class="card" id="sec-trend">
+    <div class="card-head"><h2>30 天用量趋势<span class="h-sub">头部模型每日 Token 消耗 · Top 6</span></h2></div>
+    <div class="chart" id="chart-trend" role="img" aria-label="30 天用量趋势折线图：头部模型每日 Token 消耗"><div class="ph">加载中…</div></div>
+  </section>
+
+  <div class="grid2">
+    <!-- 厂商份额 -->
+    <section class="card">
+      <div class="card-head"><h2>厂商份额<span class="h-sub">近 7 天 Token 占比</span></h2></div>
+      <div class="chart sq" id="chart-vendors" role="img" aria-label="厂商份额环形图：近 7 天 Token 占比"><div class="ph">加载中…</div></div>
+    </section>
+    <!-- 任务花费 -->
+    <section class="card">
+      <div class="card-head"><h2>钱花在哪<span class="h-sub">30 天任务花费占比</span></h2></div>
+      <div class="chart sq" id="chart-spend" role="img" aria-label="任务花费环形图：30 天任务花费占比"><div class="ph">加载中…</div></div>
+    </section>
+  </div>
+
+  <!-- 分类榜 -->
+  <section class="card" id="sec-category">
+    <div class="card-head">
+      <h2>分类用量榜<span class="h-sub" id="cat-sub">最新一天分类消耗 · Top 8</span></h2>
+      <div class="tabs" id="cat-tabs"></div>
+    </div>
+    <div class="chart tall" id="chart-cat" role="img" aria-label="分类用量榜条形图：可切换编程、自然语言、长上下文、图像、工具调用、视频生成"><div class="ph">加载中…</div></div>
+  </section>
+
+  <!-- 本周黑马 -->
+  <section class="card">
+    <div class="card-head"><h2>本周黑马<span class="h-sub">用量周涨幅最大的模型</span></h2></div>
+    <div class="risers" id="risers"><div class="ph">加载中…</div></div>
+  </section>
+
+  <!-- 新模型 -->
+  <section class="card" id="sec-new" hidden>
+    <div class="card-head"><h2>新上架模型<span class="h-sub">近 14 天登录 OpenRouter</span></h2></div>
+    <div class="newmodels" id="newmodels"></div>
+  </section>
+
+  <!-- 工具箱（默认折叠，保护首屏一眼看完的定位） -->
+  <section class="card" id="sec-tools">
+    <div class="card-head">
+      <h2>工具箱<span class="h-sub">对比 · 白嫖 · 对决 · 降价 · 算账</span></h2>
+      <button id="tools-toggle" class="btn-refresh" aria-expanded="false" aria-controls="tools-body">展开 ▾</button>
+    </div>
+    <div id="tools-body" hidden>
+      <div class="tabs" id="tool-tabs" role="group" aria-label="工具切换">
+        <button class="tab on" data-tool="vs" aria-pressed="true">模型对比</button>
+        <button class="tab" data-tool="free" aria-pressed="false">白嫖榜</button>
+        <button class="tab" data-tool="cn" aria-pressed="false">国产对决</button>
+        <button class="tab" data-tool="price" aria-pressed="false">降价榜</button>
+        <button class="tab" data-tool="calc" aria-pressed="false">算笔账</button>
+      </div>
+      <div class="tool-pane" id="tool-vs">
+        <div class="vs-box">
+          <input id="vs-a" list="vs-list" placeholder="输入模型 A（slug 或名称）" aria-label="模型 A">
+          <span class="vs-x">对</span>
+          <input id="vs-b" list="vs-list" placeholder="输入模型 B" aria-label="模型 B">
+          <datalist id="vs-list"></datalist>
+        </div>
+        <div id="vs-out"><div class="ph">选两个模型开始对比，或点击任意榜单里的模型 → 详情 → 加入对比</div></div>
+      </div>
+      <div class="tool-pane" id="tool-free" hidden>
+        <div class="chart tall" id="chart-free" role="img" aria-label="免费模型榜条形图：24 小时 free 变体 Token 消耗 Top 12"></div>
+        <p class="tool-note">口径：24h 内 <code>variant=free</code> 调用行按 base 模型聚合；智能分来自 Artificial Analysis。</p>
+      </div>
+      <div class="tool-pane" id="tool-cn" hidden><div class="ph">加载中…</div></div>
+      <div class="tool-pane" id="tool-price" hidden><div class="ph">加载中…</div></div>
+      <div class="tool-pane" id="tool-calc" hidden>
+        <div class="calc-box">
+          <label>日请求量 <input id="calc-req" type="number" value="1000" min="0" step="100"></label>
+          <span>× 单请求真实成本 × 30 天</span>
+        </div>
+        <div id="calc-out"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- 模型详情弹层 -->
+<div id="modal" hidden>
+  <div class="modal-mask" id="modal-mask"></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-label="模型详情">
+    <button id="modal-close" class="modal-x" aria-label="关闭">×</button>
+    <div id="modal-body"></div>
+    <div class="modal-acts">
+      <button id="modal-vs" class="btn-refresh">加入对比</button>
+      <button id="modal-stamp" class="btn-refresh">拓印此模型</button>
+    </div>
+  </div>
+</div>
+<canvas id="stamp-canvas" hidden></canvas>
+
+<footer class="wrap foot">
+  <p>数据来自 <a href="https://openrouter.ai/rankings" target="_blank" rel="noopener">openrouter.ai</a> 公开接口（智能/编程/智能体分数来自 Artificial Analysis，网页/可视化等分数来自 Design Arena），每小时随官方更新。</p>
+  <p class="kai">计白当黑 · 墨分五色 —— 榜如水墨，浓淡随时 · <span id="foot-time"></span></p>
+</footer>
+
+<script src="vendor/echarts.min.js"></script>
+<script src="js/app.js"></script>
+<script src="js/tools.js"></script>
+<script src="js/card.js"></script>
+</body>
+</html>
