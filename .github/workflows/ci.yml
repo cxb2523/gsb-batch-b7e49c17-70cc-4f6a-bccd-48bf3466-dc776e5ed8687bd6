@@ -1,0 +1,105 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run --exclude 'test/wasm-full.test.ts'
+
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - name: Built bundle parses like src
+        run: npx vitest run test/dist-parity.test.ts
+      - name: CLI smoke test
+        run: |
+          set -e
+          test "$(node bin/cli.mjs -P title 'The.Matrix.1999.mkv')" = "The Matrix"
+          node bin/cli.mjs -j 'Show.S01E02.mkv' | grep -q '"season": 1'
+          printf 'A.2020.mkv\nB.2021.mkv\n' | node bin/cli.mjs --jsonl | wc -l | grep -q 2
+          node bin/cli.mjs -a -j 'Movie.2020.mkv' | grep -q '"raw": "2020"'
+          node bin/cli.mjs -p | grep -qx title
+          node bin/cli.mjs --nope 2>/dev/null && exit 1 || test $? = 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Drop-in parity vs Python guessit CLI
+        run: |
+          set -e
+          # six: guessit imports six.text_type in jsonutils.py — in the release and in
+          # upstream's git — without declaring it, and guessit.__main__ imports
+          # jsonutils, so on a clean install the Python CLI dies before parsing
+          # anything and every diff below "fails" against an empty side. Pinned so the
+          # comparison is against the version the docs cite.
+          pip install --quiet "guessit==4.5.1" six pyyaml
+          guessit --version | head -1
+          # mimetype is dropped from the comparison: Python reads it from the OS
+          # table, so the same .mkv is "video/matroska" on this runner and
+          # "video/x-matroska" on macOS and on Python 3.15. That is a property of the
+          # machine, not of either parser, and this port reports the conventional
+          # x- spelling consistently everywhere.
+          strip_mimetype() { grep -v -e '"mimetype"' -e '^mimetype:' -e '^  mimetype:'; }
+          for fmt in "" "-j" "-y" "-s"; do
+            for f in 'Movie.2020.1080p.mkv' 'B.S01E02 en.mkv' 'Dune.2021.2160p.WEB-DL.DDP5.1.Atmos.mkv'; do
+              diff <(guessit $fmt "$f" | strip_mimetype) <(node bin/cli.mjs $fmt "$f" | strip_mimetype) \
+                || { echo "DROP-IN DIFF: [$fmt] $f"; exit 1; }
+            done
+          done
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Coverage (summary in job log)
+        run: npx vitest run --coverage --exclude 'test/wasm-full.test.ts'
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Install wasmtime (pinned — the install.sh "latest" lookup is rate-limited on shared runners)
+        run: |
+          V=v47.0.3
+          curl -sSfL "https://github.com/bytecodealliance/wasmtime/releases/download/${V}/wasmtime-${V}-x86_64-linux.tar.xz" | tar -xJ
+          mkdir -p ~/.wasmtime/bin
+          mv "wasmtime-${V}-x86_64-linux/wasmtime" ~/.wasmtime/bin/
+          ~/.wasmtime/bin/wasmtime --version
+      - name: Build WASM (downloads pinned Javy)
+        run: bash wasm/build.sh
+      - name: Test WASM against fixtures
+        run: npx vitest run test/wasm-full.test.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guessit-wasm
+          path: |
+            wasm/guessit.wasm
+            wasm/guessit.wasm.gz

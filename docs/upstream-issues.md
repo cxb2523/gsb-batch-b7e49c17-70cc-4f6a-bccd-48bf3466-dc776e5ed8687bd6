@@ -1,0 +1,303 @@
+# Upstream guessit issues — triage & tracking
+
+> **Historical snapshot (last full triage: v4.3.x, 2026-06/08).** Everything
+> fixable listed here has since shipped; see `CHANGELOG.md` for the release
+> trail (v4.3.0 onward), `test/fixtures/upstream-open-issues.yml` for the guard
+> fixtures, and `docs/python-parity.md` for the parity story. Newly filed
+> upstream work since this snapshot: guessit-io/guessit#961 (dead episode pass,
+> our PR guessit-io/guessit#962) and the rebulk-js 3.4.0 engine fixes.
+>
+> **Fourth sweep, 2026-11-10 — open issues read to #977, closed issues to #988,
+> merged PRs #982 and #985.** Upstream shipped 4.5.0 and 4.5.1 the same day and
+> closed six issues; four of them reproduced here and are now fixed with guard
+> fixtures: #988 (an unbracketed `YYYY-YYYY` range leaked its first year into the
+> title), #983 (a season-pack directory overrode the episode of the file it
+> holds), #978 (`.strm`/`.vtt`/`.txt`/`.url` became or corrupted the
+> `release_group`) and the #985 anime cluster (the "Season N - EE" and `(S4-24)`
+> readings fired on western box sets; `HR-GZ` parsed as Croatian in a nonexistent
+> country; a `0x539` group id was discarded as a number). #976 (a numeric title
+> inside the year range) and all five of #982's filepart cases already passed.
+> #977 (asterisks in titles) was already correct and is pinned.
+>
+> Deliberate divergences from #985, which this port does not adopt: an anime
+> compound dash title stays whole (`Fairy Tail - 100 Years Quest` is the show's
+> name — same rule that keeps `Tower of Druaga - Sword of Uruk`), a year does not
+> become a season, and `Show 12 - 24` reads as title "Show 12" plus episode 24
+> rather than a two-episode list. Cross-parser baseline unchanged at 114 of the
+> historical 276; upstream's own baseline is now 255 cases, of which 94 pass.
+>
+> **#961/#962 resolved upstream, 2026-11-10.** Toilal confirmed the diagnosis,
+> declined the per-subclass workaround and fixed the root cause in rebulk
+> instead (Toilal/rebulk#92 → rebulk 6.0.2, where instance-registered rules
+> compare by identity). guessit#982 integrates it along with the specificity
+> guard from our #962, which it credits and supersedes; #961 is closed and #962
+> is closed with it. All five of #982's new equally-complete-filepart cases pass
+> here unchanged — that guard originated in this port.
+>
+> We carried the same engine defect. The rebulk-js 3.4.0 note claimed every
+> instance of a duplicated rule class executes, but only `toposortRules` had been
+> fixed — `Rules.extend` still deduped by class, so differently-parameterized
+> instances died one step earlier (verified on 3.4.0: two instances in, one
+> effective rule out, only the first fired). Fixed in rebulk-js 3.5.0 with
+> parameter-aware equality rather than upstream's identity rule, so the default
+> `ConflictSolver`/`PrivateRemover` (31 each, interchangeable) still collapse to
+> one. No guessit-js behaviour depended on it; effective rules stayed 137 of 197
+> registered.
+>
+> **Second sweep, 2026-09-19** — re-triaged every open issue and everything
+> upstream closed after the port (#812–#954). Four needed work here and are
+> fixed with guard fixtures: #963 (decimal sequel numbers read as dates or
+> audio channels), #964 (a source picked out of an episode title), #966 (`re:`
+> expected titles ignored separators), #944 (absolute episodes behind a dotted
+> range). Everything else already parsed correctly, several cases better than
+> Python: #875, #877, #928, #929, #937, #943, #948, #950, #953, #954. #704
+> (nuitka), #389 (Aho-Corasick) and #599 (music) stay out of scope.
+>
+> **Third sweep, 2026-09-27 — last issue checked: #968.** Every open issue
+> re-read down to #273, plus every comment filed since the second sweep. Two
+> needed work: the new sub-case in the #875 thread (Mika3578, 2026-09-11 —
+> broadcast/DVR underscore stamps) and the last open #877 B2 name
+> (`[Juuni.Kokki]-(Les.12.Royaumes)-[Ep.24]`, which the earlier "11 of 12" count
+> missed). #968 (`Spa Weekend` read as Spanish), #961 and the #949 comment
+> (a duplicate of #966) already parsed correctly. Guard fixtures for all of them
+> are in `test/fixtures/upstream-open-issues.yml`.
+
+**Upstream's rule-level test suite, imported 2026-11-10.** The port mirrored
+upstream's four corpus files (`movies.yml`, `episodes.yml`, `various.yml`,
+`streaming_services.yaml`, `enable_disable_properties.yml`) but never the 19
+per-rule files under `guessit/test/rules/`. Upstream's corpus is 2394 entries
+against the 1516 names carried here, and the 977-case difference is now imported:
+`test/fixtures/upstream-corpus-*.yml` (new entries in the files already mirrored)
+and `test/fixtures/upstream-rules-*.yml` (the per-rule files). 897 of them passed
+on arrival.
+
+The 80 that did not were triaged: 41 are fixed and now run, and 39 are parked in
+`test/fixtures/upstream-rules-pending.yml`, which is deliberately absent from
+`FIXTURE_FILES` so the suite stays green while the gap stays visible. Work
+through it by moving blocks back into the matching `upstream-rules-*.yml`.
+
+Fixed in this sweep:
+
+| Count | Fix |
+|---|---|
+| 17 | `WxH` screen sizes. `aspect_ratio` was reported only when the ratio fell inside the standard window, which hid it for exactly the unusual resolutions it describes; and a trailing scan type made the parse read the width as the height (`500x480p` → `500p`, `852x480i` → `852p`). |
+| 4 | Streaming services ADN (Anime Digital Network), MY5 (Channel 5), MAX and NOW. The last two are case-sensitive, so "Mad Max" and "Now You See Me" are unaffected. |
+| 1 | `HDR10P` as a spelling of HDR10+. |
+| 1 | `Part Trois`. The part rule carried its own English-only copy of the word numerals; it now shares the table the formatter reads, so every French numeral works. |
+| 6 | Harness, not parser: a leading `+` on a fixture name is a marker, not input; a null expectation asserts nothing (upstream's harness skips those keys); and `options` may be a mapping rather than a CLI string, which is how `advanced_config` is reached. |
+| 6 | Decimal numbers in a title keep their dot (`M3GAN 2.0`, `Ghost in the Shell 2.0`, `eps1.0 hellofriend`), and a decimal is no longer eaten as an audio channel layout, which had truncated `Evangelion.1.0.You.Are.Not.Alone` to "Evangelion". |
+
+Still pending, largest first:
+
+| Count | Bucket | Kind |
+|---|---|---|
+| 9 | short codes that stay titles upstream (`may`, `ice`, `mal`, `est`, `mon`, `mar`, `ben`, `sr`, `sub`) | divergence — upstream allows 23 languages, this port 60, so these resolve here. A rule dropping a whole-filepart language also breaks bare `pt`/`English`/`French`, which upstream expects to be languages. |
+| 7 | episode rules: title from the filepart carrying the episode, bare space-separated lists (`Some Series S01 02 03`), `Season.4.Episodes.1-12` | gap |
+| 5 | the #985 divergences above | divergence |
+| 4 | a bare four-digit year alone in the name (`2012`, `(1920)`) | divergence — a lone number stays a title here, which is what #976 asks for; `Something.2.5.2007` is the unpadded `D.M.YYYY` date this port rejects on purpose (#963) |
+| 1 | `The.Taking.of.Pelham.1.2.3` under a forced type | gap, low value |
+| 3 | bare `Cam` with nothing else in the name, and `UHD HQ 8bit Bluray` merging into Ultra HD Blu-ray across intervening tokens | gap, low value |
+| 3 | subtitle prefixes `SubFrench`, `SubFr`, `STFr` | gap |
+| 3 | audio channels from a bare `1.0` / `2.0` / `51` with nothing else in the name | gap, low value |
+| 3 | `other`: `The complete movie` — `Complete` as a property inside title text | gap |
+| 2 | `release_group` vs `episode_title` on `Test.S01E01-FooBar-Group` under `-G` | gap |
+
+**Rebuilding the cross-parser corpus.** `scripts/cross-parser-check.mts` reads a
+joined corpus from `$XP_CASES` (default `xp-cases.json`). Build it from upstream
+with no clone: fetch `guessit/test/cross_parser/baseline.json` plus
+`{anitomy,go-ptn,ptn,ptt,thcolin}.json`; the baseline is
+`{parser: {release_name: [failing_field, …]}}` and each parser file is
+`{entries: [{release_name, expected}]}`, so for every baseline name pick just the
+listed fields out of that parser's `expected`. Compare only those fields — the
+score counts the cases Python admits failing, not a general pass rate.
+
+Triaged from <https://github.com/guessit-io/guessit/issues> (open issues) for the
+guessit-js port. Oriented toward parsing behaviour; Python-runtime/packaging
+crashes are treated as no-go since they have no analogue in a self-contained
+TS/WASM build.
+
+**Status legend:** **fixed** = done in guessit-js · **works**/**acceptable** =
+already correct or reasonable (often better than Python) · **partial** = improved
+but not complete · **not fixed / not done** = with the reason inline · `wontfix` =
+invalid/ambiguous/env-specific.
+
+**Progress (as of 2026-06-02, see the 2026-08-09 update below — several rows in this table were later fixed):** every open issue below has an explicit disposition.
+**32 fixed** (272, 273, 623, 634, 638, 640, 646, 651, 652, 667, 670, 671, 705, 722, 732,
+737, 742, 743, 745, 746, 763, 784, 789, 790, 796, 800, 773, 301, 618, 622, 630, 708) · **7 already
+work / acceptable** (648, 660, 752, 774, 637, 741, 771) · the rest carry an inline
+"why not fixed" note. No known parsing *bugs* remain — only ambiguous anime
+conventions (#690/#696/#747) and the underspecified composite-quality request
+(#802) / music domain (#599). The
+delicate release-group cascade (#634/#640) and the `cd`-mid-token hash case (#742)
+are both FIXED. The whole title-token-collision cluster that overlapped the
+Python↔JS parity gap is resolved (parity FIX 0).
+
+**Cross-ref (UPDATED 2026-06-02):** the biggest validated cluster was **title-token
+collision** — a title word/letter consumed as country/language/edition/source/other,
+the same root cause as the Python↔JS parity gap tracked by `scripts/python-diff.mts`.
+**That gap is now closed: parity is FIX 0** (`docs/python-parity.md`) — every genuine
+JS-worse-than-Python case (spurious episode_title/alternative_title fragments,
+title-absorbs-junk lists, dup-language, GROUP→episode_title, phantom languages,
+obfuscated-hash junk) is fixed. The ★ issues below that are still "not fixed" are a
+*different, narrower* set (hyphen-title release-group cascade #634/#640, the
+`cd`-mid-token hash case #742, ambiguous anime formatting #690/#696/#747) — they were
+NOT part of the parity-fixture corpus, so the parity work did not touch them. They
+remain open and are individually marginal/risky.
+
+---
+
+## VALIDATED / SHOULD FIX (22)
+
+| # | URL | Claim (example → expected vs actual) | Status |
+|---|-----|--------------------------------------|--------|
+| 305 | https://github.com/guessit-io/guessit/issues/305 | `Brodnopis_i_pioro.svg` → title includes `svg`; extension leaks into title, typed movie | not fixed — shared Python bug (Python also keeps 'svg' in title; .svg isn't a video container). Added .svg→image/svg+xml mimetype; the title-leak fix would diverge from Python |
+| 623 | https://github.com/guessit-io/guessit/issues/623 | `FlexGet.US.S2013E14...AAC1.0.x264-NOGRP` → `season:[2013,0]`, misses `audio_codec:AAC`/`audio_channels:1.0` | **fixed** (audio_channels 1.0, no season:0) |
+| 634 | https://github.com/guessit-io/guessit/issues/634 | ★ `grown-ish.s03e01.web.x264-tbs[eztv]` → `release_group:"grown"`, `title:"ish"`; hyphenated title split | **fixed** — title now `grown-ish` (Python STILL mis-parses this). DashSeparatedReleaseGroup `!atEnd` no longer grabs a candidate at the filepart start when a season/episode/date follows. (rg is `tbs[eztv]` — the `[eztv]` bracket isn't split off, minor/cosmetic) |
+| 638 | https://github.com/guessit-io/guessit/issues/638 | ★ `Us.2019.mkv` → `Us` matched as country `US` not title | **fixed** (Title-Case country at title pos) |
+| 640 | https://github.com/guessit-io/guessit/issues/640 | ★ `grown-ish` + trailing `[ettv]`/`[eztv]` flips title/release_group (same root as 634) | **fixed** — same fix as #634; title now `grown-ish` |
+| 646 | https://github.com/guessit-io/guessit/issues/646 | `Charlot.Policeman.1917...` → `season:19, episode:17`; pre-1920 year split into S/E | **fixed** (validYear lower bound → 1900) |
+| 651 | https://github.com/guessit-io/guessit/issues/651 | `...x264-CNHD` → `streaming_service:"Cartoon Network"` from `CN` in release group | **fixed** (glued short-abbrev guard) |
+| 652 | https://github.com/guessit-io/guessit/issues/652 | ★ `The.Collector.2009...` → `title:"The"`, `edition:"Collector"` | **fixed** (lone-article title extend) |
+| 670 | https://github.com/guessit-io/guessit/issues/670 | `[SSA] Uma Musume...mkv` → `container:["ssa","mkv"]`, no release_group; leading `[SSA]` is group | **fixed** (leading subtitle-ext bracket → release_group) |
+| 732 | https://github.com/guessit-io/guessit/issues/732 | ★ `Show.S01E01.Cam...` → `source:["Camera","Web"]`; "Cam" episode word → Camera source | **fixed** (Title-Case Cam→title) |
+| 737 | https://github.com/guessit-io/guessit/issues/737 | ★ `The.English.S01E01...` → `title:"The"`, `language:"English"` | **fixed** (lone-article title extend) |
+| 742 | https://github.com/guessit-io/guessit/issues/742 | `My File 238ddcd5aff.mkv` → `cd:5`; `cd` matches mid-token, needs word boundary | **fixed** — added a leading word boundary to the `cd` regex so it only matches a standalone `CD<n>` token, not `cd` glued inside a word/hash (`238ddcd5aff`/`abcd5` → no `cd`; `CD1`/`CD.1`/`(CD3)`/`_CD1`/`-CD1`/`cd1of2` still work). Python still mis-parses this. (boundary written as `(?<!\d)(?<![^\W\d_])` — no literal `-`, which the `dash` abbreviation would otherwise corrupt) |
+| 743 | https://github.com/guessit-io/guessit/issues/743 | ★ `The.Mandalorian.S03E03.Chapter.19.The.Convert...` → `other:"Converted"`, truncated episode_title | **fixed** (Title-Case Convert→title) |
+| 744 | https://github.com/guessit-io/guessit/issues/744 | `Ted.Lasso.S03E03.4-5-1...` → `episode:[3,4,5]`, `episode_title:"1"`; "4-5-1" eaten as range | **fixed** (v4.3.1) — episode 3 + episode_title '4-5-1' kept whole (FormationRunEpisodeTitle); Python still gives [3,4,5] |
+| 745 | https://github.com/guessit-io/guessit/issues/745 | ★ `[ASW] Oshi no Ko - 01...` → `title:"Oshi no"`, `language:"Korean"`; "Ko" → Korean | **fixed** (stop-word trailing-crop guard) |
+| 746 | https://github.com/guessit-io/guessit/issues/746 | ★ `Schmigadoon.S02E04.Something.Real...` → `other:"Proper"`, episode_title truncated | **fixed** (Title-Case Real→title) |
+| 757 | https://github.com/guessit-io/guessit/issues/757 | `[SubsPlus+] Helck...` → group mis-detected; `+` in leading-bracket group name breaks detection | not fixed — JS already gets release_group 'SubsPlus' (better than Python's wrong group); only the trailing '+' is lost because '+' is a global separator char. Low value, risky to change sep handling |
+| 784 | https://github.com/guessit-io/guessit/issues/784 | ★ `The.Convert (2024)...` → `title:"The"`, `other:"Converted"` (movie variant of 743) | **fixed** (Title-Case Convert→title) |
+| 789 | https://github.com/guessit-io/guessit/issues/789 | ★ `It Ends With Us 2024...` → `title:"It Ends With"`, `country:"US"` (19 comments) | **fixed** (stop-word trailing-crop guard) |
+| 790 | https://github.com/guessit-io/guessit/issues/790 | `La casa del dragón 2×7` not parsed; Unicode `×` should normalize to `x` (→ S2E7) | **fixed** (added × to episode markers) |
+| 796 | https://github.com/guessit-io/guessit/issues/796 | ★ `Adam-12 S01E02...` → `title:["Adam","12"]` (list, split); should be `"Adam-12"` | **fixed** (title "Adam-12") |
+| 800 | https://github.com/guessit-io/guessit/issues/800 | ★ `The.Four.Seasons.2025.S01E01...` → `title:"The Four"`, `season:[2025,1]`; "Seasons" swallowed | **fixed** (reject year as season-word number) |
+
+---
+
+## MIDDLE PRIORITY (27)
+
+| # | URL | Claim | Status |
+|---|-----|-------|--------|
+| 272 | https://github.com/guessit-io/guessit/issues/272 | Feature: archive containers/types (rar → episodearchive) | **fixed** (container) — archive extensions (rar/zip/7z/tar/gz/bz2/ace/cbr/cbz/… + split `.rNN` volumes) now recognised as `container`, so they stop leaking into release_group/episode_title (`-GRP.rar`→`GRP`+`container:rar`; `.r00`/`.7z` no longer release_group/episode_title). NOT changing `type` to `episodearchive` — Python keeps `type:movie/episode` for these (fixtures depend on it), so a new type value would diverge & break fixtures |
+| 273 | https://github.com/guessit-io/guessit/issues/273 | Feature: metadata files (nfo/poster/jpg → episodemeta, other:poster) | **fixed** (container + other) — image extensions (jpg/jpeg/png/gif/bmp/tbn/webp) recognised as `container` (no more `GRP.jpg` leak); artwork files classified via `other` (poster→`Poster`, fanart→`Fanart`, banner/thumb/landscape/cover/clearart/logo/discart), scoped to image fileparts so a real video title containing such a word is never clobbered. `type` left as movie/episode (same reason as #272) |
+| 301 | https://github.com/guessit-io/guessit/issues/301 | `vol127+128` leaks into release_group; detect `volume` property | **fixed** (new volume property) |
+| 599 | https://github.com/guessit-io/guessit/issues/599 | Feature: artist/album for music folders | not done — music artist/album; out of core video scope |
+| 618 | https://github.com/guessit-io/guessit/issues/618 | Feature: VR support | **fixed** (VR other-value) |
+| 622 | https://github.com/guessit-io/guessit/issues/622 | Feature: extract imdb_id/tmdb/tvdb (`tt\d+`) | **fixed** (imdb_id tt…, tmdb_id, tvdb_id) |
+| 630 | https://github.com/guessit-io/guessit/issues/630 | Feature: MicroHD / HDlite other-values | **fixed** (added MicroHD/HDlite) |
+| 637 | https://github.com/guessit-io/guessit/issues/637 | `E.60.2020...` → title "E", ep 60; real show "E:60" but ambiguous | acceptable — JS gives title 'E 60' (≈ 'E:60'); '60' is not mis-read as episode. Reasonable as-is |
+| 648 | https://github.com/guessit-io/guessit/issues/648 | Dolby Vision (DV/SL.DV/DL.DV) mis-parsed; new property, ambiguous tokens | **works** (DV→Dolby Vision, HDR→HDR10) |
+| 660 | https://github.com/guessit-io/guessit/issues/660 | `HI.SCORE.GIRL...` → `language:hi`; suppress 2-letter lang at title start (debatable) | **works** (title kept, no phantom hi) |
+| 667 | https://github.com/guessit-io/guessit/issues/667 | Anime `S2 - 01` → episode as episode_title "01" | **fixed** (numeric episode_title w/ season but no episode → episode) |
+| 671 | https://github.com/guessit-io/guessit/issues/671 | Japanese episode marker `第195話` (CJK parsing) | **fixed** (CJK 第N話/シーズン/期 markers) |
+| 690 | https://github.com/guessit-io/guessit/issues/690 | `Re ZERO -Starting Life...- Season 2 - 15` → season:15; ambiguous formatting | **fixed** (v4.3.0) — Season-dash-episode rule: season 2, episode 15, title whole |
+| 693 | https://github.com/guessit-io/guessit/issues/693 | Resolution without 'p' (`720`/`1080`) → S/E; maintainer reluctant | **fixed** (v4.1.0, upstream #933 port) — bare 720/1080/2160 → screen_size when a codec follows in the same tag block |
+| 696 | https://github.com/guessit-io/guessit/issues/696 | Romaji title + `(English title)` → group mis-detected | **fixed** (v4.2.0) — leading anime bracket wins over the trailing parenthetical; title/season/episode all correct |
+| 705 | https://github.com/guessit-io/guessit/issues/705 | Feature: opening/ending sequence detection (extra_type) | **fixed** (NCOP→Opening Credits, NCED→Ending Credits) |
+| 708 | https://github.com/guessit-io/guessit/issues/708 | `...(July 30 2021) [540p mp4 subs]` → release_group "July 30 2021"; should be date | **fixed** (month-name date parsing) |
+| 722 | https://github.com/guessit-io/guessit/issues/722 | `Extras (2005) - S01E01...` → `other:"Extras"`, no title; show named "Extras" | **fixed** (Title-Case property at title pos → title) |
+| 741 | https://github.com/guessit-io/guessit/issues/741 | `1280x720up` junk after resolution breaks parsing | **fixed** (v4.1.0) — 'up' upscale marker parsed: screen_size 720p, release group intact |
+| 747 | https://github.com/guessit-io/guessit/issues/747 | `5. Nanatsu no Taizai...` → movie while `22.` works; inconsistent leading number | not fixed — '5. Title' vs '22. Title' inconsistent leading-number handling; ambiguous |
+| 752 | https://github.com/guessit-io/guessit/issues/752 | `S01E02.3.Kings` → `episode:[2,3]`; leading title digit read as range | **works** (ep 2, et "3 Kings"; better than Python) |
+| 763 | https://github.com/guessit-io/guessit/issues/763 | Japanese season/episode markers (シーズン/第/話) | **fixed** (CJK シーズン/第/話/期 markers) |
+| 771 | https://github.com/guessit-io/guessit/issues/771 | `3D` should match only after year (avoids titles containing 3D) | acceptable — leading '3D' stays in the title (not mis-detected); a strict after-year-only rule could regress titles legitimately containing 3D |
+| 772 | https://github.com/guessit-io/guessit/issues/772 | Folder episode range `01~43` overrides file `11`; precedence design | not done — design call: folder episode range vs filename precedence |
+| 774 | https://github.com/guessit-io/guessit/issues/774 | `Blade Runner 2049` (no year) → S20E49; needs year-range heuristic | works — with a release year JS gives title 'Blade Runner 2049' + year. The no-year case (2049→S/E) is shared Python behaviour and needs a fragile year heuristic |
+| 797 | https://github.com/guessit-io/guessit/issues/797 | Parent-dir `Season 1` overrides filename `S44`; precedence design | **fixed** (v4.2.0) — SxxExx-weighted filepart precedence: filename S44E03 wins |
+| 802 | https://github.com/guessit-io/guessit/issues/802 | Feature: composite `quality` field (underspecified) | not done — underspecified feature (composite 'quality' field) |
+
+---
+
+## NO-GO / BULLSHIT (29)
+
+| # | URL | Reason | Status |
+|---|-----|--------|--------|
+| 389 | https://github.com/guessit-io/guessit/issues/389 | Aho-Corasick perf; Python-engine, irrelevant to TS | wontfix |
+| 610 | https://github.com/guessit-io/guessit/issues/610 | options vs options.json merge; Python config behaviour, workaround exists | wontfix |
+| 617 | https://github.com/guessit-io/guessit/issues/617 | Debian test failures on old 3.1.0; obsolete/env | wontfix |
+| 620 | https://github.com/guessit-io/guessit/issues/620 | "Us 2019 remux" dump looks correct, no clear expected; dup of 638 | wontfix |
+| 627 | https://github.com/guessit-io/guessit/issues/627 | `-t episode` lenient anime rules; working-as-designed per maintainer | wontfix |
+| 668 | https://github.com/guessit-io/guessit/issues/668 | no/da removed by common_words; user-config, not a bug | wontfix |
+| 699 | https://github.com/guessit-io/guessit/issues/699 | `E-AC-3` bleeds into episode; ambiguous audio token, no clean expected | wontfix |
+| 700 | https://github.com/guessit-io/guessit/issues/700 | mojibake/zero-width chars; not a clean repro | wontfix |
+| 704 | https://github.com/guessit-io/guessit/issues/704 | nuitka packaging TypeError; Python tooling | wontfix |
+| 725 | https://github.com/guessit-io/guessit/issues/725 | Bazarr crash old version; downstream/version | wontfix |
+| 751 | https://github.com/guessit-io/guessit/issues/751 | title vs film_title; usage question | wontfix |
+| 768 | https://github.com/guessit-io/guessit/issues/768 | read embedded media tags; out of scope (names only) | wontfix |
+| 773 | https://github.com/guessit-io/guessit/issues/773 | `xXx`→other:XXX; fundamentally ambiguous, dup of 246 | **fixed** (other at title pos → title) |
+| 779 | https://github.com/guessit-io/guessit/issues/779 | garbled Chinese = JSON ensure_ascii in user's script; not a bug | wontfix |
+| 782 | https://github.com/guessit-io/guessit/issues/782 | "Discovery" episode word → streaming service; no well-defined rule | wontfix |
+| 783 | https://github.com/guessit-io/guessit/issues/783 | UnicodeDecodeError reading options.json; ASCII-locale env | wontfix |
+| 785 | https://github.com/guessit-io/guessit/issues/785 | NoneType not iterable; corrupted install via Bazarr/QNAP | wontfix |
+| 792 | https://github.com/guessit-io/guessit/issues/792 | import fails on Python 3.12 / babelfish; runtime-specific | wontfix |
+| 793 | https://github.com/guessit-io/guessit/issues/793 | Exception report 3.4.2; obsolete | wontfix |
+| 794 | https://github.com/guessit-io/guessit/issues/794 | episode_title is a date, parsed as `date` correctly; expected behaviour | wontfix |
+| 795 | https://github.com/guessit-io/guessit/issues/795 | Exception report 3.4.2 (`E=M6`); obsolete | wontfix |
+| 803 | https://github.com/guessit-io/guessit/issues/803 | input is None; user error / TS type error | wontfix |
+| 804 | https://github.com/guessit-io/guessit/issues/804 | subliminal can't find subs; downstream integration | wontfix |
+| 805 | https://github.com/guessit-io/guessit/issues/805 | mnamer crash; pinned old 3.7.1, fixed in 3.8.0 | wontfix |
+| 806 | https://github.com/guessit-io/guessit/issues/806 | Medusa crash 3.4.2; obsolete/env | wontfix |
+| 807 | https://github.com/guessit-io/guessit/issues/807 | "project dead?"; meta question | wontfix |
+| — | (#783/#785/#792/#793/#795/#803/#804/#805/#806 form the Python-runtime crash cluster) | | |
+
+---
+
+## Notes for fixing
+
+- **DONE (2026-06-02) — the title-token / multi-hole cluster.** What was feared to
+  need a `check_titles_in_filepart` rework was instead solved with ~13 surgical
+  `POST_PROCESS` (priority −2048) cleanup rules that DELETE junk *after* the
+  multi-hole machinery runs (don't constrain hole-finding — that regresses
+  fixtures). Reusable pattern: keep the PRIMARY title/episode_title, drop later
+  fragments behind a recognised property in the release tail; keep things
+  contiguous with the title/year. Rules live in title.ts / episode_title.ts /
+  language.ts / release_group.ts. See the `python-parity` memory for the full list.
+  Parity is now FIX 0; validate against `scripts/python-diff.mts` after any change.
+- **Hyphenated-title split (#634, #640) — FIXED 2026-06-02.** A `-` inside a title
+  was made a release-group boundary when a trailing `[eztv]`/`[ettv]` group was
+  present (`grown-ish…[eztv]` → title "ish"). Fixed by rejecting a
+  DashSeparatedReleaseGroup `!atEnd` candidate at the filepart start when a
+  season/episode/date follows. JS now beats Python (which still mis-parses).
+- **Obfuscated `cd`-mid-token (#742) — FIXED 2026-06-02.** `cd` regex now has a
+  leading word boundary `(?<!\d)(?<![^\W\d_])` (no literal `-`, so the `dash`
+  abbreviation can't corrupt it), so `cd<n>` only matches as a standalone token.
+  JS now beats Python (which still emits `cd:5` for `238ddcd5aff`).
+- **Still open (no clean fix — ambiguous, not bugs):**
+  - **Ambiguous anime formatting** (#690/#696/#747): "Season 2 - 15", romaji +
+    "(English title)", inconsistent leading numbers.
+
+---
+
+## 2026-08-09 — upstream 4.x resync (upstream released v4.0.0–v4.4.0)
+
+Upstream shipped eight releases (June–July 2026) and adopted several guessit-js
+fixes verbatim (the `cd` word-boundary regex from #742, archive/image containers
+from #272/#273, `xXx` leading-property titles from #773). We resynced the other
+direction: their test corpus grew by 225 entries; guessit-js passes **all 225**
+as of v4.2.0 (absorbed into `test/fixtures/upstream-new-*.yml` and, for the hard
+tail, `test/fixtures/upstream-pending.yml` — the name is historical; every entry
+runs green in the regular suite).
+
+Ported feature clusters (v4.1.0): localized season/episode words with
+number-first forms and counts (Temporada/Сезон/Sezon/Staffel/évad/Bölüm/…, "5 de
+12" → episode_count), COMPLETE/INTÉGRALE → series detection, CJK 第N季/第N集 with
+Han numerals, VR/stereoscopic layouts (VR-180, EAC360, SBS/OU gated on VR
+context), anime credit sequences (OP/ED/NCOP/NCED + credits_number + Creditless),
+bare resolutions ("1080.x264" → 1080p, #933) with the asymmetric SxxExx guard,
+U+00D7 separator, upscaled marker (#741), Laserdisc/LDRip, T02E22 markers, full
+IANA TLD website detection, title-word reclaim (Opus, #885), leading-word titles
+(Uk./Au…, widened #638), CAM refinement (#732), DoVi.
+
+New upstream issues triaged:
+| # | Claim | Status |
+|---|-------|--------|
+| 929 | `--type episode` picks episode 12 from "Adam-12" over S01E02 | **fixed** (v4.2.0) — filepart-precedence rules revived (two latent port bugs); correct in all modes |
+| 875 | Spurious season/episode from title digits / parens / "Season N - EE" ranges | **fixed** (v4.3.0) — all 11 reproducible cases pass (anchored-weak scoring, Season-dash-episode, 0x-hex guard); Python 4.4 still fails them |
+| 877 | Anime/fansub epic: episode+type (B1), bracketed titles (B2) | **fixed** (v4.3.0) — 11 of 12 cases pass (bare fansub numbers, SP/EX markers, trailing anime numbers, fully-bracketed titles, junk prefixes); ED2→episode deliberately skipped: upstream 4.4's own behavior keeps it a credit sequence (credits_number) |
+
+**v4.2.0 update:** the quarantined list is cleared — anime brackets (#696/#757),
+filepart precedence (#797/#929/#772), URANiME audio-channels fix, FASTSUB weak
+chains, weekday dates (#794), film-marker titles (#751), CJK original-script
+splits (#890), and the marker-collision residuals all pass. Suite: 1266 fixtures
+green, full parity with Python 4.4.0's corpus plus the guessit-js-only fixes.

@@ -1,0 +1,68 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Build WASM for the demo (downloads pinned Javy)
+        run: bash wasm/build.sh
+
+      - name: Regenerate output schema (keeps /docs current)
+        run: npm run schema
+
+      - name: Refresh Pages assets (copies wasm into public/)
+        run: npm run build:pages
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate live Python guessit comparison for the demo
+        run: |
+          # A fresh venv, because the runner's site-packages holds a half-replaced
+          # guessit: `pip install guessit==4.5.1` there reported 4.5.1 while
+          # jsonutils.py stayed on the 3.x code that imports `six`, a module nothing
+          # installs any more — so the import died and took the deploy with it. The
+          # pin also keeps the demo's side-by-side honest: this is the version the
+          # README and the parity report compare against.
+          python -m venv /tmp/guessit-venv
+          # six: guessit 4.5.1 on PyPI ships a jsonutils.py that imports it without
+          # declaring the dependency, so a clean install cannot import GuessitEncoder.
+          # Reproduced in a bare venv locally; the fix is in their git, not the release.
+          /tmp/guessit-venv/bin/pip install --quiet "guessit==4.5.1" six
+          /tmp/guessit-venv/bin/python -c "import guessit; from guessit.jsonutils import GuessitEncoder; print('python guessit', guessit.__version__)"
+          /tmp/guessit-venv/bin/python scripts/python-compare.py
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

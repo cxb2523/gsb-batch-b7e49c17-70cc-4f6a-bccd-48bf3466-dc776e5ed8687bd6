@@ -1,0 +1,708 @@
+import { Rebulk } from 'rebulk-js';
+import { Rule, AppendMatch, RemoveMatch, POST_PROCESS } from 'rebulk-js';
+import { Match } from 'rebulk-js';
+import { seps , sepsPattern } from '../common/index.js';
+import { buildExpectedFunction } from '../common/expected.js';
+import { cleanup, strip } from '../common/formatters.js';
+import { isDisabled } from '../common/pattern.js';
+import { intCoercable, sepsSurround } from '../common/validators.js';
+import { markerSorted } from '../common/comparators.js';
+
+export function releaseGroup(config: Record<string, unknown>) {
+  const forbiddenGroupnames = config['forbidden_names'] as string[];
+  const groupnameIgnoreSeps = config['ignored_seps'] as string;
+  const groupnameSeps = seps
+    .split('')
+    .filter((c) => !groupnameIgnoreSeps.includes(c))
+    .join('');
+
+  function cleanGroupname(str: string): string {
+    // Step 1: Strip groupname seps (seps minus ignored bracket-like chars) from both ends.
+    // We use groupnameSeps (not full seps) so brackets/parens are preserved inside.
+    let result = strip(str, groupnameSeps);
+
+    // Step 2: Only strip ignored_seps from ends if the string doesn't have them
+    // as surrounding brackets AND doesn't contain them internally.
+    const containsIgnored = groupnameIgnoreSeps.split('').some((c) => result.includes(c));
+    const startsWithIgnored = groupnameIgnoreSeps.split('').some((c) => result.startsWith(c));
+    const endsWithIgnored = groupnameIgnoreSeps.split('').some((c) => result.endsWith(c));
+    if (!(startsWithIgnored && endsWithIgnored) && !containsIgnored) {
+      result = strip(result, groupnameIgnoreSeps);
+    }
+
+    // Step 3: Strip forbidden names from start/end.
+    for (const forbidden of forbiddenGroupnames) {
+      if (
+        result.toLowerCase().startsWith(forbidden) &&
+        result.length > forbidden.length &&
+        seps.includes(result[forbidden.length])
+      ) {
+        result = strip(result.slice(forbidden.length), groupnameSeps);
+      }
+      if (
+        result.toLowerCase().endsWith(forbidden) &&
+        result.length > forbidden.length &&
+        seps.includes(result[result.length - forbidden.length - 1])
+      ) {
+        result = strip(result.slice(0, result.length - forbidden.length), groupnameSeps);
+      }
+    }
+
+    // Step 4: Remove unmatched closing bracket/paren characters at the end.
+    // e.g. "tigole)" → "tigole", "TrollHD ]" → "TrollHD"
+    result = result.replace(/\s*[)\]]\s*$/, (m) => {
+      const closing = m.trim();
+      const opening = closing === ')' ? '(' : '[';
+      return result.includes(opening) ? m : '';
+    }).trim();
+
+    // Step 5: Normalize 'foo) [bar]' patterns → 'foo [bar]'.
+    // The trailing tracker stamp in "PUNCH[TGx]" / "lol[ettv]" stays part of the
+    // group name: Python keeps it, and the corpus pins the spelling on a dozen
+    // names (`artik[sedg]`, `sadpanda[rarbg]`, `0sec [glodls]`, …).
+    return result.replace(/(.+)\)\s*\[(.+)\]/, '$1 $2').trim();
+  }
+
+  const rebulk = new Rebulk({ disabled: (context) => isDisabled(context, 'release_group') });
+
+  const expectedGroup = buildExpectedFunction('expected_group');
+
+  rebulk.functional(expectedGroup, {
+    name: 'release_group',
+    tags: ['expected'],
+    validator: sepsSurround,
+    conflictSolver: () => null as any,
+    disabled: (context) => !context?.['expected_group'],
+  });
+
+  const scene = new SceneReleaseGroup(cleanGroupname);
+  return rebulk.rules(
+    new DashSeparatedReleaseGroup(cleanGroupname),
+    scene,
+    AnimeReleaseGroup,
+    new TrailingTokenAfterEpisodeAsReleaseGroup(cleanGroupname),
+    NumericPrefixedGroupRule,
+    RemoveSeasonPackReleaseGroup,
+    new ReclaimTrailingSceneGroup(cleanGroupname, (m) => scene.isPreviousMatch(m))
+  );
+}
+
+/**
+ * A bracket like "[Season.2.Full]" in a directory part has no parseable content
+ * (the written-out "Season 2" isn't matched as a season), so the empty-group
+ * release-group rule claims the whole bracket as release_group "[Season.2.Full]".
+ * A release group named after a season pack is never real — drop a release_group
+ * whose text is a "Season N" expression. (Python emits no release_group here.)
+ */
+class RemoveSeasonPackReleaseGroup extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  override when(matches: any): Match[] | false {
+    const rgs = matches.named('release_group') as Match[];
+    const out = (Array.isArray(rgs) ? rgs : rgs ? [rgs] : []).filter((m: Match) =>
+      /(^|[\s._\-\[(])seasons?[\s._-]*\d/i.test(String(m.value ?? '')));
+    return out.length ? out : false;
+  }
+}
+
+class DashSeparatedReleaseGroup extends Rule {
+  consequence = [RemoveMatch, AppendMatch];
+  valueFormatter: (s: string) => string;
+
+  constructor(valueFormatter: (s: string) => string) {
+    super();
+    this.valueFormatter = valueFormatter;
+  }
+
+  isValid(
+    matches: any,
+    candidate: Match,
+    start: number,
+    end: number,
+    atEnd: boolean
+  ): boolean {
+    if (!atEnd) {
+      if (String(candidate.value).length <= 1) {
+        return false;
+      }
+
+      if (matches.markers.atMatch(candidate, (m: Match) => m.name === 'group', 0)) {
+        return false;
+      }
+
+      // A leading token that is already an episode number (e.g. "03" in
+      // "03-Criminal.Minds") is the episode, not a release group.
+      if (matches.range(candidate.start, candidate.end, (m: Match) => m.name === 'episode', 0)) {
+        return false;
+      }
+
+      const firstHole = matches.holes(
+        candidate.end,
+        end,
+        { predicate: (m: Match) => m.start === candidate.end, index: 0 }
+      );
+      if (!firstHole) {
+        return false;
+      }
+
+      // A candidate at the filepart start, joined by a dash to a SINGLE word (no
+      // internal separator) and followed by a season/episode/date/year anchor, is
+      // the first half of a hyphenated title ("grown-ish.s03e01" → "grown-ish",
+      // "Spider-Man.2002" → "Spider-Man"), not a release group (#634/#640). A
+      // multi-word remainder ("FoV-Show.Name.S01E01") keeps the leading scene
+      // group. (upstream 4.4 refinement)
+      const holeRaw = String((firstHole as any).raw ?? '');
+      const holeCore = holeRaw.replace(new RegExp('^[' + sepsPattern + ']+|[' + sepsPattern + ']+$', 'g'), '');
+      if (candidate.start === start &&
+          !holeCore.includes('.') && !holeCore.includes(' ') &&
+          matches.range(candidate.end, end,
+            (m: Match) => ['season', 'episode', 'date', 'year'].includes(m.name ?? '') && !m.private, 0)) {
+        return false;
+      }
+
+      const rawValue = firstHole.raw;
+      return (
+        rawValue[0] === '-' &&
+        !rawValue.slice(1).includes('-') &&
+        rawValue.includes('.') &&
+        !rawValue.includes(' ')
+      );
+    }
+
+    const group = matches.markers.atMatch(
+      candidate,
+      (m: Match) => m.name === 'group',
+      0
+    );
+    if (group && matches.atMatch(group, (m: Match) => !m.private && m.span !== candidate.span)) {
+      return false;
+    }
+
+    let count = 0;
+    let match: Match | null = candidate;
+    while (match) {
+      // Fix: correct arg order - predicate is 3rd, index is 4th
+      const current = matches.range(
+        start,
+        match.start,
+        (m: Match) => !m.private && !m.tags.includes('expected'),
+        -1
+      ) as Match | undefined;
+      if (!current) {
+        break;
+      }
+
+      // Fix: use inputString (camelCase)
+      const inputStr: string = matches.inputString ?? '';
+      let separator = inputStr.slice(current.end, match.start);
+      if (!separator && (match.raw ?? '')[0] === '-') {
+        separator = '-';
+      }
+
+      match = current;
+
+      if (count === 0) {
+        if (separator !== '-') {
+          break;
+        }
+        count++;
+        continue;
+      }
+
+      if (separator === '.') {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  detect(matches: any, start: number, end: number, atEnd: boolean): Match | null {
+    let candidate: Match | null = null;
+    if (atEnd) {
+      const container = matches.ending(end, (m: Match) => m.name === 'container', 0);
+      if (container) {
+        end = container.start;
+      }
+
+      // Fix: correct arg order - predicate is 2nd, index is 3rd
+      candidate = matches.ending(
+        end,
+        (m: Match) =>
+          !m.private &&
+          !(m.name === 'other' && m.tags.includes('not-a-release-group')) &&
+          !(m.raw ?? '').includes('-') &&
+          (m.raw ?? '').trim() === m.raw,
+        0
+      );
+    }
+
+    if (!candidate) {
+      // Ignore weak-episode matches when computing holes for release groups,
+      // so that trailing numbers like "45" in "Scarface45" aren't consumed.
+      const ignoreWeak = (m: Match) =>
+        !!(m.tags?.includes('weak-episode') || m.tags?.includes('weak-duplicate'));
+      if (atEnd) {
+        // Fix: pass options as object with seps, index, predicate
+        candidate = matches.holes(
+          start,
+          end,
+          {
+            seps,
+            index: -1,
+            ignore: ignoreWeak,
+            predicate: (m: Match) => m.end === end && !!(m.raw ?? '').trim() && (m.raw ?? '')[0] === '-',
+          }
+        );
+      } else {
+        candidate = matches.holes(
+          start,
+          end,
+          {
+            seps,
+            index: 0,
+            ignore: ignoreWeak,
+            predicate: (m: Match) => m.start === start && !!(m.raw ?? '').trim(),
+          }
+        );
+      }
+    }
+
+    if (candidate && this.isValid(matches, candidate, start, end, atEnd)) {
+      return candidate;
+    }
+
+    return null;
+  }
+
+  when(matches: any) {
+    // Fix: JS truthiness - named() returns [] (truthy), use .length check
+    if ((matches.named('release_group') as Match[]).length > 0) {
+      return;
+    }
+
+    const toRemove = [];
+    const toAppend = [];
+    for (const filepart of matches.markers.named('path')) {
+      let candidate = this.detect(matches, filepart.start, filepart.end, true);
+      if (candidate) {
+        toRemove.push(...matches.atMatch(candidate));
+      } else {
+        candidate = this.detect(matches, filepart.start, filepart.end, false);
+      }
+
+      if (candidate) {
+        const releasegroup = new Match(candidate.start, candidate.end, {
+          name: 'release_group',
+          inputString: matches.inputString,
+        });
+        releasegroup.formatter = this.valueFormatter;
+
+        if (releasegroup.value) {
+          toAppend.push(releasegroup);
+        }
+        if (toRemove.length || toAppend.length) {
+          return [toRemove, toAppend];
+        }
+      }
+    }
+  }
+}
+
+class SceneReleaseGroup extends Rule {
+  static dependency = ['TitleFromPosition'];
+  static consequence = AppendMatch;
+  static properties = { release_group: [null] };
+
+  valueFormatter: (s: string) => string;
+
+  constructor(valueFormatter: (s: string) => string) {
+    super();
+    this.valueFormatter = valueFormatter;
+  }
+
+  isPreviousMatch(match: Match): boolean {
+    const sceneNames = [
+      'video_codec',
+      'source',
+      'video_api',
+      'audio_codec',
+      'audio_profile',
+      'video_profile',
+      'audio_channels',
+      'screen_size',
+      'other',
+      'container',
+      'language',
+      'subtitle_language',
+      'subtitle_language.suffix',
+      'subtitle_language.prefix',
+      'language.suffix',
+    ];
+    const scenePrefixTags = ['release-group-prefix'];
+    const sceneNoPrefixTags = ['no-release-group-prefix'];
+
+    return sceneNames.includes(match.name ?? '')
+      ? !match.tags.some((t) => sceneNoPrefixTags.includes(t))
+      : match.tags.some((t) => scenePrefixTags.includes(t));
+  }
+
+  when(matches: any) {
+    const ret = [];
+
+    for (const filepart of markerSorted(matches.markers.named('path'), matches)) {
+      const { start, end } = filepart;
+      // Fix: JS truthiness - check .length
+      if (
+        ((matches.named(
+          'release_group',
+          (m: Match) => m.start >= start && m.end <= end
+        )) as Match[]).length > 0
+      ) {
+        continue;
+      }
+
+      const titles = matches.named(
+        'title',
+        (m: Match) => m.start >= start && m.end <= end
+      ) as Match[];
+
+      // Ignore extra titles AND episode_title matches when computing holes,
+      // so these don't prevent release_group detection.
+      // Also ignore weak-episode matches so trailing numbers (e.g. "Scarface45")
+      // aren't consumed by weak episode patterns.
+      const keepOnlyFirstTitle = (match: Match) =>
+        titles.slice(1).includes(match) || match.name === 'episode_title' ||
+        !!(match.tags?.includes('weak-episode') || match.tags?.includes('weak-duplicate'));
+
+      // Python: ignore=keepOnlyFirstTitle (treat extra titles as unmatched),
+      // predicate=lambda hole: cleanup(hole.value) (filter holes with non-empty value)
+      const lastHole = matches.holes(
+        start,
+        end + 1,
+        {
+          formatter: (s: string) => cleanup(s),
+          ignore: keepOnlyFirstTitle,
+          predicate: (hole: Match) => Boolean(cleanup(String(hole.value ?? ''))),
+          index: -1,
+        }
+      );
+
+      if (lastHole) {
+        // Anime episode releases carry the group in the leading [bracket]; a trailing
+        // (English title) parenthetical must not be claimed instead — leave it for
+        // AnimeReleaseGroup (#696/#757). Gated on an episode/season match so a movie's
+        // trailing (group) (YTS/YIFY) is untouched.
+        const holeGroup = matches.markers.atMatch(lastHole, (m: Match) => m.name === 'group', 0);
+        if (holeGroup && String((holeGroup as any).raw ?? '').startsWith('(')) {
+          const hasEpisodeish = ((matches.range(start, end,
+            (m: Match) => m.name === 'episode' || m.name === 'season') as Match[]) ?? []).length > 0;
+          if (hasEpisodeish) {
+            const firstGroup = matches.markers.range(start, end,
+              (m: Match) => m.name === 'group' && m.start === start, 0) as Match | undefined;
+            if (firstGroup) {
+              const inner = (matches.range(firstGroup.start, firstGroup.end,
+                (mm: Match) => !mm.tags.includes('weak-language')) as Match[]) ?? [];
+              const core = String((firstGroup as any).value ?? '').replace(new RegExp(`[${sepsPattern}]`, 'g'), '');
+              const emptyish = inner.length === 0 ||
+                inner.every((mm: Match) => mm.name === 'container' && mm.tags?.includes('subtitle'));
+              if (emptyish && core && !intCoercable(core)) continue;
+            }
+          }
+        }
+        const previousMatchFilter = (match: Match) => {
+          if (match.start < filepart.start) {
+            return false;
+          }
+          return !match.private || this.isPreviousMatch(match);
+        };
+
+        const previousMatch = matches.previous(lastHole, previousMatchFilter, 0);
+        // Fix: use inputString (camelCase)
+        const inputStr: string = matches.inputString ?? '';
+        const holeValue = String(lastHole.value ?? '');
+        if (
+          previousMatch &&
+          this.isPreviousMatch(previousMatch) &&
+          !inputStr
+            .slice(previousMatch.end, lastHole.start)
+            .replace(new RegExp(`[${sepsPattern}]`, 'g'), '') &&
+          !intCoercable(holeValue.replace(new RegExp(`[${sepsPattern}]`, 'g'), ''))
+        ) {
+          lastHole.name = 'release_group';
+          lastHole.tags = ['scene'];
+          // Use the cleanGroupname formatter so release_group value is properly cleaned.
+          lastHole.formatter = this.valueFormatter;
+
+          const group = matches.markers.atMatch(
+            lastHole,
+            (m: Match) => m.name === 'group',
+            0
+          );
+          if (group) {
+            group.formatter = this.valueFormatter;
+            if (group.value === lastHole.value) {
+              lastHole.start = group.start + 1;
+              lastHole.end = group.end - 1;
+              lastHole.tags = ['anime'];
+            }
+          }
+
+          // Remove episode_title and extra-title matches that overlap with the release_group span.
+          const ignoredMatches = matches.range(
+            lastHole.start,
+            lastHole.end,
+            keepOnlyFirstTitle
+          );
+
+          for (const ignoredMatch of ignoredMatches) {
+            matches.remove(ignoredMatch);
+          }
+
+          ret.push(lastHole);
+        }
+      }
+    }
+    return ret;
+  }
+}
+
+class AnimeReleaseGroup extends Rule {
+  static dependency = ['SceneReleaseGroup', 'TitleFromPosition'];
+  static consequence = [RemoveMatch, AppendMatch];
+  static properties = { release_group: [null] };
+
+  when(matches: any) {
+    const toRemove = [];
+    const toAppend = [];
+
+    // Fix: JS truthiness - named() returns [] (truthy), use .length check
+    if ((matches.named('release_group') as Match[]).length > 0) {
+      return false;
+    }
+
+    if (
+      !(matches.named('episode') as Match[]).length &&
+      !(matches.named('season') as Match[]).length &&
+      (matches.named('release_group') as Match[]).length > 0
+    ) {
+      return false;
+    }
+
+    for (const filepart of markerSorted(matches.markers.named('path'), matches)) {
+      // A group is a candidate for anime release group if it contains
+      // no matches (excluding weak-language), OR if it only contains
+      // 'other' matches (like "Fan Subtitled" from "Fansub") which are
+      // commonly embedded in release group names.
+      const isGroupEmpty = (m: Match): boolean => {
+        const innerMatches = (matches.range(
+          m.start,
+          m.end,
+          (mm: Match) => !mm.tags.includes('weak-language')
+        ) as Match[]);
+        if (innerMatches.length === 0) return true;
+        // A LEADING bracket whose only content is a subtitle-format container
+        // name (e.g. "[SSA]", "[ASS]") is an anime release group, not a
+        // container — the name happens to collide with a subtitle extension.
+        if (m.start === filepart.start &&
+            innerMatches.every((mm: Match) => mm.name === 'container' && mm.tags?.includes('subtitle'))) {
+          return true;
+        }
+        return false;
+      };
+
+      const emptyGroup = matches.markers.range(
+        filepart.start,
+        filepart.end,
+        (m: Match) =>
+          m.name === 'group' &&
+          isGroupEmpty(m) &&
+          String(m.value).replace(new RegExp(`[${sepsPattern}]`, 'g'), '') &&
+          !intCoercable(String(m.value).replace(new RegExp(`[${sepsPattern}]`, 'g'), '')),
+        0
+      );
+
+      if (emptyGroup) {
+        // Create a proper Match instance (not a plain spread) so prototype getters like .span work
+        const group = new Match(emptyGroup.start + 1, emptyGroup.end - 1, {
+          name: 'release_group',
+          inputString: matches.inputString,
+          tags: ['anime'],
+        });
+        toAppend.push(group);
+        // Remove weak-language, other, and subtitle-container matches that were
+        // inside the group (the bracket content is the release group name).
+        toRemove.push(
+          ...matches.range(
+            emptyGroup.start,
+            emptyGroup.end,
+            (m: Match) => m.tags.includes('weak-language') || m.name === 'other' ||
+              (m.name === 'container' && m.tags?.includes('subtitle'))
+          )
+        );
+      }
+    }
+
+    if (toRemove.length || toAppend.length) {
+      return [toRemove, toAppend];
+    }
+    return false;
+  }
+}
+
+/**
+ * A single dash-separated token at the very end of a filepart, immediately
+ * following the episode / absolute-episode numbers, is a release group — not an
+ * episode title (e.g. "Bleach.s16e03-04.313-314-GROUP" → release_group "GROUP").
+ * When the dash-separated walk in DashSeparatedReleaseGroup is disrupted by a
+ * weak-episode range, the trailing token gets mislabelled as episode_title;
+ * reclaim it here. Only fires when no release_group was found. (Python emits
+ * release_group.)
+ */
+/**
+ * A scene group claimed as "NN [name]" swallowed a leading episode number:
+ * "Mary Bell (DVD) - 02 [h-b]" (cross-parser corpus). Split it: the number is
+ * the episode, the bracket content the release group.
+ */
+class NumericPrefixedGroupRule extends Rule {
+  static override priority = -32;
+  override priority = -32;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const toAppend: any[] = [];
+    for (const rg of (matches.named('release_group') as any[]) ?? []) {
+      const m = /^(\d{1,3})\s*\[([^\]]+)\]$/.exec(String(rg.value ?? ''));
+      if (!m) continue;
+      const raw = input.slice(rg.start, rg.end);
+      const numLen = m[1].length;
+      toRemove.push(rg);
+      toAppend.push(new Match(rg.start, rg.start + numLen, {
+        name: 'episode', value: parseInt(m[1], 10), inputString: input,
+      }));
+      const inner = raw.indexOf('[');
+      toAppend.push(new Match(rg.start + inner + 1, rg.end - 1, {
+        name: 'release_group', value: m[2], inputString: input,
+      }));
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+/**
+ * Reclaim a trailing scene group that the title position stole.
+ *
+ * When the title position holds a property rather than words — a year-titled show
+ * such as "1923 S02E01 1080p WEB H264-SuccessfulCrab" — TitleFromPosition has no
+ * title slot left and takes the trailing group name as a second title instead. That
+ * hides it from SceneReleaseGroup, which sees the tail already claimed, and the
+ * year is only promoted to title afterwards (PropertyAtTitlePositionAsTitle), so the
+ * group name ended up dropped by RemoveTailTitle and lost. "1883 ..." (below the
+ * year floor) and the dotted spelling of the same name kept their group.
+ *
+ * Keyed on that extra *title* rather than on a trailing hole: a hole this late is
+ * usually the residue of a consumed marker word ("Sub", "Cap", "ep"), which is why
+ * a hole-based reclaim invented 34 release groups Python does not report. A title is
+ * only there because the title rules put it there.
+ */
+class ReclaimTrailingSceneGroup extends Rule {
+  // Just above POST_PROCESS, so the tail title is still present: RemoveTailTitle
+  // drops it at POST_PROCESS itself.
+  static override priority = POST_PROCESS + 1;
+  override priority = POST_PROCESS + 1;
+  static consequence = [RemoveMatch, AppendMatch];
+  static properties = { release_group: [null] };
+
+  valueFormatter: (s: string) => string;
+  private isPreviousMatch: (match: Match) => boolean;
+
+  constructor(valueFormatter: (s: string) => string, isPreviousMatch: (match: Match) => boolean) {
+    super();
+    this.valueFormatter = valueFormatter;
+    this.isPreviousMatch = isPreviousMatch;
+  }
+
+  when(matches: any): [Match[], Match[]] | false {
+    const toRemove: Match[] = [];
+    const toAppend: Match[] = [];
+    const input: string = matches.inputString ?? '';
+    const sepsRe = new RegExp(`[${sepsPattern}]`, 'g');
+
+    for (const filepart of (matches.markers.named('path') as Match[])) {
+      const { start, end } = filepart;
+      const inPart = (name: string) => (matches.named(name,
+        (m: Match) => m.start >= start && m.end <= end) as Match[]) ?? [];
+      if (inPart('release_group').length) continue;
+
+      // The real title must survive: only a second, trailing title is a candidate.
+      const titles = inPart('title').sort((a, b) => a.start - b.start);
+      if (titles.length < 2) continue;
+      const tail = titles[titles.length - 1];
+      if (intCoercable(String(tail.value ?? '').replace(sepsRe, ''))) continue;
+
+      const previous = matches.previous(tail,
+        (m: Match) => m.start >= start && (!m.private || this.isPreviousMatch(m)), 0) as Match | undefined;
+      if (!previous || !this.isPreviousMatch(previous)) continue;
+      if (input.slice(previous.end, tail.start).replace(sepsRe, '')) continue;
+
+      toRemove.push(tail);
+      toAppend.push(new Match(tail.start, tail.end, {
+        name: 'release_group',
+        value: this.valueFormatter(String(tail.value ?? '')),
+        inputString: input,
+        tags: ['scene'],
+      }));
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+class TrailingTokenAfterEpisodeAsReleaseGroup extends Rule {
+  static dependency = ['AnimeReleaseGroup'];
+  consequence = [RemoveMatch, AppendMatch];
+  valueFormatter: (s: string) => string;
+
+  constructor(valueFormatter: (s: string) => string) {
+    super();
+    this.valueFormatter = valueFormatter;
+  }
+
+  when(matches: any) {
+    if ((matches.named('release_group') as Match[]).length > 0) return false;
+    const inp: string = matches.inputString ?? '';
+    const toRemove: Match[] = [];
+    const toAppend: Match[] = [];
+
+    for (const filepart of matches.markers.named('path')) {
+      // Trailing episode_title, ignoring a zero-width type/container marker.
+      const last = matches.range(filepart.start, filepart.end,
+        (m: Match) => !m.private && m.name === 'episode_title' && m.value, -1) as Match | undefined;
+      if (!last) continue;
+      // Must be the last real content of the filepart.
+      const after = matches.range(last.end, filepart.end,
+        (m: Match) => !m.private && m.span[0] !== m.span[1], 0);
+      if (after) continue;
+      // Single token, dash-separated from what precedes it.
+      const raw = String(last.raw ?? last.value);
+      if (/[\s.]/.test(raw.trim())) continue;
+      if (inp[last.start - 1] !== '-') continue;
+      const prev = matches.range(filepart.start, last.start,
+        (m: Match) => !m.private, -1) as Match | undefined;
+      if (!prev || !['episode', 'absolute_episode'].includes(prev.name ?? '')) continue;
+
+      const rg = new Match(last.start, last.end, {
+        name: 'release_group',
+        inputString: inp,
+      });
+      rg.formatter = this.valueFormatter;
+      if (rg.value) {
+        toRemove.push(last);
+        toAppend.push(rg);
+      }
+    }
+    return toRemove.length || toAppend.length ? [toRemove, toAppend] : false;
+  }
+}

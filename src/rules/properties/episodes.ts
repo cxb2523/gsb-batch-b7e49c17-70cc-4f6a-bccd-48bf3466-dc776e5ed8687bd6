@@ -1,0 +1,2024 @@
+/**
+ * Episodes property — port of guessit/rules/properties/episodes.py
+ * Detects season/episode patterns, absolute episodes, and episode details
+ */
+import { Rebulk, Rule, RemoveMatch, AppendMatch, RenameMatch } from 'rebulk-js';
+import { Match } from 'rebulk-js';
+import { buildOrPattern } from '../../reutils.js';
+import { parseNumber, numericFunction } from '../common/numeral.js';
+import { intCoercable, and_, sepsSurround } from '../common/validators.js';
+import { cleanup } from '../common/formatters.js';
+import { isDisabled } from '../common/pattern.js';
+import { seps, altDash } from '../common/index.js';
+
+interface EpisodesConfig {
+  season_max_range: number;
+  episode_max_range: number;
+  max_range_gap: number;
+  season_markers: string[];
+  season_ep_markers: string[];
+  disc_markers: string[];
+  episode_markers: string[];
+  range_separators: string[];
+  discrete_separators: string[];
+  season_words: (string | { value: string; numfirst?: boolean })[];
+  episode_words: (string | { value: string; numfirst?: boolean })[];
+  ordinal_suffix: string;
+  of_words: string[];
+  all_words: string[];
+}
+
+const CJK_DIGITS: Record<string, number> = {
+  '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+  '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+};
+
+// ASCII digits or Han numerals up to 99 (十一 → 11, 二十三 → 23, single digit otherwise).
+const CJK_NUMBER = '(?:\\d{1,4}|[一二两三四五六七八九]?十[一二两三四五六七八九]?|[零一二两三四五六七八九])';
+
+function parseCjkNumber(value: string): number {
+  if (/^\d+$/.test(value)) return parseInt(value, 10);
+  if (value.includes('十')) {
+    const [tens, ones] = value.split('十');
+    const tensValue = tens ? CJK_DIGITS[tens] : 1;
+    const onesValue = ones ? CJK_DIGITS[ones] : 0;
+    return tensValue * 10 + onesValue;
+  }
+  return CJK_DIGITS[value];
+}
+
+/**
+ * Split a season/episode word config into (all values, number-first values).
+ * Each entry is a plain string (word-first only) or {value, numfirst}.
+ * Mirrors Python's _split_words (upstream 4.x).
+ */
+function splitWords(entries: (string | { value: string; numfirst?: boolean })[]): { words: string[]; numfirst: string[] } {
+  const words: string[] = [];
+  const numfirst: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry === 'object') {
+      if (entry.numfirst) numfirst.push(entry.value);
+      words.push(entry.value);
+    } else {
+      words.push(entry);
+    }
+  }
+  return { words, numfirst };
+}
+
+/**
+ * Chain breaker for episode/season chains
+ */
+function episodesSeasonChainBreaker(
+  matches: any,
+  config: EpisodesConfig,
+): boolean {
+  const episodes = matches.named('episode') || [];
+  if (
+    episodes.length > 1 &&
+    Math.abs(episodes[episodes.length - 1].value - episodes[episodes.length - 2].value) >
+      config.episode_max_range
+  ) {
+    return true;
+  }
+
+  const seasons = matches.named('season') || [];
+  if (seasons.length > 1) {
+    const last = seasons[seasons.length - 1].value;
+    const prev = seasons[seasons.length - 2].value;
+    if (Math.abs(last - prev) > config.season_max_range) {
+      return true;
+    }
+    if (last < prev) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Conflict solver for season/episode patterns
+ */
+function seasonEpisodeConflictSolver(match: any, other: any): any {
+  // Any two weak-family matches (weak_episode vs weak_duplicate, parents or
+  // children) keep BOTH: the default solver would annihilate same-span pairs
+  // (264 vs 2|64) before WeakConflictSolverRule can pick the right reading.
+  const weakFamily = (m: any) => !!(m?.tags?.includes('weak-episode') ||
+    ['weak_episode', 'weak_duplicate'].includes(m?.initiator?.name) ||
+    ['weak_episode', 'weak_duplicate'].includes(m?.name));
+  if (weakFamily(match) && weakFamily(other)) return null;
+  // A number-first private parent ("60 Сезон") colliding with a word-first private
+  // parent ("Сезон 5") on the marker word alone: keep BOTH and let
+  // RemoveNumfirstMarkerCollision decide with full context (it can see whether the
+  // word-first number is really a resolution, as in "Temporada 720p").
+  const famChild = (p: any) => {
+    if (p?.name) return null;
+    const ch = [...(p?.children ?? [])];
+    return ch.find((c: any) => c.name === 'season' || c.name === 'episode') ?? null;
+  };
+  const mChild = famChild(match);
+  const oChild = famChild(other);
+  if (mChild && oChild) {
+    const mNumfirst = !!mChild.tags?.includes('numfirst');
+    const oNumfirst = !!oChild.tags?.includes('numfirst');
+    if (mNumfirst !== oNumfirst) return null;
+  }
+  if (match.name !== other.name) {
+    if (match.name === 'episode' && other.name === 'year') {
+      return match;
+    }
+    if (['season', 'episode'].includes(match.name)) {
+      if (
+        [
+          'video_codec',
+          'audio_codec',
+          'container',
+          'date',
+        ].includes(other.name)
+      ) {
+        // A codec like "h_264" whose letter is glued to the preceding word is a
+        // phantom ("Bleach_264" is title + episode 264, upstream #877): the codec
+        // loses instead. Real "h.264"/".x264"/"HDTVx264" forms are untouched.
+        if (other.name === 'video_codec' && /^[hx][\W_]\d/i.test(String(other.raw ?? ''))) {
+          const before = (other.inputString ?? '')[other.start - 1] ?? '';
+          if (/[a-z]/i.test(before)) return other;
+        }
+        return match;
+      }
+      if (
+        (other.name === 'audio_channels' &&
+          !other.tags?.includes('weak-audio_channels') &&
+          !match.initiator?.children?.named(match.name + 'Marker')?.length) ||
+        (other.name === 'screen_size' && !intCoercable(other.raw))
+      ) {
+        return match;
+      }
+    }
+  }
+  // Handle cross-chain conflicts between season/episode matches (same or different names).
+  // This covers episode vs episode and season vs season where one is from a strong
+  // SxxExx chain and the other is from a weak-episode/weak-duplicate chain.
+  if (
+    ['season', 'episode'].includes(match.name) &&
+    ['season', 'episode'].includes(other.name) &&
+    match.initiator !== other.initiator
+  ) {
+    // A number-first form ("1 Серия") and a word-first form ("Сезон 1") claiming the
+    // same digits: pick the pairing that leaves no dangling number. "Сезон 1 Серия 5"
+    // reads word-first (numfirst "1 Серия" would orphan the 5); "2 Sezon 7 Bolum"
+    // reads number-first (word-first "Sezon 7" would orphan the leading 2). Marker-only
+    // overlaps ("04ª Temporada" vs "Temporada 720") are not number collisions.
+    const isWeak = (m: any) => !!(m.tags?.includes('weak-episode') ||
+      ['weak_episode', 'weak_duplicate'].includes(m.initiator?.name));
+    const matchNumfirst = !!match.tags?.includes('numfirst');
+    const otherNumfirst = !!other.tags?.includes('numfirst');
+    if (
+      matchNumfirst !== otherNumfirst &&
+      !isWeak(match) && !isWeak(other) &&
+      match.start < other.end && other.start < match.end
+    ) {
+      const nf = matchNumfirst ? match : other;
+      const wf = matchNumfirst ? other : match;
+      const input: string = match.inputString ?? '';
+      const digitToken = (from: number, dir: 1 | -1): string => {
+        let i = from;
+        while (i >= 0 && i < input.length && seps.includes(input[i])) i += dir;
+        let tok = '';
+        while (i >= 0 && i < input.length && /\d/.test(input[i])) { tok = dir === 1 ? tok + input[i] : input[i] + tok; i += dir; }
+        return tok;
+      };
+      const isYearLike = (t: string) => t.length === 4 && +t >= 1900 && +t <= 2100;
+      const nfInit = nf.initiator ?? nf;
+      const wfInit = wf.initiator ?? wf;
+      const nfDangling = (() => { const t = digitToken(nfInit.end, 1); return t.length >= 1 && t.length <= 4 && !isYearLike(t); })();
+      // The dangling number before a word-first marker may carry an ordinal suffix
+      // ("5-го сезон", "04ª Temporada") — match it as one token.
+      const wfDangling = (() => {
+        const before = input.slice(Math.max(0, wfInit.start - 12), wfInit.start);
+        const m = /(\d{1,3})(?:ª|º|°|a|o|-?(?:й|я|е|го|ая|ый|ое))?[\s.,_\-–]*$/iu.exec(before);
+        return !!(m && !isYearLike(m[1]));
+      })();
+      if (wfDangling && !nfDangling) return wf;
+      return nf;
+    }
+    const matchIsWeak = !!(match.tags?.includes('weak-episode') ||
+      ['weak_episode', 'weak_duplicate'].includes(match.initiator?.name));
+    const otherIsWeak = !!(other.tags?.includes('weak-episode') ||
+      ['weak_episode', 'weak_duplicate'].includes(other.initiator?.name));
+
+    // Both weak: keep BOTH here — the default solver would annihilate the pair
+    // (264 vs 2|64 on the same span) before WeakConflictSolverRule can pick the
+    // anime (weak_episode) or non-anime (weak_duplicate) reading.
+    if (matchIsWeak && otherIsWeak) {
+      return null;
+    }
+    // Only one is weak: remove it
+    if (matchIsWeak) return match;
+    if (otherIsWeak) return other;
+    // Prefer SxxExx-tagged matches over non-SxxExx when they conflict
+    // (e.g. "Ep 2x03": episode-word "Ep 2" vs SxxExx "2x03" → keep SxxExx)
+    const matchIsSxxExx = !!match.tags?.includes('SxxExx');
+    const otherIsSxxExx = !!other.tags?.includes('SxxExx');
+    if (matchIsSxxExx && !otherIsSxxExx) return other;
+    if (otherIsSxxExx && !matchIsSxxExx) return match;
+    // Neither weak but initiator raw contains 'x' (e.g. spurious season from "x264")
+    // Don't remove SxxExx-tagged matches even if they contain 'x' (e.g. "2x03" is valid)
+    const matchHasX = match.initiator?.raw?.toLowerCase().includes('x') && !matchIsSxxExx;
+    const otherHasX = other.initiator?.raw?.toLowerCase().includes('x') && !otherIsSxxExx;
+    if (matchHasX && !otherHasX) return match;
+    if (otherHasX && !matchHasX) return other;
+  }
+  return '__default__';
+}
+
+/**
+ * Validate ordering of season/episode lists
+ */
+function orderingValidator(match: any): boolean {
+  // rebulk-js names it toDict (to_dict was the Python spelling and always
+  // returned undefined here, silently skipping ordering validation)
+  const dict = match.children?.toDict?.() ?? match.children?.to_dict?.();
+  const values: any = dict instanceof Map ? Object.fromEntries(dict) : (dict || {});
+
+  if (values.season && Array.isArray(values.season)) {
+    const sorted = [...values.season].sort((a, b) => a - b);
+    if (JSON.stringify(sorted) !== JSON.stringify(values.season)) {
+      return false;
+    }
+  }
+
+  if (values.episode && Array.isArray(values.episode)) {
+    const sorted = [...values.episode].sort((a, b) => a - b);
+    if (JSON.stringify(sorted) !== JSON.stringify(values.episode)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Validate roman numerals and integer-coercable strings with separators
+ */
+function validateRoman(match: any): boolean {
+  if (intCoercable(match.raw)) {
+    return true;
+  }
+  return sepsSurround(match);
+}
+
+/**
+ * Season validator for the "Season N" WORD pattern: reject a 4-digit year as the
+ * season number, so "The Four Seasons 2025" is not parsed as "Season 2025"
+ * (leaving "Seasons" to stay in the title). Does not affect SxxExx (a different
+ * chain), so "S2013E14" → season 2013 is unaffected.
+ */
+function seasonWordNotYear(match: any): boolean {
+  const raw = String(match.raw ?? '');
+  if (/^\d{4}$/.test(raw)) {
+    const n = parseInt(raw, 10);
+    if (n >= 1900 && n <= 2100) return false;
+  }
+  return validateRoman(match);
+}
+
+/**
+ * Build the episodes rebulk
+ */
+export function episodes(config: EpisodesConfig): Rebulk {
+  const subtitleBoth = config.range_separators;
+  const discreteSeparators = config.discrete_separators;
+  const weakDiscreteSeparators = seps
+    .split('')
+    .filter(s => !config.range_separators.includes(s) && s !== '/' && s !== '\\');
+  // Python merges weak separators in too: "S03E21.22" chains over the '.' (FASTSUB case).
+  const allSeparators = [
+    ...config.range_separators,
+    ...discreteSeparators,
+    ...weakDiscreteSeparators,
+  ];
+
+  // Values chained across a WEAK separator must be consecutive ("S03E21.22" ok,
+  // "S01E10.24" is the show "24"); a strong discrete separator ("&") lifts the
+  // requirement. Mirrors Python's ordering_validator is_consecutive.
+  const moduleOrderingValidator = orderingValidator;
+  const localOrderingValidator = (match: any): boolean => {
+    if (!moduleOrderingValidator(match)) return false;
+    const isConsecutive = (prop: string): boolean => {
+      let previous: any = null;
+      let valid = true;
+      const children = match.children;
+      const named = (children?.named?.(prop) ?? []) as any[];
+      for (const current of Array.isArray(named) ? named : [named]) {
+        if (previous) {
+          const separator = children.previous?.(current, (m: any) => m.name === prop + 'Separator', 0);
+          if (separator) {
+            const sraw = String(separator.raw ?? '');
+            if (!config.range_separators.includes(sraw) && weakDiscreteSeparators.includes(sraw)) {
+              const gap = Number(current.value) - Number(previous.value);
+              if (!(gap > 0 && gap <= config.max_range_gap + 1)) valid = false;
+            }
+            if (discreteSeparators.includes(sraw)) { valid = true; break; }
+          }
+        }
+        previous = current;
+      }
+      return valid;
+    };
+    return isConsecutive('episode') && isConsecutive('season');
+  };
+
+  // Word numerals for season word patterns (e.g. "Saison sept")
+  const wordNumerals = [
+    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+    'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty',
+    'un', 'deux', 'trois', 'quatre', 'cinq', 'sept', 'huit', 'neuf', 'dix',
+    'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'vingt',
+  ];
+  const wordNumeralsPat = wordNumerals.join('|');
+  const numeralWithWords = `(?:\\d+|[ivxlcdm]+|${wordNumeralsPat})`;
+  const numeral = `(?:\\d+|[ivxlcdm]+)`;
+
+  function isSeasonEpisodeDisabled(context: any): boolean {
+    return isDisabled(context, 'episode') || isDisabled(context, 'season');
+  }
+
+  const rebulk = new Rebulk()
+    .regexDefaults({ flags: 'i' })
+    .stringDefaults({ ignoreCase: true })
+    .defaults({
+      privateNames: ['episodeSeparator', 'seasonSeparator', 'episodeMarker', 'seasonMarker'],
+      formatter: { season: (v: any) => parseInt(v, 10), episode: (v: any) => parseInt(v, 10), version: (v: any) => parseInt(v, 10), count: (v: any) => parseInt(v, 10) },
+      children: true,
+      privateParent: true,
+      conflictSolver: seasonEpisodeConflictSolver,
+      abbreviations: [altDash],
+    });
+
+  // CJK episode/season markers (Japanese: upstream #671, #763; Chinese: #779):
+  // 第195話 → episode 195, 第3集 → episode 3, 第二季 → season 2, シーズン2 → season 2, 2期 → season 2.
+  // Numbers may be ASCII digits or Han numerals up to 99 (二 → 2, 十一 → 11, 二十三 → 23).
+  rebulk.regex(`第(?<episode>${CJK_NUMBER})[話话集]`, { tags: ['SxxExx'], formatter: { episode: parseCjkNumber } });
+  rebulk.regex(`第(?<season>${CJK_NUMBER})季`, { tags: ['SxxExx'], formatter: { season: parseCjkNumber } });
+  rebulk.regex('(?:シーズン|シリーズ)(?<season>\\d{1,2})(?!\\d)', { tags: ['SxxExx'] });
+  rebulk.regex('(?<!\\d)(?<season>\\d{1,2})期', {});
+
+  // Main SxxExx patterns
+  const seasonMarkerPattern = buildOrPattern(config.season_markers, 'seasonMarker');
+  const episodeMarkerPattern = buildOrPattern(
+    [...config.episode_markers, ...config.disc_markers],
+    'episodeMarker',
+  );
+  const allSeparatorsPattern = buildOrPattern(
+    [...config.episode_markers, ...config.disc_markers, ...allSeparators],
+    'episodeSeparator',
+    true,
+  );
+
+  // S01E02, S01E02E03, S01E02-E03, etc
+  rebulk.chain({
+    tags: ['SxxExx'],
+    validateAll: true,
+    validator: {
+      __parent__: and_(sepsSurround, localOrderingValidator),
+    },
+    chainBreaker: (matches: any) => episodesSeasonChainBreaker(matches, config),
+    disabled: isSeasonEpisodeDisabled,
+  })
+    .defaults({ tags: ['SxxExx'] })
+    .regex(
+      seasonMarkerPattern +
+        `(?<season>\\d+)@?` +
+        episodeMarkerPattern +
+        `@?(?<episode>\\d+)(?:[a-d](?![a-z0-9]))?(?:v(?<version>\\d+))?`,
+    )
+    .repeater('+')
+    .regex(
+      allSeparatorsPattern + `@?(?<episode>\\d+)`,
+    )
+    .repeater('*');
+
+  // 1x02, 1x02x03 patterns
+  const seasonEpMarkerPattern = buildOrPattern(config.season_ep_markers, 'episodeMarker');
+  // A separator before the marker requires one after it too: "1x03" and "1 x 03" are
+  // episodes, while "1080.x264" is a number followed by a codec token (#933).
+  const asymmetricSeasonEpMarker = `(?!@` + buildOrPattern(config.season_ep_markers) + `\\d)`;
+  rebulk.chain({
+    tags: ['SxxExx'],
+    validateAll: true,
+    validator: {
+      __parent__: and_(sepsSurround, orderingValidator),
+    },
+    disabled: isSeasonEpisodeDisabled,
+  })
+    .defaults({ tags: ['SxxExx'] })
+    .regex(
+      `(?!0x[0-9a-fA-F])(?<season>\\d+)` + asymmetricSeasonEpMarker + `@?` + seasonEpMarkerPattern + `@?(?<episode>\\d+)`,
+    )
+    .repeater('+');
+
+  // 1x02 with additional episodes (1x02x03, 1x02-03)
+  rebulk.chain({
+    tags: ['SxxExx'],
+    validateAll: true,
+    validator: {
+      __parent__: and_(sepsSurround, orderingValidator),
+    },
+    disabled: isSeasonEpisodeDisabled,
+  })
+    .defaults({ tags: ['SxxExx'] })
+    .regex(`(?!0x[0-9a-fA-F])(?<season>\\d+)` + asymmetricSeasonEpMarker + `@?` + seasonEpMarkerPattern + `@?(?<episode>\\d+)`)
+    .regex(
+      buildOrPattern(
+        [...config.season_ep_markers, ...discreteSeparators, ...config.range_separators],
+        'episodeSeparator',
+        true,
+      ) + `(?<episode>\\d+)`,
+    )
+    .repeater('*');
+
+  // Compact non-English season/episode marker: "T02E22", "T01XE08" (Spanish/Portuguese).
+  // Restricted to a "t" prefix immediately followed by an episode marker so a lone
+  // "T1" stays a title token. (upstream 4.x)
+  rebulk.regex(
+    `t(?<season>\\d{1,2})@?` + buildOrPattern(config.episode_markers, 'episodeMarker') + `@?(?<episode>\\d{1,4})`,
+    { tags: ['SxxExx'], disabled: isSeasonEpisodeDisabled },
+  );
+
+  // Anime special-episode markers: SP01/EX01/OVA2 → episode (upstream #877 B1).
+  // ED/OP stay credit sequences (see other.ts) — only the special/extra forms
+  // carry a real episode number.
+  rebulk.regex(
+    `(?<![^\\W_])(?:SP|EX|OVA|OAV)-?(?<episode>\\d{1,3})(?![^\\W_])`,
+    { tags: ['SxxExx', 'special-episode'], disabled: (context: any) => isDisabled(context, 'episode') },
+  );
+
+  // English ordinal season: "2nd Season 24" → season 2 (upstream #877 B2f).
+  rebulk.regex(
+    `(?<season>\\d{1,2})(?:st|nd|rd|th)@?(?:season)(?![^\\W_])`,
+    { tags: ['SxxExx', 'numfirst'], disabled: isSeasonEpisodeDisabled },
+  );
+
+  // Glued NxNN forms without separators (cross-parser corpus): "Castle1x01",
+  // "clny.3x11m720p". Both numbers are bounded so resolutions (1280x720) and
+  // hex ids never match.
+  rebulk.regex(
+    `(?<!\\d)(?<season>\\d{1,2})(?<episodeMarker>x)(?<episode>\\d{2})(?!\\d)`,
+    { tags: ['SxxExx'], disabled: isSeasonEpisodeDisabled },
+  );
+
+  // Season-only: S01, S01S02S03
+  const seasonOnlySepPattern = buildOrPattern(
+    [...config.season_markers, ...discreteSeparators, ...config.range_separators],
+    'seasonSeparator',
+    true,
+  );
+  rebulk.chain({
+    tags: ['SxxExx'],
+    validateAll: true,
+    validator: {
+      __parent__: and_(sepsSurround, orderingValidator),
+    },
+    disabled: isSeasonEpisodeDisabled,
+  })
+    .defaults({ tags: ['SxxExx'] })
+    .regex(seasonMarkerPattern + `(?<season>\\d+)`)
+    .regex(`(?<other>Extras)`, { name: 'other', value: 'Extras', tags: ['no-release-group-prefix'] } as any)
+    .repeater('?')
+    .regex(seasonOnlySepPattern + `(?<season>\\d+)`)
+    .repeater('*');
+
+  // Episode details
+  for (const detail of ['Special', 'Pilot', 'Unaired', 'Final']) {
+    rebulk.string(detail, {
+      name: 'episode_details',
+      value: detail,
+      children: false,
+      privateParent: false,
+      disabled: (context: any) => isDisabled(context, 'episode_details'),
+    });
+  }
+
+  // Season-of patterns
+  const { words: seasonWords, numfirst: seasonWordsNumfirst } = splitWords(config.season_words);
+  const { words: episodeWords, numfirst: episodeWordsNumfirst } = splitWords(config.episode_words);
+  const seasonWordPattern = buildOrPattern(seasonWords, 'seasonMarker');
+  const ofWordPattern = buildOrPattern(config.of_words);
+
+  rebulk.chain({
+    validateAll: true,
+    conflictSolver: seasonEpisodeConflictSolver,
+    formatter: { season: parseNumber, season_count: parseNumber },
+    validator: {
+      __parent__: and_(sepsSurround, orderingValidator),
+      season: seasonWordNotYear,
+      season_count: validateRoman,
+    },
+    chainBreaker: (matches: any) => episodesSeasonChainBreaker(matches, config),
+    disabled: (context: any) =>
+      context?.type === 'movie' || isDisabled(context, 'season'),
+  })
+    .defaults({
+      formatter: { season: parseNumber, season_count: parseNumber },
+      validator: { season: seasonWordNotYear, season_count: validateRoman },
+      conflictSolver: seasonEpisodeConflictSolver,
+    })
+    .regex(seasonWordPattern + `@?(?P<season>${numeralWithWords})`)
+    .regex(ofWordPattern + `@?(?P<season_count>${numeral})`)
+    .repeater('?')
+    .regex(
+      // an optional comma before the separator covers list forms like ", & 6"
+      `(?:,@?)?@?` +
+        buildOrPattern(
+          [...config.range_separators, ...discreteSeparators, '@'],
+          'seasonSeparator',
+          true,
+        ) +
+        `@?(?P<season>\\d+)`,
+    )
+    .repeater('*');
+
+  // Non-English convention where the number precedes the keyword:
+  //   "1ª Temporada", "3 сезон", "2.Sezon" (season); "24 серия", "7.Bölüm" (episode).
+  // An optional ordinal suffix may sit between the two, and the total may follow
+  // the keyword ("5 серия из 12"). Mirrors upstream 4.x numfirst patterns.
+  const ofCountPattern = `(?:@?` + ofWordPattern + `@?(?<count>\\d+))?`;
+  if (seasonWordsNumfirst.length > 0) {
+    rebulk.regex(
+      `(?<season>\\d{1,2})` + config.ordinal_suffix + `@?@?` +
+        buildOrPattern(seasonWordsNumfirst, 'seasonMarker') + `(?![^\\W\\d_])` + ofCountPattern,
+      {
+        tags: ['SxxExx', 'numfirst'],
+        formatter: { season: parseNumber, count: (v: any) => parseInt(v, 10) },
+        disabled: isSeasonEpisodeDisabled,
+      },
+    );
+  }
+  if (episodeWordsNumfirst.length > 0) {
+    rebulk.regex(
+      `(?<episode>\\d{1,3})` + config.ordinal_suffix + `@?@?` +
+        buildOrPattern(episodeWordsNumfirst, 'episodeMarker') + `(?![^\\W\\d_])` + ofCountPattern,
+      {
+        tags: ['SxxExx', 'numfirst'],
+        formatter: { episode: parseNumber, count: (v: any) => parseInt(v, 10) },
+        disabled: (context: any) => isDisabled(context, 'episode'),
+      },
+    );
+  }
+
+  // Episode patterns
+  const episodeWordPattern = buildOrPattern(episodeWords, 'episodeMarker');
+
+  // Decimal season.episode notations (cross-parser corpus):
+  //   "Episode 1.22"        → s1 e22 (episode word + decimal)
+  //   " - 6.01 - " / "[5.134]" → s6 e1 / s5 e134 (delimited decimal)
+  // The episode needs two+ digits (or a leading zero) so audio "5.1"/"7.1" and
+  // version "2.0" never match.
+  rebulk.regex(
+    buildOrPattern(episodeWords, 'episodeMarker') + `@?(?<season>\\d{1,2})\\.(?<episode>\\d{2,3})(?!\\d)`,
+    { tags: ['SxxExx'], disabled: isSeasonEpisodeDisabled },
+  );
+  rebulk.regex(
+    // The season half may not be the tail of an episode range: "s16e03-04.313"
+    // must leave "04" to the SxxExx chain and "313" to the absolute-episode
+    // range behind it, instead of reading "04.313" as season 4 (upstream #944).
+    `(?<=[\\s([_-][\\s._-]?)(?<!\\d[-x])(?<season>\\d{1,2})\\.(?<episode>\\d{2,3})(?=[\\s)\\]._-]|$)(?!\\.\\d)`,
+    {
+      tags: ['SxxExx', 'decimal-episode'],
+      validator: {
+        __parent__: (m: any) => {
+          // require a real delimiter context: dash/space before, or brackets
+          const inp = m.inputString ?? '';
+          const before = inp.slice(Math.max(0, m.start - 3), m.start);
+          return /[-([]\s?$|^\s*$|\s-\s$/.test(before) || /[([]/.test(before);
+        },
+      },
+      disabled: isSeasonEpisodeDisabled,
+    },
+  );
+
+  rebulk.regex(
+    `(?<![a-zA-Z\\d])` + episodeWordPattern + `@?(?<episode>\\d+)` +
+      `(?:v(?<version>\\d+))?` +
+      `(?:@?` + ofWordPattern + `@?(?<count>\\d+))?`,
+    {
+      disabled: (context: any) =>
+        context?.type === 'episode' || isDisabled(context, 'episode'),
+    },
+  );
+
+  rebulk.regex(
+    `(?<![a-zA-Z\\d])` + episodeWordPattern + `@?(?<episode>${numeral})` +
+      `(?:v(?<version>\\d+))?` +
+      `(?:@?` + ofWordPattern + `@?(?<count>\\d+))?`,
+    {
+      validator: { episode: validateRoman },
+      formatter: { episode: parseNumber },
+      disabled: (context: any) =>
+        context?.type !== 'episode' || isDisabled(context, 'episode'),
+    },
+  );
+
+  // S?01-xE/Ex/E/x-All patterns
+  rebulk.regex(
+    `S?(?<season>\\d+)-?(?:xE|Ex|E|x)-?(?<other>` +
+      buildOrPattern(config.all_words) + ')',
+    {
+      tags: ['SxxExx'],
+      formatter: { other: () => 'Complete' },
+      disabled: (context: any) => isDisabled(context, 'season'),
+    },
+  );
+
+  // Weak episode patterns: 12, 13
+  rebulk.chain({
+    tags: ['weak-episode'],
+    disabled: (context: any) =>
+      context?.type === 'movie' || isDisabled(context, 'episode'),
+  })
+    .defaults({ validator: null, tags: ['weak-episode'] })
+    .regex(`(?<![^\\W_])(?<episode>\\d{2})(?!(?:st|nd|rd|th)\\b)(?!%)(?:[a-d](?![a-z0-9]))?(?!(?![vV]\\d)[^\\W_])`)
+    .regex(`v(?<version>\\d+)`)
+    .repeater('?')
+    .regex(`(?<episodeSeparator>[x-])(?<episode>\\d{2})`, {
+      abbreviations: null,
+    } as any)
+    .repeater('*');
+
+  // Weak episode patterns: 012, 013
+  rebulk.chain({
+    tags: ['weak-episode'],
+    disabled: (context: any) =>
+      context?.type === 'movie' || isDisabled(context, 'episode'),
+  })
+    .defaults({ validator: null, tags: ['weak-episode'] })
+    .regex(`(?<![^\\W_])0(?<episode>\\d{1,2})(?!%)(?:[a-d](?![a-z0-9]))?(?!(?![vV]\\d)[^\\W_])`)
+    .regex(`v(?<version>\\d+)`)
+    .repeater('?')
+    .regex(`(?<episodeSeparator>[x-])0(?<episode>\\d{1,2})`, {
+      abbreviations: null,
+    } as any)
+    .repeater('*');
+
+  // Weak episode patterns: 112, 113
+  rebulk.chain({
+    tags: ['weak-episode'],
+    name: 'weak_episode',
+    disabled: (context: any) =>
+      context?.type === 'movie' || isDisabled(context, 'episode'),
+  })
+    .defaults({
+      validator: null,
+      tags: ['weak-episode'],
+      name: 'weak_episode',
+    })
+    .regex(`(?<![^\\W_])(?<episode>\\d{3,4})(?!%)(?:[a-d](?![a-z0-9]))?(?!(?![vV]\\d)[^\\W_])`)
+    .regex(`v(?<version>\\d+)`)
+    .repeater('?')
+    .regex(`(?<episodeSeparator>[x-])(?<episode>\\d{3,4})`, {
+      abbreviations: null,
+    } as any)
+    .repeater('*');
+
+  // Single digit episodes
+  rebulk.chain({
+    tags: ['weak-episode'],
+    disabled: (context: any) =>
+      context?.type !== 'episode' || isDisabled(context, 'episode'),
+  })
+    .defaults({ validator: null, tags: ['weak-episode'] })
+    .regex(`(?<![^\\W_])(?<episode>\\d)(?!-[a-z])(?!%)(?!(?![vV]\\d)[^\\W_])`)
+    .regex(`v(?<version>\\d+)`)
+    .repeater('?')
+    .regex(`(?<episodeSeparator>[x-])(?<episode>\\d{1,2})`, {
+      abbreviations: null,
+    } as any)
+    .repeater('*');
+
+  // e112, e113, 1e18, 3e19
+  rebulk.chain({
+    validateAll: true,
+    validator: { __parent__: sepsSurround },
+    disabled: (context: any) => isDisabled(context, 'episode'),
+  })
+    .defaults({ validator: null })
+    .regex(`(?<season>\\d{1,2})?(?<episodeMarker>e)(?<episode>\\d{1,4})`)
+    .regex(`v(?<version>\\d+)`)
+    .repeater('?')
+    .regex(`(?<episodeSeparator>e|x|-)(?<episode>\\d{1,4})`, {
+      abbreviations: null,
+    } as any)
+    .repeater('*');
+
+  // ep112, ep113
+  rebulk.chain({
+    disabled: (context: any) => isDisabled(context, 'episode'),
+  })
+    .defaults({ validator: null })
+    .regex(`(?<![a-zA-Z\\d])ep-?(?<episode>\\d{1,4})`)
+    .regex(`v(?<version>\\d+)`)
+    .repeater('?')
+    .regex(`(?<episodeSeparator>ep|e|x|-)(?<episode>\\d{1,4})`, {
+     abbreviations: null,
+   } as any)
+    .repeater('*');
+
+  // cap patterns
+  rebulk.chain({
+    tags: ['see-pattern'],
+    disabled: isSeasonEpisodeDisabled,
+  })
+    .defaults({ validator: null, tags: ['see-pattern'] })
+    .regex(`(?<seasonMarker>cap)@?(?<season>\\d{1,2})(?<episode>\\d{2})(?!\\d)`)
+    .regex(`(?<episodeSeparator>[_-])(?<season>\\d{1,2})(?<episode>\\d{2})(?!\\d)`)
+    .repeater('?');
+
+  // 102, 0102 (weak duplicate)
+  rebulk.chain({
+    tags: ['weak-episode', 'weak-duplicate'],
+    name: 'weak_duplicate',
+    conflictSolver: seasonEpisodeConflictSolver,
+    disabled: (context: any) =>
+      context?.episode_prefer_number === true ||
+      context?.type === 'movie' ||
+      isSeasonEpisodeDisabled(context),
+  })
+    .defaults({
+      tags: ['weak-episode', 'weak-duplicate'],
+      name: 'weak_duplicate',
+      validator: null,
+      conflictSolver: seasonEpisodeConflictSolver,
+    })
+    // Season half: zero-padded ("0102" → s01e02), a single digit ("102" → s1e02),
+    // or an unpadded two-digit season only when the episode half stays under 40
+    // ("2401" → s24e01). A four-digit run whose tail is 40+ is the absolute
+    // episode of a long-running show ("One.Piece.1089"), not season 10 episode
+    // 89 — no season anywhere carries 89 episodes. "1120" stays ambiguous and
+    // keeps the season reading.
+    // A three-digit run keeps Python's reading throughout, including the
+    // episode-zero quirk ("Show.Name.100" → s1e0), which the corpus pins.
+    // A zero-padded season is never season zero: "RE.0096" is part of the title
+    // "Gundam Unicorn RE:0096", not season 0 episode 96.
+    .regex(`(?<![^\\W_])(?<season>0[1-9]|[1-9]\\d(?=[0-3]\\d)|\\d)(?<episode>\\d{2})(?!%)(?!(?![vV]\\d)[^\\W_])`)
+    .regex(`v(?<version>\\d+)`)
+    .repeater('?')
+    .regex(`(?<episodeSeparator>x|-)(?<episode>\\d{2})`, {
+      abbreviations: null,
+    } as any)
+    .repeater('*');
+
+  // Version pattern
+  rebulk.regex(`v(?<version>\\d+)`, {
+    formatter: { version: (v: string) => parseInt(v, 10) },
+    disabled: (context: any) => isDisabled(context, 'version'),
+  });
+
+  // Detached of X count (e.g. "14 of 21", "14.of.21", "1-of-6")
+  // Use @? (altDash abbreviation) so separators like '.' and ' ' are also matched.
+  rebulk.regex(
+    // The lookbehind keeps this off token tails: "AC3-de[42]" is not "episode 3 of 42"
+    // ('de' is also a Spanish of-word — codec suffixes must stay intact).
+    `(?<![^\\W_])(?<episode>\\d+)@?` +
+      ofWordPattern +
+      `@?(?<count>\\d+)@?` +
+      episodeWordPattern + '?',
+    {
+      formatter: { episode: (v: string) => parseInt(v, 10), count: (v: string) => parseInt(v, 10) },
+      preMatchProcessor: (match: any) => {
+        match.value = cleanup(match.value);
+        return match;
+      },
+      disabled: (context: any) => isDisabled(context, 'episode'),
+    },
+  );
+
+  // Minisodes
+  rebulk.regex(`Minisodes?`, {
+    children: false,
+    privateParent: false,
+    name: 'episode_format',
+    value: 'Minisode',
+    disabled: (context: any) => isDisabled(context, 'episode_format'),
+  });
+
+  // Add rules for validation and cleanup
+  rebulk.rules(
+    EventNumberAsTitleRule,
+    SportsEventNumberIsOneNumber,
+    MotorsportRoundIsEpisode,
+    EpisodeWordBeforeYearAsTitle,
+    RemoveGroupSuffixSeason,
+    AnimeTrailingEpisodeRule,
+    PreferAnchoredWeakEpisodeRule,
+    SeasonWordDashedEpisodeRule,
+    RemoveNumfirstMarkerCollision,
+    CountValidator,
+    new DiscMarkerRule(config),
+    FixCorruptedGroupBoundaryValues,
+    new RangeExpansionRule(config),
+    WeakConflictSolverRule,
+    RemoveWeakDuplicateRule,
+    RemoveWeakIfSxxExxRule,
+    RemoveWeakInsideTitleRule,
+    AbsoluteEpisodeInGroupRule,
+    RemoveInvalidSeasonRule,
+    RemoveInvalidEpisodeRule,
+  );
+
+  return rebulk;
+}
+
+/**
+ * A dash-glued "S<n>" hanging off a release token is a group name, not a season:
+ * "DD5.1-S56", "[E-AC3-S78]" (cross-parser corpus). Season-only S-chains whose
+ * initiator directly follows a dash after an audio/codec/channels token (or that
+ * sit inside a bracket group with such a token) are dropped so the release-group
+ * logic can claim them.
+ */
+class RemoveGroupSuffixSeason extends Rule {
+  static override priority = 72;
+  override priority = 72;
+  override consequence = RemoveMatch;
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const TOKENS = new Set(['audio_codec', 'audio_channels', 'video_codec', 'audio_profile', 'other']);
+    for (const season of (matches.named('season') as any[]) ?? []) {
+      const init = season.initiator ?? season;
+      if (!/^s\d{1,3}$/i.test(String(init.raw ?? ''))) continue;
+      const hasEpisode = [...(init.children ?? [])].some((c: any) => c.name === 'episode');
+      if (hasEpisode) continue;
+      if (input[init.start - 1] !== '-') continue;
+      const prev = matches.range(Math.max(0, init.start - 12), init.start - 1,
+        (m: any) => !m.private && TOKENS.has(m.name ?? ''), -1) ??
+        matches.range(Math.max(0, init.start - 12), init.start - 1,
+          (m: any) => !m.private && TOKENS.has(m.name ?? ''), 0);
+      const inGroup = matches.markers.atMatch(init, (m: any) => m.name === 'group', 0);
+      if (!prev && !inGroup) continue;
+      toRemove.push(season);
+      for (const c of (init.children ?? [])) if (!toRemove.includes(c)) toRemove.push(c);
+    }
+    return toRemove.length ? toRemove : false;
+  }
+}
+
+/**
+ * Event/title numbers that are not episodes (cross-parser corpus):
+ * - "UFC.247.PPV…" — a number directly followed by PPV numbers the event
+ * - "22.Jump.Street.GERMAN…" — a leading 2-digit before a multi-word title with
+ *   no year/season/SxxExx anywhere is part of a movie title
+ * The weak match is dropped so the number rejoins the title.
+ */
+class EventNumberAsTitleRule extends Rule {
+  static override priority = 60;
+  override priority = 60;
+  override consequence = RemoveMatch;
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const isWeak = (m: any) => !!(m.tags?.includes('weak-episode') ||
+      ['weak_episode', 'weak_duplicate'].includes(m.initiator?.name));
+    for (const filepart of (matches.markers.named('path') as any[]) ?? []) {
+      const weaks = ((matches.range(filepart.start, filepart.end,
+        (m: any) => m.name === 'episode' && !m.private && isWeak(m)) as any[]) ?? []);
+      if (!weaks.length) continue;
+      const strong = matches.range(filepart.start, filepart.end, (m: any) =>
+        !m.private && (m.name === 'season' || m.name === 'year' || m.name === 'date' ||
+          (m.name === 'episode' && m.tags?.includes('SxxExx'))), 0);
+      for (const w of weaks) {
+        const init = w.initiator ?? w;
+        const after = input.slice(init.end, init.end + 5);
+        // "UFC 247 PPV": number glued to a PPV marker is the event number
+        if (/^[\s._-]?PPV/i.test(after)) {
+          for (const c of [init, ...(init.children ?? [])]) if (!toRemove.includes(c)) toRemove.push(c);
+          continue;
+        }
+        // Leading 2-digit + multi-word title, no year/season/SxxExx anywhere
+        // zero-padded leading numbers ("01 - Ep Name") are deliberate episode numbering
+        if (!strong && init.start === filepart.start && /^[1-9]\d$/.test(String(init.raw ?? ''))) {
+          const rest = input.slice(init.end, filepart.end);
+          const words = (rest.match(/[A-Za-z][a-z]+/g) ?? []);
+          if (words.length >= 2) {
+            for (const c of [init, ...(init.children ?? [])]) if (!toRemove.includes(c)) toRemove.push(c);
+          }
+        }
+      }
+    }
+    return toRemove.length ? toRemove : false;
+  }
+}
+
+/**
+ * Combat sports number their events, they do not run seasons. A three-digit
+ * event number was being split down the middle: "UFC Fight Night 185" became
+ * season 1 episode 85, "UFC 300" became season 3, "Bellator 300" the same. The
+ * number is one value — the event — so the pair collapses back into a single
+ * episode ("UFC on FOX 24" already read that way and is unchanged).
+ *
+ * A promotion that really does run a numbered series states it with an SxxExx
+ * ("UFC.Embedded.S01E05") and is left alone.
+ */
+const FIGHT_PROMOTIONS =
+  /^(?:ufc|bellator|pfl|rizin|ksw|glory|invicta[\W_]?fc|cage[\W_]?warriors|one[\W_]?(?:championship|fc))(?:[\W_]|$)/i;
+
+class SportsEventNumberIsOneNumber extends Rule {
+  static override priority = 60;
+  override priority = 60;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const toAppend: any[] = [];
+    for (const filepart of (matches.markers.named('path') as any[]) ?? []) {
+      if (!FIGHT_PROMOTIONS.test(input.slice(filepart.start, filepart.end))) continue;
+
+      // An explicit marker means the promotion really is running a series.
+      const strong = matches.range(filepart.start, filepart.end, (m: any) =>
+        !m.private && (m.name === 'date' || m.tags?.includes('SxxExx')), 0);
+      if (strong) continue;
+
+      const isWeak = (m: any) => m.tags?.includes('weak-episode') ||
+        ['weak_episode', 'weak_duplicate'].includes(m.initiator?.name);
+      const seasons = (matches.range(filepart.start, filepart.end,
+        (m: any) => !m.private && m.name === 'season' && isWeak(m)) as any[]) ?? [];
+
+      for (const season of seasons) {
+        const init = season.initiator ?? season;
+        const raw = String(init.raw ?? '').trim();
+        if (!/^\d{3,4}$/.test(raw)) continue;
+        for (const c of [season, init, ...(init.children ?? [])]) {
+          if (!toRemove.includes(c)) toRemove.push(c);
+        }
+        toAppend.push(new Match(init.start, init.end, {
+          name: 'episode',
+          value: parseInt(raw, 10),
+          inputString: input,
+        }));
+      }
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+/**
+ * Motorsport numbers its calendar by round: "Formula 1 2024 Round 22 Las Vegas
+ * GP Race" is round 22 of the season, which is the episode. The round word was
+ * being dropped into an alternative title and its number lost entirely.
+ *
+ * Bare numbers elsewhere in the name belong to the race, not the calendar —
+ * "NASCAR Cup Series 2024 Daytona 500" was read as season 5 episode 0 — so any
+ * weak number that is not the round rejoins the title. Scoped to a filepart that
+ * opens with a series name, which is what keeps "Round 6" (the Portuguese title
+ * of Squid Game) and "Round Midnight" out of it.
+ */
+const MOTORSPORT_SERIES =
+  /^(?:formula[\W_]?(?:1|e|one)|f1|motogp|moto2|moto3|nascar|indycar|wrc|wec|dtm|supercars|superbike|wsbk)(?:[\W_]|$)/i;
+
+class MotorsportRoundIsEpisode extends Rule {
+  static override priority = 60;
+  override priority = 60;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const toAppend: any[] = [];
+    for (const filepart of (matches.markers.named('path') as any[]) ?? []) {
+      const text = input.slice(filepart.start, filepart.end);
+      if (!MOTORSPORT_SERIES.test(text)) continue;
+
+      // "2016x03" and friends are a real marker — the name already says which round.
+      const strong = matches.range(filepart.start, filepart.end, (m: any) =>
+        !m.private && (m.name === 'date' || m.tags?.includes('SxxExx')), 0);
+      if (strong) continue;
+
+      const round = /(?:^|[\W_])round[\W_]?(\d{1,2})(?=[\W_]|$)/i.exec(text);
+
+      const isWeak = (m: any) => m.tags?.includes('weak-episode') ||
+        ['weak_episode', 'weak_duplicate'].includes(m.initiator?.name);
+      for (const w of (matches.range(filepart.start, filepart.end, (m: any) =>
+        !m.private && (m.name === 'season' || m.name === 'episode') && isWeak(m)) as any[]) ?? []) {
+        const init = w.initiator ?? w;
+        for (const c of [w, init, ...(init.children ?? [])]) {
+          if (!toRemove.includes(c)) toRemove.push(c);
+        }
+      }
+
+      if (round) {
+        // Span the marker word as well as the digits, so "Round" itself does not
+        // survive as a leftover hole and become part of the episode title.
+        const wordStart = filepart.start + round.index + round[0].search(/round/i);
+        const end = filepart.start + round.index + round[0].length;
+        toAppend.push(new Match(wordStart, end, {
+          name: 'episode',
+          value: parseInt(round[1], 10),
+          inputString: input,
+        }));
+      }
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+/**
+ * "Episode N" spelled out before the movie year is part of the title:
+ * "Star Wars Episode 1 La Menace fantome 1999" (cross-parser corpus). Only when
+ * a year follows and the filepart has no season/SxxExx — a real episode marker
+ * never precedes the year in movie naming.
+ */
+class EpisodeWordBeforeYearAsTitle extends Rule {
+  static override priority = 60;
+  override priority = 60;
+  override consequence = RemoveMatch;
+
+  when(matches: any, _context: any): any {
+    const toRemove: any[] = [];
+    for (const episode of (matches.named('episode') as any[]) ?? []) {
+      const init = episode.initiator ?? episode;
+      const marker = [...(init.children ?? [])].find((c: any) => c.name === 'episodeMarker');
+      if (!marker || String(marker.raw ?? '').length < 3) continue; // word marker only (Episode/Ep.)
+      const filepart = matches.markers.atMatch(episode, (m: any) => m.name === 'path', 0);
+      if (!filepart) continue;
+      const year = matches.range(episode.end, filepart.end, (m: any) => !m.private && m.name === 'year', 0);
+      if (!year) continue;
+      const seasonish = matches.range(filepart.start, filepart.end,
+        (m: any) => !m.private && (m.name === 'season' || (m.name === 'episode' && m.tags?.includes('SxxExx'))), 0);
+      if (seasonish) continue;
+      // title text must continue between the number and the year (the episode name)
+      const between = String(matches.inputString ?? '').slice(episode.end, year.start);
+      if (!/[a-zA-Z]{2,}/.test(between)) continue;
+      toRemove.push(episode);
+      if (!toRemove.includes(init)) toRemove.push(init);
+      for (const c of (init.children ?? [])) if (!toRemove.includes(c)) toRemove.push(c);
+    }
+    return toRemove.length ? toRemove : false;
+  }
+}
+
+/**
+ * Anime episode from a trailing bare number (upstream #877 B1): with an anime
+ * signal in the filepart — a CRC32 checksum or a leading bracket release group —
+ * a trailing number is the episode, whether bare ("Eve no Jikan 2 [88F4F7F0]")
+ * or parenthesized ("[N LogN Fansubs] Angel Beats (9)"). The episode match then
+ * types the release as an episode. Without such a signal nothing happens, so
+ * movie sequels ("Deadpool 2") are untouched.
+ */
+class AnimeTrailingEpisodeRule extends Rule {
+  static override priority = -64;
+  override priority = -64;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const toAppend: any[] = [];
+    const episodes = (matches.named('episode') as any[]) ?? [];
+    if (episodes.length) return false;
+    for (const filepart of (matches.markers.named('path') as any[]) ?? []) {
+      const crc = matches.range(filepart.start, filepart.end, (m: any) => m.name === 'crc32', 0);
+      const animeRg = matches.range(filepart.start, filepart.end,
+        (m: any) => m.name === 'release_group' && m.tags?.includes('anime'), 0);
+      const groupCount = ((matches.markers.range(filepart.start, filepart.end,
+        (m: any) => m.name === 'group') as any[]) ?? []).length;
+      if (!crc && !animeRg && groupCount < 3) continue;
+      // Parenthesized bare number: "(9)"
+      let done = false;
+      for (const group of (matches.markers.range(filepart.start, filepart.end, (m: any) => m.name === 'group') as any[]) ?? []) {
+        const core = input.slice(group.start + 1, group.end - 1).trim();
+        if (!/^\d{1,3}$/.test(core)) continue;
+        const inner = (matches.range(group.start, group.end, (m: any) => !m.private) as any[]) ?? [];
+        // a numeric bracket often gets misread as alternative_title / weak junk — reclaim it
+        if (inner.some((m: any) => !['alternative_title', 'episode_title'].includes(m.name ?? '') && !m.tags?.includes('weak-episode'))) continue;
+        toRemove.push(...inner);
+        toAppend.push(new Match(group.start + 1, group.end - 1, {
+          name: 'episode', value: parseInt(core, 10), inputString: input, tags: ['anime'],
+        }));
+        done = true;
+        break;
+      }
+      if (done) continue;
+      // Trailing bare number at the end of the title: "Eve no Jikan 2"
+      const title = matches.range(filepart.start, filepart.end, (m: any) => m.name === 'title', 0);
+      if (!title) continue;
+      const m = /^(.*[^\W\d_])[\s._-]+(\d{1,3})$/.exec(input.slice(title.start, title.end));
+      if (!m) continue;
+      const numStart = title.start + m[1].length + (m[0].length - m[1].length - m[2].length);
+      toRemove.push(title);
+      const newTitle = new Match(title.start, title.start + m[1].length, {
+        name: 'title', value: cleanup(m[1]), inputString: input,
+      });
+      toAppend.push(newTitle);
+      toAppend.push(new Match(numStart, title.end, {
+        name: 'episode', value: parseInt(m[2], 10), inputString: input, tags: ['anime'],
+      }));
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+/**
+ * Competing weak episode numbers in one filepart (upstream #875): a number that is
+ * plainly the anime episode — dash-delimited (" - 09"), zero-padded ("002") — wins
+ * over a digit that belongs to the title ("Mob Psycho 100") or an absolute number
+ * quoted in parentheses ("52 (227)"). An explicit episode-word match ("episode 18")
+ * outranks every weak reading. Scoring: leading zero +4, dash-delimited +1,
+ * inside brackets -2; the top-scoring initiator group survives, and lower-scoring
+ * groups are dropped. Nothing happens when all candidates tie.
+ */
+class PreferAnchoredWeakEpisodeRule extends Rule {
+  static override priority = 40;
+  override priority = 40;
+  override consequence = RemoveMatch;
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const isWeakEp = (m: any) => m.name === 'episode' && !m.private &&
+      (m.tags?.includes('weak-episode') || ['weak_episode', 'weak_duplicate'].includes(m.initiator?.name));
+    const removeGroup = (init: any) => {
+      for (const c of [...(init.children ?? []), init]) {
+        if (!toRemove.includes(c)) toRemove.push(c);
+      }
+      if (!init.children?.length && !toRemove.includes(init)) toRemove.push(init);
+    };
+    for (const filepart of (matches.markers.named('path') as any[]) ?? []) {
+      const weaks = ((matches.range(filepart.start, filepart.end, isWeakEp) as any[]) ?? []);
+      if (!weaks.length) continue;
+      const strong = matches.range(filepart.start, filepart.end, (m: any) =>
+        m.name === 'episode' && !m.private && !isWeakEp(m) &&
+        !!(m.initiator?.children?.named?.('episodeMarker')?.length), 0);
+      const byInit = new Map<any, any[]>();
+      for (const w of weaks) {
+        const init = w.initiator ?? w;
+        byInit.set(init, [...(byInit.get(init) ?? []), w]);
+      }
+      if (strong) {
+        for (const init of byInit.keys()) removeGroup(init);
+        continue;
+      }
+      if (byInit.size < 2) continue;
+      const score = (init: any): number => {
+        let sc = 0;
+        const raw = String(init.raw ?? '');
+        // A padded run of two or three digits is the anime episode-number
+        // convention ("- 01 -"). Four digits with a leading zero is a number the
+        // title carries — "Gundam Unicorn RE.0096" is not episode 96.
+        if (/^0\d{1,2}$/.test(raw)) sc += 4;
+        // dash-delimited: the token right before the number is a dash
+        let i = init.start - 1;
+        while (i >= 0 && (input[i] === ' ' || input[i] === '.' || input[i] === '_')) i--;
+        if (input[i] === '-') sc += 1;
+        if (matches.markers.atMatch(init, (m: any) => m.name === 'group', 0)) sc -= 2;
+        return sc;
+      };
+      const scored = [...byInit.keys()].map((init) => [init, score(init)] as const);
+      const top = Math.max(...scored.map(([, sc]) => sc));
+      const winners = scored.filter(([, sc]) => sc === top);
+      if (winners.length === scored.length) continue; // all tie — leave untouched
+      const winnerValues = new Set(winners.flatMap(([init]) => (byInit.get(init) ?? []).map((w) => Number(w.value))));
+      for (const [init, sc] of scored) {
+        if (sc >= top) continue;
+        const eps = byInit.get(init) ?? [];
+        // A multi-value group is a range/list (absolute numbering "(191-195)") and a
+        // group agreeing with the winner ("101 (01)" both read episode 1) both stay.
+        if (eps.length > 1) continue;
+        if (eps.some((w) => winnerValues.has(Number(w.value)))) continue;
+        removeGroup(init);
+      }
+    }
+    return toRemove.length ? toRemove : false;
+  }
+}
+
+/**
+ * Anime signals, mirroring Python's WeakConflictSolver.is_anime: a version or crc32
+ * tag, a screen_size quoted inside a bracket group, or a bracket group holding only
+ * the release group's name. Several readings are anime-only conventions and must not
+ * fire on western releases that look similar.
+ */
+export function isAnime(matches: any): boolean {
+  if ((matches.named('version') as any[])?.length > 0) return true;
+  if ((matches.named('crc32') as any[])?.length > 0) return true;
+  const groups = matches.markers?.named('group') || [];
+  const groupArr: any[] = Array.isArray(groups) ? groups : groups ? [groups] : [];
+  for (const group of groupArr) {
+    // screen_size inside a group marker
+    const screenSizeInGroup = matches.range?.(group.start, group.end, (m: any) =>
+      m.name === 'screen_size',
+    );
+    const hasScreenSize = Array.isArray(screenSizeInGroup)
+      ? screenSizeInGroup.length > 0
+      : !!screenSizeInGroup;
+    if (hasScreenSize) return true;
+    // Empty bracket group with non-numeric text (likely anime release group)
+    const innerMatches = matches.range?.(group.start, group.end,
+      (m: any) => !m.private && !m.tags?.includes('weak-language')) || [];
+    const innerArr: any[] = Array.isArray(innerMatches) ? innerMatches : innerMatches ? [innerMatches] : [];
+    const nonRG = innerArr.filter((m: any) => m.name !== 'release_group');
+    if (nonRG.length === 0) {
+      const groupText = (matches.inputString ?? '').slice(group.start + 1, group.end - 1).trim();
+      if (groupText && !/^\d+$/.test(groupText)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a season chain fills a round-parenthesis group that directly follows a bare
+ * absolute episode number — "87 (S4-24)", where 24 is the per-season number annotating
+ * the absolute count. A square-bracketed "[S01-07]" is a season pack, and a
+ * parenthesized range with nothing in front of it has nothing to annotate.
+ */
+function isAbsoluteNumberAnnotation(matches: any, init: any): boolean {
+  const group = matches.markers.atMatch(init, (m: any) => m.name === 'group', 0);
+  // EnlargeGroupMatches has already grown the chain over the brackets by this
+  // priority, so a bracket-wrapped chain reads as the group's own span.
+  if (!group || group.start !== init.start || group.end !== init.end) return false;
+  const groupRaw = String(group.raw ?? '');
+  if (!groupRaw.startsWith('(') || !groupRaw.endsWith(')')) return false;
+  // The absolute count sits directly in front. Upstream can look for its
+  // `weak-episode` match; here the anime absolute-episode rule only claims that
+  // number later (priority -64, long after this one), so the bare digits are read
+  // from the input instead — which is all the convention is: "87 (S4-24)".
+  return /(?:^|[\s._-])\d{1,4}[\s._]*$/.test((matches.inputString ?? '').slice(0, group.start));
+}
+
+/**
+ * "Season N - EE": an anime convention where the space-padded dash joins the season
+ * word to the EPISODE number, not a season range (upstream #875): "Attack on Titan
+ * Season 3 - 11" → season 3, episode 11. A glued dash ("Season 1-3") or an explicit
+ * completeness marker ("Season 1 - 4 Complete") keeps range semantics, and a plural
+ * marker ("Seasons 1 - 5") is always a range.
+ */
+class SeasonWordDashedEpisodeRule extends Rule {
+  static override priority = 32;
+  override priority = 32;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const toAppend: any[] = [];
+    const seasons = (matches.named('season') as any[]) ?? [];
+    const seen = new Set<any>();
+    for (const season of seasons) {
+      const init = season.initiator ?? season;
+      if (seen.has(init)) continue;
+      seen.add(init);
+      const children = [...(init.children ?? [])];
+      const marker = children.find((c: any) => c.name === 'seasonMarker');
+      if (!marker) continue;
+      const markerRaw = String(marker.raw ?? '');
+      const isWordMarker = /^[a-zà-ÿа-я]{3,}$/i.test(markerRaw);
+      // A compact "(S4-24)" in round parentheses right after a bare absolute episode
+      // number is season 4 + episode 24 (upstream #875): the 24 annotates the absolute
+      // count in front of it. A square-bracketed "[S01-07]" or a parenthesized range
+      // with nothing before it is a genuine season pack, so it stays a range.
+      const parenthesizedAnnotation = markerRaw.toLowerCase() === 's'
+        && isAbsoluteNumberAnnotation(matches, init);
+      if (!isWordMarker && !parenthesizedAnnotation) continue;
+      if (isWordMarker && /s$/i.test(markerRaw)) continue; // "Seasons" — plural means a real range
+      const nums = children.filter((c: any) => c.name === 'season');
+      if (nums.length !== 2) continue;
+      const sep = children.find((c: any) => c.name === 'seasonSeparator');
+      if (!sep || String(sep.raw ?? '').trim() !== '-') continue;
+      // word markers need the space-padded dash ("Season 3 - 11"); a glued
+      // "Season 1-3" is a range. Bracketed "S4-24" is glued by convention.
+      if (isWordMarker && (input[sep.start - 1] !== ' ' || input[sep.end] !== ' ')) continue;
+      // The padded-dash reading is anime-only: it collides with the equally common
+      // western box set ("The Wire Season 1 - 5", upstream #920), which is a range.
+      if (isWordMarker && !isAnime(matches)) continue;
+      const filepart = matches.markers.atMatch(season, (m: any) => m.name === 'path', 0);
+      if (filepart) {
+        const complete = matches.range(filepart.start, filepart.end,
+          (m: any) => m.name === 'other' && m.value === 'Complete', 0);
+        if (complete) continue;
+      }
+      const episodeMatch = new Match(nums[1].start, nums[1].end, {
+        name: 'episode',
+        value: nums[1].value,
+        inputString: input,
+      });
+      toRemove.push(nums[1]);
+      toAppend.push(episodeMatch);
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+/**
+ * RemoveNumfirstMarkerCollision — a number-first match ("60 Сезон") whose marker
+ * word is also claimed by a surviving word-first match ("Сезон 5") yields to it:
+ * the explicit word-then-number form is the intended reading. Runs after
+ * match-level conflicts, so a word-first match whose number was consumed by a
+ * stronger property (e.g. "Temporada 720" where 720 is the resolution) is
+ * already gone and leaves the number-first reading in place.
+ */
+class RemoveNumfirstMarkerCollision extends Rule {
+  static override priority = 70;
+  override priority = 70;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  when(matches: any, _context: any): any {
+    const toRemove: any[] = [];
+    const toAppend: any[] = [];
+    const isWeak = (m: any) => !!(m.tags?.includes('weak-episode') ||
+      ['weak_episode', 'weak_duplicate'].includes(m.initiator?.name));
+    const removeWithParent = (m: any) => {
+      const init = m.initiator ?? m;
+      if (!toRemove.includes(m)) toRemove.push(m);
+      for (const child of init.children ?? []) {
+        if (!toRemove.includes(child)) toRemove.push(child);
+      }
+    };
+    const all: any[] = [...matches];
+    const numfirsts = all.filter((m: any) =>
+      (m.name === 'season' || m.name === 'episode') && m.tags?.includes('numfirst'));
+    for (const nf of numfirsts) {
+      const nfInit = nf.initiator ?? nf;
+      const wordFirst = all.find((w: any) => {
+        if (w.name !== 'season' && w.name !== 'episode') return false;
+        if (w.tags?.includes('numfirst') || isWeak(w)) return false;
+        const wInit = w.initiator ?? w;
+        if (wInit === nfInit) return false;
+        return wInit.start < nfInit.end && nfInit.start < wInit.end;
+      });
+      if (!wordFirst) continue;
+      // The word-first reading loses only when its number is really another property
+      // (the resolution in "04ª Temporada 720p"); otherwise the explicit
+      // word-then-number form wins ("Studio 60 Сезон 5" → season 5, weak 60 → episode).
+      const claimed = all.some((m: any) =>
+        !m.private && (m.name === 'screen_size' || m.name === 'year') &&
+        m.start < wordFirst.end && wordFirst.start < m.end);
+      // A glued ordinal ("2nd Season") binds the number to the marker — that
+      // number-first reading wins and the trailing number stays an absolute
+      // episode ("Hayate no Gotoku 2nd Season 24" → season 2).
+      const gluedOrdinal = /^(?:st|nd|rd|th|ª|º|°)/i.test(String(matches.inputString ?? '').slice(nf.end, nf.end + 2));
+      if (claimed || gluedOrdinal) {
+        removeWithParent(wordFirst);
+        // The word-first number was real text — resurface it as the (absolute)
+        // episode unless another property claimed it ("Studio 60 Сезон 5" → e60,
+        // "Hayate no Gotoku 2nd Season 24" → e24; matches Python).
+        if (!claimed) {
+          toAppend.push(new Match(wordFirst.start, wordFirst.end, {
+            name: 'episode',
+            value: wordFirst.value,
+            inputString: matches.inputString,
+          }));
+        }
+      }
+      else removeWithParent(nf);
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+/**
+ * CountValidator — validate a `count` match and rename it to episode_count or
+ * season_count depending on the last episode/season inside its own match; drop
+ * counts with no owner. Scoped to the count's initiator rather than the nearest
+ * neighbour because another property can sit on the linking word itself ("de"
+ * is the German language code as much as the Spanish "of"). Mirrors upstream 4.x.
+ */
+class CountValidator extends Rule {
+  static override priority = 64;
+  override priority = 64;
+  static consequence = [RemoveMatch, new RenameMatch('episode_count'), new RenameMatch('season_count')];
+  override consequence = [RemoveMatch, new RenameMatch('episode_count'), new RenameMatch('season_count')];
+
+  when(matches: any, _context: any): any {
+    const toRemove: any[] = [];
+    const episodeCount: any[] = [];
+    const seasonCount: any[] = [];
+
+    for (const count of matches.named('count') ?? []) {
+      const numbers = matches.range(
+        count.initiator.start,
+        count.start,
+        (m: Match) => m.name === 'episode' || m.name === 'season',
+      ) as Match[];
+      const numbered = numbers.length ? numbers[numbers.length - 1] : undefined;
+      if (!numbered) toRemove.push(count);
+      else if (numbered.name === 'episode') episodeCount.push(count);
+      else seasonCount.push(count);
+    }
+    if (toRemove.length || episodeCount.length || seasonCount.length) {
+      return [toRemove, episodeCount, seasonCount];
+    }
+    return false;
+  }
+}
+
+/**
+ * DiscMarkerRule — when the episode marker is a disc marker (e.g. "D"),
+ * rename the episode matches to disc.
+ */
+class DiscMarkerRule extends Rule {
+  static override priority = 128;
+  override priority = 128;
+  private config: EpisodesConfig;
+
+  constructor(config: EpisodesConfig) {
+    super();
+    this.config = config;
+  }
+
+  when(matches: any, _context: any): any {
+    const discMarkers = new Set((this.config.disc_markers || []).map((s: string) => s.toLowerCase()));
+    if (discMarkers.size === 0) return false;
+
+    const toRename: any[] = [];
+    const episodes: any[] = matches.named('episode', (m: any) => !m.private) || [];
+    for (const ep of episodes) {
+      const initiator = ep.initiator;
+      if (!initiator) continue;
+      const children = initiator.children;
+      if (!children) continue;
+      const markers: any[] = (typeof children.named === 'function'
+        ? children.named('episodeMarker')
+        : []) || [];
+      for (const marker of markers) {
+        const markerText = (marker.rawString || marker.raw || marker.value || '').toString().toLowerCase();
+        if (discMarkers.has(markerText)) {
+          toRename.push(ep);
+          break;
+        }
+      }
+    }
+    return toRename.length > 0 ? toRename : false;
+  }
+
+  then(matches: any, toRename: any, context: any): void {
+    const discExcluded = isDisabled(context, 'disc');
+    for (const ep of toRename) {
+      if (discExcluded) {
+        // Disc is excluded — remove the episode AND its associated season from the same chain
+        const initiator = ep.initiator;
+        matches.remove(ep);
+        if (initiator) {
+          // Remove all children of this initiator (season, episode, markers)
+          const siblings = initiator.children
+            ? (typeof initiator.children[Symbol.iterator] === 'function'
+                ? [...initiator.children]
+                : [])
+            : [];
+          for (const sib of siblings) {
+            if (matches.includes(sib)) matches.remove(sib);
+          }
+          if (matches.includes(initiator)) matches.remove(initiator);
+        }
+      } else {
+        matches.remove(ep);
+        ep.name = 'disc';
+        matches.append(ep);
+      }
+    }
+  }
+}
+
+/**
+ * Fix numeric episode/season values that were corrupted by EnlargeGroupMatches.
+ * When a match ends at a group bracket boundary, EnlargeGroupMatches extends the
+ * span to include the bracket and shrinks rawEnd by 1. For regex chain children,
+ * this can truncate the captured value (e.g. "04" → "0"). This rule detects
+ * such cases and re-parses the value from the original input text.
+ */
+class FixCorruptedGroupBoundaryValues extends Rule {
+  when(matches: any, _context: any): any {
+    const toFix: Array<{ match: any; correctValue: number }> = [];
+    const groups = matches.markers?.named('group') || [];
+    const groupArr: any[] = Array.isArray(groups) ? groups : groups ? [groups] : [];
+
+    for (const match of matches) {
+      if (match.name !== 'episode' && match.name !== 'season') continue;
+      if (typeof match.value !== 'number') continue;
+
+      // Check if this match ends at a group boundary
+      const atGroupEnd = groupArr.some((g: any) => match.end === g.end);
+      if (!atGroupEnd) continue;
+
+      // Re-read the digits from the original input before the bracket
+      const inputStr = matches.inputString || '';
+      // Find the digits just before the group boundary (match.end - 1 is the bracket)
+      let digitEnd = match.end - 1; // position of the bracket
+      let digitStart = digitEnd;
+      while (digitStart > match.start && /\d/.test(inputStr[digitStart - 1])) {
+        digitStart--;
+      }
+      if (digitStart >= digitEnd) continue;
+
+      const correctStr = inputStr.slice(digitStart, digitEnd);
+      const correctValue = parseInt(correctStr, 10);
+      if (isNaN(correctValue) || correctValue === match.value) continue;
+
+      toFix.push({ match, correctValue });
+    }
+
+    return toFix.length > 0 ? toFix : false;
+  }
+
+  then(matches: any, whenResponse: any, _context: any): void {
+    for (const { match, correctValue } of whenResponse) {
+      (match as any).value = correctValue;
+      // Also fix rawEnd to include the full digit sequence
+      const inputStr = matches.inputString || '';
+      let digitEnd = match.end - 1;
+      if (match.rawEnd < digitEnd) {
+        (match as any).rawEnd = digitEnd;
+      }
+    }
+  }
+}
+
+/**
+ * Expand ranges: when two season/episode values are connected by a range separator,
+ * fill in the intermediate values (e.g., S01-S03 -> [1,2,3], E01-04 -> [1,2,3,4]).
+ */
+class RangeExpansionRule extends Rule {
+  consequence = AppendMatch;
+  private config: EpisodesConfig;
+
+  constructor(config: EpisodesConfig) {
+    super();
+    this.config = config;
+  }
+
+  when(matches: any, _context: any): any {
+    const toAppend: any[] = [];
+    const rangeSeps = new Set(this.config.range_separators || ['-', '~', 'to', 'a']);
+
+    // Get filepart markers to restrict range expansion to within the same filepart
+    const fileparts = matches.markers?.named('path') || [];
+    const filepartArr: any[] = Array.isArray(fileparts) ? fileparts : fileparts ? [fileparts] : [];
+
+    // Helper: find which filepart a match belongs to
+    const getFilepart = (m: any): any => {
+      for (const fp of filepartArr) {
+        if (m.start >= fp.start && m.end <= fp.end) return fp;
+      }
+      return null;
+    };
+
+    for (const name of ['season', 'episode', 'absolute_episode', 'disc']) {
+      const maxRange = name === 'season' ? this.config.season_max_range : this.config.episode_max_range;
+      const all: any[] = matches.named(name, (m: any) => !m.private) || [];
+      if (all.length < 2) continue;
+
+      // Sort by position
+      const sorted = [...all].sort((a: any, b: any) => a.start - b.start);
+
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const current = sorted[i];
+        const next = sorted[i + 1];
+
+        // Only expand ranges within the same filepart
+        const currentFp = getFilepart(current);
+        const nextFp = getFilepart(next);
+        if (currentFp !== nextFp || !currentFp) continue;
+
+        const curVal = typeof current.value === 'number' ? current.value : parseInt(current.value, 10);
+        const nextVal = typeof next.value === 'number' ? next.value : parseInt(next.value, 10);
+
+        if (isNaN(curVal) || isNaN(nextVal)) continue;
+        if (nextVal <= curVal) continue;
+        const gap = nextVal - curVal;
+        if (gap <= 1 || gap > maxRange) continue;
+
+        // Check if connected by a range separator (look at text between them).
+        // Only strip whitespace and dots: a dot is a discrete separator
+        // ("Season.1.3.4" -> [1,3,4]) while "_" is a range separator within a
+        // chain ("Cap.102_104" -> [2,3,4]), so the two must not be conflated.
+        const between = matches.inputString?.slice(current.end, next.start) || '';
+        const betweenClean = between.replace(/[\s.]/g, '').toLowerCase();
+        // Also check after stripping marker letters (s/e/x/p) so the "-" in
+        // "E01-E07" is still recognised as the range separator.
+        const betweenStripMarkers = betweenClean.replace(/[sexp]/gi, '');
+        // A single-char range separator (-, ~, _) anywhere between the two
+        // numbers marks a range, even when adjacent digits/markers cling to it
+        // (e.g. "Cap.102_104" leaves "_1" between the "02" and "04" matches).
+        // "_" counts here although it is not in the configured range_separators.
+        const hasRangeChar = /[-~_]/.test(between);
+        // "Complete Seasons 1: 11" — a colon between two season numbers is a range
+        const seasonColon = name === 'season' && betweenClean === ':';
+        const isRange = hasRangeChar || seasonColon || rangeSeps.has(betweenClean) || rangeSeps.has(betweenStripMarkers);
+
+        // Expand only on an explicit range separator. A bare episode/season
+        // marker between the numbers means a new explicit value, not a range
+        // ("S01E01E07" -> [1,7], not [1..7]); a dot is likewise discrete.
+        if (isRange) {
+          // Fill intermediate values
+          for (let v = curVal + 1; v < nextVal; v++) {
+            const m = new Match(current.start, next.end, {
+              name,
+              value: v,
+              inputString: matches.inputString,
+              tags: current.tags ? [...current.tags] : [],
+            });
+            toAppend.push(m);
+          }
+        }
+      }
+    }
+
+    return toAppend.length > 0 ? toAppend : false;
+  }
+}
+
+/**
+ * Remove invalid season matches
+ */
+class RemoveInvalidSeasonRule extends Rule {
+  consequence = RemoveMatch;
+  static override priority = 64;
+  override priority = 64;
+
+  when(matches: any, context: any): any {
+    const toRemove: any[] = [];
+
+    for (const filepart of matches.markers?.named('path') || []) {
+      const strongSeason = matches.range?.(filepart.start, filepart.end, (m: any) =>
+        m.name === 'season' && !m.private && m.tags?.includes('SxxExx'),
+      )?.[0];
+
+      if (strongSeason?.initiator?.children?.named('episode')) {
+        for (const season of matches.range?.(strongSeason.end, filepart.end, (m: any) =>
+          m.name === 'season' && !m.private,
+        ) || []) {
+          if (
+            !season.tags?.includes('SxxExx') ||
+            !season.initiator?.children?.named('episode')
+          ) {
+            if (season.initiator) {
+              toRemove.push(season.initiator);
+              toRemove.push(...(season.initiator.children || []));
+            } else {
+              toRemove.push(season);
+            }
+          }
+        }
+      }
+    }
+
+    return toRemove.length > 0 ? toRemove : false;
+  }
+}
+
+/**
+ * Remove invalid episode matches
+ */
+class RemoveInvalidEpisodeRule extends Rule {
+  consequence = RemoveMatch;
+  static override priority = 64;
+  override priority = 64;
+
+  when(matches: any, context: any): any {
+    const toRemove: any[] = [];
+
+    for (const filepart of matches.markers?.named('path') || []) {
+      const strongEpisode = matches.range?.(filepart.start, filepart.end, (m: any) =>
+        m.name === 'episode' && !m.private && m.tags?.includes('SxxExx'),
+      )?.[0];
+
+      if (strongEpisode) {
+        const strongMarker = this.getEpisodePrefix(matches, strongEpisode);
+
+        for (const episode of matches.range?.(strongEpisode.end, filepart.end, (m: any) =>
+          m.name === 'episode' && !m.private,
+        ) || []) {
+          if (episode.tags?.includes('SxxExx')) continue;
+
+          const marker = this.getEpisodePrefix(matches, episode);
+
+          const epMarkers = episode.initiator?.children?.named?.('episodeMarker') || [];
+          const epMarkerArr: any[] = Array.isArray(epMarkers) ? epMarkers : [epMarkers];
+          const hasShortEMarker = epMarkerArr.some((m: any) => {
+            const raw = (m.rawString || m.raw || m.value || '').toString().toLowerCase();
+            return raw === 'e' || raw === 'ep';
+          });
+
+          const shouldRemove = (strongMarker && marker)
+            ? strongMarker.value?.toLowerCase?.() !== marker.value?.toLowerCase?.()
+            : (!episode.tags?.includes('SxxExx') && !hasShortEMarker);
+
+          if (shouldRemove) {
+            if (episode.initiator) {
+              toRemove.push(episode.initiator);
+              toRemove.push(...(episode.initiator.children || []));
+            } else {
+              if (marker) toRemove.push(marker);
+              toRemove.push(episode);
+            }
+          }
+        }
+      }
+    }
+
+    return toRemove.length > 0 ? toRemove : false;
+  }
+
+  private getEpisodePrefix(matches: any, episode: any): any {
+    // Only look for non-private markers — in Python, private names are invisible
+    // to lookup methods, so private episodeMarker/episodeSeparator are not found.
+    return matches.previous?.(episode, (m: any) =>
+      !m.private && ['episodeMarker', 'episodeSeparator'].includes(m.name),
+    )?.[0];
+  }
+}
+
+/**
+ * RemoveWeakDuplicate — mirrors Python's RemoveWeakDuplicate.
+ *
+ * Remove weak-duplicate tagged matches if duplicate patterns exist.
+ * For example: "The 100.109" produces two weak_duplicate matches (100 and 109).
+ * Keep the LAST one (109 → season=1, episode=9) and remove the earlier (100).
+ */
+class RemoveWeakDuplicateRule extends Rule {
+  consequence = RemoveMatch;
+  static override priority = 64;
+  override priority = 64;
+
+  when(matches: any, _context: any): any {
+    const toRemove: any[] = [];
+    const fileparts = matches.markers?.named('path') || [];
+    const filepartArr: any[] = Array.isArray(fileparts) ? fileparts : fileparts ? [fileparts] : [];
+
+    for (const filepart of filepartArr) {
+      const weakDups: any[] = (matches.range?.(filepart.start, filepart.end,
+        (m: any) => m.tags?.includes('weak-duplicate'),
+      ) || []).slice().reverse(); // iterate in reverse (keep last)
+
+      const seen: Record<string, Set<any>> = {};
+      for (const match of weakDups) {
+        const name = match.name ?? '';
+        const pattern = match.initiator?.pattern ?? match.pattern ?? null;
+        if (!pattern) continue;
+        if (!seen[name]) seen[name] = new Set();
+        if (seen[name].has(pattern)) {
+          toRemove.push(match);
+        } else {
+          seen[name].add(pattern);
+        }
+      }
+    }
+
+    return toRemove.length > 0 ? toRemove : false;
+  }
+}
+
+/**
+ * WeakConflictSolverRule — mirrors Python's WeakConflictSolver.
+ *
+ * Decides between weak_episode (plain number like 679) and weak_duplicate (season+episode like 6+79):
+ * - If anime detected (has version/crc32/screen_size-in-brackets): remove weak_duplicate
+ * - Otherwise, if weak_duplicate present with no SxxExx and no range episodes: remove weak_episode
+ */
+class WeakConflictSolverRule extends Rule {
+  consequence = RemoveMatch;
+  static override priority = 128;
+  override priority = 128;
+
+  enabled(context: any): boolean {
+    return context?.type !== 'movie';
+  }
+
+  when(matches: any, _context: any): any {
+    const toRemove: any[] = [];
+
+    const animeDetected = isAnime(matches);
+
+    const fileparts = matches.markers?.named('path') || [];
+    const filepartArr: any[] = Array.isArray(fileparts) ? fileparts : fileparts ? [fileparts] : [];
+
+    for (const filepart of filepartArr) {
+      const weakMatches: any[] = matches.range?.(filepart.start, filepart.end, (m: any) =>
+        m.initiator?.name === 'weak_episode',
+      ) || [];
+
+      const allDupMatches: any[] = matches.range?.(filepart.start, filepart.end, (m: any) =>
+        m.initiator?.name === 'weak_duplicate',
+      ) || [];
+
+      // The digits inside a codec are not a season/episode pair: "H.264" offers
+      // "264" as a weak duplicate (s2e64), and letting it outrank a real weak
+      // episode costs the episode entirely ("One.Piece.1089.…H.264-VARYG" kept
+      // neither). A duplicate sitting inside another recognised property is
+      // noise and takes no part in the contest.
+      const weakDupMatches = allDupMatches.filter((dup: any) => {
+        const covering = matches.range?.(dup.start, dup.end, (m: any) =>
+          !m.private && !!m.name && m.name !== 'season' && m.name !== 'episode' &&
+          !m.tags?.includes('weak-episode') &&
+          m.start <= dup.start && m.end >= dup.end && (m.start < dup.start || m.end > dup.end),
+        ) || [];
+        return !(Array.isArray(covering) ? covering.length > 0 : !!covering);
+      });
+
+      if (animeDetected) {
+        // Anime: remove weak_duplicate, keep weak_episode
+        if (weakMatches.length > 0) {
+          toRemove.push(...weakDupMatches);
+        }
+      } else if (weakDupMatches.length > 0) {
+        // Check for episodes in range (weak_episode with episodeSeparator child)
+        const episodesInRange: any[] = matches.range?.(filepart.start, filepart.end, (m: any) => {
+          if (m.name !== 'episode' || m.initiator?.name !== 'weak_episode') return false;
+          const children = m.initiator?.children;
+          if (!children) return false;
+          if (Array.isArray(children)) return children.some((c: any) => c.name === 'episodeSeparator');
+          if (typeof children.named === 'function') return (children.named('episodeSeparator') || []).length > 0;
+          return false;
+        }) || [];
+
+        const hasSxxExx = (matches.range?.(filepart.start, filepart.end, (m: any) =>
+          m.tags?.includes('SxxExx') && !m.private,
+        ) || []).length > 0;
+
+        if (episodesInRange.length === 0 && !hasSxxExx) {
+          // Remove weak_episode matches, keep weak_duplicate
+          toRemove.push(...weakMatches);
+        } else if (episodesInRange.length > 0) {
+          // Remove weak_duplicate, keep weak_episode range
+          toRemove.push(...weakDupMatches);
+        }
+      }
+    }
+
+    return toRemove.length > 0 ? toRemove : false;
+  }
+}
+
+/**
+ * RemoveWeakIfSxxExxRule — mirrors Python's RemoveWeakIfSxxExx.
+ *
+ * When an SxxExx match exists in a filepart:
+ * - Remove weak-duplicate matches (season+episode combos like 102 → S01E02)
+ * - Rename weak_episode matches (3-4 digit absolute numbers like 313) to absolute_episode
+ * - Remove 2-digit weak-episode matches (they're just noise when SxxExx is present)
+ */
+/**
+ * AbsoluteEpisodeInGroupRule — when episodes exist both inside and outside a group marker
+ * (parentheses), rename the group-interior episodes to absolute_episode.
+ * E.g. "Fairy_Tail_2_-_16-20_(191-195)_[720p]" → episodes 16-20, absolute_episode 191-195.
+ */
+class AbsoluteEpisodeInGroupRule extends Rule {
+  static override priority = -1;
+  override priority = -1;
+
+  when(matches: any, _context: any): any {
+    const toRename: any[] = [];
+
+    const fileparts = matches.markers?.named('path') || [];
+    const filepartArr: any[] = Array.isArray(fileparts) ? fileparts : [fileparts];
+
+    for (const filepart of filepartArr) {
+      const episodes: any[] = (matches.range?.(filepart.start, filepart.end, (m: any) =>
+        m.name === 'episode' && !m.private,
+      ) || []);
+      if (episodes.length < 2) continue;
+
+      const groups = matches.markers?.named?.('group') || [];
+      const groupArr: any[] = Array.isArray(groups) ? groups : groups ? [groups] : [];
+      const relevantGroups = groupArr.filter((g: any) => g.start >= filepart.start && g.end <= filepart.end);
+
+      const isInGroup = (m: any) =>
+        relevantGroups.some((g: any) => m.start >= g.start && m.end <= g.end);
+
+      const insideGroup = episodes.filter(isInGroup);
+      const outsideGroup = episodes.filter((m: any) => !isInGroup(m));
+
+      if (insideGroup.length > 0 && outsideGroup.length > 0) {
+        toRename.push(...insideGroup);
+      }
+    }
+
+    if (toRename.length === 0) return false;
+    (this as any)._toRename = toRename;
+    return true;
+  }
+
+  then(matches: any, _whenResponse: any, _context: any): void {
+    const toRename = (this as any)._toRename || [];
+    for (const match of toRename) {
+      matches.remove(match);
+      match.name = 'absolute_episode';
+      matches.append(match);
+    }
+  }
+}
+
+/**
+ * A weak number that the finished title covers is title text, not an episode.
+ *
+ * "60.Minutes.2008.12.14" keeps the title "60 Minutes" — the title rules already
+ * treat a leading weak number as transparent when a year, date or SxxExx is in the
+ * filepart — but nothing dropped the weak match itself, so the same two characters
+ * came back as both the title's first word and `episode: 60`. A year in the part
+ * was handled; a date was not. Python reports no episode for either.
+ *
+ * Only weak readings qualify: an explicit marker ("Episodio 13") is numbered on
+ * purpose, and a SxxExx match never sits inside a title.
+ */
+class RemoveWeakInsideTitleRule extends Rule {
+  // -2048 is POST_PROCESS: titles must be final before this reads them.
+  static override priority = -2048;
+  override priority = -2048;
+  override consequence = RemoveMatch;
+
+  when(matches: any, _context: any): any {
+    const titles = ((matches.named('title') as any[]) ?? []).filter((t: any) => !t.private);
+    if (!titles.length) return false;
+    const isWeak = (m: any) => !!(m.tags?.includes('weak-episode') || m.tags?.includes('weak-duplicate')
+      || ['weak_episode', 'weak_duplicate'].includes(m.initiator?.name));
+    const toRemove: any[] = [];
+    for (const name of ['episode', 'season']) {
+      for (const m of ((matches.named(name) as any[]) ?? [])) {
+        if (m.private || !isWeak(m) || m.tags?.includes('SxxExx')) continue;
+        if (!titles.some((t: any) => m.start >= t.start && m.end <= t.end)) continue;
+        for (const c of [m, ...(m.initiator === m ? (m.children ?? []) : [])]) {
+          if (!toRemove.includes(c)) toRemove.push(c);
+        }
+      }
+    }
+    return toRemove.length ? toRemove : false;
+  }
+}
+
+class RemoveWeakIfSxxExxRule extends Rule {
+  consequence = RemoveMatch;
+  static override priority = 64;
+  override priority = 64;
+
+  when(matches: any, _context: any): any {
+    const toRemove: any[] = [];
+    const toRename: any[] = [];
+
+    const fileparts = matches.markers?.named('path') || [];
+    const filepartArr = Array.isArray(fileparts) ? fileparts : [fileparts];
+
+    for (const filepart of filepartArr) {
+      const sxxexxMatches = matches.range?.(filepart.start, filepart.end, (m: any) =>
+        !m.private && m.tags?.includes('SxxExx'),
+      ) || [];
+      const hasSxxExx = Array.isArray(sxxexxMatches) ? sxxexxMatches.length > 0 : !!sxxexxMatches;
+
+      if (hasSxxExx) {
+        const weakEpisodes: any[] = (matches.range?.(filepart.start, filepart.end, (m: any) =>
+          m.tags?.includes('weak-episode'),
+        ) || []);
+
+        // Collect weak_episode matches and check if any form a range
+        const weakEpByInitiator = new Map<any, any[]>();
+        for (const match of weakEpisodes) {
+          const init = match.initiator;
+          if (!weakEpByInitiator.has(init)) weakEpByInitiator.set(init, []);
+          weakEpByInitiator.get(init)!.push(match);
+        }
+
+        for (const match of weakEpisodes) {
+          const initiator = match.initiator;
+          const isWeakEpisode = match.name === 'episode' && initiator?.name === 'weak_episode';
+          // Check if this weak_episode is part of a range (has episodeSeparator child
+          // or multiple episode siblings from the same initiator)
+          const siblings = weakEpByInitiator.get(initiator) || [];
+          const isRange = siblings.filter((s: any) => s.name === 'episode').length > 1;
+          // Check if surrounded by separators (standalone number)
+          const inp = matches.inputString || '';
+          const mStart = initiator?.start ?? match.start;
+          const mEnd = initiator?.end ?? match.end;
+          const prevChar = mStart > 0 ? inp[mStart - 1] : '';
+          const nextChar = mEnd < inp.length ? inp[mEnd] : '';
+          const isSurrounded = (!prevChar || seps.includes(prevChar)) &&
+                              (!nextChar || seps.includes(nextChar));
+          if (isWeakEpisode && isSurrounded && isRange) {
+            toRename.push(match);
+          } else {
+            toRemove.push(match);
+          }
+        }
+      }
+    }
+
+    // Store renames on the rule instance for then() to process
+    (this as any)._toRename = toRename;
+    return toRemove.length > 0 || toRename.length > 0 ? toRemove : false;
+  }
+
+  then(matches: any, toRemove: any, _context: any): void {
+    // Remove matches
+    if (toRemove && Array.isArray(toRemove)) {
+      for (const match of toRemove) {
+        matches.remove(match);
+      }
+    }
+    // Rename weak_episode to absolute_episode
+    const toRename = (this as any)._toRename || [];
+    for (const match of toRename) {
+      matches.remove(match);
+      match.name = 'absolute_episode';
+      matches.append(match);
+    }
+  }
+}

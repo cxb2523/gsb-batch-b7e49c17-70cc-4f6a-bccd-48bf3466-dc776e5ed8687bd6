@@ -1,0 +1,40 @@
+import { defineConfig } from 'vite';
+import { resolve } from 'path';
+import dts from 'vite-plugin-dts';
+
+export default defineConfig({
+  plugins: [
+    dts({
+      include: ['src/**/*.ts'],
+      outDir: 'dist',
+    }),
+  ],
+  build: {
+    lib: {
+      entry: resolve(__dirname, 'src/index.ts'),
+      name: 'GuessItJS',
+      fileName: 'guessit-js',
+      formats: ['es', 'cjs'],
+    },
+    rollupOptions: {
+      // No external deps — fully self-contained for WASM compatibility
+      external: [],
+    },
+    target: 'es2020',
+    sourcemap: true, // sourcemaps ship alongside, so minified dist stays debuggable
+    minify: 'esbuild',
+    emptyOutDir: true,
+    copyPublicDir: false, // don't copy the public/ demo site into the npm dist/
+  },
+  // rebulk identifies a rule by `this.constructor.name`, so minified class names
+  // collapse rule identity and the engine loses dependency order and dedup.
+  // wasm/build.sh passes the same flag — the two bundles must agree.
+  esbuild: {
+    keepNames: true,
+  },
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+    },
+  },
+});

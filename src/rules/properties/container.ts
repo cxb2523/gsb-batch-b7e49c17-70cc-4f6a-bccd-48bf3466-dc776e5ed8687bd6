@@ -1,0 +1,110 @@
+import { Rebulk, Rule, RemoveMatch, AppendMatch, POST_PROCESS } from 'rebulk-js';
+import type { Matches, Context } from 'rebulk-js';
+import { Match } from 'rebulk-js';
+import { seps, reEscape, sepsPattern } from '../common/index.js';
+import { isDisabled } from '../common/pattern.js';
+import { sepsSurround } from '../common/validators.js';
+import { buildOrPattern } from '../../reutils.js';
+
+export function container(config: Record<string, unknown>) {
+  const rebulk = new Rebulk({ disabled: (context) => isDisabled(context, 'container') });
+  rebulk.regexDefaults({ flags: 'i' }).stringDefaults({ ignoreCase: true });
+  rebulk.defaults({
+    name: 'container',
+    formatter: (value: string) => value.replace(new RegExp(`[${reEscape(seps)}]`, 'g'), ''),
+    tags: ['extension'],
+    conflictSolver: (match: Match, other: Match) =>
+      other.name === 'source' || other.name === 'video_codec' || (other.name === 'container' && !other.tags.includes('extension'))
+        ? other
+        : '__default__',
+  });
+
+  const subtitles = (config['subtitles'] as string[]) || [];
+  const info = (config['info'] as string[]) || [];
+  const videos = (config['videos'] as string[]) || [];
+  const torrent = (config['torrent'] as string[]) || [];
+  const nzb = (config['nzb'] as string[]) || [];
+  const archives = (config['archives'] as string[]) || [];
+  const images = (config['images'] as string[]) || [];
+
+  if (archives.length) rebulk.regex('\\.' + buildOrPattern(archives, undefined, true) + '$', {
+    exts: archives,
+    tags: ['extension', 'archive'],
+  });
+  // Split RAR volumes: ".r00", ".r01", … and ".partNN.rar" (the .rar is caught above).
+  rebulk.regex('\\.r\\d{2}$', { tags: ['extension', 'archive'] });
+  if (images.length) rebulk.regex('\\.' + buildOrPattern(images, undefined, true) + '$', {
+    exts: images,
+    tags: ['extension', 'image'],
+  });
+  if (subtitles.length) rebulk.regex('\\.' + buildOrPattern(subtitles, undefined, true) + '$', {
+    exts: subtitles,
+    tags: ['extension', 'subtitle'],
+  });
+  if (info.length) rebulk.regex('\\.' + buildOrPattern(info, undefined, true) + '$', {
+    exts: info,
+    tags: ['extension', 'info'],
+  });
+  if (videos.length) rebulk.regex('\\.' + buildOrPattern(videos, undefined, true) + '$', {
+    exts: videos,
+    tags: ['extension', 'video'],
+  });
+  if (torrent.length) rebulk.regex('\\.' + buildOrPattern(torrent, undefined, true) + '$', {
+    exts: torrent,
+    tags: ['extension', 'torrent'],
+  });
+  if (nzb.length) rebulk.regex('\\.' + buildOrPattern(nzb, undefined, true) + '$', {
+    exts: nzb,
+    tags: ['extension', 'nzb'],
+  });
+
+  rebulk.defaults({
+    clear: true,
+    name: 'container',
+    validator: sepsSurround,
+    formatter: (s: string) => s.toLowerCase(),
+    conflictSolver: (match: Match, other: Match) =>
+      other.name === 'source' || other.name === 'video_codec' || (other.name === 'container' && other.tags.includes('extension'))
+        ? match
+        : '__default__',
+  });
+
+  const nonStdSubtitles = subtitles.filter((s) => !['sub', 'ass'].includes(s));
+  rebulk.string(...nonStdSubtitles, { tags: ['subtitle'] });
+  rebulk.string(...videos, { tags: ['video'] });
+  rebulk.string(...torrent, { tags: ['torrent'] });
+  rebulk.string(...nzb, { tags: ['nzb'] });
+
+  return rebulk.rules(OggCodecTagToVorbis);
+}
+
+/**
+ * A codec bracket lists what the file was encoded with, not what it is stored in:
+ * "[x264_ogg].avi" is H.264 video and Vorbis audio inside an AVI, so the "ogg"
+ * there is the audio codec. Only a non-extension "ogg" sharing its bracket with a
+ * video codec qualifies — a real ".ogg" file keeps its container.
+ */
+class OggCodecTagToVorbis extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  override when(matches: Matches, _context: Context): [Match[], Match[]] | false {
+    const containers = matches.named('container') as Match[] | Match | undefined;
+    const toRemove: Match[] = [];
+    const toAppend: Match[] = [];
+    for (const c of Array.isArray(containers) ? containers : containers ? [containers] : []) {
+      if (String(c.value ?? '').toLowerCase() !== 'ogg') continue;
+      if (c.tags?.includes('extension')) continue;
+      const group = matches.markers.atMatch(c, (m: Match) => m.name === 'group', 0) as Match | undefined;
+      if (!group) continue;
+      const codec = matches.range(group.start, group.end,
+        (m: Match) => m.name === 'video_codec', 0);
+      if (!codec) continue;
+      toRemove.push(c);
+      toAppend.push(new Match(c.start, c.end, {
+        name: 'audio_codec', value: 'Vorbis', inputString: matches.inputString,
+      }));
+    }
+    return toRemove.length ? [toRemove, toAppend] : false;
+  }
+}

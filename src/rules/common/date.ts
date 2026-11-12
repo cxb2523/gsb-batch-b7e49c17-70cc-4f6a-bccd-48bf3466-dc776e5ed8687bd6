@@ -1,0 +1,205 @@
+/**
+ * Date utilities — port of guessit/rules/common/date.py
+ */
+
+// Underscore joins the parts of a broadcast/DVR timestamp
+// ("…_2025_07_18_21_00.mp4", upstream #875) just like the separators Python
+// lists; without it those digits fall through to the episode rules.
+const DSEP = '[-/ ._]';
+const DSEP_BIS = '[-/ ._x]';
+
+// Four-digit-year shapes come first: in a DVR stamp the two-digit-year regexps
+// would otherwise claim an interior window ("…07_18_21…" as 2021-07-18) before
+// the real "2025_07_18" is ever tried.
+const DATE_REGEXPS: RegExp[] = [
+  new RegExp(`${DSEP}((\\d{8}))${DSEP}`, 'i'),
+  new RegExp(`${DSEP}((\\d{6}))${DSEP}`, 'i'),
+  new RegExp(`(?:^|[^\\d])((\\d{4})${DSEP_BIS}(\\d{1,2})${DSEP}(\\d{1,2}))(?:$|[^\\d])`, 'i'),
+  new RegExp(`(?:^|[^\\d])((\\d{1,2})${DSEP}(\\d{1,2})${DSEP_BIS}(\\d{4}))(?:$|[^\\d])`, 'i'),
+  new RegExp(`(?:^|[^\\d])((\\d{2})${DSEP}(\\d{1,2})${DSEP}(\\d{1,2}))(?:$|[^\\d])`, 'i'),
+  new RegExp(`(?:^|[^\\d])((\\d{1,2})${DSEP}(\\d{1,2})${DSEP}(\\d{2}))(?:$|[^\\d])`, 'i'),
+  new RegExp(`(?:^|[^\\d])((\\d{1,2}(?:st|nd|rd|th)?${DSEP}(?:[a-z]{3,10})${DSEP}\\d{4}))(?:$|[^\\d])`, 'i'),
+  // Month-name first: "July 30 2021", "Jul.30.2021"
+  new RegExp(`(?:^|[^a-z\\d])(([a-z]{3,10})${DSEP}\\d{1,2}(?:st|nd|rd|th)?${DSEP}\\d{4})(?:$|[^\\d])`, 'i'),
+];
+
+const MONTHS: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9,
+  september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+};
+
+export function validYear(year: number): boolean {
+  return year >= 1900 && year < 2035;
+}
+
+export function validWeek(week: number): boolean {
+  return week >= 1 && week < 53;
+}
+
+function isInt(s: string): boolean {
+  return !isNaN(parseInt(s, 10)) && String(parseInt(s, 10)) === s.replace(/^0+/, '') || s === '0';
+}
+
+function guessDayFirst(groups: string[]): boolean | undefined {
+  const first = groups[0];
+  const last = groups[groups.length - 1];
+  if (isInt(first) && validYear(parseInt(first.slice(0, 4), 10))) return false;
+  if (isInt(last) && validYear(parseInt(last.slice(-4), 10))) return true;
+  if (isInt(first) && parseInt(first.slice(0, 2), 10) > 31) return false;
+  if (isInt(last) && parseInt(last.slice(-2), 10) > 31) return true;
+  return undefined;
+}
+
+function tryParseDate(
+  match: string,
+  groups: string[],
+  yearFirst?: boolean,
+  dayFirst?: boolean,
+): Date | undefined {
+  // Normalize the match string: replace separators with '-'
+  const normalized = match.replace(/[-/ ._x]/g, '-');
+  const parts = normalized.split('-').filter(Boolean);
+
+  const yearFirstOpts = yearFirst !== undefined ? [yearFirst] : [false, true];
+  const dayFirstOpts = dayFirst !== undefined ? [dayFirst] : [true, false];
+
+  for (const yf of yearFirstOpts) {
+    for (const df of dayFirstOpts) {
+      let year: number, month: number, day: number;
+
+      // Month-name dates: one part is a month name (e.g. "July"/"Jul"), the
+      // 4-digit part is the year, the remaining part is the day. Handles both
+      // "30 July 2021" and "July 30 2021".
+      const monthNameIdx = parts.findIndex((x) => MONTHS[x.toLowerCase()] !== undefined);
+      if (parts.length === 3 && monthNameIdx >= 0) {
+        month = MONTHS[parts[monthNameIdx].toLowerCase()];
+        const rest = parts
+          .filter((_, i) => i !== monthNameIdx)
+          .map((x) => parseInt(x.replace(/(st|nd|rd|th)$/i, ''), 10));
+        const yearPos = rest.findIndex((n) => n >= 1000);
+        if (yearPos >= 0) { year = rest[yearPos]; day = rest[1 - yearPos]; }
+        else { year = rest[1]; day = rest[0]; }
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && validYear(year)) {
+          const ts = Date.UTC(year, month - 1, day);
+          const d = new Date(ts);
+          if (d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day) {
+            return d;
+          }
+        }
+        continue;
+      }
+
+      if (parts.length === 1) {
+        // yyyymmdd or yymmdd
+        const s = parts[0];
+        if (s.length === 8) {
+          year = parseInt(s.slice(0, 4), 10);
+          month = parseInt(s.slice(4, 6), 10);
+          day = parseInt(s.slice(6, 8), 10);
+        } else if (s.length === 6) {
+          // yymmdd
+          const yy = parseInt(s.slice(0, 2), 10);
+          year = yy > 50 ? 1900 + yy : 2000 + yy;
+          month = parseInt(s.slice(2, 4), 10);
+          day = parseInt(s.slice(4, 6), 10);
+        } else {
+          continue;
+        }
+      } else if (parts.length === 3) {
+        const p = parts.map(Number);
+        if (yf) {
+          [year, month, day] = df ? [p[0], p[2], p[1]] : [p[0], p[1], p[2]];
+          // Convert 2-digit year
+          if (!validYear(year) && year < 100) {
+            year = year > 50 ? 1900 + year : 2000 + year;
+          }
+        } else {
+          // year is the 4-digit one, or the last part
+          const longIdx = p.findIndex((n, i) => parts[i].length === 4 && validYear(n));
+          if (longIdx === 0) {
+            [year, month, day] = df ? [p[0], p[2], p[1]] : [p[0], p[1], p[2]];
+          } else if (longIdx === 2) {
+            [year, month, day] = df ? [p[2], p[1], p[0]] : [p[2], p[0], p[1]];
+          } else {
+            // 2-digit year
+            if (df) {
+              [day, month, year] = yf ? [p[2], p[1], p[0]] : [p[0], p[1], p[2]];
+            } else {
+              [month, day, year] = yf ? [p[2], p[0], p[1]] : [p[0], p[1], p[2]];
+            }
+            const yy = year > 100 ? year : (year > 50 ? 1900 + year : 2000 + year);
+            year = yy;
+          }
+        }
+      } else {
+        continue;
+      }
+
+      if (month < 1 || month > 12) continue;
+      if (day < 1 || day > 31) continue;
+      if (!validYear(year)) continue;
+
+      try {
+        // Use UTC to avoid local-timezone offsets shifting the date when serialized to ISO string.
+        const ts = Date.UTC(year, month - 1, day);
+        const date = new Date(ts);
+        if (date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) {
+          return date;
+        }
+      } catch {
+        // invalid date
+      }
+    }
+  }
+  return undefined;
+}
+
+export function searchDate(
+  string: string,
+  yearFirst?: boolean,
+  dayFirst?: boolean,
+): [number, number, Date] | undefined {
+  for (const dateRe of DATE_REGEXPS) {
+    const globalRe = new RegExp(dateRe.source, dateRe.flags.includes('g') ? dateRe.flags : dateRe.flags + 'g');
+    let m: RegExpExecArray | null;
+    globalRe.lastIndex = 0;
+    while ((m = globalRe.exec(string)) !== null) {
+      if (!m[1]) continue;
+      const start = m.index + m[0].indexOf(m[1]);
+      const end = start + m[1].length;
+      const groups = m.slice(2).filter(Boolean);
+      const matchStr = m[1];
+
+      // "Jackass.2.5.2007" is sequel 2.5 released in 2007, not 2 May 2007
+      // (upstream #963). Release names zero-pad genuine broadcast dates
+      // ("10.11.2008"), so two unpadded single digits in front of a full year
+      // means decimal versioning — skip this candidate and keep scanning.
+      if (/^\d\.\d\.\d{4}$/.test(matchStr)) continue;
+
+      let dfGuess = dayFirst;
+      if (yearFirst && dfGuess === undefined) dfGuess = false;
+      const dfGuessWasExplicit = dfGuess !== undefined;
+      if (!dfGuessWasExplicit && groups.length > 0) {
+        dfGuess = guessDayFirst(groups);
+      }
+
+      // Try guessed day-first setting first. If it fails (e.g., month > 12),
+      // fall back to the opposite setting so ambiguous dates like "03-29-2012"
+      // are correctly resolved even when the heuristic guesses wrong.
+      const dfOptions: Array<boolean | undefined> = dfGuess !== undefined
+        ? (dfGuessWasExplicit ? [dfGuess] : [dfGuess, !dfGuess])
+        : [undefined];
+
+      let date: Date | undefined;
+      for (const df of dfOptions) {
+        date = tryParseDate(matchStr, groups, yearFirst, df);
+        if (date && validYear(date.getUTCFullYear())) break;
+      }
+      if (date && validYear(date.getUTCFullYear())) {
+        return [start, end, date];
+      }
+    }
+  }
+  return undefined;
+}

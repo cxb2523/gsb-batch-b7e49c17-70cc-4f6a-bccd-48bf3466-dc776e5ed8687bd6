@@ -1,0 +1,26 @@
+node_modules/
+
+# WASM build intermediates
+wasm/guessit-bundle.js
+wasm/guessit-bundle.min.js
+wasm/guessit-wasm.js
+
+# Build artifacts
+/dist/
+!public/dist/
+*.timestamp-*.mjs
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Binaries — built by CI, never committed (issue #1)
+tools/javy
+wasm/guessit.wasm
+wasm/guessit.wasm.gz
+public/wasm/guessit.wasm

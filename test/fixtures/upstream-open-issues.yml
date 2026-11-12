@@ -1,0 +1,1266 @@
+# Upstream guessit OPEN issues #875 (spurious season/episode numbers) and #877
+# (anime/fansub episode + title extraction) — fixed in guessit-js while Python
+# still fails them. ED2/OP2 stay credit sequences (credits_number), matching
+# upstream 4.4's shipped behavior rather than the #877 wishlist.
+
+? __default__
+: type: episode
+
+# ── #875 pattern 1: a digit inside the title is not an episode ──
+? Mob Psycho 100 - 09 [1080p].mkv
+: title: Mob Psycho 100
+  episode: 9
+  screen_size: 1080p
+
+? Space Battleship Yamato 2199 (2012) episode 18
+: episode: 18
+  year: 2012
+
+? "[Golumpa] Star Blazers 2202 - 22 (Uchuu Senkan Yamato 2202) [FuniDub 1080p x264 AAC].mkv"
+: episode: 22
+  release_group: Golumpa
+
+? "[SubsPlease] Fairy Tail - 100 Years Quest - 05 (1080p) [1107F3A9].mkv"
+: episode: 5
+  release_group: SubsPlease
+
+# ── #875 pattern 2: absolute episode in parentheses is not double-counted ──
+? "[Hatsuyuki-Kaitou]_Fairy_Tail_2_-_52_(227)_[1280x720][10bit][612B87F5].mkv"
+: episode: 52
+
+? "[Hatsuyuki] Dragon Ball Kai (2014) - 002 (100) [1280x720][DD66AFB7].mkv"
+: episode: 2
+
+? "[Deep] Tegami Bachi (REVERSE) - Letter Bee - 29 (04) [E56A4C7B].mkv"
+: episode: 4
+
+# ── #875 pattern 3: "Season N - EE" is season + episode, not a season range ──
+? "[SCY] Attack on Titan Season 3 - 11 (BD 1080p Hi10 FLAC) [5D7A2C4E].mkv"
+: season: 3
+  episode: 11
+
+? "[Erai-raws] Granblue Fantasy The Animation Season 2 - 08 [1080p].mkv"
+: season: 2
+  episode: 8
+
+? "[HR] Boku no Hero Academia 87 (S4-24) [1080p].mkv"
+: season: 4
+  episode: 24
+
+# guard: S-prefixed and glued ranges still expand
+? Show.S01-S05.Complete.720p.mkv
+: season: [1, 2, 3, 4, 5]
+
+# ── #875 pattern 4: a 0x-hex bracket id is not SxxExx ──
+? "[0x539] Somali and the Forest Spirit - S01E01 (WEB 1080p x264 AAC).mkv"
+: season: 1
+  episode: 1
+
+# ── #877 B1: fansub episode numbers ──
+? "[DB]_Bleach_264_[012073FE].avi"
+: title: Bleach
+  episode: 264
+  crc32: 012073FE
+  release_group: DB
+
+? "[UTW]_Accel_World_-_EX01_[BD][h264-720p_AAC][3E56EE18].mkv"
+: title: Accel World
+  episode: 1
+
+? "[FFF] Seirei Tsukai no Blade Dance - SP01 [BD][720p-AAC][F1FB50A9].mkv"
+: title: Seirei Tsukai no Blade Dance
+  episode: 1
+
+? Eve no Jikan 2 [88F4F7F0].mkv
+: title: Eve no Jikan
+  episode: 2
+
+? "[N LogN Fansubs] Angel Beats (9).mkv"
+: title: Angel Beats
+  episode: 9
+
+# guard: no anime signal → a trailing number stays in the title
+? Deadpool 2 2018 1080p.mkv
+: title: Deadpool 2
+  type: movie
+  year: 2018
+
+# ── #877 B2: title extraction ──
+? "[FuktLogik][Sayonara_Zetsubou_Sensei][01][DVDRip][x264_ogg].avi"
+: title: Sayonara Zetsubou Sensei
+  episode: 1
+  release_group: FuktLogik
+
+? "[Keroro].148.[Xvid.mp3].[FE68D5F1].avi"
+: title: Keroro
+  episode: 148
+
+? "Attack on Titan - Episode 3 - A Dim Light Amid Despair Humanity's Comeback Part 2.mkv"
+: title: Attack on Titan
+  episode: 3
+
+? EvoBot.[Watakushi]_Akuma_no_Riddle_-_01v2_[720p][D0335AF6].mkv
+: title: Akuma no Riddle
+  episode: 1
+  version: 2
+  release_group: Watakushi
+
+? Hayate no Gotoku 2nd Season 24 (Blu-Ray 1080p) [Chihiro]
+: title: Hayate no Gotoku
+  season: 2
+
+# ── #744: a dash-joined formation after the episode stays whole ──
+? Ted.Lasso.S03E03.4-5-1.1080p.WEB.H264-GGWP.mkv
+: title: Ted Lasso
+  season: 3
+  episode: 3
+  episode_title: 4-5-1
+
+# ── #690: romaji title with embedded dashes + "Season 2 - 15" ──
+? Re ZERO -Starting Life in Another World- Season 2 - 15 [1080p].mkv
+: season: 2
+  episode: 15
+
+# ── cross-parser corpus wins (fields Python guessit still gets wrong) ──
+? 2047 - Sights of Death (2014) 720p BrRip x264 - YIFY
+: title: 2047 - Sights of Death
+  type: movie
+  year: 2014
+
+? House MD Season 7 Complete MKV
+: title: House MD
+  season: 7
+
+# guard: a post-anchor MD stays the Mic Dubbed tag
+? House.of.Cards.S01E01.720p.MD.German.mkv
+: title: House of Cards
+  other: Mic Dubbed
+
+? Skins Season S01-S07 COMPLETE UK Soundtrack 720p WEB-DL
+: title: Skins
+  season: [1, 2, 3, 4, 5, 6, 7]
+
+? Desperation 2006 Multi Pal DvdR9-TBW1973
+: type: movie
+  title: Desperation
+  source: DVD
+  year: 2006
+
+? Thor Love and Thunder (2022) Hindi HQCAM x264 AAC.mkv
+: type: movie
+  title: Thor Love and Thunder
+  source: Camera
+
+? Avatar The Way of Water (2022) 1080p HQ S-Print Dual Audio.mkv
+: type: movie
+  title: Avatar The Way of Water
+  source: Camera
+
+# ── anime compound titles: no dash-split under an anime signal ──
+? "[HorribleSubs] Tower of Druaga - Sword of Uruk - 04 [480p].mkv"
+: title: Tower of Druaga - Sword of Uruk
+  episode: 4
+
+? "[ACX]Neon_Genesis_Evangelion_-_Platinum_-_06_-_Showdown_in_Tokyo_3_[SaHa]_[66A8FB7D].mkv"
+: title: Neon Genesis Evangelion - Platinum
+  episode: 6
+
+? Macross Frontier - Sayonara no Tsubasa (Central Anime, 720p) [46B35E25].mkv
+: type: movie
+  title: Macross Frontier - Sayonara no Tsubasa
+
+# guards: short coded segments still split / stay separate
+? "Series/Baccano!/Baccano!_-_T1_-_Trailer_-_[Ayu](dae8173e).mkv"
+: title: Baccano!
+
+? "[Ayako]_Infinite_Stratos_-_IS_-_07_[H264][720p][EB7838FC]"
+: title: Infinite Stratos
+  episode: 7
+
+# ── bracket titles and codecs ──
+? "[Mobile Suit Gundam Seed Destiny HD REMASTER][07][Big5][720p][AVC_AAC].mp4"
+: options: -t episode
+  title: Mobile Suit Gundam Seed Destiny
+
+? "ponyo_on_the_cliff_by_the_sea[h264.dts][niizk].mkv"
+: type: movie
+  title: ponyo on the cliff by the sea
+  video_codec: H.264
+  audio_codec: DTS
+  release_group: niizk
+
+? Hayate no Gotoku 2nd Season 24 (Blu-Ray 1080p) [Chihiro] # e24 absolute
+: title: Hayate no Gotoku
+  season: 2
+  episode: 24
+
+# ── title integrity (cross-parser sprint 3) ──
+? Dune.Part.Two.2024.2160p.WEB-DL.mkv
+: type: movie
+  title: Dune Part Two
+  year: 2024
+
+# guard: a digit part stays the property
+? Harry.Potter.Part.2.2011.1080p.mkv
+: type: movie
+  title: Harry Potter
+  part: 2
+
+? 1923 S02E01 1080p WEB H264-SuccessfulCrab
+: title: '1923'
+  season: 2
+  episode: 1
+
+? Apollo 13 (1995) [1080p] [WEB-DL] [x264] [E-AC3-S78] [Lektor PL].mkv
+: type: movie
+  title: Apollo 13
+  year: 1995
+
+? "The Killer's Game 2024 PL 1080p WEB-DL H264 DD5.1-S56"
+: type: movie
+  title: The Killer's Game
+  year: 2024
+
+# guards: real season markers stay seasons
+? Show.S05.720p.mkv
+: season: 5
+
+? Blood Diamond (2006) 1080p BluRay H264 DolbyD 5.1.mkv
+: type: movie
+  title: Blood Diamond
+  audio_codec: Dolby Digital
+
+# ── season/episode notations (cross-parser sprint 4) ──
+? Sons of Anarchy Sn4 Ep14 HD-TV.mkv
+: season: 4
+  episode: 14
+
+? The Twilight Zone 1985 S01E22c The Library.mp4
+: season: 1
+  episode: 22
+
+? Mash S10E01b Thats Show Biz Part 2 1080p H.264.mkv
+: season: 10
+  episode: 1
+
+? "South Park Complete Seasons 1: 11"
+: season: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+? "How I Met Your Mother Season 1, 2, 3, 4, 5, & 6 + Extras DVDRip"
+: season: [1, 2, 3, 4, 5, 6]
+
+? Desperate Housewives - Episode 1.22 - Goodbye for now.avi
+: season: 1
+  episode: 22
+
+? My Little Pony FiM - 6.01 - No Second Prances.mkv
+: season: 6
+  episode: 1
+
+? "Dragon Ball [5.134] Preliminary Peril.mp4"
+: season: 5
+  episode: 134
+
+# guards: audio channels and resolutions stay themselves
+? Movie.2015.DDP5.1.Atmos.mkv
+: type: movie
+  audio_channels: '5.1'
+
+? The.Man.In.The.High.Castle1x01.HDTV.XviD.mkv
+: season: 1
+  episode: 1
+
+? clny.3x11m720p.es.mkv
+: season: 3
+  episode: 11
+
+# ── final sprint: anime/fansub tail + movie-title integrity ──
+? "[Judas] Aharen-san wa Hakarenai - S01E06v2.mkv"
+: season: 1
+  episode: 6
+  version: 2
+
+? "[HorribleSubs] Gintama - 111C [1080p].mkv"
+: title: Gintama
+  episode: 111
+
+? Mary Bell (DVD) - 02 [h-b].mkv
+: title: Mary Bell
+  episode: 2
+  release_group: h-b
+
+? "[SpoonSubs]_Hidamari_Sketch_x365_-_04.1_(DVD)[B6CE8458].mkv"
+: title: Hidamari Sketch x365
+  episode: 4
+
+? Star Wars Episode 1 La Menace fantome 1999 Truefrench BDrip x264-BBer
+: type: movie
+  title: Star Wars Episode 1 La Menace fantome
+  year: 1999
+
+? Star Wars Episode 6 Le Retour du Jedi 1983 Truefrench BDrip x264.mkv
+: type: movie
+  title: Star Wars Episode 6 Le Retour du Jedi
+  year: 1983
+
+# guard: a real episode word without a year stays an episode
+? Show.Episode.5.HDTV.mkv
+: title: Show
+  episode: 5
+
+? 2012.AC3.720p.BluRay.x264-XXL
+: type: movie
+  title: '2012'
+
+? "[tlacatlc6] Natsume Yuujinchou Shi Vol. 1v2 & Vol. 2 (BD 1280x720).mkv"
+: type: movie
+  title: Natsume Yuujinchou Shi
+  volume: [1, 2]
+
+? "[GS] Classroom Crisis Vol.1&2 (BD 1080p 10bit FLAC)"
+: type: movie
+  title: Classroom Crisis
+  volume: 1
+
+# ── closing sprint: anime title words, CJK brackets, event numbers ──
+? "[Seto_Otaku]_AIKa_ZERO_OVA_-_01_[BD][1920x1080_H264-Flac][6730D40A].mkv"
+: title: AIKa ZERO OVA
+  episode: 1
+
+? "[CMS] Magical☆Star Kanon 100% OVA[DVD][E9F43685].mkv"
+: title: Magical☆Star Kanon 100%
+
+? "[Urusai]_Bokura_Ga_Ita_01_[DVD_h264_AC3]_[BFCE1627][Fixed].mkv"
+: title: Bokura Ga Ita
+  episode: 1
+
+? "[Doremi].Ro-Kyu-Bu!.SS.01.[C1B5CE5D].mkv"
+: title: Ro-Kyu-Bu! SS
+  episode: 1
+
+# The bracketed end-marker is the completeness of the run, and [GB] is the
+# subtitle encoding (GB2312, simplified Chinese) — neither is a title or a country
+? "【MMZYSUB】★【Golden Time】[24（END）][GB][720P_MP4]"
+: title: Golden Time
+  episode: 24
+  release_group: MMZYSUB
+  other: Complete
+  -episode_title:
+  -country: GB
+
+? "[KTXP][Fate][24][GB][1080P].mp4"
+: title: Fate
+  episode: 24
+  -country: GB
+
+# …but a country that travels with the title is still a country
+? The.Voice.UK.S03E12.HDTV.x264-C4TV
+: title: The Voice
+  country: GB
+  season: 3
+  episode: 12
+
+# The fight card names the release as much as the event number does — it is an
+# alternative_title, not release noise to drop
+? "UFC.247.PPV.Jones.vs.Reyes.HDTV.x264-PUNCH[TGx]"
+: type: movie
+  title: UFC 247
+  alternative_title: Jones vs Reyes
+  source: [Pay-per-view, HDTV]
+
+? Show-A (US) - Episode Title S02E09 hdtv
+: title: Show-A
+  alternative_title: Episode Title
+  season: 2
+  episode: 9
+
+# …but a shouted release tag in the same position stays dropped
+? French Maid Services - Lola At Your Service WEB-DL SPLIT SCENES MP4-RARBG
+: type: movie
+  title: French Maid Services
+  alternative_title: Lola At Your Service
+  release_group: RARBG
+
+? 22.Jump.Street.GERMAN.DL.AC3.Dubbed.1080p.BluRay.x264-SOV
+: type: movie
+  title: 22 Jump Street
+
+# guards
+? 24.S01E01.mkv
+: title: '24'
+  season: 1
+  episode: 1
+
+? 03-Criminal.Minds.avi
+: options: -t episode
+  episode: 3
+  title: Criminal Minds
+
+# upstream #963 — a decimal sequel number is title text, not a broadcast date
+# nor an audio channel layout
+? Jackass.2.5.2007.DVDRip.x264.AC3-DEEP
+: type: movie
+  title: Jackass 2.5
+  year: 2007
+  source: DVD
+
+? Jackass.4.5.2022.1080p.NF.WEB-DL.DDP5.1.x264-KHN
+: type: movie
+  title: Jackass 4.5
+  year: 2022
+  audio_channels: '5.1'
+
+? Ghost.In.The.Shell.2.0.2008.1080p.BluRay.x264-MOOVEE
+: type: movie
+  title: Ghost In The Shell 2.0
+  year: 2008
+
+? M3GAN.2.0.2025.UNRATED.1080p.BluRay.x264-ROEN
+: type: movie
+  title: M3GAN 2.0
+  year: 2025
+
+# A version run keeps every dot; the year behind it is the release year
+? Evangelion.3.0.1.11.Thrice.Upon.A.Time.2021.COMPLETE.UHD.BLURAY-NERV
+: type: movie
+  title: Evangelion 3.0.1.11 Thrice Upon A Time
+  year: 2021
+  other: Complete
+
+# upstream #964 — "Vhs" inside an episode title is title text: a tag block
+# (1080p) separates it from the real source
+? Solar.Opposites.S06E05.The.Family.Memories.Vhs.Mix.Tape.1080p.WEBRip.10bit.EAC3.5.1.x265-iVy.mkv
+: title: Solar Opposites
+  season: 6
+  episode: 5
+  episode_title: The Family Memories Vhs Mix Tape
+  source: Web
+
+# …but two real sources with only title text between them both stand, and the
+# file extension never outranks a source earlier in the name
+? Game of Thrones S03E06 1080i HDTV DD5.1 MPEG2-TrollHD.ts
+: title: Game of Thrones
+  source: HDTV
+  container: ts
+
+# upstream #966 — a space in a re: expected_title matches any separator, so the
+# digit left over after the match is the episode, not episode_title
+? Foo.2.2
+: options: -t episode -T 're:Foo 2'
+  title: Foo 2
+  episode: 2
+
+? Foo.2.2.bar
+: options: -t episode -T 're:Foo 2'
+  title: Foo 2
+  episode: 2
+  episode_title: bar
+
+# A four-digit run whose tail is 40+ is the absolute episode of a long-running
+# show, not a season/episode pair — no season carries 89 episodes
+? One.Piece.1089.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG.mkv
+: title: One Piece
+  episode: 1089
+  -season:
+
+? One.Piece.1089.1080p.WEB-DL.mkv
+: title: One Piece
+  episode: 1089
+
+# …and the digits inside "H.264" do not get to outrank it
+? Show.Name.1089.1080p.WEB-DL.H.264-VARYG.mkv
+: title: Show Name
+  episode: 1089
+  video_codec: H.264
+
+# A plausible pair still reads as season/episode
+? Show.1024.hdtv-abc
+: title: Show
+  season: 10
+  episode: 24
+
+# HLG is an HDR transfer curve, not an episode title — BBC iPlayer rips carry it
+? Planet.Earth.III.S01E01.Coasts.2160p.iP.WEB-DL.AAC2.0.HLG.H.265-RAWR.mkv
+: title: Planet Earth III
+  episode_title: Coasts
+  other: HLG
+
+# HDR10+ is its own format, both spellings
+? Oppenheimer.2023.2160p.UHD.BluRay.DV.HDR10Plus.TrueHD.7.1.Atmos.x265-W4NK3R.mkv
+: type: movie
+  title: Oppenheimer
+  other: [Dolby Vision, HDR10+]
+
+? Movie.2023.2160p.HDR10+.x265-GRP.mkv
+: type: movie
+  title: Movie
+  other: HDR10+
+
+? Movie.2023.2160p.HDR.x265-GRP.mkv
+: type: movie
+  title: Movie
+  other: HDR10
+
+# A four-digit run with a leading zero is a number the title carries — the
+# dash-anchored number after it is the episode
+? "[GROUP].Mobile.Suit.Gundam.Unicorn.RE.0096.-.14.[720p].mkv"
+: title: Mobile Suit Gundam Unicorn RE 0096
+  episode: 14
+  -season:
+
+# …but a padded two-digit run keeps the anime episode-number convention
+? "[GROUP] Fairy Tail - 01 [720p].mkv"
+: title: Fairy Tail
+  episode: 1
+
+# A codec bracket lists codecs: the "ogg" beside x264 is Vorbis audio, and the
+# container is the real extension
+? "[FuktLogik][Sayonara_Zetsubou_Sensei][01][DVDRip][x264_ogg].avi"
+: title: Sayonara Zetsubou Sensei
+  episode: 1
+  video_codec: H.264
+  audio_codec: Vorbis
+  container: avi
+
+# …a genuine .ogg file keeps its container
+? Show.S01E01.ogg
+: title: Show
+  season: 1
+  episode: 1
+  container: ogg
+  -audio_codec:
+
+# "Final Cut" is an edition like "Director's Cut" — without it the film is typed
+# as an episode with episode_details "Final"
+? Blade.Runner.1982.Final.Cut.2160p.UHD.BluRay.x265-GRP.mkv
+: type: movie
+  title: Blade Runner
+  year: 1982
+  edition: Final Cut
+  -episode_details:
+  -episode_title:
+
+? Apocalypse.Now.Redux.2001.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Apocalypse Now
+  edition: Redux
+
+? Watchmen.2009.Ultimate.Cut.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Watchmen
+  edition: Ultimate Cut
+
+? Jaws.1975.45th.Anniversary.Edition.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Jaws
+  edition: Anniversary
+
+# Subtitle flags belong to the track, and the release group keeps its name
+? Movie.2020.1080p.BluRay.x264-GRP.eng.forced.srt
+: type: movie
+  title: Movie
+  subtitle_language: en
+  other: Forced
+  release_group: GRP
+
+? Movie.2020.1080p.BluRay.x264-GRP.eng.sdh.srt
+: type: movie
+  title: Movie
+  subtitle_language: en
+  other: SDH
+  release_group: GRP
+
+# …but in a video file the same token is the release group, not a flag — the
+# guard is the subtitle container
+? Total.Divas.S05E01.720p.HDTV.AAC2.0.H.264-SC-SDH
+: title: Total Divas
+  release_group: SDH
+  video_profile: Scalable Video Coding
+  -other: SDH
+
+# A trailing "hi" behind another subtitle language is hearing-impaired, not Hindi
+? Movie.2020.1080p.BluRay.x264-GRP.eng.hi.srt
+: type: movie
+  title: Movie
+  subtitle_language: en
+  other: SDH
+
+# …alone it is still Hindi
+? Movie.2020.1080p.BluRay.x264-GRP.hi.srt
+: type: movie
+  title: Movie
+  subtitle_language: hi
+
+# Chinese, and its two written forms
+? Movie.2020.1080p.BluRay.x264-GRP.chi.srt
+: type: movie
+  title: Movie
+  subtitle_language: zh
+
+? Movie.2020.1080p.BluRay.x264-GRP.zh-Hans.srt
+: type: movie
+  title: Movie
+  subtitle_language: zh
+
+# The bibliographic half of ISO 639-2 is what subtitle files carry
+? Movie.2020.1080p.BluRay.x264-GRP.ger.srt
+: type: movie
+  title: Movie
+  subtitle_language: de
+
+? Movie.2020.1080p.BluRay.x264-GRP.fre.srt
+: type: movie
+  title: Movie
+  subtitle_language: fr
+
+# …but glued to the previous word by a dash it is part of the title
+? Shang-Chi.2021.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Shang-Chi
+  -language:
+
+# A hyphenated title before a year is not a leading scene group
+? Spider-Man.2002.1080p.mkv
+: type: movie
+  title: Spider-Man
+  year: 2002
+  -release_group:
+
+? Ant-Man.2015.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Ant-Man
+  release_group: GRP
+
+# ── allowed_languages widened from 24 to 60 ──
+# The high-volume subtitle languages upstream omits
+? Movie.2020.1080p.BluRay.x264-GRP.ara.srt
+: type: movie
+  title: Movie
+  subtitle_language: ar
+
+? Movie.2020.1080p.BluRay.x264-GRP.turkish.srt
+: type: movie
+  title: Movie
+  subtitle_language: tr
+
+? Movie.2020.1080p.BluRay.x264-GRP.tha.srt
+: type: movie
+  title: Movie
+  subtitle_language: th
+
+? Movie.2020.1080p.BluRay.x264-GRP.vie.srt
+: type: movie
+  title: Movie
+  subtitle_language: vi
+
+? Movie.2020.1080p.BluRay.x264-GRP.indonesian.srt
+: type: movie
+  title: Movie
+  subtitle_language: id
+
+# The bibliographic spellings resolve too
+? Movie.2020.1080p.BluRay.x264-GRP.gre.srt
+: type: movie
+  title: Movie
+  subtitle_language: el
+
+? Movie.2020.1080p.BluRay.x264-GRP.per.srt
+: type: movie
+  title: Movie
+  subtitle_language: fa
+
+# …while the ambiguous two-letter spellings stay suppressed: these are words,
+# scene tags and TLDs, not languages
+? My.Name.Is.Earl.S01E01.720p.HDTV.x264-GRP.mkv
+: title: My Name Is Earl
+  -language:
+
+? Mr.Robot.S04E01.1080p.WEB-DL.x264-GRP.mkv
+: title: Mr Robot
+  -language:
+
+? El.Camino.A.Breaking.Bad.Movie.2019.1080p.NF.WEB-DL.x264-GRP.mkv
+: type: movie
+  title: El Camino A Breaking Bad Movie
+  -language:
+
+? Star.Trek.Into.Darkness.2013.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Star Trek Into Darkness
+  -language:
+  -subtitle_language:
+
+? The.Lizzie.McGuire.Movie.2003.HR.DVDRip.avi
+: type: movie
+  title: The Lizzie McGuire Movie
+  -language:
+
+? Movie.2020.1080p.WEB-DL.x264-YTS.LT.mp4
+: type: movie
+  title: Movie
+  -language:
+
+? Lo.Imposible.2012.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Lo Imposible
+  -language:
+
+? Jules.et.Jim.1962.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Jules et Jim
+  -language:
+
+? Show.S01E01.720p.ID.WEBRip.AAC2.0.x264-BTW
+: title: Show
+  -language:
+
+# ── combat sports and motorsport number events, they do not run seasons ──
+# A three-digit event number was split down the middle
+? UFC.300.Early.Prelims.1080p.WEB-DL.H264-GRP.mkv
+: title: UFC
+  episode: 300
+  -season:
+
+? Bellator.300.1080p.WEB-DL.H264-GRP.mkv
+: title: Bellator
+  episode: 300
+  -season:
+
+? UFC.Fight.Night.245.Prelims.1080p.WEB-DL.H264-GRP.mkv
+: title: UFC Fight Night
+  episode: 245
+  episode_title: Prelims
+  -season:
+
+# …a two-digit one already read whole and is unchanged
+? UFC.on.ESPN.62.1080p.WEB-DL.H264-GRP.mkv
+: title: UFC on ESPN
+  episode: 62
+
+# …and a promotion that really runs a numbered series keeps its SxxExx
+? UFC.Embedded.S01E05.1080p.WEB-DL.mkv
+: title: UFC Embedded
+  season: 1
+  episode: 5
+
+# The motorsport calendar counts rounds
+? Formula.1.2024.Round.22.Las.Vegas.GP.Race.1080p.F1TV.WEB-DL.mkv
+: title: Formula 1
+  year: 2024
+  episode: 22
+  episode_title: Las Vegas GP Race
+  streaming_service: F1TV
+
+? MotoGP.2024.Round.15.Japan.Race.1080p.WEB-DL.mkv
+: title: MotoGP
+  year: 2024
+  episode: 15
+  episode_title: Japan Race
+
+# …but a number in a race name belongs to the race
+? NASCAR.Cup.Series.2024.Daytona.500.1080p.WEB-DL.mkv
+: type: movie
+  title: NASCAR Cup Series
+  year: 2024
+  -season:
+  -episode:
+
+# …and "Round" outside a motorsport name is title text
+? Round.6.2021.1080p.NF.WEB-DL.mkv
+: type: movie
+  title: Round 6
+  -episode:
+
+? Round.Midnight.1986.1080p.BluRay.x264-GRP.mkv
+: type: movie
+  title: Round Midnight
+  -episode:
+
+# Sports streaming services are services, not release groups
+? Fight.2024.1080p.DAZN.WEB-DL.mkv
+: type: movie
+  title: Fight
+  streaming_service: DAZN
+  -release_group:
+
+? Event.2024.1080p.FITE.WEB-DL.mkv
+: type: movie
+  title: Event
+  streaming_service: FITE
+  -release_group:
+
+# ── #875 comment: a broadcast/DVR underscore stamp is a date, not episodes ──
+? Example.Show.-.Saison.19.-.Requested.Episode.Title_Channel.5_2025_07_18_21_00.mp4
+: title: Example Show
+  season: 19
+  date: 2025-07-18
+  -episode:
+  -year:
+
+# underscore now separates date parts like every other separator does
+? Show_2025_07_18.mp4
+: title: Show
+  date: 2025-07-18
+  -year:
+
+# guard: a zero-padded day-first stamp still reads as that date
+? Show.10.11.2008.mkv
+: title: Show
+  date: 2008-11-10
+
+# guard: the clock tail is only absorbed when every group is a real time
+? Show_2025_07_18_31_99.mkv
+: title: Show
+  date: 2025-07-18
+
+# ── #877 B2: a parenthesised localized title leaves the lead bracket as title ──
+? "[Juuni.Kokki]-(Les.12.Royaumes)-[Ep.24]-[x264+OGG].mkv"
+: title: Juuni Kokki
+  alternative_title: Les 12 Royaumes
+  episode: 24
+
+# guard: a real fansub group keeps the bracket when the title is unbracketed
+? "[Golumpa] Star Blazers 2202 - 22 (Uchuu Senkan Yamato 2202) [FuniDub 1080p x264 AAC].mkv"
+: release_group: Golumpa
+  episode: 22
+
+# ── #968: a language abbreviation at title position stays in the title ──
+? Spa Weekend 2026 1080p WEB-DL HEVC x265 5.1 BONE.mkv
+: type: movie
+  title: Spa Weekend
+  year: 2026
+  -language:
+
+# ── cross-parser: a property filling a bracket group glued to the token before ──
+# EnlargeGroupMatches moves `start` onto the bracket, so the separator check used
+# to read the character in front of it and throw the match away.
+? Shes the one_2013(camrip)__TOPSIDER
+: type: movie
+  title: Shes the one
+  year: 2013
+  source: Camera
+  other: Rip
+
+? Movie abc(BluRay) x264-GRP
+: type: movie
+  title: Movie abc
+  source: Blu-ray
+  release_group: GRP
+
+? Movie abc(AAC) x264
+: type: movie
+  title: Movie abc
+  audio_codec: AAC
+
+# guard: the same name with the bracket separated is unchanged
+? Movie abc (BluRay) x264-GRP
+: type: movie
+  title: Movie abc
+  source: Blu-ray
+  release_group: GRP
+
+# ── cross-parser: an HD camera release writes the marker either way round ──
+? Avatar La Voie de l'eau.FRENCH.CAMHD.H264.AAC
+: type: movie
+  title: Avatar La Voie de l'eau
+  source: HD Camera
+  language: fr
+
+# ── #977: an asterisk inside a title is title text, at every position ──
+# Python splits on the first `*` and keeps the rest ("M*A*S H" with an episode
+# marker, "M A*S*H" without), so one show yields two mangled titles. Here `*` is
+# never a separator, so the title is the same in both shapes.
+? M*A*S*H.S01E01.mkv
+: type: episode
+  title: M*A*S*H
+  season: 1
+  episode: 1
+
+? M*A*S*H.mkv
+: type: movie
+  title: M*A*S*H
+
+? a*b*c*d.mkv
+: type: movie
+  title: a*b*c*d
+
+# guard: two asterisks behave like three, which is where Python diverges
+? a*b*c.mkv
+: type: movie
+  title: a*b*c
+
+# guard: the dotted spelling is unaffected and matches Python
+? M.A.S.H.S01E01.mkv
+: type: episode
+  title: M.A.S.H.
+  season: 1
+  episode: 1
+
+# ── #985 (upstream, merged): the anime readings are anime-only ──
+# "Season N - EE" as season+episode and "(S4-24)" as an annotation are anime
+# conventions that collide with western box sets. Gated on an anime signal and on
+# the parenthesis-after-an-absolute-number shape, so a plain range stays a range.
+? The Wire Season 1 - 5 1080p BluRay
+: type: episode
+  title: The Wire
+  season: [1, 2, 3, 4, 5]
+
+? Once Upon a Time [S01-07] (2011-2017) WEB-DLRip by Generalfilm
+: type: episode
+  title: Once Upon a Time
+  season: [1, 2, 3, 4, 5, 6, 7]
+  year: [2011, 2017]
+
+# guard: the anime shapes still read as season + episode
+? "[SCY] Attack on Titan Season 3 - 11 (BD 1080p Hi10 FLAC) [1FA13150].mkv"
+: type: episode
+  season: 3
+  episode: 11
+
+? "[Erai-raws] Granblue Fantasy The Animation Season 2 - 08 [1080p][Multiple Subtitle].mkv"
+: type: episode
+  season: 2
+  episode: 8
+  subtitle_language: mul
+
+# A fansub group id is hex, and a bare two-letter token after a language code is
+# not a country: "0x539" scored as the integer 1337 and lost the group, "HR-GZ"
+# read as Croatian spoken in the nonexistent country GZ and ate the group name.
+? "[HR] Boku no Hero Academia 87 (S4-24) [1080p HEVC Multi-Subs] HR-GZ"
+: type: episode
+  season: 4
+  episode: 24
+  subtitle_language: mul
+  release_group: GZ
+  other: High Resolution
+
+? "[0x539] Somali and the Forest Spirit - S01E01 (WEB 1080p test)"
+: type: episode
+  title: Somali and the Forest Spirit
+  season: 1
+  episode: 1
+  release_group: '0x539'
+
+? Show.S01E01.1080p-HR-GZ
+: type: episode
+  release_group: GZ
+  -language:
+  -subtitle_language:
+
+# guard: a real IETF tag keeps its country
+? Show.S01E01.1080p.pt-BR.mkv
+: type: episode
+  language: pt-BR
+
+# ── #988: a YYYY-YYYY span is one year range, bracketed or not ──
+# Each year used to be matched alone and arbitrated by KeepMarkedYearInFilepart,
+# which released the first one to the title — so the bracketed spelling happened
+# to give [start, end] while the bare one gave "Show 2005" plus year 2013. The
+# range is never expanded to the years between: it is a span of airing dates.
+? The.Office.US.2005-2013.Complete.Series.720p
+: type: episode
+  title: The Office
+  country: US
+  year: [2005, 2013]
+  other: Complete
+
+? Show 2011-2017 S01E01
+: type: episode
+  title: Show
+  year: [2011, 2017]
+  season: 1
+  episode: 1
+
+? Show.S01-S07.2011-2017.1080p
+: type: episode
+  title: Show
+  year: [2011, 2017]
+  season: [1, 2, 3, 4, 5, 6, 7]
+
+? Friends (1994-2004) Complete Series 1080p
+: type: episode
+  title: Friends
+  year: [1994, 2004]
+  other: Complete
+
+? Breaking Bad [2008-2013] S01-S05 1080p
+: type: episode
+  title: Breaking Bad
+  year: [2008, 2013]
+  season: [1, 2, 3, 4, 5]
+
+? /Show (2011-2017)/Season 1/Show S01E01.mkv
+: type: episode
+  title: Show
+  year: [2011, 2017]
+  season: 1
+  episode: 1
+
+? Movie 1994-2004 1080p
+: type: movie
+  title: Movie
+  year: [1994, 2004]
+
+? Show 2005 - 2013 Complete
+: type: movie
+  title: Show
+  year: [2005, 2013]
+  other: Complete
+
+? Show (2011 to 2017) Complete
+: type: movie
+  title: Show
+  year: [2011, 2017]
+  other: Complete
+
+? Show 2005–2013 Complete
+: type: movie
+  title: Show
+  year: [2005, 2013]
+  other: Complete
+
+? Trilogy (1999-2003) 1080p
+: type: movie
+  title: Trilogy
+  year: [1999, 2003]
+
+? Show 2005-2013 2020 1080p
+: type: movie
+  title: Show
+  year: [2005, 2013]
+
+# not a range: a reversed pair, or two unrelated years
+? Show (2013-2005) Complete
+: type: movie
+  title: Show
+  year: [2013, 2005]
+
+? Film (2010) (2015 Remaster) 1080p
+: type: movie
+  title: Film
+  year: [2010, 2015]
+
+? Movie.1999.2005.Remastered.1080p
+: type: movie
+  title: Movie 1999
+  year: 2005
+
+# ── #978: a plain sidecar extension is a container, not the release group ──
+# Unknown extensions were left glued to the trailing scene group ("NINJA.strm")
+# or became the group outright, replacing the real one. `.strm` is how Kodi,
+# Emby and Jellyfin libraries name every streamed episode, so this hit every
+# scan there. Upstream's #979 added strm and vtt; txt and url are named in the
+# issue and fail the same way, so they are here too.
+? "[Erai-raws] Show Name - 02 [720p][Multi].strm"
+: type: episode
+  title: Show Name
+  episode: 2
+  screen_size: 720p
+  release_group: Erai-raws
+  container: strm
+
+? Show.Name.S01E02.1080p-NINJA.strm
+: type: episode
+  title: Show Name
+  season: 1
+  episode: 2
+  release_group: NINJA
+  container: strm
+
+? Show.Name.S01E02.1080p-NINJA.vtt
+: type: episode
+  release_group: NINJA
+  container: vtt
+
+? Show.Name.S01E02.1080p-NINJA.txt
+: type: episode
+  release_group: NINJA
+  container: txt
+
+? Show.Name.S01E02.1080p-NINJA.url
+: type: episode
+  release_group: NINJA
+  container: url
+
+# guard: the extensions that already worked are unchanged
+? "[Erai-raws] Show Name - 02 [720p][Multi].srt"
+: type: episode
+  release_group: Erai-raws
+  container: srt
+
+? Show.Name.S01E02.1080p-NINJA.srt
+: type: episode
+  release_group: NINJA
+  container: srt
+
+# ── #982 (upstream, merged): equally complete SxxExx fileparts ──
+# The specificity guard upstream took from our #962. The filename wins unless the
+# parent filepart carries more properties.
+? Show.S02E03/Show.S01E09.mkv
+: title: Show
+  season: 1
+  episode: 9
+
+? Show.S02E03/Show.S01.E14.mkv
+: title: Show
+  season: 1
+  episode: 14
+
+# ── #983: a season-pack directory never overrides the file it holds ──
+# RemoveAmbiguous keeps the filepart with the most properties and only then the
+# rightmost, so one extra token on the directory ("Complete", or a stray word read
+# as episode_title) was enough to replace the file's own episode with the pack's
+# whole range. Between equally complete SxxExx fileparts the filename now wins.
+? Show.S01E01-E10.Complete/Show.S01E05.mkv
+: type: episode
+  season: 1
+  episode: 5
+
+? Show.S01E01-E10.Pack/Show.S01E05.mkv
+: type: episode
+  season: 1
+  episode: 5
+
+? Show.S01E01.Pack/Show.S01E05.mkv
+: type: episode
+  season: 1
+  episode: 5
+  -episode: 1
+
+? Show.S01E01-E10.Complete.720p.WEB-DL/Show.S01E05.720p.WEB-DL.mkv
+: type: episode
+  season: 1
+  episode: 5
+  other: Complete
+
+# The exception: a companion file names nothing real, so a sample or proof clip
+# defers to the single-episode directory holding it — but not to a pack, which is
+# not a single episode either.
+? Show S01E02/Show.S03E16.sample.mkv
+: type: episode
+  season: 1
+  episode: 2
+  other: Sample
+  -season: 3
+  -episode: 16
+
+? Show.S02E03.720p/Show.S01E01.proof.jpg
+: type: episode
+  season: 2
+  episode: 3
+  other: Proof
+  -episode: 1
+
+# the sample directory alone marks the companion file when the file's own Sample
+# token is not kept
+? Westworld.S02E03.720p.WEB-DL/sample/sample-westworld.s01e01.mkv
+: type: episode
+  title: Westworld
+  season: 2
+  episode: 3
+  -season: 1
+
+? Show.S01E01-E10.Complete.720p/Show.S01E05.sample.mkv
+: type: episode
+  season: 1
+  episode: 5
+
+? Show.S01E01-E10.Complete.720p/Sample/Show.S01E05.sample.mkv
+: type: episode
+  season: 1
+  episode: 5
+
+# ── AV1/AV2: the AOMedia codecs, which Python does not know at all ──
+# Unsupported, the "V1" read as a version marker and split the token:
+# "Show.Name.Season.2.AV1.1080p" came back as episode_title "A" plus version 1.
+? Movie.2024.1080p.WEB-DL.AV1.Opus-GRP.mkv
+: type: movie
+  title: Movie
+  video_codec: AV1
+  release_group: GRP
+  -version:
+
+? Movie.2024.2160p.AV1.10bit.mkv
+: type: movie
+  video_codec: AV1
+  color_depth: 10-bit
+
+? Show.Name.Season.2.AV1.1080p
+: type: episode
+  title: Show Name
+  season: 2
+  video_codec: AV1
+  -episode_title:
+  -version:
+
+? Movie.2024.1080p.AV2.mkv
+: type: movie
+  video_codec: AV2
+
+# guard: a real version marker is still a version
+? Show.S01E01.1080p.x264.v2.mkv
+: type: episode
+  version: 2
+  video_codec: H.264
+
+# ── a blacklisted common word is not a language, undetermined or not ──
+# A directory named "sub" — the commonest folder name in a subtitle library —
+# reported subtitle_language "und", because the `common` tag was only applied to
+# determinate matches. "subs" is not blacklisted and still reports und, which is
+# what Python does for each of these.
+? sub/folder/Title Only
+: type: movie
+  title: Title Only
+  -subtitle_language:
+
+? Movie.2024.1080p/sub/Movie.srt
+: type: movie
+  title: Movie
+  -subtitle_language:
+
+? Movie.2024.sub.1080p.mkv
+: type: movie
+  title: Movie
+  -subtitle_language:
+
+? subs/Movie.2024.1080p.mkv
+: type: movie
+  title: Movie
+  subtitle_language: und
+
+# guard: an affix with a real language still resolves it
+? Movie.2024.1080p.French.sub.mkv
+: type: movie
+  title: Movie
+  subtitle_language: fr
+
+# ── excluding a property must not turn its text into another property ──
+# The removed match reopened its span as a hole, so the excluded value came back
+# as the episode title.
+? Hotel.Hell.S01E01.720p.DD5.1.448kbps-ALANiS
+: options: --exclude audio_bit_rate
+  type: episode
+  title: Hotel Hell
+  release_group: ALANiS
+  -audio_bit_rate:
+  -episode_title:
+
+? House.of.Cards.2013.S02E03.1080p.Netflix.WEBRip.DD5.1.x264-NTb.mkv
+: options: --exclude streaming_service
+  type: episode
+  title: House of Cards
+  release_group: NTb
+  -streaming_service:
+  -episode_title:
+
+# guard: without the exclusion both properties are reported as usual
+? Hotel.Hell.S01E01.720p.DD5.1.448kbps-ALANiS
+: type: episode
+  audio_bit_rate: 448Kbps
+  release_group: ALANiS
+
+? House.of.Cards.2013.S02E03.1080p.Netflix.WEBRip.DD5.1.x264-NTb.mkv
+: type: episode
+  streaming_service: Netflix
+  release_group: NTb
+

@@ -1,0 +1,992 @@
+import { Rebulk } from 'rebulk-js';
+import { Rule, AppendMatch, RemoveMatch } from 'rebulk-js';
+import { Match } from 'rebulk-js';
+import type { Matches } from 'rebulk-js';
+import { POST_PROCESS } from 'rebulk-js';
+import { seps, titleSeps, sepsPattern } from '../common/index.js';
+import { cleanup, reorderTitle } from '../common/formatters.js';
+import { isDisabled } from '../common/pattern.js';
+import { or_ } from '../common/validators.js';
+import { formatters } from 'rebulk-js';
+
+/** Helper: truthy check for match result (handles empty arrays correctly) */
+function hasmatch(result: Match[] | Match | undefined): boolean {
+  if (result === null || result === undefined) return false;
+  if (Array.isArray(result)) return result.length > 0;
+  return true;
+}
+
+/** Strip leading articles for title comparison */
+const LEADING_ARTICLES_RE = /^(the|a|an|le|la|les|l'|el|los|las|der|die|das)\s+/i;
+function normalizeTitle(s: string): string {
+  return s.toLowerCase().replace(LEADING_ARTICLES_RE, '').trim();
+}
+
+/**
+ * A dash-joined digit run after an SxxExx chain that spills into a numeric
+ * episode_title ("S03E03.4-5-1" → episodes [3,4,5] + episode_title "1") is a
+ * formation/score, not an episode range (upstream #744): drop the continuation
+ * episodes and keep the whole run as the episode title ("4-5-1").
+ */
+class FormationRunEpisodeTitle extends Rule {
+  static override priority = POST_PROCESS;
+  override priority = POST_PROCESS;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  override when(matches: any, _context: any): any {
+    const input: string = matches.inputString ?? '';
+    const toRemove: any[] = [];
+    const toAppend: any[] = [];
+    const ets = (matches.named('episode_title') as any[]) ?? [];
+    for (const et of ets) {
+      if (!/^\d{1,2}$/.test(String(et.value ?? ''))) continue;
+      const eps = ((matches.named('episode') as any[]) ?? [])
+        .filter((e: any) => e.end <= et.start && !e.private)
+        .sort((a: any, b: any) => a.start - b.start);
+      if (eps.length < 3) continue;
+      // continuation episodes = those after the first, glued to the et by dashes
+      const run = eps.slice(1);
+      const runStart = run[0].start;
+      const span = input.slice(runStart, et.end);
+      if (!/^\d{1,3}(-\d{1,3})+$/.test(span)) continue;
+      // the run must hang off the strong chain via a weak separator ('.', ' ')
+      const between = input.slice(eps[0].end, runStart);
+      if (!/^[\s._]+$/.test(between)) continue;
+      toRemove.push(...run, et);
+      toAppend.push(new Match(runStart, et.end, {
+        name: 'episode_title',
+        value: span,
+        inputString: input,
+      }));
+    }
+    return (toRemove.length || toAppend.length) ? [toRemove, toAppend] : false;
+  }
+}
+
+export function episodeTitle(config: Record<string, unknown>) {
+  const rebulk = new Rebulk({ disabled: (context) => isDisabled(context, 'episode_title') });
+  rebulk.rules(
+    RemoveConflictsWithEpisodeTitle,
+    TitleToEpisodeTitle,
+    ExtendEpisodeTitleWithDetails,
+    EpisodeTitleFromPosition,
+    AlternativeTitleReplace,
+    TrimLanguageFromEpisodeTitle,
+    Filepart3EpisodeTitle,
+    Filepart2EpisodeTitle,
+    NumericEpisodeTitleToEpisode,
+    RemoveEpisodeTitleInReleaseGroup,
+    RemoveEpisodeMarkerWordTitle,
+    RemoveEpisodeTitleCoveredByDetailsInGroup,
+    EndMarkerEpisodeTitleToComplete,
+    RemoveFansubCreditEpisodeTitle,
+    RemoveSubtitleDescriptorEpisodeTitle,
+    RemoveHashFilepartJunk,
+    RemoveTailEpisodeTitle,
+    FormationRunEpisodeTitle,
+    RenameEpisodeTitleWhenMovieType
+  );
+
+  return rebulk;
+}
+
+/**
+ * An `episode_title` that is a bare episode-marker word ("Ep", "Episode", "Cap",
+ * …) sitting immediately before the episode number is the marker that leaked, not
+ * a title — e.g. ".../Ep. 02 - Soul Hunter" → episode_title ["Ep","Soul Hunter"].
+ * Python keeps only the real title; drop the marker word.
+ */
+const EPISODE_MARKER_WORDS = new Set([
+  'ep', 'eps', 'episode', 'episodes', 'episodio', 'episodios', 'cap', 'capitulo',
+  'capitulos', 'folge', 'e',
+]);
+class RemoveEpisodeMarkerWordTitle extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const ets = matches.named('episode_title') as Match[] | Match | undefined;
+    const etArr = Array.isArray(ets) ? ets : ets ? [ets] : [];
+    if (!etArr.length) return false;
+    const out: Match[] = [];
+    for (const et of etArr) {
+      if (!EPISODE_MARKER_WORDS.has(String(et.value ?? '').trim().toLowerCase())) continue;
+      const next = matches.range(et.end, (matches as any).inputString?.length ?? et.end + 100,
+        (m: Match) => !m.private && !!m.value, 0) as Match | undefined;
+      if (next && next.name === 'episode') out.push(et);
+    }
+    return out.length ? out : false;
+  }
+}
+
+/**
+ * An "-Obfuscated" / scene rename leaves the file in a directory whose last part
+ * is a bare hash — "…-MeGusta-Obfuscated/afaae96ae7a140e0981ced2a79221751.mkv",
+ * "…-TVSmash/mxNMuJWeO7PUWCMEwqKSsS6D8Vs9S6V3PHD.mkv". guessit-js mines the hash
+ * for junk (hex chunks → episode_title; "V3" → version). Python extracts nothing
+ * from it (the real data lives in the parent part). When a filepart's content is
+ * a single high-entropy hash token, strip episode_title / version / episode_details
+ * / alternative_title matches found inside it.
+ */
+class RemoveHashFilepartJunk extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  private static isHash(token: string): boolean {
+    if (/[\s._\-]/.test(token)) return false;          // a hash is one unbroken token
+    if (/^[0-9a-f]{16,}$/i.test(token)) return true;   // pure hex (CRC/md5-like)
+    return token.length >= 24 && /[a-z]/.test(token) && /[A-Z]/.test(token) && /\d/.test(token);
+  }
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const inp: string = (matches as any).inputString ?? '';
+    const strip = new Set(['episode_title', 'version', 'episode_details', 'alternative_title']);
+    const out: Match[] = [];
+    for (const fp of matches.markers.named('path') as Match[]) {
+      let text = inp.slice(fp.start, fp.end);
+      const cont = matches.range(fp.start, fp.end, (m: Match) => m.name === 'container', 0) as Match | undefined;
+      if (cont) text = inp.slice(fp.start, cont.start);
+      if (!RemoveHashFilepartJunk.isHash(text.replace(/[.\s]+$/, ''))) continue;
+      for (const m of matches.range(fp.start, fp.end, (m: Match) => strip.has(m.name ?? '')) as Match[]) {
+        out.push(m);
+      }
+    }
+    return out.length ? out : false;
+  }
+}
+
+/**
+ * An `episode_title` fully covered by an `episode_details` *inside a bracket
+ * group* is a duplicate of that detail, not a title — e.g. "[Cap.112_114.Final]"
+ * yields both episode_details "Final" and episode_title "Final". Python keeps only
+ * the detail. The bracket-group guard is what separates this from bare
+ * "S01E01.Pilot" / "…2014.Special" where the detail word IS the episode title and
+ * Python keeps the episode_title (those are never inside a metadata bracket).
+ */
+class RemoveEpisodeTitleCoveredByDetailsInGroup extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const ets = matches.named('episode_title') as Match[] | Match | undefined;
+    const etArr = Array.isArray(ets) ? ets : ets ? [ets] : [];
+    const out: Match[] = [];
+    for (const et of etArr) {
+      if (!matches.markers.atMatch(et, (m: Match) => m.name === 'group', 0)) continue;
+      const covered = matches.range(et.start, et.end,
+        (m: Match) => m.name === 'episode_details' && m.start <= et.start && m.end >= et.end, 0);
+      if (covered) out.push(et);
+    }
+    return out.length ? out : false;
+  }
+}
+
+/**
+ * Asian fansubs flag the last episode of a run with a bracketed end-marker —
+ * "[24（END）]", "[12(END)]", "[完]". It rides in the same bracket as the episode
+ * number, so it lands in `episode_title`; it is the completeness of the run, not
+ * a title. The bracket is what tells it apart from an ordinary title word, so
+ * "World's End" and "End of Days" never reach this rule.
+ */
+const END_OF_RUN_MARKER = /^[\s([（【「]*(?:end|fin|完结|完|全)[\s)\]）】」]*$/i;
+
+class EndMarkerEpisodeTitleToComplete extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = [RemoveMatch, AppendMatch];
+
+  override when(matches: Matches, _context: any): [Match[], Match[]] | false {
+    const ets = matches.named('episode_title') as Match[] | Match | undefined;
+    const etArr = Array.isArray(ets) ? ets : ets ? [ets] : [];
+    const toRemove: Match[] = [];
+    const toAppend: Match[] = [];
+    for (const et of etArr) {
+      if (!matches.markers.atMatch(et, (m: Match) => m.name === 'group', 0)) continue;
+      if (!END_OF_RUN_MARKER.test(String(et.raw ?? et.value ?? ''))) continue;
+      toRemove.push(et);
+      const alreadyComplete = matches.named('other',
+        (m: Match) => m.value === 'Complete') as Match[] | Match | undefined;
+      const completeCount = Array.isArray(alreadyComplete)
+        ? alreadyComplete.length
+        : alreadyComplete ? 1 : 0;
+      if (completeCount === 0) {
+        toAppend.push(new Match(et.start, et.end, {
+          name: 'other', value: 'Complete', inputString: matches.inputString,
+        }));
+      }
+    }
+    return toRemove.length ? [toRemove, toAppend] : false;
+  }
+}
+
+/**
+ * An `episode_title` containing the word "fansub" is a fan-subbing group credit,
+ * not a title — e.g. "Show Name 445 VOSTFR par Fansub-Resistance …" →
+ * episode_title "par Fansub-Resistance" ("by Fansub-Resistance"). Drop it.
+ */
+class RemoveFansubCreditEpisodeTitle extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const ets = matches.named('episode_title') as Match[] | Match | undefined;
+    const etArr = Array.isArray(ets) ? ets : ets ? [ets] : [];
+    const out = etArr.filter((et) => /\bfansub/i.test(String(et.value ?? '')));
+    return out.length ? out : false;
+  }
+}
+
+/**
+ * A single-word `episode_title` immediately followed by a subtitle keyword
+ * ("Subtitles"/"Subs") is a subtitle-type descriptor, not a title — e.g.
+ * "…Eng.Soft.Subtitles.720p…" → episode_title "Soft" ("soft subtitles"). Python
+ * forms no episode_title there; drop it.
+ */
+class RemoveSubtitleDescriptorEpisodeTitle extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const inp: string = (matches as any).inputString ?? '';
+    const ets = matches.named('episode_title') as Match[] | Match | undefined;
+    const etArr = Array.isArray(ets) ? ets : ets ? [ets] : [];
+    const out: Match[] = [];
+    for (const et of etArr) {
+      if (/[\s.]/.test(String(et.value ?? '').trim())) continue; // single word only
+      const after = inp.slice(et.end).replace(/^[\s._-]+/, '');
+      if (/^subtitl(e|es)\b|^subs?\b/i.test(after)) out.push(et);
+    }
+    return out.length ? out : false;
+  }
+}
+
+const ET_STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'for', 'from',
+  'by', 'with', 'le', 'la', 'les', 'de', 'du', 'des', 'el',
+]);
+
+/**
+ * guessit-js can leave `episode_title` as a list when a stray fragment from the
+ * release tail forms a second episode_title — e.g.
+ * "NHL…Condensed.Game.720p.Away.Feed.GC…" → ["Leafs vs Red Wings Condensed
+ * Game","Away Feed"]; "Tales S01E08 All I Need…Mary J Blige 720p BET…" → [...,
+ * "BET"]. Python keeps a single episode_title. Keep the primary (first) one and
+ * drop later fragments that sit *behind* a recognised property in the tail.
+ */
+class RemoveTailEpisodeTitle extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  private static readonly TITLEISH = new Set([
+    'year', 'title', 'alternative_title', 'episode_title', 'type', 'episode', 'season',
+  ]);
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const out: Match[] = [];
+    for (const fp of matches.markers.named('path') as Match[]) {
+      const ets = matches.range(fp.start, fp.end, (m: Match) => m.name === 'episode_title') as Match[] | Match | undefined;
+      const etArr = (Array.isArray(ets) ? ets : ets ? [ets] : []).slice().sort((a, b) => a.start - b.start);
+      if (etArr.length < 2) continue;
+      const primary = etArr[0];
+      const head = String(primary.value ?? '').trim().toLowerCase();
+      if (!head || ET_STOP_WORDS.has(head)) continue;
+      for (const et of etArr.slice(1)) {
+        const between = matches.range(primary.end, et.start,
+          (m: Match) => !m.private && !!m.value && !RemoveTailEpisodeTitle.TITLEISH.has(m.name ?? ''), 0);
+        if (between) out.push(et);
+      }
+    }
+    return out.length ? out : false;
+  }
+}
+
+/**
+ * An `episode_title` that sits inside a bracket group which also holds release
+ * metadata (resolution, codec, audio, source, …) is a stray tag, not a title —
+ * e.g. "Show Name S01e10[Mux - 1080p - H264 - Ita Eng Ac3 …]" → episode_title
+ * "Mux". Python forms no episode_title inside such release-info groups; drop it.
+ */
+class RemoveEpisodeTitleInReleaseGroup extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  private static readonly RELEASE_PROPS = new Set([
+    'screen_size', 'video_codec', 'audio_codec', 'audio_channels', 'source',
+    'color_depth', 'video_profile', 'audio_profile', 'streaming_service',
+    'video_bit_rate', 'audio_bit_rate', 'container',
+  ]);
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const ets = matches.named('episode_title') as Match[] | Match | undefined;
+    const etArr = Array.isArray(ets) ? ets : ets ? [ets] : [];
+    if (!etArr.length) return false;
+    const out: Match[] = [];
+    const inp: string = (matches as any).inputString ?? '';
+    const hasReleaseIn = (s: number, e: number) =>
+      !!matches.range(s, e, (m: Match) => RemoveEpisodeTitleInReleaseGroup.RELEASE_PROPS.has(m.name ?? ''), 0);
+    const onlySeps = (s: number, e: number) => e <= s || [...inp.slice(s, e)].every((c) => '[](){} .-_'.includes(c));
+    for (const et of etArr) {
+      const group = matches.markers.atMatch(et, (m: Match) => m.name === 'group', 0) as Match | undefined;
+      if (!group) continue;
+      // Release props inside the episode_title's own bracket, OR in an
+      // immediately-adjacent bracket (a run of metadata brackets like
+      // "[LQ][h264][720p]") — in either case the token is a tag, not a title.
+      let tag = hasReleaseIn(group.start, group.end);
+      if (!tag) {
+        for (const other of matches.markers.named('group') as Match[]) {
+          if (other.span?.[0] === group.span?.[0]) continue;
+          const adjacent = (other.start >= group.end && onlySeps(group.end, other.start)) ||
+            (other.end <= group.start && onlySeps(other.end, group.start));
+          if (adjacent && hasReleaseIn(other.start, other.end)) { tag = true; break; }
+        }
+      }
+      if (tag) out.push(et);
+    }
+    return out.length ? out : false;
+  }
+}
+
+/**
+ * A purely-numeric episode_title in a filepart that has a season but NO episode
+ * is really the episode number — the anime "S2 - 01" convention, where "01"
+ * after the dash is the episode, not an episode_title. (Issue #667.)
+ */
+class NumericEpisodeTitleToEpisode extends Rule {
+  static override priority = POST_PROCESS;
+  override consequence = RemoveMatch;
+
+  override when(matches: Matches, _context: any): Match[] | false {
+    const out: Match[] = [];
+    for (const fp of matches.markers.named('path') as Match[]) {
+      if (matches.range(fp.start, fp.end, (m: Match) => m.name === 'episode' && !m.private, 0)) continue;
+      if (!matches.range(fp.start, fp.end, (m: Match) => m.name === 'season' && !m.private, 0)) continue;
+      const ets = matches.range(fp.start, fp.end, (m: Match) => m.name === 'episode_title') as Match[] | Match | undefined;
+      for (const et of (Array.isArray(ets) ? ets : ets ? [ets] : [])) {
+        if (/^\d{1,3}$/.test(String(et.value ?? '').trim())) out.push(et);
+      }
+    }
+    return out.length ? out : false;
+  }
+
+  override then(matches: Matches, whenResponse: unknown, _context: any): void {
+    for (const et of whenResponse as Match[]) {
+      matches.remove(et);
+      et.name = 'episode';
+      et.value = parseInt(String(et.value).trim(), 10);
+      matches.append(et);
+    }
+  }
+}
+
+class RemoveConflictsWithEpisodeTitle extends Rule {
+  static override priority = 64;
+  override consequence = RemoveMatch;
+
+  previousNames = ['episode', 'episode_count', 'season', 'season_count', 'date', 'title', 'year'];
+  nextNames = ['streaming_service', 'screen_size', 'source', 'video_codec', 'audio_codec', 'other', 'container'];
+  affectedIfHolesAfter = ['part'];
+  affectedNames = ['part', 'year'];
+
+  override when(matches: Matches, _context: any): Match[] {
+    const toRemove: Match[] = [];
+    const fileparts = matches.markers.named('path') as Match[];
+    for (const filepart of fileparts) {
+      const affectedMatches = matches.range(filepart.start, filepart.end,
+        (m: Match) => this.affectedNames.includes(m.name ?? '')) as Match[];
+      for (const match of affectedMatches) {
+        const before = matches.range(filepart.start, match.start,
+          (m: Match) => !m.private, -1) as Match | undefined;
+        if (!before || !this.previousNames.includes(before.name ?? '')) {
+          continue;
+        }
+        // Don't remove year when the preceding match is only a weak episode
+        // (e.g. "12.Angry.Men.1957.mkv" — the "12" is a weak episode, 1957 is a real year).
+        if ((before as any).tags?.includes('weak-episode') || (before as any).tags?.includes('weak-duplicate')) {
+          continue;
+        }
+
+        // Don't remove year when it's inside a group (parentheses/brackets)
+        // e.g. "(the.oscars.of.1963)" — the year is significant, not part of episode title
+        if (match.name === 'year') {
+          const yearGroup = matches.markers.atMatch(match,
+            (m: Match) => m.name === 'group', 0) as Match | undefined;
+          if (yearGroup) continue;
+        }
+
+        const after = matches.range(match.end, filepart.end,
+          (m: Match) => !m.private, 0) as Match | undefined;
+        if (!after || !this.nextNames.includes(after.name ?? '')) {
+          continue;
+        }
+
+        const group = matches.markers.atMatch(match,
+          (m: Match) => m.name === 'group', 0) as Match | undefined;
+
+        const hasValueInSameGroup = (m: Match) =>
+          !!(m.value && String(m.value).replace(new RegExp(`[${sepsPattern}]`, 'g'), '')) &&
+          group === matches.markers.atMatch(m, (mm: Match) => mm.name === 'group', 0);
+
+        const holesBefore = matches.holes(before.end, match.start, { predicate: hasValueInSameGroup });
+        const holesAfter = matches.holes(match.end, after.start, { predicate: hasValueInSameGroup });
+
+        const hasHolesBefore = hasmatch(holesBefore);
+        const hasHolesAfter = hasmatch(holesAfter);
+
+        if (!hasHolesBefore && !hasHolesAfter) {
+          continue;
+        }
+
+        if (this.affectedIfHolesAfter.includes(match.name ?? '') && !hasHolesAfter) {
+          continue;
+        }
+
+        toRemove.push(match);
+        if ((match as any).parent) {
+          toRemove.push((match as any).parent);
+        }
+      }
+    }
+
+    return toRemove;
+  }
+}
+
+class TitleToEpisodeTitle extends Rule {
+  static override dependency = ['TitleFromPosition'];
+
+  override when(matches: Matches, _context: any): Match[] {
+    const titles = matches.named('title') as Match[];
+    const titleGroups: Record<string, Match[]> = {};
+    for (const title of titles) {
+      const key = String(title.value);
+      titleGroups[key] = titleGroups[key] || [];
+      titleGroups[key].push(title);
+    }
+
+    const episodeTitles: Match[] = [];
+    if (Object.keys(titleGroups).length < 2) {
+      return episodeTitles;
+    }
+
+    // Work around rebulk-js previous() bug: use range() to find
+    // preceding episode/season/date/year matches within the same filepart.
+    const epNames = new Set(['episode', 'season', 'date', 'year']);
+    const findPrevEpisode = (title: Match): Match | undefined => {
+      const filepart = matches.markers.atMatch(title, (m: Match) => m.name === 'path', 0) as Match | undefined;
+      if (!filepart) return undefined;
+      const prevMatches = matches.range(filepart.start, title.start,
+        (m: Match) => !m.private && epNames.has(m.name ?? '')) as Match[];
+      const arr = Array.isArray(prevMatches) ? prevMatches : prevMatches ? [prevMatches] : [];
+      return arr.length > 0 ? arr[arr.length - 1] : undefined;
+    };
+
+    // Determine which titles are "series titles" (no previous episode match)
+    // so we can avoid converting article variants of them to episode_title.
+    const seriesTitleKeys = new Set<string>();
+    for (const title of titles) {
+      const prevEpisode = findPrevEpisode(title);
+      if (!prevEpisode) {
+        seriesTitleKeys.add(normalizeTitle(String(title.value)));
+      }
+    }
+
+    for (const title of titles) {
+      const prevEpisode = findPrevEpisode(title);
+      if (prevEpisode) {
+        // Only convert to episode_title if this title's normalized value
+        // differs from all series titles (handles "The Simpsons" vs "Simpsons")
+        const norm = normalizeTitle(String(title.value));
+        if (!seriesTitleKeys.has(norm)) {
+          episodeTitles.push(title);
+        }
+      }
+    }
+
+    return episodeTitles;
+  }
+
+  override then(matches: Matches, whenResponse: unknown, _context: any): void {
+    const episodeTitles = whenResponse as Match[];
+    for (const title of episodeTitles) {
+      matches.remove(title);
+      title.name = 'episode_title';
+      matches.append(title);
+    }
+  }
+}
+
+/**
+ * Extend episode_title to include adjacent episode_details matches (e.g., "Special").
+ * When "Special" appears right after an episode_title like "Head To Tail",
+ * the title trimming logic strips it. This rule re-attaches it.
+ */
+class ExtendEpisodeTitleWithDetails extends Rule {
+  static override dependency = ['TitleToEpisodeTitle'];
+
+  override when(matches: Matches, _context: any): Array<{ et: Match; detail: Match }> | undefined {
+    const episodeTitles = matches.named('episode_title') as Match[];
+    if (!episodeTitles || episodeTitles.length === 0) return undefined;
+
+    const updates: Array<{ et: Match; detail: Match }> = [];
+
+    for (const et of episodeTitles) {
+      const inp: string = (matches as any).inputString ?? '';
+      // Look for episode_details immediately after the episode_title (with only seps between)
+      const detailMatches = matches.range(et.end, et.end + 20,
+        (m: Match) => m.name === 'episode_details') as Match[];
+      if (!detailMatches || detailMatches.length === 0) continue;
+
+      for (const detail of detailMatches) {
+        const between = inp.slice(et.end, detail.start);
+        if ([...between].every(c => seps.includes(c))) {
+          updates.push({ et, detail });
+          break;
+        }
+      }
+    }
+
+    return updates.length > 0 ? updates : undefined;
+  }
+
+  override then(matches: Matches, whenResponse: unknown, _context: any): void {
+    const updates = whenResponse as Array<{ et: Match; detail: Match }>;
+    if (!updates) return;
+
+    for (const { et, detail } of updates) {
+      matches.remove(et);
+      et.end = detail.end;
+      // Reset cached value so it recomputes
+      et.value = undefined as any;
+      const _ = et.value; // trigger recompute
+      matches.append(et);
+    }
+  }
+}
+
+class EpisodeTitleFromPosition extends Rule {
+  static override dependency = ['ExtendEpisodeTitleWithDetails'];
+
+  previousNames = ['episode', 'episode_count', 'season', 'season_count', 'date', 'title', 'year'];
+
+  protected isIgnored(match: Match): boolean {
+    if (!(match.name === 'language' || match.name === 'country' || match.name === 'episode_details')) {
+      return false;
+    }
+    // Python parity: a full-word (len > 3) UPPERCASE language/country is a real
+    // token, not title filler — e.g. "...S01E12.FRENCH.BDRip..." must NOT pull
+    // "FRENCH" into the episode_title. Lowercase/short ones stay ignored.
+    const raw = match.raw ?? '';
+    if (match.end - match.start > 3 && raw !== '' && raw === raw.toUpperCase() && raw !== raw.toLowerCase()) {
+      return false;
+    }
+    return true;
+  }
+
+  override when(matches: Matches, _context: any): Match[] {
+    const toAppend: Match[] = [];
+    const fileparts = matches.markers.named('path') as Match[];
+
+    for (const filepart of fileparts) {
+      // Skip fileparts that already have an episode_title
+      const hasEpTitleInPart = hasmatch(matches.range(filepart.start, filepart.end,
+        (m: Match) => m.name === 'episode_title', 0));
+      if (hasEpTitleInPart) continue;
+
+      // Only look at fileparts that have a title or episode (for multi-part paths
+      // where the title may have been de-duped into a parent directory)
+      const hasTitleInPart = hasmatch(matches.range(filepart.start, filepart.end,
+        (m: Match) => m.name === 'title', 0));
+      const hasEpisodeInPart = hasmatch(matches.range(filepart.start, filepart.end,
+        (m: Match) => m.name === 'episode' && !m.private, 0));
+      if (!hasTitleInPart && !hasEpisodeInPart) continue;
+
+      // Find holes (gaps) in filepart
+      const holesResult = matches.holes(filepart.start, filepart.end, {
+        formatter: formatters(cleanup, reorderTitle),
+        ignore: (m: Match) => this.isIgnored(m),
+        predicate: (m: Match) => !!(m.value),
+      });
+      const holeArray = Array.isArray(holesResult) ? holesResult : holesResult ? [holesResult] : [];
+
+      const inp: string = (matches as any).inputString || '';
+      for (const hole of holeArray) {
+        // A parenthetical/bracket group that ALSO contains a year is metadata,
+        // typically "(Director - YYYY)" (e.g. "(Michel Deville - 1983)") — not a
+        // title. Skip it so it doesn't become an episode_title (which for movies
+        // is then renamed to alternative_title). Legit alt-title parens like
+        // "(The Killers)" carry no year, so they're unaffected.
+        const groupMarker = (matches.markers as any)?.atMatch?.(hole, (m: Match) => m.name === 'group', 0) as Match | undefined;
+        if (groupMarker) {
+          const yearInGroup = matches.range(groupMarker.start, groupMarker.end,
+            (m: Match) => (m.name === 'year' || m.name === 'date') && !m.private, 0) as Match | undefined;
+          if (yearInGroup) continue;
+        }
+        // Crop leading/trailing ignored (language/country/episode_details) matches
+        // out of the hole — Python's TitleBaseRule does this via should_keep, but
+        // this standalone port did not. Without it a hole that is wholly or partly
+        // a lowercase language ("...French...", "...multi...") survives as an
+        // episode_title (and is later renamed to alternative_title for movies).
+        // Only crop language/country — episode_details ("Pilot", "Special") are
+        // legitimate episode_title content and must be kept.
+        const cropName = (m: Match) => m.name === 'language' || m.name === 'country';
+        const fpLangsRaw = matches.range(filepart.start, filepart.end, (m: Match) => cropName(m)) as Match[] | Match | undefined;
+        const langArr = (Array.isArray(fpLangsRaw) ? fpLangsRaw : fpLangsRaw ? [fpLangsRaw] : []);
+        // Trim, from each edge, any region covered by a language/country match —
+        // including a match that *encloses* the edge (e.g. "[Espanol Castellano]"
+        // where the language spans the whole bracket around the hole).
+        let guard = 0;
+        while (guard++ < 64) {
+          let e = hole.end;
+          while (e > hole.start && seps.includes(inp[e - 1])) e--;
+          if (e <= hole.start) break;
+          const cover = langArr.find((m: Match) => m.start <= e - 1 && m.end >= e);
+          if (cover && cover.start < hole.end) { hole.end = Math.min(hole.end, cover.start); } else break;
+        }
+        guard = 0;
+        while (guard++ < 64) {
+          let s = hole.start;
+          while (s < hole.end && seps.includes(inp[s])) s++;
+          if (s >= hole.end) break;
+          const cover = langArr.find((m: Match) => m.start <= s && m.end >= s + 1);
+          if (cover && cover.end > hole.start) { hole.start = Math.max(hole.start, cover.end); } else break;
+        }
+        while (hole.start < hole.end && seps.includes(inp[hole.start])) hole.start++;
+        while (hole.end > hole.start && seps.includes(inp[hole.end - 1])) hole.end--;
+        if (hole.end <= hole.start || !hole.value) continue;
+
+        // Check there's an episode/crc32/etc. BEFORE this hole in the same filepart
+        // Work around rebulk-js previous() bug by using range()
+        const prevPred = (m: Match) => !m.private && this.previousNames.includes(m.name ?? '');
+        const prevMatches = matches.range(filepart.start, hole.start, prevPred) as Match[];
+        const prevArr = Array.isArray(prevMatches) ? prevMatches : prevMatches ? [prevMatches] : [];
+        const prevEpisode = prevArr.length > 0 ? prevArr[prevArr.length - 1] : undefined;
+
+        let prevCrc32: Match | undefined;
+        if (!prevEpisode) {
+          const crc32Matches = matches.range(filepart.start, hole.start,
+            (m: Match) => !m.private && m.name === 'crc32') as Match[];
+          const crc32Arr = Array.isArray(crc32Matches) ? crc32Matches : crc32Matches ? [crc32Matches] : [];
+          prevCrc32 = crc32Arr.length > 0 ? crc32Arr[crc32Arr.length - 1] : undefined;
+        }
+        if (!prevEpisode && !prevCrc32) continue;
+
+        hole.name = 'episode_title';
+        toAppend.push(hole);
+      }
+    }
+
+    return toAppend;
+  }
+
+  override then(matches: Matches, whenResponse: unknown, _context: any): void {
+    const holes = whenResponse as Match[];
+    for (const hole of holes) {
+      if (!matches.includes(hole)) {
+        matches.append(hole);
+      }
+    }
+  }
+}
+
+class AlternativeTitleReplace extends Rule {
+  static override dependency = ['EpisodeTitleFromPosition'];
+
+  previousNames = ['episode', 'episode_count', 'season', 'season_count', 'date', 'title', 'year'];
+
+  override when(matches: Matches, _context: any): Match | undefined {
+    // Skip if episode_title already found
+    if (hasmatch(matches.named('episode_title', null, 0))) {
+      return undefined;
+    }
+
+    // range with proper args: start=0, end=undefined, predicate, index
+    const alternativeTitle = matches.range(0, undefined,
+      (m: Match) => m.name === 'alternative_title', 0) as Match | undefined;
+    if (alternativeTitle) {
+      const mainTitle = (matches as any).chainBefore(
+        alternativeTitle.start,
+        seps,
+        0,
+        (m: Match) => m.name === 'title',
+        0
+      ) as Match | undefined;
+      if (mainTitle) {
+        // Work around rebulk-js previous() bug: use range() to search
+        // within the same filepart for a preceding episode/season/date/year/title
+        const filepart = matches.markers.atMatch(mainTitle, (m: Match) => m.name === 'path', 0) as Match | undefined;
+        const searchStart = filepart?.start ?? 0;
+        const prevPred = (m: Match) => !m.private && this.previousNames.includes(m.name ?? '');
+        const prevMatches = matches.range(searchStart, mainTitle.start, prevPred) as Match[];
+        const prevArr = Array.isArray(prevMatches) ? prevMatches : prevMatches ? [prevMatches] : [];
+        const episode = prevArr.length > 0 ? prevArr[prevArr.length - 1] : undefined;
+
+        // Check crc32 anywhere in the same filepart (not just before the title)
+        const searchEnd = filepart?.end ?? (matches.inputString?.length ?? mainTitle.end + 100);
+        const crc32Matches = !episode ? (matches.range(searchStart, searchEnd,
+          (m: Match) => !m.private && m.name === 'crc32') as Match[]) : undefined;
+        const crc32Arr = Array.isArray(crc32Matches) ? crc32Matches : crc32Matches ? [crc32Matches] : [];
+        const crc32 = crc32Arr.length > 0 ? crc32Arr[0] : undefined;
+
+        if (episode || crc32) {
+          return alternativeTitle;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  override then(matches: Matches, whenResponse: unknown, _context: any): void {
+    const match = whenResponse as Match | undefined;
+    if (!match) return;
+    matches.remove(match);
+    match.name = 'episode_title';
+    match.tags = match.tags || [];
+    match.tags.push('alternative-replaced');
+    matches.append(match);
+  }
+}
+
+/**
+ * Trim language/country/subtitle_language matches that overlap with the
+ * trailing (or leading) edge of an episode_title.  When title extraction
+ * ignores language matches the resulting hole text includes the language
+ * word — this rule shrinks the episode_title span so it no longer covers
+ * the language match, then recomputes the cleaned value.
+ */
+class TrimLanguageFromEpisodeTitle extends Rule {
+  static override dependency = ['EpisodeTitleFromPosition', 'AlternativeTitleReplace'];
+
+  private readonly langNames = new Set(['language', 'country', 'subtitle_language']);
+
+  override when(matches: Matches, _context: any): Array<{ match: Match; newStart: number; newEnd: number }> | undefined {
+    const episodeTitles = matches.named('episode_title') as Match[];
+    if (!episodeTitles || episodeTitles.length === 0) return undefined;
+
+    const updates: Array<{ match: Match; newStart: number; newEnd: number }> = [];
+
+    for (const et of episodeTitles) {
+      let newStart = et.start;
+      let newEnd = et.end;
+
+      // Find language/country matches overlapping with the episode_title
+      const overlapping = matches.range(et.start, et.end,
+        (m: Match) => this.langNames.has(m.name ?? '')) as Match[];
+
+      if (!overlapping || overlapping.length === 0) continue;
+
+      // Trim from the end: remove language matches that touch or extend past the trailing edge
+      // Sort by start descending to peel from the end
+      const sorted = [...overlapping].sort((a, b) => b.start - a.start);
+      for (const lang of sorted) {
+        // Language match starts within the episode title and reaches (or extends past) the end
+        if (lang.start >= newStart && lang.start < newEnd) {
+          const inputStr = et.inputString ?? '';
+          // Check that between the language match end and the episode title end is only seps (or language extends beyond)
+          const between = lang.end >= newEnd ? '' : inputStr.slice(lang.end, newEnd);
+          if (between === '' || [...between].every(c => seps.includes(c))) {
+            let trimEnd = lang.start;
+            while (trimEnd > newStart && seps.includes(inputStr[trimEnd - 1])) {
+              trimEnd--;
+            }
+            if (trimEnd < newEnd) {
+              newEnd = trimEnd;
+            }
+          }
+        }
+      }
+
+      // Note: we intentionally do NOT trim language matches from the leading
+      // edge because short language codes (e.g. "En") frequently appear as
+      // legitimate title words.
+
+      if (newStart !== et.start || newEnd !== et.end) {
+        if (newEnd > newStart) {
+          updates.push({ match: et, newStart, newEnd });
+        }
+      }
+    }
+
+    return updates.length > 0 ? updates : undefined;
+  }
+
+  override then(matches: Matches, whenResponse: unknown, _context: any): void {
+    const updates = whenResponse as Array<{ match: Match; newStart: number; newEnd: number }>;
+    if (!updates) return;
+
+    for (const { match, newStart, newEnd } of updates) {
+      matches.remove(match);
+      match.start = newStart;
+      match.end = newEnd;
+      // Reset cached value so it recomputes from formatter + new span
+      match.value = undefined as any;
+      const val = match.value;
+      if (val && String(val).trim()) {
+        matches.append(match);
+      }
+    }
+  }
+}
+
+/**
+ * Title hole in a parent filepart, keeping a dash-joined name (e.g. "Adam-12",
+ * "The X-Files") whole. matches.holes() splits holes on titleSeps (dash included),
+ * so without this such names truncate to their first hole ("The X"). Merge the
+ * consecutive leading holes joined by a single "-" with non-separator characters
+ * on both sides. Mirrors Python's _parent_title_hole (upstream guessit #796).
+ */
+function parentTitleHole(matches: Matches, start: number, end: number): Match | undefined {
+  const holesResult = matches.holes(start, end, {
+    ignore: or_(
+      (m: Match) => !!(m.tags?.includes('weak-episode')),
+      (m: Match) => m.name === 'language' || m.name === 'country' || m.name === 'episode_details',
+    ),
+    formatter: cleanup,
+    seps: titleSeps,
+    predicate: (m: Match) => !!(m.value),
+  }) as Match[] | Match | undefined;
+  const holes = Array.isArray(holesResult) ? holesResult : holesResult ? [holesResult] : [];
+  if (holes.length === 0) return undefined;
+
+  const hole = holes[0];
+  const inputString = hole.inputString ?? '';
+  for (const nextHole of holes.slice(1)) {
+    const separator = inputString.slice(hole.end, nextHole.start);
+    const holeRaw = hole.raw;
+    const nextRaw = nextHole.raw;
+    if (
+      separator === '-' &&
+      holeRaw && !seps.includes(holeRaw[holeRaw.length - 1]) &&
+      nextRaw && !seps.includes(nextRaw[0])
+    ) {
+      hole.end = nextHole.end;
+    } else {
+      break;
+    }
+  }
+  return hole;
+}
+
+class Filepart3EpisodeTitle extends Rule {
+  // consequence produces a hole; we rename it to 'title' via matchName
+  override consequence = new AppendMatch('title');
+
+  override when(matches: Matches, _context: any): Match | undefined {
+    if (hasmatch(matches.tagged('filepart-title', null, 0))) {
+      return undefined;
+    }
+
+    const fileparts = matches.markers.named('path') as Match[];
+    if (fileparts.length < 3) {
+      return undefined;
+    }
+
+    const filename = fileparts[fileparts.length - 1];
+    const directory = fileparts[fileparts.length - 2];
+    const subdirectory = fileparts[fileparts.length - 3];
+
+    const episodeNumber = matches.range(filename.start, filename.end,
+      (m: Match) => m.name === 'episode', 0) as Match | undefined;
+    if (episodeNumber) {
+      const season = matches.range(directory.start, directory.end,
+        (m: Match) => m.name === 'season', 0) as Match | undefined;
+
+      if (season) {
+        const hole = parentTitleHole(matches, subdirectory.start, subdirectory.end);
+        if (hole) {
+          return hole;
+        }
+      }
+    }
+    return undefined;
+  }
+}
+
+class Filepart2EpisodeTitle extends Rule {
+  // consequence produces a hole; we rename it to 'title' via matchName
+  override consequence = new AppendMatch('title');
+
+  override when(matches: Matches, _context: any): Match | undefined {
+    if (hasmatch(matches.tagged('filepart-title', null, 0))) {
+      return undefined;
+    }
+
+    const fileparts = matches.markers.named('path') as Match[];
+    if (fileparts.length < 2) {
+      return undefined;
+    }
+
+    const filename = fileparts[fileparts.length - 1];
+    const directory = fileparts[fileparts.length - 2];
+
+    const episodeNumber = matches.range(filename.start, filename.end,
+      (m: Match) => m.name === 'episode', 0) as Match | undefined;
+    if (episodeNumber) {
+      const season =
+        (matches.range(directory.start, directory.end, (m: Match) => m.name === 'season', 0) as Match | undefined) ||
+        (matches.range(filename.start, filename.end, (m: Match) => m.name === 'season', 0) as Match | undefined);
+
+      // Absolute numbering (no season anywhere) still puts the title in the parent
+      // directory: "zettai karen children/01 - Episode Title.mkv". (upstream 4.x)
+      const anySeason = (matches.named('season') as Match[] | Match | undefined);
+      const hasAnySeason = Array.isArray(anySeason) ? anySeason.length > 0 : !!anySeason;
+      if (season || !hasAnySeason) {
+        const hole = parentTitleHole(matches, directory.start, directory.end);
+        if (hole) {
+          // Crop the hole at group marker boundaries so that content inside
+          // parentheses (e.g., "(US)") that was ignored (country) doesn't
+          // bleed into the title text.
+          const groupMarkers = matches.markers.named('group') as Match[] | Match | undefined;
+          const groupArray = Array.isArray(groupMarkers) ? groupMarkers : groupMarkers ? [groupMarkers] : [];
+          const relevantGroups = groupArray.filter(
+            (g) => g.start >= directory.start && g.end <= directory.end &&
+                   !(g.start === directory.start && g.end === directory.end),
+          );
+          if (relevantGroups.length > 0) {
+            const cropped = hole.crop(relevantGroups);
+            const croppedArr = Array.isArray(cropped) ? cropped : cropped ? [cropped] : [];
+            const first = croppedArr.find((c) => c.value);
+            if (first) {
+              first.tags = first.tags || [];
+              first.tags.push('filepart-title');
+              return first;
+            }
+            // If cropping removed all content, fall through
+          } else {
+            hole.tags = hole.tags || [];
+            hole.tags.push('filepart-title');
+            return hole;
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+}
+
+class RenameEpisodeTitleWhenMovieType extends Rule {
+  static override priority = POST_PROCESS;
+  static override dependency = ['TypeProcessor'];
+
+  override when(matches: Matches, _context: any): Match[] | undefined {
+    // Get episode_title matches (excluding alternative-replaced ones)
+    const episodeTitles = (matches.named('episode_title',
+      (m: Match) => !m.tags?.includes('alternative-replaced')) as Match[]) || [];
+
+    // Check if type is episode (using index=0 to get single match → undefined if none)
+    const episodeType = matches.named('type', (m: Match) => m.value === 'episode', 0) as Match | undefined;
+
+    if (episodeTitles.length > 0 && !episodeType) {
+      return episodeTitles;
+    }
+    return undefined;
+  }
+
+  override then(matches: Matches, whenResponse: unknown, _context: any): void {
+    const episodeTitles = whenResponse as Match[] | undefined;
+    if (!episodeTitles) return;
+    for (const match of episodeTitles) {
+      matches.remove(match);
+      match.name = 'alternative_title';
+      matches.append(match);
+    }
+  }
+}
