@@ -65,10 +65,14 @@ export class CacheManager {
   const operation=this.pending.then(async()=>{
    if(this.migrating)throw new AppError('CACHE_BUSY','缓存正在迁移，请等待完成再删除');
    const draft=structuredClone(this.value);let task=draft.tasks.find(item=>item.series.id===id);if(!task){const series=draft.knownSeries.find(item=>item.id===id);if(series)task={series,paused:true,createdAt:Date.now(),priority:'normal'}}if(!task)throw new AppError('CACHE_TASK','缓存任务不存在');
+   const shared=new Set([...draft.tasks.filter(item=>item.series.id!==id).map(item=>item.series),...draft.knownSeries.filter(item=>item.id!==id)].flatMap(item=>item.episodes.map(episode=>episode.id)));
+   const ownedIds=task.series.episodes.map(episode=>episode.id).filter(id=>!shared.has(id));
+   // Reject before pausing or touching the queue so a playback-window conflict
+   // leaves both the task and its files exactly as they were.
+   if(this.media.inPlaybackWindow?.(ownedIds))throw new AppError('CACHE_IN_USE','作品仍在播放页打开，请先返回缓存中心再删除');
    task.paused=true;await this.save(draft);this.value=draft;this.sync();
    // Persist the pause first. A failed unlink must never restart the download on relaunch.
-   const shared=new Set([...draft.tasks.filter(item=>item.series.id!==id).map(item=>item.series),...draft.knownSeries.filter(item=>item.id!==id)].flatMap(item=>item.episodes.map(episode=>episode.id)));
-   const result=await this.media.deleteEpisodes(task.series.episodes.map(episode=>episode.id).filter(id=>!shared.has(id)));
+   const result=await this.media.deleteEpisodes(ownedIds);
    const next={...draft,tasks:draft.tasks.filter(item=>item.series.id!==id),knownSeries:draft.knownSeries.filter(item=>item.id!==id)};await this.save(next);this.value=next;this.sync();
    this.message=`已删除《${task.series.title}》的缓存，释放 ${(result.freedBytes/1048576).toFixed(1)} MiB；收藏和观看记录保留。`;return this.snapshot();
   });this.pending=operation.catch(()=>{});return operation;

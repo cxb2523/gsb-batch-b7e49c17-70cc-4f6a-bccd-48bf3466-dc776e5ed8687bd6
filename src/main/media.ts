@@ -58,6 +58,7 @@ export class MediaCache {
  private protectedIds=new Set<string>();
  private pausedMessage='';
  private failed=new Set<string>();
+ private suppressed=new Set<string>();
  private closing=false;
  private processing=0;
  private processingQueue:{signal:AbortSignal;grant:(release:()=>void)=>void;reject:()=>void}[]=[];
@@ -78,7 +79,7 @@ export class MediaCache {
   if(!Array.isArray(ids)||ids.length>5000||ids.some(id=>!validId(id))||new Set(ids).size!==ids.length)throw new AppError('INVALID_INPUT','缓冲剧集列表无效');
   if(this.closing)return this.bufferState();
   const sameWork=ids.length===this.protectedIds.size&&ids.every(id=>this.protectedIds.has(id));
-  if(ids.length){this.protectedIds=new Set(ids);if(!sameWork)this.pausedMessage=''}
+  this.protectedIds=new Set(ids);if(ids.length&&!sameWork)this.pausedMessage=''
   this.window=[...ids];this.failed=new Set([...this.failed].filter(id=>ids.includes(id)||this.groups.some(group=>group.ids.includes(id))));
   for(const job of this.jobs.values()){
    if(job.foreground&&job.id!==ids[0]){if(this.inBackground(job.id)&&this.activeJobs.has(job))job.foreground=false;else this.cancel(job)}
@@ -101,12 +102,16 @@ export class MediaCache {
  private inBackground(id:string){return this.groups.some(group=>!group.paused&&group.ids.includes(id))}
  setBackgroundGroups(groups:BackgroundGroup[]){
   if(!Array.isArray(groups)||groups.length>100||groups.some(group=>!validId(group.id)||!Array.isArray(group.ids)||group.ids.length>5000||group.ids.some(id=>!validId(id))||new Set(group.ids).size!==group.ids.length))throw new AppError('INVALID_INPUT','后台缓存队列无效');
+  const previousIds=new Set(this.groups.flatMap(group=>group.ids));
   this.groups=groups.map(group=>({...group,ids:[...group.ids]}));
+  // A deleted episode stays out of the queue until the work is removed and
+  // re-added, or until playback explicitly asks for it again.
+  for(const id of this.suppressed)if(!(this.groups.some(group=>group.ids.includes(id))&&previousIds.has(id)))this.suppressed.delete(id);
   for(const job of this.jobs.values())if(!job.foreground&&!this.inBackground(job.id)&&job.id!==this.window[0])this.cancel(job);
   this.pump();
  }
  retryBuffer(ids?:string[]){
-  if(this.closing)return this.bufferState();this.pausedMessage='';if(ids)for(const id of ids)this.failed.delete(id);else this.failed.clear();
+  if(this.closing)return this.bufferState();this.pausedMessage='';if(ids)for(const id of ids){this.failed.delete(id);this.suppressed.delete(id)}else{this.failed.clear();this.suppressed.clear()};
   if(!ids&&this.window[0]&&!this.entries.has(this.window[0])&&!this.jobs.has(this.window[0]))this.enqueue(this.window[0],false,true);
   this.pump();return this.bufferState();
  }
@@ -114,6 +119,7 @@ export class MediaCache {
   if(!validId(id))return Promise.reject(new AppError('INVALID_INPUT','剧集编号无效'));
   if(this.closing)return Promise.reject(cancelled());
   if(this.suspended)return Promise.reject(new AppError('CACHE_MOVING','正在迁移缓存，请稍后再播放'));
+  this.suppressed.delete(id);
   const cached=this.cached(id);if(cached&&!force){cached.touched=Date.now();return Promise.resolve(this.result(cached))}
   const existing=this.jobs.get(id);
   if(existing&&!existing.controller.signal.aborted){if(force&&existing.everReady)this.cancel(existing);else{existing.foreground=true;if(existing.progressivePlayback)existing.resolve(existing.progressivePlayback);if(existing.progress?.stage==='waiting')this.prioritizeProcessing(existing.controller.signal);return existing.promise}}
@@ -169,6 +175,12 @@ export class MediaCache {
   }
  }
  hasDeletionPending(ids:string[]){return ids.some(id=>this.deletionMetadata.has(id))}
+ // The playback window is the authoritative set of episodes that must not be
+ // deleted, even when a cache task for the same series is being cleaned up.
+ inPlaybackWindow(ids:string[]){return ids.some(id=>this.window.includes(id))}
+ private async removeFile(file:string):Promise<'deleted'|'missing'|'failed'>{
+  try{await unlink(file);return 'deleted'}catch(error:any){return error?.code==='ENOENT'?'missing':'failed'}
+ }
  private pumpProcessors(){
   while(this.processing<2&&this.processingQueue.length){
    const first=this.processingQueue.findIndex(item=>[...this.activeJobs].some(job=>job.foreground&&job.controller.signal===item.signal));
@@ -179,19 +191,48 @@ export class MediaCache {
  async deleteEpisodes(ids:string[]):Promise<{freedBytes:number}>{
   if(!Array.isArray(ids)||ids.length>5000||ids.some(id=>!validId(id))||new Set(ids).size!==ids.length)throw new AppError('INVALID_INPUT','删除缓存的分集列表无效');
   if(this.suspended||this.closing)throw new AppError('CACHE_BUSY','缓存正在迁移或退出，请稍后再删除');
-  if(ids.some(id=>this.window.includes(id)))throw new AppError('CACHE_IN_USE','作品仍在播放页打开，请先返回缓存中心再删除');
-  this.suspended=true;let freedBytes=0,failed=false;
+  // Reject the whole batch up front. A playback window must never lose only
+  // part of its episodes because another episode in the same request was free.
+  if(this.inPlaybackWindow(ids))throw new AppError('CACHE_IN_USE','作品仍在播放页打开，请先返回缓存中心再删除');
+  this.suspended=true;let freedBytes=0;const failedIds=new Set<string>(),qualities:VideoQuality[]=['auto','1080p','720p','540p','480p','360p'];
+  for(const id of ids)this.suppressed.add(id);
   try{
    const selected=new Set(ids),pending=[...new Set([...this.jobs.values(),...this.activeJobs])].filter(job=>selected.has(job.id));
-   for(const job of pending)this.cancel(job);await Promise.allSettled(pending.map(job=>job.completion??job.promise));
+   for(const job of pending)this.cancel(job);
+   // Cancellation is asynchronous: wait for the download/encoder/cleanup to
+   // actually finish before unlinking the files those jobs may still hold.
+   await Promise.allSettled(pending.map(job=>job.completion??job.promise));
    for(const id of ids){
-    const entry=this.entries.get(id),key=entry?.key||this.deletionMetadata.get(id);
-    if(entry){try{await unlink(entry.file)}catch(error:any){if(error.code!=='ENOENT'){failed=true;continue}}this.entries.delete(id);freedBytes+=entry.bytes||0}
-    this.failed.delete(id);this.protectedIds.delete(id);
-    for(const quality of ['auto','1080p','720p','540p','480p','360p']){const name=this.partialName(id,quality as VideoQuality);try{const bytes=this.partialBytes.get(name+'.mp4')||0;await unlink(path.join(this.directory,name+'.mp4'));this.partialBytes.delete(name+'.mp4');freedBytes+=bytes}catch(error:any){if(error.code!=='ENOENT')failed=true}try{await unlink(path.join(this.directory,name+'.json'))}catch(error:any){if(error.code!=='ENOENT')failed=true}}
-    if(key){this.deletionMetadata.set(id,key);try{await unlink(path.join(this.directory,key+'.json'));this.deletionMetadata.delete(id)}catch(error:any){if(error.code!=='ENOENT')failed=true;else this.deletionMetadata.delete(id)}}
+    let failed=false;const entry=this.entries.get(id),key=entry?.key||this.deletionMetadata.get(id);
+    if(entry){
+     const outcome=await this.removeFile(entry.file);
+     if(outcome==='deleted'){this.entries.delete(id);freedBytes+=entry.bytes||0}
+     else if(outcome==='missing')this.entries.delete(id);
+     else failed=true;
+    }
+    // Clean every residue independently: one locked file must not prevent the
+    // other checkpoints or quality variants from being removed.
+    for(const quality of qualities){
+     const name=this.partialName(id,quality),bytes=this.partialBytes.get(name+'.mp4')||0;
+     const outcome=await this.removeFile(path.join(this.directory,name+'.mp4'));
+     if(outcome==='deleted'){this.partialBytes.delete(name+'.mp4');freedBytes+=bytes}
+     else if(outcome==='missing')this.partialBytes.delete(name+'.mp4');
+     else failed=true;
+     if(await this.removeFile(path.join(this.directory,name+'.json'))==='failed')failed=true;
+    }
+    if(key){
+     this.deletionMetadata.set(id,key);
+     const outcome=await this.removeFile(path.join(this.directory,key+'.json'));
+     if(outcome==='failed')failed=true;else this.deletionMetadata.delete(id);
+    }
+    // Only forget download-failure and eviction protection once no tracked
+    // artifact remains. A locked file keeps its entry accounting alive, so a
+    // later retry can finish the residue instead of treating it as gone.
+    const remaining=this.entries.has(id)||this.deletionMetadata.has(id)||qualities.some(quality=>this.partialBytes.has(this.partialName(id,quality)+'.mp4'));
+    if(!remaining){this.failed.delete(id);this.protectedIds.delete(id)}
+    if(failed)failedIds.add(id);
    }
-   if(failed)throw new AppError('CACHE_DELETE','部分缓存文件无法删除，任务已暂停；请关闭占用文件的程序或检查目录权限后重试删除');
+   if(failedIds.size)throw new AppError('CACHE_DELETE',`有 ${failedIds.size} 集缓存文件无法删除，其余已删除结果已保留；请关闭占用文件的程序或检查目录权限后重试删除`);
    return {freedBytes};
   }finally{this.suspended=false;this.pump()}
  }
@@ -239,7 +280,7 @@ export class MediaCache {
    if(this.window[0]&&(this.cached(this.window[0])||[...this.jobs.values()].some(job=>job.id===this.window[0]&&job.ready))&&!groups.some(group=>group.ids.includes(this.window[0])))groups.push({id:'current',ids:this.window.slice(1),paused:false});
    for(let n=0;n<groups.length;n++){
     const index=(this.groupCursor+n)%groups.length,group=groups[index];
-    const id=!group.paused?group.ids.find(id=>!this.cached(id)&&!this.failed.has(id)&&!this.jobs.has(id)):undefined;
+    const id=!group.paused?group.ids.find(id=>!this.cached(id)&&!this.failed.has(id)&&!this.jobs.has(id)&&!this.suppressed.has(id)):undefined;
     if(id){job=this.enqueue(id,false,false);this.groupCursor=(index+1)%groups.length;break}
    }
   }
