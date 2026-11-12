@@ -1,0 +1,26 @@
+name: Build
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1,13 * * *'
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: Run Build
+        run: npm run build
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Commit latest data
+        run: |
+          git config --global user.name 'cityssm-bot'
+          git config --global user.email 'cityssm-bot@users.noreply.github.com'
+          git commit -am "Latest data"
+          git push

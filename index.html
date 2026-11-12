@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en-CA">
+
+<head>
+  <title>Canadian Municipal GitHub Rankings</title>
+  <meta name="description" content="Ranking Canadian cities releasing open source code on GitHub by their repository stars." />
+  <meta name="keywords" content="open source, open government, canada, city, cities, town, region, county, counties, municipality, municipalities, github" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@cityssm/bulma-a11y@0.4.0/bulma-a11y.min.css" integrity="sha256-YrqCMmMEmKYmLuLlI1phSUZA4V4V104f2CiZB1B1cvc=" crossorigin="anonymous" />
+</head>
+
+<body>
+  <main class="container mt-4" style="max-width:650px;margin:0 auto;">
+    <h1 class="title has-text-centered">Canadian Municipal GitHub Rankings</h1>
+
+    <div class="message is-info">
+      <p class="message-body">
+        To motivate us to continuously improve our GitHub presence,
+        the table below shows how <a href="https://saultstemarie.ca/" target="_blank">The City of Sault Ste. Marie</a>
+        compares to other Canadian cities, towns, regions, and counties that are releasing their open source code on GitHub.
+      </p>
+    </div>
+
+    <div class="has-text-centered mb-4">
+      <a href="./map.html" class="button is-primary is-outlined">
+        <span class="icon">
+          <span>🗺️</span>
+        </span>
+        <span>Map Layout (Beta)</span>
+      </a>
+    </div>
+
+    <div class="my-4" id="table-container">
+      <p class="has-text-centered">Loading...</p>
+    </div>
+
+    <h2 class="title is-5">What do the numbers mean?</h2>
+
+    <div class="content">
+      <ul>
+        <li>
+          Having a high number of <strong>stars</strong>
+          indicates that the open source code being released by the municipality is of interest to a large number of people.
+        </li>
+        <li>
+          Having a high number of <strong>public repos</strong> (or repositories)
+          shows that the municipality prioritizes releasing code in the open.
+        </li>
+        <li>
+          Having a high <strong>ratio</strong> of stars to public repos
+          shows that the open source code being released is of a high quality.
+        </li>
+      </ul>
+    </div>
+  </main>
+  <footer class="footer mt-4">
+    <p class="has-text-centered">
+      A friendly project by The City of Sault Ste. Marie.<br />
+      <a href="https://github.com/cityssm/municipal-github-rankings">View on GitHub</a>
+    </p>
+  </footer>
+  <script src="https://cdn.jsdelivr.net/npm/axios@0.26.1/dist/axios.min.js" integrity="sha256-iSkNRnKsHORmMCNgQIxzyW0QzHrWeko/lyVjyI78G2c=" crossorigin="anonymous"></script>
+  <script>
+    axios.get("./data.json")
+      .then((response) => {
+        return response.data;
+      })
+      .then((data) => {
+
+        let maxStars = 0;
+        let maxRepos = 0;
+        let maxRatio = 0;
+
+        for (const organization of data.organizations) {
+          maxStars = Math.max(maxStars, organization.stars);
+          maxRepos = Math.max(maxRepos, organization.repositories);
+
+          if (organization.repositories !== 0) {
+            maxRatio = Math.max(maxRatio, (organization.stars / organization.repositories));
+          }
+        }
+
+        const tableElement = document.createElement("table");
+        tableElement.className = "table is-fullwidth is-striped";
+
+        tableElement.innerHTML = "<thead><tr>" +
+          "<th class=\"has-text-centered\">Icon</th>" +
+          "<th>Municipality</th>" +
+          "<th class=\"has-text-right\" style=\"width:6em\">Stars</th>" +
+          "<th class=\"has-text-right\" style=\"width:6em\">Public Repos</th>" +
+          "<th class=\"has-text-right\" style=\"width:6em\">Quality Ratio</th>" +
+          "</tr></thead>" +
+          "<tbody></tbody>";
+
+        for (const organization of data.organizations) {
+
+          const trElement = document.createElement("tr");
+
+          if (organization.handle === "cityssm") {
+            trElement.className = "has-text-weight-bold";
+          }
+
+          trElement.innerHTML = "<td class=\"has-text-centered\">" +
+            "<img src=\"https://github.com/" + organization.handle + ".png?size=40\" alt=\"" + organization.handle + "\" width=\"40\" height=\"40\" loading=\"lazy\" />" +
+            "</td>" +
+            "<td>" +
+            "<a href=\"https://github.com/" + organization.handle + "\" rel=\"noopener\" target=\"_blank\">" + organization.handle + "</a><br />" +
+            organization.municipality + ", " + organization.province +
+            "</td>" +
+            "<td class=\"has-text-right" + (organization.stars === maxStars ? " has-background-success-light" : "") + "\">" +
+              organization.stars +
+            "</td>" +
+            "<td class=\"has-text-right" + (organization.repositories === maxRepos ? " has-background-success-light" : "") + "\">" +
+              organization.repositories +
+            "</td>" +
+            "<td class=\"has-text-right" + (organization.repositories !== 0 && (organization.stars / organization.repositories) >= maxRatio ? " has-background-success-light" : "") + "\">" +
+              (organization.repositories === 0
+              ? ""
+              : (organization.stars / organization.repositories).toPrecision(2)) + 
+            "</td>";
+
+          tableElement.querySelector("tbody").append(trElement);
+        }
+
+        const containerElement = document.querySelector("#table-container");
+        containerElement.innerHTML = "";
+        containerElement.append(tableElement);
+
+        const refreshElement = document.createElement("p");
+        refreshElement.className = "has-text-centered";
+
+        refreshElement.innerHTML = "Updated Twice Daily<br />Last Updated<br />" + new Date(data.refreshMillis).toLocaleString();
+
+        containerElement.append(refreshElement);
+      });
+  </script>
+</body>
+
+</html>
