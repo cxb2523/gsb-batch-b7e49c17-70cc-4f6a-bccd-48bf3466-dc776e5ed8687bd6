@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+"""
+MCP 授权中间件 - MCP Tools Authorization Middleware
+
+为MCP工具提供授权检查装饰器，集成AuthManager
+仅用于授权渗透测试和安全研究
+"""
+
+import functools
+import logging
+import os
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, cast
+
+logger = logging.getLogger(__name__)
+
+# 尝试导入AuthManager
+try:
+    from .auth_manager import AuthManager, Permission, ToolLevel
+
+    HAS_AUTH_MANAGER = True
+except ImportError:
+    HAS_AUTH_MANAGER = False
+    logger.warning("AuthManager不可用，授权检查将被跳过")
+
+
+class AuthMode(Enum):
+    """授权模式"""
+
+    STRICT = "strict"  # 严格模式：必须提供有效API Key
+    PERMISSIVE = "permissive"  # 宽松模式：无Key时允许访问（记录警告）
+    DISABLED = "disabled"  # 禁用模式：不检查授权
+
+
+# 全局配置
+_auth_config = {
+    "mode": AuthMode.STRICT,  # 默认严格模式
+    "manager": None,
+    "audit_enabled": True,
+}
+
+
+def get_auth_manager() -> Optional["AuthManager"]:
+    """获取全局AuthManager实例"""
+    if _auth_config["manager"] is None and HAS_AUTH_MANAGER:
+        try:
+            _auth_config["manager"] = AuthManager()
+        except Exception as e:
+            logger.error("初始化AuthManager失败: %s", e)
+    return _auth_config["manager"]
+
+
+def set_auth_mode(mode: AuthMode):
+    """设置授权模式"""
+    if mode == AuthMode.DISABLED:
+        # 仅在测试环境下允许禁用授权
+        is_test = os.getenv("AUTOREDTEAM_ENV") == "test" or os.getenv("PYTEST_CURRENT_TEST")
+        if not is_test:
+            logger.warning(
+                "拒绝设置DISABLED模式：仅允许在测试环境中禁用授权 "
+                "(需设置 AUTOREDTEAM_ENV=test 或 PYTEST_CURRENT_TEST)"
+            )
+            return
+    _auth_config["mode"] = mode
+    logger.info("授权模式设置为: %s", mode.value)
+
+
+def set_audit_enabled(enabled: bool):
+    """设置是否启用审计"""
+    _auth_config["audit_enabled"] = enabled
+
+
+def get_api_key_from_env() -> Optional[str]:
+    """从环境变量获取API Key"""
+    return os.getenv("AUTOREDTEAM_API_KEY") or os.getenv("MCP_API_KEY")
+
+
+def require_auth(
+    tool_name: Optional[str] = None,
+    level: Optional["ToolLevel"] = None,
+    permissions: Optional[List["Permission"]] = None,
+):
+    """
+    MCP工具授权装饰器
+
+    用于检查API Key权限和工具访问级别
+
+    Args:
+        tool_name: 工具名称（默认使用函数名）
+        level: 工具危险等级（覆盖AuthManager中的默认值）
+        permissions: 所需权限列表
+
+    Usage:
+        @mcp.tool()
+        @require_auth(level=ToolLevel.CRITICAL)
+        async def lateral_smb_exec(target: str, ...) -> Dict:
+            ...
+    """
+
+    def decorator(func: Callable):
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs) -> Dict[str, Any]:
+            actual_tool_name = tool_name or func.__name__
+
+            # 检查授权模式
+            if _auth_config["mode"] == AuthMode.DISABLED:
+                return cast(Dict[str, Any], await func(*args, **kwargs))
+
+            # 获取API Key
+            api_key_str = get_api_key_from_env()
+
+            # 无Key情况处理
+            if not api_key_str:
+                # CRITICAL/DANGEROUS 级工具无论何种非DISABLED模式都必须认证
+                _is_high_level = False
+                if HAS_AUTH_MANAGER and level is not None:
+                    _is_high_level = level in (ToolLevel.CRITICAL, ToolLevel.DANGEROUS)
+                elif not HAS_AUTH_MANAGER and level is not None:
+                    # AuthManager不可用但指定了level，安全起见视为高危
+                    _is_high_level = True
+
+                if _is_high_level:
+                    logger.warning(
+                        "CRITICAL/DANGEROUS 工具 %s 需要授权，但未提供API Key",
+                        actual_tool_name,
+                    )
+                    return {
+                        "success": False,
+                        "error": (
+                            "Authorization required for CRITICAL/DANGEROUS tools. "
+                            "Set AUTOREDTEAM_API_KEY environment variable."
+                        ),
+                        "code": "AUTH_REQUIRED",
+                    }
+
+                if _auth_config["mode"] == AuthMode.STRICT:
+                    logger.warning("工具 %s 需要授权，但未提供API Key", actual_tool_name)
+                    return {
+                        "success": False,
+                        "error": (
+                            "Authorization required. "
+                            "Set AUTOREDTEAM_API_KEY environment variable."
+                        ),
+                        "code": "AUTH_REQUIRED",
+                    }
+                else:
+                    # 宽松模式：SAFE/MODERATE 工具允许但记录警告
+                    logger.warning("工具 %s 未授权访问（宽松模式）", actual_tool_name)
+                    return cast(Dict[str, Any], await func(*args, **kwargs))
+
+            # 验证API Key
+            auth_mgr = get_auth_manager()
+            if not auth_mgr:
+                logger.error("AuthManager不可用")
+                if _auth_config["mode"] == AuthMode.STRICT:
+                    return {
+                        "success": False,
+                        "error": "Authorization system unavailable",
+                        "code": "AUTH_UNAVAILABLE",
+                    }
+                return cast(Dict[str, Any], await func(*args, **kwargs))
+
+            # 验证Key
+            api_key = auth_mgr.verify_key(api_key_str)
+            if not api_key:
+                return {
+                    "success": False,
+                    "error": "Invalid or expired API key",
+                    "code": "INVALID_KEY",
+                }
+
+            # 检查权限
+            if not auth_mgr.check_permission(api_key, actual_tool_name):
+                # 记录审计日志
+                if _auth_config["audit_enabled"]:
+                    auth_mgr.audit(
+                        api_key.key_id,
+                        actual_tool_name,
+                        _sanitize_params(kwargs),
+                        success=False,
+                        error="Permission denied",
+                    )
+                return {
+                    "success": False,
+                    "error": f"Insufficient permissions for tool: {actual_tool_name}",
+                    "code": "PERMISSION_DENIED",
+                }
+
+            # 执行工具
+            try:
+                result = await func(*args, **kwargs)
+
+                # 记录成功审计
+                if _auth_config["audit_enabled"]:
+                    auth_mgr.audit(
+                        api_key.key_id, actual_tool_name, _sanitize_params(kwargs), success=True
+                    )
+
+                return cast(Dict[str, Any], result)
+            except Exception as e:
+                # 记录失败审计
+                if _auth_config["audit_enabled"]:
+                    auth_mgr.audit(
+                        api_key.key_id,
+                        actual_tool_name,
+                        _sanitize_params(kwargs),
+                        success=False,
+                        error=str(e),
+                    )
+                raise
+
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs) -> Dict[str, Any]:
+            actual_tool_name = tool_name or func.__name__
+
+            # 检查授权模式
+            if _auth_config["mode"] == AuthMode.DISABLED:
+                return cast(Dict[str, Any], func(*args, **kwargs))
+
+            # 获取API Key
+            api_key_str = get_api_key_from_env()
+
+            if not api_key_str:
+                # CRITICAL/DANGEROUS 级工具无论何种非DISABLED模式都必须认证
+                _is_high_level = False
+                if HAS_AUTH_MANAGER and level is not None:
+                    _is_high_level = level in (ToolLevel.CRITICAL, ToolLevel.DANGEROUS)
+                elif not HAS_AUTH_MANAGER and level is not None:
+                    _is_high_level = True
+
+                if _is_high_level:
+                    logger.warning(
+                        "CRITICAL/DANGEROUS 工具 %s 需要授权，但未提供API Key",
+                        actual_tool_name,
+                    )
+                    return {
+                        "success": False,
+                        "error": (
+                            "Authorization required for CRITICAL/DANGEROUS tools. "
+                            "Set AUTOREDTEAM_API_KEY environment variable."
+                        ),
+                        "code": "AUTH_REQUIRED",
+                    }
+
+                if _auth_config["mode"] == AuthMode.STRICT:
+                    return {
+                        "success": False,
+                        "error": "Authorization required",
+                        "code": "AUTH_REQUIRED",
+                    }
+                # 宽松模式：SAFE/MODERATE 工具允许
+                return cast(Dict[str, Any], func(*args, **kwargs))
+
+            auth_mgr = get_auth_manager()
+            if not auth_mgr:
+                if _auth_config["mode"] == AuthMode.STRICT:
+                    return {
+                        "success": False,
+                        "error": "Authorization system unavailable",
+                        "code": "AUTH_UNAVAILABLE",
+                    }
+                return cast(Dict[str, Any], func(*args, **kwargs))
+
+            api_key = auth_mgr.verify_key(api_key_str)
+            if not api_key:
+                return {
+                    "success": False,
+                    "error": "Invalid or expired API key",
+                    "code": "INVALID_KEY",
+                }
+
+            if not auth_mgr.check_permission(api_key, actual_tool_name):
+                return {
+                    "success": False,
+                    "error": f"Insufficient permissions for tool: {actual_tool_name}",
+                    "code": "PERMISSION_DENIED",
+                }
+
+            return cast(Dict[str, Any], func(*args, **kwargs))
+
+        # 根据函数类型返回对应的wrapper
+        import asyncio
+
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
+
+    return decorator
+
+
+def _sanitize_params(params: Dict) -> Dict:
+    """
+    清理参数中的敏感信息用于审计日志
+
+    Args:
+        params: 原始参数
+
+    Returns:
+        清理后的参数
+    """
+    sensitive_keys = {
+        "password",
+        "secret",
+        "key",
+        "token",
+        "credential",
+        "api_key",
+        "auth",
+        "ntlm_hash",
+        "ssh_key",
+    }
+
+    sanitized = {}
+    for k, v in params.items():
+        if any(s in k.lower() for s in sensitive_keys):
+            sanitized[k] = "***REDACTED***"
+        elif isinstance(v, str) and len(v) > 200:
+            sanitized[k] = v[:200] + "...[TRUNCATED]"
+        else:
+            sanitized[k] = v
+
+    return sanitized
+
+
+# 便捷装饰器：不同安全级别
+def _mark_auth_level(func: Callable, level: str) -> Callable:
+    """Record the decorator rank so HITL can see it after functools.wraps."""
+    func.__autort_auth_level__ = level  # type: ignore[attr-defined]
+    return func
+
+
+def require_safe_auth(func):
+    """安全工具授权（信息收集）"""
+    wrapped = require_auth(level=ToolLevel.SAFE if HAS_AUTH_MANAGER else None)(func)
+    return _mark_auth_level(wrapped, "safe")
+
+
+def require_moderate_auth(func):
+    """中等风险工具授权（漏洞扫描）"""
+    wrapped = require_auth(level=ToolLevel.MODERATE if HAS_AUTH_MANAGER else None)(func)
+    return _mark_auth_level(wrapped, "moderate")
+
+
+def require_dangerous_auth(func):
+    """高风险工具授权（漏洞利用）"""
+    wrapped = require_auth(level=ToolLevel.DANGEROUS if HAS_AUTH_MANAGER else None)(func)
+    return _mark_auth_level(wrapped, "dangerous")
+
+
+def require_critical_auth(func):
+    """极高风险工具授权（后渗透）"""
+    wrapped = require_auth(level=ToolLevel.CRITICAL if HAS_AUTH_MANAGER else None)(func)
+    return _mark_auth_level(wrapped, "critical")
+
+
+# 初始化时检查环境变量设置的授权模式
+_env_mode = os.getenv("AUTOREDTEAM_AUTH_MODE", "strict").lower()
+if _env_mode == "strict":
+    _auth_config["mode"] = AuthMode.STRICT
+elif _env_mode == "disabled":
+    # 与 set_auth_mode() 保持一致：仅测试环境允许 DISABLED
+    _is_test = os.getenv("AUTOREDTEAM_ENV") == "test" or os.getenv("PYTEST_CURRENT_TEST")
+    if _is_test:
+        _auth_config["mode"] = AuthMode.DISABLED
+    else:
+        logger.warning(
+            "拒绝初始化DISABLED模式：仅允许在测试环境中禁用授权 "
+            "(需设置 AUTOREDTEAM_ENV=test 或 PYTEST_CURRENT_TEST)"
+        )
+        _auth_config["mode"] = AuthMode.STRICT
+elif _env_mode == "permissive":
+    _auth_config["mode"] = AuthMode.PERMISSIVE
+else:
+    logger.warning("未知授权模式 '%s'，回退到 STRICT", _env_mode)
+    _auth_config["mode"] = AuthMode.STRICT
+
+logger.info("MCP授权中间件初始化完成，模式: %s", _auth_config["mode"].value)

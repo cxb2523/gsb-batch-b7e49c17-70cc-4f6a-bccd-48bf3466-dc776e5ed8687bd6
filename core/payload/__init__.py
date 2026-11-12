@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""
+Payload 统一模块 - 整合的 Payload 生成、选择、变异引擎
+
+本模块整合了原先分散在多个文件中的 Payload 相关功能：
+- smart_payload_engine.py
+- smart_payload_selector.py
+- adaptive_payload_engine.py
+
+提供统一、无重复的 Payload 管理接口。
+
+主要组件:
+- AdaptivePayloadEngine: 自适应 Payload 引擎（主入口）
+- SmartPayloadSelector: 智能 Payload 选择器
+- PayloadMutator: Payload 变异器
+- TargetProfile: 目标特征分析
+
+使用示例:
+    from core.payload import (
+        get_payload_engine,
+        smart_select_payloads,
+        mutate_payload,
+        TargetProfile,
+    )
+
+    payloads = smart_select_payloads("sqli", waf="cloudflare", top_n=10)
+    variants = mutate_payload("' OR '1'='1", waf="modsecurity")
+"""
+
+# 主引擎
+from .engine import (
+    AdaptivePayloadEngine,
+    get_payload_engine,
+    get_waf_bypass_payloads,
+    record_payload_result,
+    smart_select_payloads,
+)
+
+# 变异器
+from .mutator import (
+    MUTATION_DESCRIPTIONS,
+    WAF_MUTATION_STRATEGIES,
+    MutationType,
+    PayloadMutator,
+    get_waf_bypass_variants,
+    mutate_for_waf,
+    mutate_payload,
+)
+
+# 选择器
+from .selector import SmartPayloadSelector, get_selector, smart_select
+
+# 特征检测
+from .signatures import (
+    DB_SIGNATURES,
+    FRAMEWORK_SIGNATURES,
+    LANGUAGE_INDICATORS,
+    SERVER_SIGNATURES,
+    WAF_BYPASS_STRATEGIES,
+    WAF_SIGNATURES,
+    TargetProfile,
+    detect_db_from_dict,
+    detect_framework_from_dict,
+    detect_waf_from_dict,
+)
+
+# 类型定义
+from .types import (
+    PayloadCategory,
+    PayloadResult,
+    PayloadStats,
+    ScoredPayload,
+    VulnType,
+    get_payload_hash,
+    get_payload_key,
+)
+
+__all__ = [
+    # 类型
+    "VulnType",
+    "PayloadCategory",
+    "PayloadStats",
+    "PayloadResult",
+    "ScoredPayload",
+    "get_payload_hash",
+    "get_payload_key",
+    # 特征检测
+    "TargetProfile",
+    "WAF_SIGNATURES",
+    "DB_SIGNATURES",
+    "FRAMEWORK_SIGNATURES",
+    "LANGUAGE_INDICATORS",
+    "SERVER_SIGNATURES",
+    "WAF_BYPASS_STRATEGIES",
+    "detect_waf_from_dict",
+    "detect_db_from_dict",
+    "detect_framework_from_dict",
+    # 变异器
+    "PayloadMutator",
+    "MutationType",
+    "MUTATION_DESCRIPTIONS",
+    "WAF_MUTATION_STRATEGIES",
+    "mutate_payload",
+    "mutate_for_waf",
+    "get_waf_bypass_variants",
+    # 选择器
+    "SmartPayloadSelector",
+    "get_selector",
+    "smart_select",
+    # 主引擎
+    "AdaptivePayloadEngine",
+    "get_payload_engine",
+    "smart_select_payloads",
+    "get_waf_bypass_payloads",
+    "record_payload_result",
+]
+
+__version__ = "2.0.0"

@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort
+
+      - name: Check code style with Black
+        run: black --check --line-length 100 core/ utils/ handlers/ autort/ cli/
+
+      - name: Check import sorting with isort
+        run: isort --check-only --profile black core/ utils/ handlers/ autort/ cli/
+
+      - name: Lint with flake8
+        run: flake8 --max-line-length 100 --ignore=E501,W503,E402,E203,W504,E704 core/ utils/ handlers/ autort/ cli/
+
+      - name: Install mypy
+        run: pip install mypy
+
+      - name: Type check with mypy
+        # --follow-imports=silent keeps the gate on the modules listed here.
+        # core/container.py was removed in 3.1.0.
+        # These handler modules typecheck. The rest still disagree with current
+        # core APIs, so they stay out until those calls are aligned:
+        # api_security, cloud_security, error_handling, evidence, misc,
+        # orchestration, persistence, recon, redteam, report, resource,
+        # runtime_helpers, session, supply_chain.
+        run: mypy --python-version 3.10 --ignore-missing-imports --no-strict-optional --follow-imports=silent core/result.py core/capability_manifest.py core/mcts_planner.py core/ai_surface core/agent_runtime core/reporting/sarif.py handlers/__init__.py handlers/ad_handlers.py handlers/ai_handlers.py handlers/cve_handlers.py handlers/detector_factory.py handlers/external_tools_handlers.py handlers/knowledge_handlers.py handlers/lateral_handlers.py handlers/mcts_handlers.py handlers/parallel_handlers.py handlers/prompt_handlers.py handlers/tooling.py
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install pytest-asyncio pytest-timeout
+
+      - name: SDK and CLI smoke
+        run: |
+          python -c "from autort import Scanner; print(Scanner)"
+          python -m cli.main capabilities manifest --profile safe
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set +e
+          pytest tests/ -q --tb=line --maxfail=10 --timeout=30 -m "not slow and not integration and not network" --ignore=tests/test_performance_integration.py --ignore=tests/test_modules_jwt.py --junitxml=pytest.xml
+          status=$?
+          set -e
+          python scripts/emit_pytest_annotations.py pytest.xml
+          exit $status
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install security tools
+        run: pip install bandit pip-audit safety
+
+      - name: Security scan with Bandit
+        run: bandit -c .bandit -r core/ utils/ handlers/ -f json -o bandit-report.json
+
+      - name: Upload Bandit Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+      - name: Dependency vulnerability scan with pip-audit
+        run: pip-audit -r requirements.txt
+
+      - name: Check for hardcoded secrets
+        run: |
+          pip install detect-secrets
+          detect-secrets scan core/ utils/ handlers/ --list-all-secrets
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install pytest-asyncio pytest-timeout pytest-cov
+      - name: Check syntax
+        run: python -m py_compile mcp_stdio_server.py
+      - name: Run unit tests (fast)
+        run: |
+          set +e
+          # Gate the default wheel. The excluded engines remain in the source tree.
+          pytest tests/ \
+            --verbose \
+            --tb=short \
+            --cov=core --cov=handlers --cov=utils --cov=autort --cov=cli \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            --cov-fail-under=50 \
+            --ignore=tests/test_performance_integration.py \
+            --ignore=tests/test_modules_jwt.py \
+            -m "not slow and not integration and not network" \
+            --timeout=30 \
+            --maxfail=10 \
+            --junitxml=pytest.xml
+          status=$?
+          set -e
+          python scripts/emit_pytest_annotations.py pytest.xml
+          exit $status
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.10'
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build wheel
+
+      - name: Build package
+        # Console script, not `python -m build`: a leftover setuptools `build/`
+        # directory would otherwise hide the PyPA build module.
+        run: pyproject-build
+
+      - name: Check the installed wheel boundary
+        run: |
+          pip install pytest
+          pytest tests/test_wheel_boundary.py -m slow -q --tb=short
+        env:
+          AUTORT_WHEEL: dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

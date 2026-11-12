@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""
+AutoRedTeam-Orchestrator MCP Server
+MCP-native 授权安全自动化工作台 - MCP 协议服务端
+
+版本: 3.1.0
+作者: AutoRedTeam Team
+许可: 仅限授权安全测试使用
+
+功能:
+    - 纯Python安全工具 (工具数量由 handlers/ 自动统计)
+    - 覆盖 OWASP Top 10、API安全、供应链安全、云原生安全
+    - 支持 Cursor / Windsurf / Kiro 等AI编辑器
+
+架构:
+    - 工具按功能模块化拆分到 handlers/ 目录
+    - capability manifest 在注册阶段应用 fail-closed profile
+    - 主文件仅负责 MCP 服务器初始化和工具注册调度
+    - 工具数量以 ToolCounter 运行时统计为准
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+
+# 确保项目根目录在路径中
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJECT_ROOT)
+
+from mcp.server import MCPServer
+
+# ==================== MCP服务器实例 ====================
+
+# version 会作为 _meta.io.modelcontextprotocol/serverInfo 发给客户端；
+# 不传时客户端看到的将是 MCP SDK 自己的版本号，而不是本项目的版本。
+mcp = MCPServer("AutoRedTeam", version="3.1.0")
+
+
+# ==================== 日志配置 (延迟到 main 调用) ====================
+
+logger = logging.getLogger("AutoRedTeam")
+
+
+# ==================== 工具计数器 ====================
+
+
+class ToolCounter:
+    """工具注册计数器"""
+
+    def __init__(self):
+        self.counts = {
+            "recon": 0,
+            "detector": 0,
+            "cve": 0,
+            "redteam": 0,
+            "orchestration": 0,  # 自动化编排
+            "api_security": 0,
+            "cloud_security": 0,
+            "supply_chain": 0,
+            "lateral": 0,  # 横向移动
+            "persistence": 0,  # 持久化
+            "ad": 0,  # AD攻击
+            "external_tools": 0,  # 外部工具集成
+            "session": 0,
+            "report": 0,
+            "ai": 0,
+            "knowledge": 0,
+            "mcts": 0,
+            "misc": 0,
+        }
+        self.total = 0
+
+    def add(self, category: str, count: int = 1):
+        if category in self.counts:
+            self.counts[category] += count
+        else:
+            self.counts["misc"] += count
+        self.total += count
+
+    def summary(self) -> str:
+        parts = [f"{k}={v}" for k, v in self.counts.items() if v > 0]
+        return f"总计 {self.total} 个 MCP surface ({', '.join(parts)})"
+
+
+_counter = ToolCounter()
+
+
+# ==================== 工具注册入口 ====================
+
+
+def register_all_tools(profile: str | None = None):
+    """按 capability profile 注册 MCP surfaces。"""
+    from core.capability_manifest import DEFAULT_MCP_PROFILE, resolve_profile
+    from handlers import register_all_handlers
+
+    selected_profile = resolve_profile(profile, default=DEFAULT_MCP_PROFILE)
+
+    logger.info("=" * 60)
+    logger.info(
+        "AutoRedTeam MCP Server v3.1.0 - capability profile: %s",
+        selected_profile,
+    )
+    logger.info("=" * 60)
+
+    # 使用模块化的 handlers 注册所有工具
+    register_all_handlers(mcp, _counter, logger, profile=selected_profile)
+
+    logger.info("=" * 60)
+    logger.info("工具注册完成: %s", _counter.summary())
+    logger.info("=" * 60)
+
+
+# ==================== 主入口 ====================
+
+
+def main():
+    """主入口函数"""
+
+    # 配置日志（延迟到启动时）
+    from utils.logger import configure_root_logger
+
+    configure_root_logger(level=logging.INFO, log_to_file=True, log_to_console=True)
+
+    # 注册所有工具
+    register_all_tools()
+
+    # 法律声明
+    try:
+        from core.config.models import LEGAL_DISCLAIMER
+
+        logger.warning(LEGAL_DISCLAIMER)
+    except ImportError:
+        logger.warning("⚠️ This tool is for AUTHORIZED penetration testing only.")
+
+    # 显示安全配置
+    try:
+        from core.security.mcp_auth_middleware import _auth_config
+
+        logger.info("授权模式: %s", _auth_config["mode"].value)
+    except Exception:
+        logger.warning("无法读取授权模式配置")
+
+    # 启动MCP服务器
+    logger.info("AutoRedTeam MCP Server v3.1.0 启动中...")
+    logger.info("支持: Cursor / Windsurf / Kiro 等AI编辑器")
+    logger.info("-" * 60)
+
+    # 根据命令行参数决定传输方式
+    if len(sys.argv) > 1 and sys.argv[1] == "--stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run()
+
+
+if __name__ == "__main__":
+    main()

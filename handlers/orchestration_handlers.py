@@ -1,0 +1,1055 @@
+"""
+自动化渗透编排工具处理器
+包含: auto_pentest, pentest_resume, pentest_status, pentest_phase,
+      exploit_run, exploit_vulnerability, exploit_by_cve, get_attack_paths
+
+授权级别:
+- CRITICAL: auto_pentest, pentest_resume, pentest_phase, exploit_*, verify_and_exploit
+- DANGEROUS: pentest_status, get_attack_paths, analyze_exploit_failure
+
+重构说明 (2026-01):
+    使用 handle_errors 装饰器替代手动 try-except，实现:
+    - 异常自动分类和日志记录
+    - 标准化错误响应格式
+    - 减少代码重复
+"""
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
+# 授权中间件
+from core.security import require_critical_auth, require_dangerous_auth
+
+from .error_handling import ErrorCategory, handle_errors, validate_inputs
+from .runtime_helpers import (
+    complete_handler_runtime_action as _shared_complete_handler_runtime_action,
+)
+from .runtime_helpers import evidence_items
+from .runtime_helpers import gate_handler_runtime_action as _shared_gate_handler_runtime_action
+from .tooling import no_target_contact, tool
+
+# ==================== 共享数据类 ====================
+
+
+@dataclass
+class DetectionResultWrapper:
+    """将漏洞检测结果 dict 转换为类似对象以兼容 ExploitEngine"""
+
+    vulnerable: bool
+    vuln_type: str
+    url: str
+    param: str = ""
+    payload: str = ""
+    evidence: str = ""
+    extra: dict = None
+
+
+# ==================== 自定义上下文提取器 ====================
+
+
+def extract_target_context(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """提取 target 上下文"""
+    if args:
+        return {"target": args[0]}
+    return {"target": kwargs.get("target", "")}
+
+
+def extract_session_context(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """提取 session_id 上下文"""
+    if args:
+        return {"session_id": args[0]}
+    return {"session_id": kwargs.get("session_id", "")}
+
+
+def extract_phase_context(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """提取 phase 相关上下文"""
+    ctx = {}
+    if args:
+        ctx["target"] = args[0]
+        if len(args) > 1:
+            ctx["phase"] = args[1]
+    else:
+        ctx["target"] = kwargs.get("target", "")
+        ctx["phase"] = kwargs.get("phase", "")
+    return ctx
+
+
+def extract_cve_context(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """提取 CVE 相关上下文"""
+    ctx = {}
+    if args:
+        ctx["target"] = args[0]
+        if len(args) > 1:
+            ctx["cve_id"] = args[1]
+    else:
+        ctx["target"] = kwargs.get("target", "")
+        ctx["cve_id"] = kwargs.get("cve_id", "")
+    return ctx
+
+
+def _gate_handler_runtime_action(
+    tool_name: str,
+    inputs: Optional[Dict[str, Any]] = None,
+    risk_level: str = "critical",
+) -> Dict[str, Any]:
+    """Gate direct orchestration handler actions through runtime middleware."""
+    return _shared_gate_handler_runtime_action(
+        tool_name,
+        inputs=inputs,
+        risk_level=risk_level,
+        source="orchestration_handler",
+        requires_auth=True,
+        human_approved=True,
+        network_policy="controlled",
+        artifact_policy="metadata-only",
+        cleanup_policy="handler-owned",
+    )
+
+
+def _complete_handler_runtime_action(
+    gate: Dict[str, Any],
+    success: bool,
+    output: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Complete a handler runtime action and return serializable metadata."""
+    return _shared_complete_handler_runtime_action(
+        gate,
+        success=success,
+        output=output,
+        error=error,
+    )
+
+
+async def _exec_poc_execute(
+    target: str,
+    template_id: str,
+    variables: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
+    from core.cve.poc_engine import get_poc_engine
+
+    gate = _gate_handler_runtime_action(
+        "poc_execute",
+        inputs={"target": target, "template_id": template_id},
+    )
+    if not gate["allowed"]:
+        return {
+            "success": False,
+            "error": gate["reason"],
+            "runtime": _complete_handler_runtime_action(gate, False),
+        }
+    engine = get_poc_engine()
+    template = engine.get_template(template_id)
+    if not template:
+        return {
+            "success": False,
+            "error": f"模板不存在: {template_id}",
+            "available_templates": engine.list_templates()[:10],
+            "runtime": _complete_handler_runtime_action(gate, False),
+        }
+    result = engine.execute(target, template, variables)
+    payload = {
+        "success": result.success,
+        "vulnerable": result.vulnerable,
+        "template_id": template_id,
+        "target": target,
+        "evidence": result.evidence,
+        "extracted": result.extracted,
+        "execution_time_ms": result.execution_time_ms,
+    }
+    payload["runtime"] = _complete_handler_runtime_action(
+        gate,
+        bool(result.success),
+        output={"success": bool(result.success), "template_id": template_id},
+    )
+    return payload
+
+
+async def _exec_cve_auto_exploit(
+    target: str,
+    cve_id: str,
+    custom_vars: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
+    from core.cve.auto_exploit import auto_exploit_cve
+
+    gate = _gate_handler_runtime_action(
+        "cve_auto_exploit",
+        inputs={"target": target, "cve_id": cve_id},
+    )
+    if not gate["allowed"]:
+        return {
+            "success": False,
+            "error": gate["reason"],
+            "runtime": _complete_handler_runtime_action(gate, False),
+        }
+    result = await auto_exploit_cve(target, cve_id, custom_vars)
+    payload = {
+        "success": result.success,
+        "status": result.status.value,
+        "cve_id": cve_id,
+        "target": target,
+        "vulnerable": result.vulnerable,
+        "vuln_type": result.vuln_type,
+        "evidence": result.evidence,
+        "poc_yaml": result.poc_yaml[:2000] if result.poc_yaml else None,
+        "poc_template_path": result.poc_template_path,
+        "exploit_data": result.exploit_data,
+        "execution_time_ms": result.execution_time_ms,
+        "steps": result.steps,
+        "error": result.error,
+    }
+    payload["runtime"] = _complete_handler_runtime_action(
+        gate,
+        bool(result.success),
+        output={"success": bool(result.success), "cve_id": cve_id},
+        error=result.error,
+    )
+    return payload
+
+
+def register_orchestration_tools(mcp, counter, logger):
+    """注册自动化渗透编排工具
+
+    Args:
+        mcp: FastMCP实例
+        counter: ToolCounter实例
+        logger: Logger实例
+    """
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(target="target")
+    @handle_errors(logger, category=ErrorCategory.REDTEAM, context_extractor=extract_target_context)
+    async def auto_pentest(
+        target: str,
+        quick_mode: bool = False,
+        skip_exfiltrate: bool = True,
+        skip_phases: Optional[List[str]] = None,
+        report_formats: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """全自动渗透测试 - 执行完整的自动化渗透测试流程
+
+        执行阶段: RECON -> VULN_SCAN -> POC_EXEC -> EXPLOIT -> PRIV_ESC -> LATERAL -> REPORT
+        支持断点续传、状态持久化、智能决策
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            target: 目标URL或IP
+            quick_mode: 是否快速模式 (跳过耗时的子域名和目录扫描)
+            skip_exfiltrate: 是否跳过数据外泄阶段 (默认跳过，安全考虑)
+            skip_phases: 要跳过的阶段列表 (例: ["privilege_escalation", "lateral_movement"])
+            report_formats: 报告格式列表 (默认: ["html", "json"])
+
+        Returns:
+            完整渗透测试结果，包含各阶段数据和发现
+        """
+        from core.orchestrator import AutoPentestOrchestrator, OrchestratorConfig
+
+        config = OrchestratorConfig(
+            quick_mode=quick_mode,
+            skip_exfiltrate=skip_exfiltrate,
+            skip_phases=skip_phases or [],
+            report_formats=report_formats or ["html", "json"],
+        )
+
+        orchestrator = AutoPentestOrchestrator(target, config)
+        result = await orchestrator.run()
+        success = result.get("status") == "completed"
+
+        findings = result.get("findings_summary") or {}
+        payload = {"success": success, **result}
+        payload["evidence"] = evidence_items(
+            "auto_pentest",
+            "orchestration",
+            f"渗透流程 {result.get('status')}，发现 {findings.get('total', 0)} 个 finding",
+        )
+        payload["verified"] = findings.get("total", 0) > 0
+        return payload
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(session_id="session_id")
+    @handle_errors(
+        logger, category=ErrorCategory.REDTEAM, context_extractor=extract_session_context
+    )
+    async def pentest_resume(session_id: str) -> Dict[str, Any]:
+        """恢复渗透测试 - 从检查点恢复之前中断的渗透测试
+
+        支持断点续传，可从任意阶段继续执行
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            session_id: 会话ID (32字符hex或UUID格式)
+
+        Returns:
+            渗透测试结果
+        """
+        from core.orchestrator import resume_pentest
+
+        result = await resume_pentest(session_id)
+        success = result.get("status") == "completed"
+
+        findings = result.get("findings_summary") or {}
+        payload = {"success": success, **result}
+        payload["evidence"] = evidence_items(
+            "pentest_resume",
+            "orchestration",
+            f"恢复的渗透流程 {result.get('status')}，发现 {findings.get('total', 0)} 个 finding",
+        )
+        payload["verified"] = findings.get("total", 0) > 0
+        return payload
+
+    @tool(mcp)
+    @require_dangerous_auth
+    @validate_inputs(session_id="session_id")
+    @handle_errors(
+        logger, category=ErrorCategory.REDTEAM, context_extractor=extract_session_context
+    )
+    @no_target_contact("读取本地会话状态，不接触目标")
+    async def pentest_status(session_id: str) -> Dict[str, Any]:
+        """查询渗透测试状态 - 获取渗透测试会话的当前状态
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            会话状态、当前阶段、发现摘要
+        """
+        from core.orchestrator import AutoPentestOrchestrator
+
+        orchestrator = AutoPentestOrchestrator.resume(session_id)
+        state = orchestrator.get_state()
+        findings = orchestrator.get_findings()
+        attack_paths = orchestrator.get_attack_paths()
+
+        return {
+            "success": True,
+            "session_id": session_id,
+            "target": state.get("target"),
+            "current_phase": state.get("current_phase"),
+            "phase_status": state.get("phase_status"),
+            "findings_count": len(findings),
+            "high_value_findings": len(
+                [f for f in findings if f.get("severity") in ("critical", "high")]
+            ),
+            "suggested_attack_paths": attack_paths[:3],
+        }
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(target="target")
+    @handle_errors(logger, category=ErrorCategory.REDTEAM, context_extractor=extract_phase_context)
+    async def pentest_phase(
+        target: str,
+        phase: str,
+        session_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """执行单个渗透阶段 - 可以单独执行某一阶段
+
+        可用阶段: recon, vuln_scan, poc_exec, exploit, privilege_escalation,
+                  lateral_movement, exfiltrate, report
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            target: 目标URL或IP
+            phase: 要执行的阶段
+            session_id: 会话ID (可选，用于关联已有会话)
+            config: 阶段配置
+
+        Returns:
+            阶段执行结果
+        """
+        from core.orchestrator import AutoPentestOrchestrator, OrchestratorConfig, PentestPhase
+
+        if session_id:
+            orchestrator = AutoPentestOrchestrator.resume(session_id)
+        else:
+            orchestrator = AutoPentestOrchestrator(target, OrchestratorConfig())
+
+        phase_enum = PentestPhase(phase)
+        result = await orchestrator.execute_phase(phase_enum, config)
+
+        payload = {
+            "success": result.success,
+            "session_id": orchestrator.state.session_id,
+            "phase": phase,
+            "data": result.data,
+            "findings_count": len(result.findings),
+            "errors": result.errors,
+            "duration": result.duration,
+        }
+        payload["evidence"] = evidence_items(
+            "pentest_phase",
+            "orchestration",
+            f"阶段 {phase} 完成，发现 {len(result.findings)} 个 finding",
+        )
+        payload["verified"] = len(result.findings) > 0
+        return payload
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, category=ErrorCategory.REDTEAM)
+    async def exploit_vulnerability(
+        detection_result: Dict[str, Any],
+        targets: Optional[Dict[str, Any]] = None,
+        use_feedback: bool = False,
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
+        """利用检测到的漏洞 - 根据漏洞检测结果自动执行利用
+
+        支持漏洞类型: sqli, rce, ssti, xxe, path_traversal, ssrf, idor, xss, deserialize, file_upload
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            detection_result: 漏洞检测结果 (包含 vulnerable, vuln_type, url, param, payload)
+            targets: 利用目标配置 (可选，如 queries, commands, files)
+            use_feedback: 是否启用反馈循环 (失败自动调整重试)
+            max_retries: 最大重试次数 (仅在 use_feedback=True 时生效)
+
+        Returns:
+            利用结果
+        """
+        from core.exploit import ExploitEngine
+
+        wrapped = DetectionResultWrapper(
+            vulnerable=detection_result.get("vulnerable", False),
+            vuln_type=detection_result.get("vuln_type", detection_result.get("type", "unknown")),
+            url=detection_result.get("url", ""),
+            param=detection_result.get("param", ""),
+            payload=detection_result.get("payload", ""),
+            evidence=detection_result.get("evidence", ""),
+            extra=detection_result.get("extra", {}),
+        )
+
+        runtime_gate = _gate_handler_runtime_action(
+            "exploit_vulnerability",
+            inputs={
+                "url": wrapped.url,
+                "vuln_type": wrapped.vuln_type,
+                "use_feedback": use_feedback,
+            },
+        )
+        if not runtime_gate["allowed"]:
+            return {
+                "success": False,
+                "error": runtime_gate["reason"],
+                "runtime": _complete_handler_runtime_action(runtime_gate, False),
+            }
+
+        engine = ExploitEngine()
+
+        if use_feedback:
+            # 使用反馈循环引擎执行
+            from core.feedback import FeedbackLoopEngine
+
+            async def exploit_operation(context):
+                return await engine.async_exploit(wrapped, targets=targets)
+
+            feedback_engine = FeedbackLoopEngine()
+            feedback_result = await feedback_engine.execute_with_feedback(
+                exploit_operation, wrapped, max_retries=max_retries
+            )
+
+            if feedback_result.success:
+                result = feedback_result.result
+                runtime = _complete_handler_runtime_action(
+                    runtime_gate,
+                    bool(result.success),
+                    output={"success": bool(result.success), "vuln_type": result.vuln_type},
+                    error=result.error,
+                )
+                return {
+                    "success": result.success,
+                    "status": result.status.value,
+                    "exploit_type": result.exploit_type.value,
+                    "vuln_type": result.vuln_type,
+                    "url": result.url,
+                    "evidence": result.evidence,
+                    "payload_used": result.payload_used,
+                    "data": result.data,
+                    "shell": result.shell.to_dict() if result.shell else None,
+                    "files": [f.to_dict() for f in result.files] if result.files else None,
+                    "execution_time_ms": result.execution_time_ms,
+                    "error": result.error,
+                    "feedback": {
+                        "attempts": feedback_result.attempts,
+                        "adjustments_made": feedback_result.adjustments_made,
+                        "final_strategy": feedback_result.final_strategy,
+                    },
+                    "runtime": runtime,
+                }
+            else:
+                runtime = _complete_handler_runtime_action(
+                    runtime_gate,
+                    False,
+                    output={"success": False, "attempts": feedback_result.attempts},
+                    error=feedback_result.error,
+                )
+                return {
+                    "success": False,
+                    "error": feedback_result.error,
+                    "feedback": {
+                        "attempts": feedback_result.attempts,
+                        "failure_reasons": feedback_result.failure_reasons,
+                        "adjustments_tried": feedback_result.adjustments_tried,
+                    },
+                    "runtime": runtime,
+                }
+        else:
+            # 直接执行
+            result = await engine.async_exploit(wrapped, targets=targets)
+            runtime = _complete_handler_runtime_action(
+                runtime_gate,
+                bool(result.success),
+                output={"success": bool(result.success), "vuln_type": result.vuln_type},
+                error=result.error,
+            )
+
+            return {
+                "success": result.success,
+                "status": result.status.value,
+                "exploit_type": result.exploit_type.value,
+                "vuln_type": result.vuln_type,
+                "url": result.url,
+                "evidence": result.evidence,
+                "payload_used": result.payload_used,
+                "data": result.data,
+                "shell": result.shell.to_dict() if result.shell else None,
+                "files": [f.to_dict() for f in result.files] if result.files else None,
+                "execution_time_ms": result.execution_time_ms,
+                "error": result.error,
+                "runtime": runtime,
+            }
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(target="target")
+    @handle_errors(logger, category=ErrorCategory.REDTEAM, context_extractor=extract_cve_context)
+    async def exploit_by_cve(
+        target: str, cve_id: str, variables: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """利用已知CVE漏洞 - 使用PoC模板利用指定CVE
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            target: 目标URL
+            cve_id: CVE编号 (例: CVE-2021-44228)
+            variables: PoC变量 (可选)
+
+        Returns:
+            利用结果
+        """
+        from core.exploit import ExploitEngine
+
+        runtime_gate = _gate_handler_runtime_action(
+            "exploit_by_cve",
+            inputs={"target": target, "cve_id": cve_id},
+        )
+        if not runtime_gate["allowed"]:
+            return {
+                "success": False,
+                "error": runtime_gate["reason"],
+                "runtime": _complete_handler_runtime_action(runtime_gate, False),
+            }
+
+        engine = ExploitEngine()
+        result = engine.exploit_cve(target, cve_id, variables=variables)
+        runtime = _complete_handler_runtime_action(
+            runtime_gate,
+            bool(result.success),
+            output={"success": bool(result.success), "vuln_type": result.vuln_type},
+            error=result.error,
+        )
+
+        return {
+            "success": result.success,
+            "status": result.status.value,
+            "vuln_type": result.vuln_type,
+            "url": result.url,
+            "evidence": result.evidence,
+            "payload_used": result.payload_used,
+            "data": result.data,
+            "execution_time_ms": result.execution_time_ms,
+            "metadata": result.metadata,
+            "error": result.error,
+            "runtime": runtime,
+        }
+
+    @tool(mcp)
+    @require_dangerous_auth
+    @validate_inputs(target="target")
+    @handle_errors(logger, category=ErrorCategory.REDTEAM, context_extractor=extract_target_context)
+    @no_target_contact("由决策引擎基于已有状态推荐路径，不接触目标")
+    async def get_attack_paths(
+        target: str,
+        session_id: Optional[str] = None,
+        reconnaissance_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """获取攻击路径建议 - 基于侦察数据智能推荐攻击路径
+
+        Args:
+            target: 目标URL
+            session_id: 会话ID (可选，获取会话关联的攻击路径)
+            reconnaissance_data: 侦察数据 (可选)
+
+        Returns:
+            推荐的攻击路径列表
+        """
+        from core.orchestrator import AutoPentestOrchestrator, OrchestratorConfig
+
+        if session_id:
+            orchestrator = AutoPentestOrchestrator.resume(session_id)
+        else:
+            orchestrator = AutoPentestOrchestrator(target, OrchestratorConfig())
+            if reconnaissance_data:
+                orchestrator.state.recon_data = reconnaissance_data
+
+        attack_paths = orchestrator.get_attack_paths()
+
+        return {
+            "success": True,
+            "target": target,
+            "attack_paths": attack_paths,
+            "count": len(attack_paths),
+        }
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, category=ErrorCategory.REDTEAM)
+    async def exploit_orchestrate(
+        detections: List[Dict[str, Any]],
+        top_n: int = 3,
+        verify_first: bool = True,
+        parallel: bool = True,
+    ) -> Dict[str, Any]:
+        """编排多漏洞利用 - 智能编排多个漏洞的利用流程
+
+        功能:
+        - 按严重程度/置信度对漏洞排序
+        - 选择TOP N漏洞进行利用
+        - 支持并行/顺序执行
+        - 可选利用前验证
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            detections: 漏洞检测结果列表 (每个包含 vulnerable, vuln_type, url, param, severity, confidence)
+            top_n: 并行尝试数量 (默认3)
+            verify_first: 利用前是否验证漏洞 (默认True)
+            parallel: 是否并行执行 (默认True)
+
+        Returns:
+            编排利用结果，包含每个漏洞的利用状态
+        """
+        from core.exploit import ExploitOrchestrator, OrchestrationStrategy
+
+        strategy = OrchestrationStrategy.PARALLEL if parallel else OrchestrationStrategy.SEQUENTIAL
+
+        runtime_gate = _gate_handler_runtime_action(
+            "exploit_orchestrate",
+            inputs={
+                "detections": len(detections),
+                "top_n": top_n,
+                "verify_first": verify_first,
+                "parallel": parallel,
+            },
+        )
+        if not runtime_gate["allowed"]:
+            return {
+                "success": False,
+                "error": runtime_gate["reason"],
+                "runtime": _complete_handler_runtime_action(runtime_gate, False),
+            }
+
+        orchestrator = ExploitOrchestrator()
+        result = await orchestrator.orchestrate(
+            detections=detections, top_n=top_n, verify_first=verify_first, strategy=strategy
+        )
+        runtime = _complete_handler_runtime_action(
+            runtime_gate,
+            bool(result.success),
+            output={
+                "success": bool(result.success),
+                "successful_count": result.successful_count,
+            },
+        )
+
+        return {
+            "success": result.success,
+            "total_detections": result.total_detections,
+            "exploited_count": result.exploited_count,
+            "successful_count": result.successful_count,
+            "results": [
+                {
+                    "vuln_type": r.vuln_type,
+                    "url": r.url,
+                    "success": r.success,
+                    "status": r.status.value if hasattr(r, "status") else "unknown",
+                    "evidence": r.evidence,
+                    "error": r.error,
+                }
+                for r in result.results
+            ],
+            "execution_time_ms": result.execution_time_ms,
+            "strategy_used": strategy.value,
+            "runtime": runtime,
+        }
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, category=ErrorCategory.REDTEAM)
+    async def exploit_with_retry(
+        detection_result: Dict[str, Any],
+        max_retries: int = 3,
+        targets: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """带重试的漏洞利用 - 失败时自动分析原因并调整策略重试
+
+        功能:
+        - 失败原因分析 (WAF拦截/超时/限速/Payload过滤等)
+        - 策略自动调整 (编码绕过/延迟/代理切换等)
+        - 指数退避重试
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            detection_result: 漏洞检测结果
+            max_retries: 最大重试次数 (默认3)
+            targets: 利用目标配置
+
+        Returns:
+            利用结果，包含重试信息和调整策略
+        """
+        from core.exploit import exploit_with_retry as _exploit_with_retry
+
+        runtime_gate = _gate_handler_runtime_action(
+            "exploit_with_retry",
+            inputs={
+                "url": detection_result.get("url"),
+                "vuln_type": detection_result.get("vuln_type", detection_result.get("type")),
+                "max_retries": max_retries,
+            },
+        )
+        if not runtime_gate["allowed"]:
+            return {
+                "success": False,
+                "error": runtime_gate["reason"],
+                "runtime": _complete_handler_runtime_action(runtime_gate, False),
+            }
+
+        result = await _exploit_with_retry(
+            detection=detection_result, max_retries=max_retries, targets=targets
+        )
+        final_error = str(result.final_error) if result.final_error else None
+        runtime = _complete_handler_runtime_action(
+            runtime_gate,
+            bool(result.success),
+            output={"success": bool(result.success), "attempts": result.total_attempts},
+            error=final_error,
+        )
+
+        exploit_result = result.result
+        if isinstance(exploit_result, Exception):
+            exploit_payload: Any = str(exploit_result)
+        elif hasattr(exploit_result, "to_dict"):
+            exploit_payload = exploit_result.to_dict()
+        else:
+            exploit_payload = exploit_result
+
+        payload = {
+            "success": result.success,
+            "result": exploit_payload,
+            "attempts": result.total_attempts,
+            "failure_reasons": [
+                failure.reason.name
+                for failure in (result.retry_context.failures if result.retry_context else [])
+            ],
+            "adjustments_made": result.adjustments_applied,
+            "total_time_ms": result.total_time_ms,
+            "error": final_error,
+            "runtime": runtime,
+        }
+        payload["evidence"] = evidence_items(
+            "exploit_with_retry",
+            "command",
+            f"exploit {'成功' if result.success else '失败'}（{result.total_attempts} 次尝试）",
+        )
+        payload["verified"] = result.success
+        return payload
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, category=ErrorCategory.REDTEAM)
+    async def verify_and_exploit(
+        detection_result: Dict[str, Any],
+        verification_method: str = "auto",
+        targets: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """验证并利用 - 先验证漏洞真实性，再执行利用
+
+        验证方法:
+        - auto: 自动选择最佳验证方法
+        - oob: 带外验证 (DNS/HTTP回调)
+        - statistical: 统计学验证 (多次请求比对)
+        - timing: 时间盲注验证
+        - error: 错误信息验证
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            detection_result: 漏洞检测结果
+            verification_method: 验证方法 (auto/oob/statistical/timing/error)
+            targets: 利用目标配置
+
+        Returns:
+            验证和利用结果
+        """
+        from core.exploit import ExploitEngine
+        from core.vuln_verifier import VulnerabilityVerifier
+
+        wrapped = DetectionResultWrapper(
+            vulnerable=detection_result.get("vulnerable", False),
+            vuln_type=detection_result.get("vuln_type", detection_result.get("type", "unknown")),
+            url=detection_result.get("url", ""),
+            param=detection_result.get("param", ""),
+            payload=detection_result.get("payload", ""),
+            evidence=detection_result.get("evidence", ""),
+            extra=detection_result.get("extra", {}),
+        )
+
+        runtime_gate = _gate_handler_runtime_action(
+            "verify_and_exploit",
+            inputs={
+                "url": wrapped.url,
+                "vuln_type": wrapped.vuln_type,
+                "verification_method": verification_method,
+            },
+        )
+        if not runtime_gate["allowed"]:
+            return {
+                "success": False,
+                "verified": False,
+                "verification_method": verification_method,
+                "error": runtime_gate["reason"],
+                "runtime": _complete_handler_runtime_action(runtime_gate, False),
+            }
+
+        # 第一步：验证漏洞
+        verifier = VulnerabilityVerifier()
+        verification_results = verifier.batch_verify(
+            [detection_result]
+        )  # pylint: disable=no-member
+
+        verified = any(r.is_vulnerable for r in verification_results)
+        verification_result = {
+            "verified": verified,
+            "method_used": (
+                verification_results[0].verification_method
+                if verification_results
+                else verification_method
+            ),
+            "confidence": verification_results[0].confidence if verification_results else "low",
+        }
+
+        if not verified:
+            return {
+                "success": False,
+                "verified": False,
+                "verification_method": verification_method,
+                "verification_details": verification_result,
+                "error": "漏洞验证失败，可能是误报",
+                "runtime": _complete_handler_runtime_action(
+                    runtime_gate,
+                    False,
+                    output={"verified": False},
+                    error="漏洞验证失败，可能是误报",
+                ),
+            }
+
+        # 第二步：执行利用
+        engine = ExploitEngine()
+        exploit_result = await engine.async_exploit(wrapped, targets=targets)
+        runtime = _complete_handler_runtime_action(
+            runtime_gate,
+            bool(exploit_result.success),
+            output={
+                "success": bool(exploit_result.success),
+                "vuln_type": exploit_result.vuln_type,
+            },
+            error=exploit_result.error,
+        )
+
+        return {
+            "success": exploit_result.success,
+            "verified": True,
+            "verification_method": verification_result.get("method_used", verification_method),
+            "verification_confidence": verification_result.get("confidence", 0),
+            "exploit_result": {
+                "status": exploit_result.status.value,
+                "vuln_type": exploit_result.vuln_type,
+                "url": exploit_result.url,
+                "evidence": exploit_result.evidence,
+                "payload_used": exploit_result.payload_used,
+                "data": exploit_result.data,
+                "shell": exploit_result.shell.to_dict() if exploit_result.shell else None,
+                "files": (
+                    [f.to_dict() for f in exploit_result.files] if exploit_result.files else None
+                ),
+                "execution_time_ms": exploit_result.execution_time_ms,
+                "error": exploit_result.error,
+            },
+            "runtime": runtime,
+        }
+
+    @tool(mcp)
+    @require_dangerous_auth
+    @handle_errors(logger, category=ErrorCategory.REDTEAM)
+    @no_target_contact("分析传入的失败结果，不接触目标")
+    async def analyze_exploit_failure(
+        failed_result: Dict[str, Any], context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """分析利用失败原因 - 深度分析漏洞利用失败的原因并给出建议
+
+        分析维度:
+        - WAF/防护检测
+        - 网络/超时问题
+        - Payload过滤情况
+        - 目标环境限制
+        - 误报可能性
+
+        Args:
+            failed_result: 失败的利用结果
+            context: 额外上下文信息 (如目标技术栈、WAF类型等)
+
+        Returns:
+            失败原因分析和改进建议
+        """
+        from core.feedback import FailureAnalyzer, StrategyRegistry
+
+        analyzer = FailureAnalyzer()
+        analysis = analyzer.analyze(context={"failed_result": failed_result, **(context or {})})
+
+        # 获取推荐的调整策略
+        registry = StrategyRegistry()
+        recommended_strategies = []
+
+        for reason in analysis.failure_reasons:
+            strategies = registry.get_strategies(reason)
+            for strategy in strategies[:2]:  # 每种原因最多2个建议
+                recommended_strategies.append(
+                    {
+                        "reason": reason.value,
+                        "strategy": strategy.name,
+                        "description": strategy.description,
+                        "parameters": strategy.parameters,
+                    }
+                )
+
+        return {
+            "success": True,
+            "analysis": {
+                "primary_reason": (
+                    analysis.primary_reason.value if analysis.primary_reason else "unknown"
+                ),
+                "all_reasons": [r.value for r in analysis.failure_reasons],
+                "confidence": analysis.confidence,
+                "waf_detected": analysis.waf_detected,
+                "waf_type": analysis.waf_type,
+                "rate_limited": analysis.rate_limited,
+                "payload_filtered": analysis.payload_filtered,
+                "is_false_positive": analysis.is_false_positive,
+                "error_details": analysis.error_details,
+            },
+            "recommended_strategies": recommended_strategies,
+            "suggestions": analysis.suggestions,
+        }
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(target="target")
+    @handle_errors(logger, category=ErrorCategory.REDTEAM)
+    async def exploit_run(
+        mode: str,
+        detection_result: Optional[Dict[str, Any]] = None,
+        detections: Optional[List[Dict[str, Any]]] = None,
+        target: Optional[str] = None,
+        cve_id: Optional[str] = None,
+        template_id: Optional[str] = None,
+        targets: Optional[Dict[str, Any]] = None,
+        variables: Optional[Dict[str, str]] = None,
+        custom_vars: Optional[Dict[str, str]] = None,
+        use_feedback: bool = False,
+        max_retries: int = 3,
+        top_n: int = 3,
+        verify_first: bool = True,
+        parallel: bool = True,
+        verification_method: str = "auto",
+    ) -> Dict[str, Any]:
+        """Run one exploit mode. Catalog exploit_* tools dispatch here.
+
+        Args:
+            mode: exploit_vulnerability, exploit_by_cve, exploit_orchestrate,
+                exploit_with_retry, verify_and_exploit, poc_execute, cve_auto_exploit
+            detection_result: Single detection for vulnerability / retry / verify modes
+            detections: Detection list for exploit_orchestrate
+            target: Target URL for CVE / PoC modes
+            cve_id: CVE id for exploit_by_cve and cve_auto_exploit
+            template_id: PoC template id for poc_execute
+        """
+        from core.exploit.names import canonical_exploit_mode
+
+        resolved = canonical_exploit_mode(mode)
+        if resolved == "exploit_vulnerability":
+            if not detection_result:
+                raise ValueError("detection_result is required for exploit_vulnerability")
+            payload = await exploit_vulnerability(
+                detection_result,
+                targets=targets,
+                use_feedback=use_feedback,
+                max_retries=max_retries,
+            )
+        elif resolved == "exploit_by_cve":
+            if not target or not cve_id:
+                raise ValueError("target and cve_id are required for exploit_by_cve")
+            payload = await exploit_by_cve(target, cve_id, variables=variables)
+        elif resolved == "exploit_orchestrate":
+            if not detections:
+                raise ValueError("detections is required for exploit_orchestrate")
+            payload = await exploit_orchestrate(
+                detections, top_n=top_n, verify_first=verify_first, parallel=parallel
+            )
+        elif resolved == "exploit_with_retry":
+            if not detection_result:
+                raise ValueError("detection_result is required for exploit_with_retry")
+            payload = await exploit_with_retry(
+                detection_result, max_retries=max_retries, targets=targets
+            )
+        elif resolved == "verify_and_exploit":
+            if not detection_result:
+                raise ValueError("detection_result is required for verify_and_exploit")
+            payload = await verify_and_exploit(
+                detection_result,
+                verification_method=verification_method,
+                targets=targets,
+            )
+        elif resolved == "poc_execute":
+            if not target or not template_id:
+                raise ValueError("target and template_id are required for poc_execute")
+            payload = await _exec_poc_execute(target, template_id, variables)
+        else:
+            if not target or not cve_id:
+                raise ValueError("target and cve_id are required for cve_auto_exploit")
+            payload = await _exec_cve_auto_exploit(target, cve_id, custom_vars)
+        if isinstance(payload, dict):
+            payload.setdefault("evidence", [])
+            payload.setdefault("verified", bool(payload.get("success")))
+        return payload
+
+    counter.add("orchestration", 12)
+    logger.info("[Orchestration] 已注册 12 个自动化渗透编排工具")

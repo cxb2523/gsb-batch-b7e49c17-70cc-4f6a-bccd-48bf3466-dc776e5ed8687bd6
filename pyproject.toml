@@ -1,0 +1,289 @@
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # 排除目录
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | backup
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip_gitignore = true
+known_first_party = ["core", "modules", "handlers", "utils", "_version"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = """
+    --verbose
+    --strict-markers
+    --tb=short
+    -ra
+"""
+markers = [
+    "slow: 标记慢速测试",
+    "integration: 集成测试",
+    "e2e: 端到端测试",
+    "network: 需要网络的测试",
+    "unit: 单元测试",
+    "security: 安全相关测试",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["core", "handlers", "utils"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/backup/*",
+    # Same engines the default wheel excludes. They stay in the source tree.
+    "*/core/c2/*",
+    "*/core/lateral/*",
+    "*/core/persistence/*",
+    "*/core/post_exploit/*",
+    "*/core/privilege_escalation/*",
+    "*/core/exfiltration/*",
+    "*/core/evasion/*",
+    "*/core/credential/*",
+    "*/core/ad/*",
+    "*/core/exploit/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/backup/*",
+    "*/core/c2/*",
+    "*/core/lateral/*",
+    "*/core/persistence/*",
+    "*/core/post_exploit/*",
+    "*/core/privilege_escalation/*",
+    "*/core/exfiltration/*",
+    "*/core/evasion/*",
+    "*/core/credential/*",
+    "*/core/ad/*",
+    "*/core/exploit/*",
+]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "mcp.*",
+    "requests.*",
+    "paramiko.*",
+]
+ignore_missing_imports = true
+
+[tool.pylint.main]
+jobs = 0
+fail-under = 8.0
+ignore = ["tests", "backup", "venv", "__pycache__"]
+ignore-patterns = ["test_.*\\.py"]
+
+[tool.pylint.messages_control]
+disable = [
+    "C0111",  # missing-docstring
+    "C0103",  # invalid-name
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+    "W0212",  # protected-access
+]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.design]
+max-args = 7
+max-attributes = 10
+max-locals = 15
+max-branches = 15
+
+[tool.vulture]
+paths = ["core", "handlers", "cli", "autort"]
+min_confidence = 60
+ignore_decorators = [
+    "@*.command",
+    "@tool",
+    "@handle_errors",
+    "@*.resource",
+    "@*.prompt",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoredteam-orchestrator"
+dynamic = ["version"]
+description = "Local MCP/AI attack-surface audit and evidence gate for authorized testing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "AutoRedTeam Team"}
+]
+keywords = ["mcp", "security", "attack-surface", "sarif", "python", "static-analysis", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "mcp>=2.2.0,<3.0.0",
+    "requests>=2.31.0",
+    "aiohttp>=3.9.0",
+    "pyyaml>=6.0.0",
+    "pydantic>=2.6.0",
+    "typer>=0.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.12.0",
+    "isort>=5.13.0",
+    "pylint>=3.0.0",
+]
+ai = [
+    "openai>=1.12.0",
+    "anthropic>=0.18.0",
+    "litellm>=1.101.0,<2.0.0",
+    # langchain 0.1.x has CVE-2025-68664; upgraded to 0.3.x
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+]
+performance = [
+    "httpx>=0.26.0",
+    "celery>=5.3.0",
+    "redis>=5.0.0",
+]
+recon = [
+    "python-nmap>=0.7.1",
+    "shodan>=1.31.0",
+    "censys>=2.2.0",
+    "dnspython>=2.5.0",
+    "whois>=0.9.27",
+    "beautifulsoup4>=4.12.0",
+]
+network = [
+    "paramiko>=5.0.0,<6.0.0",
+    "pexpect>=4.9.0",
+    "websockets>=12.0",
+    "cryptography>=50.0.0,<51.0.0",
+]
+storage = [
+    "sqlalchemy>=2.0.0",
+    "pymongo>=4.6.0",
+]
+reporting = [
+    "jinja2>=3.1.0",
+    "markdown>=3.5.0",
+    "python-docx>=1.1.0",
+    "reportlab>=4.0.0",
+]
+ui = [
+    "colorama>=0.4.6",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Coff0xc/AutoRedTeam-Orchestrator"
+Documentation = "https://github.com/Coff0xc/AutoRedTeam-Orchestrator#readme"
+Repository = "https://github.com/Coff0xc/AutoRedTeam-Orchestrator"
+Issues = "https://github.com/Coff0xc/AutoRedTeam-Orchestrator/issues"
+
+[project.scripts]
+autort = "cli.main:app"
+autoredteam-mcp = "mcp_stdio_server:main"
+
+[tool.setuptools]
+# _version.py / mcp_stdio_server.py 是根目录下的单文件模块，不是包，packages.find 扫不到。
+# 缺了这一行，版本读取与 `autoredteam-mcp` 入口点会以 ModuleNotFoundError 启动失败。
+py-modules = ["_version", "mcp_stdio_server"]
+
+[tool.setuptools.dynamic]
+version = {attr = "_version.__version__"}
+
+[tool.setuptools.package-data]
+"core.skills" = ["pins.yaml"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "handlers*", "utils*", "autort*", "cli*"]
+# 后渗透与利用引擎留在源码树，不进入默认 wheel。full 档案在源码检出中仍可导入。
+exclude = [
+    "tests*",
+    "scripts*",
+    "backup*",
+    "core.c2*",
+    "core.lateral*",
+    "core.persistence*",
+    "core.post_exploit*",
+    "core.privilege_escalation*",
+    "core.exfiltration*",
+    "core.evasion*",
+    "core.credential*",
+    "core.ad*",
+    "core.exploit*",
+]

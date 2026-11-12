@@ -1,0 +1,89 @@
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual Environment
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Project Specific
+logs/*.log
+logs/*.txt
+reports/*.html
+reports/*.json
+reports/*.md
+data/*.db
+data/*.sqlite
+data/operation_audit.jsonl
+data/sessions/
+config/config.yaml
+config/api_keys.yaml
+config/*.local.yaml
+config/external_tools.yaml
+
+# System
+.DS_Store
+Thumbs.db
+desktop.ini
+nul
+
+# Claude / AI
+.claude/
+.iflow/
+CLAUDE.md
+tmpclaude-*
+# Test & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Secrets (never commit these!)
+*.pem
+*.key
+id_rsa*
+*.secret
+credentials.json
+
+# 敏感信息
+*.enc
+data/secrets/
+data/auth/
+data/admin_key.txt
+# 密钥文件
+.master_key
+.claude-audit-*.md
+
+# IDE
+.vscode/
+.idea/
+
+# Claude audit artifacts
+.claude-audit*
+.claude-security*
+
+# Leftover local tool downloads
+tools/sqlmap/
+tools/nuclei-templates/
+tools/bin/
+
+# Unreferenced payload catalog
+payloads/
