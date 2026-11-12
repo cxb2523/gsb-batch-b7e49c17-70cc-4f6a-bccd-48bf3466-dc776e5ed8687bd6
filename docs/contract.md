@@ -1,0 +1,181 @@
+# Contract: source of truth, versioning, drift
+
+`video-editing contract --json` is generated from the code (`operations.py`, `errors.py`, `compiler.py`,
+`ffmpeg_skill.py`, `paths.py`), never maintained beside it. `contract --check` proves that the document and the
+implementation agree, and `tests/contract/contract.json` is a golden copy that CI compares against the live document
+so that no field an agent keys on changes without a deliberate regeneration.
+
+## Pinned blocks (breaking when changed)
+
+Agents pin a snapshot of the contract and compare these blocks **verbatim** (video-production-agent's adapter does so
+in its integration test):
+
+```
+schema, skill_id, contract_version, operations, unsupported, errors, execution, capabilities, schemas
+```
+
+`contract_version` (docs/decisions.md ADR-007), not `version`, is the pinned identity field: it is the version of
+this *shape*, separate from `version` (this package's own release version, free to change on any release — a
+dependent pins a range against `contract_version`, never `version`). `version` still appears at the top level and
+in every response's `skill` block (it names which release produced a given document), but a `version`-only change
+is additive drift, not breaking.
+
+plus, per ToolSpec in `tools[]`: `tool_id, skill_id, version, operation_type, capability, required_capabilities,
+inputs, input_arity, produces_output, deterministic, result_keys, executed_by, kind`, and the list of tool ids itself.
+video-production-agent's adapter additionally compares `request_shape`, `response_shape`, `engine`, `formats`,
+`capability_names` and `tools[].parameters` / `writes_media` verbatim (`versioning.also_pinned_by_agents`), so those
+are treated as pinned too: an optional request field such as `outputs[].encoding` is documented in its own block
+(`contract.encoding.request_field`) and folded into `request_shape` only with the next version.
+
+A change inside any of them is a **breaking contract change**:
+
+- bump `contract_version` (this package does not yet release independently of its contract, so bump the skill
+  version too — while the major version is 0: the minor version, e.g. `0.1.x → 0.2.0`);
+- expect every agent to re-pin its snapshot and to review its lowering (parameter names, types, error mapping);
+- regenerate `tests/contract/contract.json` in the same change.
+
+Examples of breaking changes: a new operation type or parameter (`operations` changes), a renamed parameter, a new
+or removed error code, a changed exit code or retryable default, a new capability name, a changed schema id, a new
+CLI flag in `canonical_invocation`.
+
+## Additive blocks (allowed within a version)
+
+Everything outside the pinned blocks may be added or extended without a version bump:
+
+- new top-level keys (`media_compatibility`, `graph`, `validation`, `doctor_shape`, `versioning`, `provides`,
+  `dependencies`, …);
+- new keys inside a `tools[]` entry (`media`, …);
+- new keys in a response document (`execution.sources`, `execution.reused`, `execution.request_sha256`,
+  `execution.engine`, `outputs[].container / reused / operation_id`, records with `status: skipped`, …). The
+  response schema id stays `video-editing/response@1` because every previously documented key keeps its meaning.
+
+Removing a key, or changing the meaning of an existing one, is breaking even outside the pinned blocks.
+
+## Drift detection
+
+`contract --check tests/contract/contract.json` (also `--check -` with the document on stdin) reports, and exits 1 on:
+
+- `implementation`: the live document disagrees with the code (operation allowlist, compiler flags, capabilities,
+  unsupported list, error table, execution guarantees, media table, versioning block, README / SKILL.md mentions);
+- `drift`: the saved copy differs from the live document. Every difference is classified:
+  - `[breaking]` — a pinned block or pinned ToolSpec field changed, a key or tool was removed, the request shape changed;
+  - `[additive]` — a key was added outside the pinned blocks, a non-pinned block changed.
+
+  `drift.compatibility` is `none`, `additive` or `breaking`. Any drift fails the check: the golden copy is
+  regenerated on purpose (`video-editing contract --json > tests/contract/contract.json`), reviewed in the same
+  change, and the classification tells the reviewer whether agents must re-pin.
+
+## 0.2.0 (shipped; docs/decisions.md ADR-009)
+
+`version` `0.1.0` → `0.2.0`, `contract_version` `"1.0"` → `"2.0"`: `FILL` gained an optional `anchor: {x, y}`
+(mapping to ffmpeg-skill 0.10.0's `fit.py --crop-x/--crop-y`) and `outputs[].encoding` is now named directly in
+`request_shape` instead of only via `contract.encoding.request_field`. Both are breaking by this repository's own
+pinning convention (`operations` and `request_shape` both changed) — `video-production-agent`'s
+`SUPPORTED_SKILL_VERSIONS = ("0.1.",)` must widen before it accepts this contract; see ADR-009 for why this cost
+was accepted.
+
+## 0.3.0 (shipped; docs/decisions.md ADR-011)
+
+`version` `0.2.0` → `0.3.0`, `contract_version` `"2.0"` → `"3.0"`: a new `ROTATE` operation type (`{degrees?: 90 |
+180 | 270, flip?: h | v}`, at least one required), mapped straight onto `ffmpeg-skill fit.py`'s pre-existing
+`--rotate`/`--flip` flags — no new ffmpeg-skill capability needed. Breaking by this repository's own pinning
+convention (`operations` and `capabilities` both gained a key) — `video-production-agent`'s
+`SUPPORTED_SKILL_VERSIONS = ("0.1.",)` must widen before it accepts this contract, the same disclosed cost as 0.2.0
+(ADR-009). `kajisho5/video-editing-skill#11` items 2 (`OVERLAY` video-layer / chroma-key) and 3 (`stabilize` /
+`sequence` / `background` ownership) are deliberately **not** part of this release; see `versioning.next["0.4.0"]`
+(now shipped as 0.4.0, superseded by `versioning.next["0.5.0"]` below).
+
+## 0.4.0 (shipped; docs/decisions.md ADR-012)
+
+`version` `0.3.0` → `0.4.0`, `contract_version` `"3.0"` → `"4.0"`: `SPEED` gained an optional `smooth: blend |
+interpolate` parameter, mapped straight onto `ffmpeg-skill fit.py`'s pre-existing `--smooth` flag — no new
+ffmpeg-skill capability needed. Breaking by this repository's own pinning convention (`operations.SPEED.parameters`
+gained a key, the same shape of change ADR-009's `FILL.anchor` was) — `video-production-agent`'s
+`SUPPORTED_SKILL_VERSIONS = ("0.1.",)` must widen before it accepts this contract, the same disclosed cost as 0.2.0
+/ 0.3.0. Purely additive at the request level: a `SPEED` request that omits `smooth` compiles to the exact `argv`
+it always did (`--smooth` is only emitted when given).
+
+## After 0.4.0: FREEZE, REVERSE, an engine-neutral `unsupported` list (docs/decisions.md ADR-014; version bump left to the release)
+
+`operations`, `capabilities` / `capability_names`, `tools[]` and `provides` gain `FREEZE` (`video.freeze`,
+`ffmpeg-skill/freeze`) and `REVERSE` (`video.reverse`, `ffmpeg-skill/reverse`); `unsupported` loses both, its
+remaining reasons no longer claim ffmpeg-skill lacks a tool, and each entry gains `engine_tool` (the ffmpeg-skill tool
+that would execute the type, or `null`). Whether the installed checkout has that tool is detected by `doctor --json`
+(`unsupported[].engine_tool_status`), never written into the contract. `engine` gains `tools_optional` and lists the
+two new tools in `tools_used` (non-pinned). Breaking by this repository's convention (pinned `operations`,
+`unsupported`, `capabilities` changed): the next release bumps `version` and `contract_version`, and
+`video-production-agent` re-pins. `contract_check.verify_implementation` refuses an `unsupported` reason that says an
+engine tool is missing.
+
+## After 0.4.0: IMAGE_INSERT (docs/decisions.md ADR-015; same release as ADR-014)
+
+`operations`, `capabilities` / `capability_names`, `tools[]` and `provides` gain `IMAGE_INSERT`
+(`video.image_insert`, tool `video-editing/image_insert`, `ffmpeg-skill/insert`); `unsupported` loses it.
+`media_compatibility.IMAGE_INSERT.requires` is the first entry with `video: false` (its one input is an image
+source) — a consumer that assumed every type needs video must read `requires` instead. `engine.tools_optional`
+gains `ffmpeg-skill/insert`; `engine.version_range` / `dependencies` stay `>=0.10.0` (the type is gated on the
+detected tool, not on a raised floor). Breaking by the same convention as ADR-014 and shipped in the same release:
+one `version` / `contract_version` bump and one agent re-pin cover both.
+
+## 0.5.0 (shipped; docs/decisions.md ADR-029)
+
+`version` `0.4.18` → `0.5.0`, `contract_version` `"4.0"` → `"5.0"`, both by hand. Releases 0.4.8 to 0.4.18 changed
+pinned blocks under `"4.0"`: `operations` gained `PUNCH_IN` and `CONDENSE`, TRIM / CUT gained `precision: auto`,
+CONCAT gained the `stinger` transition, and `capability_names`, `request_shape` (`options.segment_cache`,
+`sources[].ai_generated`, `outputs[].max_size`) and `response_shape` changed with them (ADR-018 to ADR-028). This
+release changes no behaviour; it gives that shape its own `contract_version`. `video-production-agent` widens its
+`SUPPORTED_SKILL_VERSIONS` and re-pins.
+
+## 0.6.0 (docs/decisions.md ADR-031)
+
+`version` `0.5.1` → `0.6.0`, `contract_version` `"5.0"` → `"6.0"`, both by hand in the same change (ADR-029's lesson:
+the release workflow does not bump `contract_version`). The pinned `operations` block's TRIM / CUT `precision`
+documentation gains `smart` (`frame | keyframe | auto | smart`); `tools[].parameters` changes with it. Additive: a
+`smart_cut` block (what precision smart asks of the engine, its fallbacks, the report), `engine.compatibility.detected`
+gains the `cut.py --smart` line, doctor's `engine.compatibility.smart_cut` (bool), and on a smart TRIM / CUT
+`execution.operations[].cuts.smart` / `cuts.fallbacks` and `plan.steps[].smart`. Nothing an existing request does
+changes: the default precision is still `frame`, and `keyframe` / `auto` compile to the same argv as in 0.5.x.
+`video-production-agent` widens its `SUPPORTED_SKILL_VERSIONS` to 0.6.x and re-pins from the v0.6.0 tag.
+
+## 0.7.0 (candidates, none scheduled; docs/decisions.md ADR-002 / ADR-003 / ADR-011 / ADR-014, `kajisho5/video-editing-skill#11`)
+
+`versioning.next["0.7.0"]` (formerly `next["0.6.0"]` and `next["0.5.0"]`, carried over unchanged) lists breaking-change candidates for a future version, none currently in progress:
+`RESIZE.height` — found, by live verification against ffmpeg-skill 0.10.0, to be blocked on the engine
+(`fit.py` has no `--height` flag), not the small addition it was first framed as; `OVERLAY` video-layer + chroma-key parameters
+(`overlay.py --video`/`--chromakey`), per ADR-002's own "extend OVERLAY rather than add a type" prescription —
+flagged by issue #11 item 2, not decided or scheduled; and capability ownership for `stabilize` / `sequence` /
+`background` (issue #11 item 3) — undecided whether they belong here, elsewhere, or nowhere. `POSITION` is not
+planned.
+
+## `provides` (docs/decisions.md ADR-006)
+
+`provides` lists this Skill's eleven operations by their cross-repository Capability id (`video.trim`, `video.cut`,
+`video.concat`, `video.speed`, `video.fit`, `video.fill`, `video.resize`, `video.overlay`, `video.rotate`,
+`video.freeze`, `video.reverse` — the same
+`capability` string `operations.OPERATIONS` and `tools[].capability` already carry), each with its `tool_id` and a `lifecycle`.
+It exists for `kajisho5/AI-video-production-OS`'s `CapabilityContract.provides` (`docs/SPEC.md` there), so a
+registry can resolve "who provides `video.trim`" without hardcoding this repository. It is additive, not pinned,
+and derived from `OPERATIONS` — it cannot say anything `tools[]` doesn't already say, only index it differently.
+
+## `dependencies` (docs/decisions.md ADR-008)
+
+`dependencies` is `[{"skill_id": "ffmpeg-skill", "version_range": ">=0.10.0"}]` (ADR-010, ADR-013: a floor, no upper
+bound) — the exact range `ffmpeg_skill.py`'s `version_supported()` already enforces at runtime, computed once
+(`contract.ffmpeg_skill_version_range()`) and shared with `engine.version_range` so the two never disagree. It adds
+no new guarantee over what `doctor --json` already reports; it makes an existing runtime fact readable from
+`contract --json` alone, in the shape `kajisho5/AI-video-production-OS`'s `CapabilityContract.dependencies`
+(`docs/SPEC.md` there) expects. It is additive, not pinned.
+
+## What an agent may rely on
+
+- `tools[].tool_id` = `video-editing/<type lower-case>`; `operations[<TYPE>].parameters` names every accepted
+  parameter (unknown ones are refused); `tools[].media.requires` says what the inputs must be.
+- `errors.codes` / `exit_codes` / `retryable_default`: the only codes a response can carry.
+- `execution.canonical_invocation`: `video-editing run - --json --workspace <dir> --allowed-input <root>`; the
+  workspace, the allowed roots and the ffmpeg-skill location are CLI flags, never request fields.
+- `response_shape` and `validation.response`: every document is self-checked before it is printed
+  (`response.check_response`); a document that would violate the shape is reported as `INTERNAL_ERROR` instead.
+- `doctor_shape`: `doctor --json` is the capability-discovery endpoint; `operations[].status` is `AVAILABLE` only
+  when the tool and every encoder / filter it needs are present, `supported_operations` lists exactly those. A type
+  MISSING only because the checkout lacks its optional tool (`engine.tools_optional`) is listed in `notes`, not
+  `problems`: `ok` stays true. `unsupported[].engine_tool_status` says whether the checkout ships each gap's tool.

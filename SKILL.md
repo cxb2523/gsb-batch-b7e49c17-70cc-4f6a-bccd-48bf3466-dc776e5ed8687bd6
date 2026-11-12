@@ -1,0 +1,61 @@
+---
+name: video-editing-skill
+description: Deterministic video editing from a typed edit request (trim, cut, concat with transitions, speed change, fit / fill / resize, still-image overlay) with an exact source-to-timeline mapping and per-operation provenance. Executes through ffmpeg-skill; never takes commands, argv, filter strings or executables. Use when an agent has already decided what to edit and needs the edit performed, verified and traced. Not for deciding what to cut, transcribing, captioning, colour grading or audio mastering.
+---
+
+# video-editing-skill
+
+`video-editing run - --json --workspace DIR [--allowed-input ROOT]` reads one request document on stdin and
+prints one response document on stdout. Everything else (`skill`, `doctor`, `validate`, `plan`) is documented in
+`README.md`; the machine-readable contract is `video-editing contract --json`.
+
+Workflow for a caller:
+
+1. `doctor --json --workspace DIR` once: `ok` must be true; `operations[]` says per type whether it is AVAILABLE
+   (tool and the flags it needs present in the installed ffmpeg-skill, any release; encoders / filters found by its
+   doctor) and `supported_operations` lists exactly those.
+2. Build the request from the contract's `request_shape`: sources (files under an allowed root), allowlisted
+   operations with typed params, outputs (relative paths under the workspace).
+3. `plan - --json` to see the operation graph, the timeline mapping, the tool per step and the commands
+   ffmpeg-skill would run. Nothing is written.
+4. `run - --json`. On success every output carries its sha256, size, timeline and an OBSERVED probe; every source
+   its probe; every operation a provenance record (`completed` / `reused`); the document is self-checked against the
+   contract shape before it is printed. On failure `{"ok": false, "error": {code, message, retryable, details}}`,
+   the failed record with its error, later operations `skipped`, and no output file is left behind.
+
+Media rules (`contract.media_compatibility`): every source is probed first; `OVERLAY` needs a video input with an
+audio stream; `CONCAT` conforms sizes / rates and adds audio when any input has it. Engine gaps (a missing
+ffmpeg-skill tool, encoder or filter) are refused before execution as `TOOL_ERROR`.
+
+Operation types (the allowlist): `TRIM`, `CUT`, `CONCAT` (with `params.transition`: an xfade type, or `{type: stinger, stinger, cut_point, cover}` for a stinger with alpha, the switch under full cover at its cut point; read cut_point / cover from its stinger.json; the cover at the cut point is measured and a stinger that does not cover it is refused), `SPEED` (`factor`, optional
+`smooth: blend | interpolate` for slow-motion), `FIT`, `FILL`, `RESIZE`, `OVERLAY`, `ROTATE` (turn 90/180/270
+clockwise and/or mirror `h`/`v`), `FREEZE` (`hold` seconds of one frame: at `at`, or the last frame when `at` is
+omitted), `REVERSE` (backwards, picture and audio), `IMAGE_INSERT` (one `kind: "image"` source → a silent clip of
+`duration` seconds, optional `width` / `height` / `fps`, that `CONCAT` can join: a title card or end slate), `CROP`
+(exactly the pixel rectangle `{x, y, width, height}` you give: even sizes, inside the frame as displayed; decide the
+rectangle yourself, e.g. from ffmpeg-skill `cropdetect`), `CONDENSE` (`segments` `[{start, end, label}]` and `rules` `{label: cut | keep | {speed: f}}`, `default` keep: apply the
+proposals from `video-editing propose` that a person approved; e.g. cut retakes and keep silences at double speed),
+`PUNCH_IN` (`start`, `end`, `scale` in (1, 4], `subject`
+`{x, y, width, height}`: a hard-cut zoom on the box you give, e.g. detection-skill's face box; which jump cuts get one is
+your decision). `FREEZE` / `REVERSE` / `IMAGE_INSERT` / `CROP` need ffmpeg-skill's
+`freeze.py` / `reverse.py` / `insert.py` / `crop.py`; `doctor --json` says whether the installed checkout has them. Anything
+else (`POSITION` included) is refused with
+`UNSUPPORTED_OPERATION`; the contract's `unsupported` list says why.
+
+`TRIM` / `CUT` take `precision`: `frame` (default: re-encoded, frame-accurate), `keyframe` (lossless, may land on a
+keyframe), `auto` (a stream copy where it lands within 0.2 s, else re-encoded) or `smart` (frame-accurate, only the
+partial GOPs at each cut point re-encoded; for long recordings cut between keyframes). `smart` needs ffmpeg-skill
+`cut.py --smart` (3.2.3+); without it, or for a source the engine cannot match, the whole cut is re-encoded and
+`execution.operations[].cuts.smart` says why (`applied: false`, `reason_code`).
+
+Times are exact: `"1:30"`, `"00:01:30.250"`, `{"frames": 300, "fps": "30000/1001"}` or a number of seconds.
+
+Frames are exact too: `RESIZE` keeps the aspect (`width` → `height = even(width × sh / sw)`), `FIT` pads to an aspect,
+`FILL` crops to it (optionally off-centre via `anchor: {x, y}`, each `0..1`); `ROTATE` keeps every pixel losslessly
+(`degrees: 90 | 180 | 270`, `flip: h | v`), swapping width and height only for a 90/270 turn; the target frame is
+reported before execution (`normalized.target_frame`) and verified after.
+`outputs[].encoding` may set `crf` (14..28) and `preset` (x264 vocabulary); nothing else about encoding is
+configurable (`contract.encoding`).
+
+`contract --check tests/contract/contract.json` verifies the live contract against the implementation, the docs
+and that saved copy; exit 1 on any problem.

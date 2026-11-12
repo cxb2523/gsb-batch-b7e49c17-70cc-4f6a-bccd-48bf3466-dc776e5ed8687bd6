@@ -1,0 +1,85 @@
+name: tests
+
+# Runs on every pull request and on pushes to main (same policy as media-analysis-skill), plus a manual trigger.
+# workflow_dispatch is only offered by GitHub once this file is on the default branch; pull_request works from the PR head.
+# The daily schedule runs the integration matrix against ffmpeg-skill main, so a new ffmpeg-skill release that breaks
+# this Skill shows up without waiting for a change here (docs/decisions.md ADR-013).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 5 * * *"   # daily, 05:23 UTC
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: pip install -e . ruff mypy
+      - run: ruff check src tests
+      - run: mypy src
+      - run: python -m compileall -q src tests
+      - run: video-editing contract --check tests/contract/contract.json --json
+
+  unit:
+    # ubuntu-latest is Ubuntu 26.04, which has no Python 3.9 build; keep 3.9 on the newest image that does
+    runs-on: ${{ matrix.python == '3.9' && startsWith(matrix.os, 'ubuntu') && 'ubuntu-24.04' || matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.9", "3.11"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e .
+      - run: python -m unittest -v test_unit test_paths test_security test_engine_contract test_engine_compat test_release_scripts test_release_labels
+        working-directory: tests
+      - run: video-editing contract --check tests/contract/contract.json
+      - run: video-editing skill --json > /dev/null
+        shell: bash
+
+  integration:
+    # The same real-media suite against two ffmpeg-skill checkouts: the oldest release every operation's flags exist in
+    # (0.11.0, pinned by commit so it never moves) and ffmpeg-skill main, so both ends of what this Skill detects are
+    # exercised. No version window: what differs between them is detected (ADR-013).
+    # 0.11.0 runs on ubuntu-24.04 (apt ffmpeg 6.1): on Ubuntu 26.04's ffmpeg 8.0 its join.py leaves a one-frame hole at
+    # a cut (29.82 fps where 30 was asked), an engine defect fixed upstream that output validation rightly refuses
+    # (ADR-013 "Found, not worked around"). main runs on ubuntu-latest, so the newest ffmpeg is still exercised.
+    name: integration (ffmpeg-skill ${{ matrix.engine.name }})
+    runs-on: ${{ matrix.engine.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - {name: "0.11.0", ref: b388035b66b3a4c370be57078ff42b115987f76c, os: ubuntu-24.04}
+          # the last 2.x and the first 3.x, pinned: 3.0 changed cut.py's defaults (ADR-017), so both sides are checked
+          - {name: "2.24.1", ref: a2c8433b2441b52b4fe16ce3525100d892ee047f, os: ubuntu-latest}
+          - {name: "3.0.0", ref: 1dc2f52013956daa1d97fd9d9d53c79b9305bc43, os: ubuntu-latest}
+          - {name: main, ref: main, os: ubuntu-latest}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: actions/checkout@v7
+        with:
+          repository: kajisho5/ffmpeg-skill
+          ref: ${{ matrix.engine.ref }}
+          path: vendor/ffmpeg-skill
+      - run: pip install -e .
+      - run: video-editing doctor --json --workspace .
+        env:
+          VIDEO_EDITING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
+      - run: python -m unittest -v test_integration
+        working-directory: tests
+        env:
+          VIDEO_EDITING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
