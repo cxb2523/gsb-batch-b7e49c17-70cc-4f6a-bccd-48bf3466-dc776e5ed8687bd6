@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-11-12T06:35:53.919014+00:00Z",
+  "git_stats": {
+    "total_commits": 1,
+    "commits_90d": 1,
+    "last_commit_date": "Wed Nov 11 05:30:23 2026 +0000"
+  },
+  "issues": {
+    "open": "Unknown",
+    "closed": "Unknown"
+  },
+  "ci": {
+    "latest_run": "passing",
+    "has_workflows": "Yes"
+  },
+  "tests": {
+    "has_tests": "Yes",
+    "failing": "0"
+  },
+  "performance": {
+    "task_create_median_s": 0.0005729198455810547,
+    "task_create_p95_s": 0.0008936882019042969
+  },
+  "code_health": {
+    "top_largest_files": [
+      "./attached_assets/Open-Source-Improvement_1770443530665.zip",
+      "./uv.lock",
+      "./app.py",
+      "./docs/index.html",
+      "./README.md",
+      "./src/satya/core/pulse.py",
+      "./src/satya/sdk/client.py",
+      "./AGENTS.md",
+      "./src/satya/core/goal_guardian.py",
+      "./src/satya/core/project_manager.py",
+      "./test_audit.db",
+      "./satya-ai/satya/core/policy_engine.py",
+      "./src/satya/core/tasks.py",
+      "./tests/test_completion_checker.py",
+      "./examples/basic_workflow/run_example.py",
+      "./src/satya/core/db.py",
+      "./src/satya/core/storage.py",
+      "./tests/test_project_manager.py",
+      "./satya-ai/satya/core/audit_logger.py",
+      "./CODE_OF_CONDUCT.md"
+    ]
+  }
+}

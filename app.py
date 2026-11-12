@@ -1,0 +1,2031 @@
+import streamlit as st
+import os
+import sys
+import json
+import html
+from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from satya.core import storage, Tasks, Scraper
+from satya.auth import is_human_authorized
+
+st.set_page_config(
+    page_title="Satya - AI Agent Tracker",
+    layout="wide",
+    page_icon="https://img.icons8.com/fluency/48/artificial-intelligence.png",
+    initial_sidebar_state="expanded"
+)
+
+if "theme" not in st.session_state:
+    st.session_state.theme = "dark"
+
+is_dark = st.session_state.theme == "dark"
+
+DARK_VARS = """
+:root {
+    --primary: #6C5CE7;
+    --primary-light: #A29BFE;
+    --primary-dark: #5A4BD1;
+    --success: #00B894;
+    --warning: #FDCB6E;
+    --danger: #E17055;
+    --info: #74B9FF;
+    --bg-main: #0F0F1A;
+    --bg-card: #1A1A2E;
+    --bg-card-hover: #222240;
+    --bg-sidebar: linear-gradient(180deg, #16162B 0%, #0F0F1A 100%);
+    --text-primary: #EAEAF0;
+    --text-secondary: #B0B0C5;
+    --border: #2D2D44;
+    --input-bg: #1E1E36;
+    --shadow-color: rgba(108, 92, 231, 0.15);
+    --log-bg: rgba(108,92,231,0.05);
+}
+"""
+
+LIGHT_VARS = """
+:root {
+    --primary: #6C5CE7;
+    --primary-light: #7C6FF0;
+    --primary-dark: #5A4BD1;
+    --success: #00B894;
+    --warning: #F0A500;
+    --danger: #E17055;
+    --info: #0984E3;
+    --bg-main: #F5F6FA;
+    --bg-card: #FFFFFF;
+    --bg-card-hover: #F0F0F8;
+    --bg-sidebar: linear-gradient(180deg, #FFFFFF 0%, #F5F6FA 100%);
+    --text-primary: #2D3436;
+    --text-secondary: #636E72;
+    --border: #DFE6E9;
+    --input-bg: #FFFFFF;
+    --shadow-color: rgba(108, 92, 231, 0.08);
+    --log-bg: rgba(108,92,231,0.04);
+}
+"""
+
+THEME_VARS = DARK_VARS if is_dark else LIGHT_VARS
+
+CUSTOM_CSS = f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+{THEME_VARS}
+
+html, body, [class*="css"] {{
+    font-family: 'Inter', sans-serif !important;
+}}
+
+.stApp {{
+    background: var(--bg-main) !important;
+}}
+
+.main .block-container {{
+    padding-top: 1.5rem;
+    max-width: 1400px;
+}}
+
+section[data-testid="stSidebar"] {{
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+}}
+
+section[data-testid="stSidebar"] [data-testid="stMarkdown"] {{
+    color: var(--text-primary);
+}}
+
+.hero-header {{
+    background: linear-gradient(135deg, #6C5CE7 0%, #A29BFE 50%, #74B9FF 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 2.2rem;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    margin-bottom: 0.2rem;
+}}
+
+.page-subtitle {{
+    color: var(--text-secondary);
+    font-size: 1rem;
+    margin-bottom: 1.5rem;
+    font-weight: 400;
+}}
+
+.metric-card {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    text-align: center;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}}
+
+.metric-card:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px var(--shadow-color);
+}}
+
+.metric-value {{
+    font-size: 2.5rem;
+    font-weight: 800;
+    margin: 0.3rem 0;
+}}
+
+.metric-label {{
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+}}
+
+.metric-icon {{
+    font-size: 1.5rem;
+    margin-bottom: 0.3rem;
+}}
+
+.task-card {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.75rem;
+    transition: all 0.2s ease;
+    border-left: 4px solid transparent;
+}}
+
+.task-card:hover {{
+    background: var(--bg-card-hover);
+    box-shadow: 0 4px 20px var(--shadow-color);
+}}
+
+.task-card.priority-critical {{ border-left-color: var(--danger); }}
+.task-card.priority-high {{ border-left-color: var(--warning); }}
+.task-card.priority-medium {{ border-left-color: var(--info); }}
+.task-card.priority-low {{ border-left-color: var(--success); }}
+
+.task-title {{
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    margin-bottom: 0.3rem;
+}}
+
+.task-meta {{
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}}
+
+.priority-badge {{
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}}
+
+.badge-critical {{ background: rgba(225,112,85,0.15); color: var(--danger); }}
+.badge-high {{ background: rgba(253,203,110,0.15); color: var(--warning); }}
+.badge-medium {{ background: rgba(116,185,255,0.15); color: var(--info); }}
+.badge-low {{ background: rgba(0,184,148,0.15); color: var(--success); }}
+
+.column-header {{
+    padding: 0.6rem 1rem;
+    border-radius: 10px;
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    letter-spacing: 0.3px;
+}}
+
+.header-todo {{ background: rgba(116,185,255,0.15); color: var(--info); border: 1px solid rgba(116,185,255,0.3); }}
+.header-progress {{ background: rgba(253,203,110,0.15); color: var(--warning); border: 1px solid rgba(253,203,110,0.3); }}
+.header-done {{ background: rgba(0,184,148,0.15); color: var(--success); border: 1px solid rgba(0,184,148,0.3); }}
+
+.truth-card {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.2rem;
+    margin-bottom: 0.75rem;
+    transition: all 0.2s ease;
+}}
+
+.truth-card:hover {{
+    background: var(--bg-card-hover);
+}}
+
+.section-divider {{
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 1.5rem 0;
+}}
+
+.sidebar-brand {{
+    text-align: center;
+    padding: 1rem 0;
+}}
+
+.sidebar-brand-title {{
+    font-size: 1.6rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #6C5CE7, #A29BFE);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.5px;
+}}
+
+.sidebar-brand-sub {{
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: 2px;
+}}
+
+.log-entry {{
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.8rem;
+    padding: 0.4rem 0.8rem;
+    border-left: 3px solid var(--primary);
+    margin-bottom: 0.3rem;
+    background: var(--log-bg);
+    border-radius: 0 6px 6px 0;
+    color: var(--text-primary);
+}}
+
+.empty-state {{
+    text-align: center;
+    padding: 3rem 2rem;
+    color: var(--text-secondary);
+}}
+
+.empty-state-icon {{
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}}
+
+.empty-state-text {{
+    font-size: 1rem;
+    font-weight: 500;
+}}
+
+.stButton > button {{
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.8rem !important;
+    padding: 0.3rem 0.8rem !important;
+    transition: all 0.2s ease !important;
+}}
+
+div[data-testid="stExpander"] {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}}
+
+.progress-bar-container {{
+    background: var(--border);
+    border-radius: 10px;
+    height: 8px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+}}
+
+.progress-bar-fill {{
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.5s ease;
+}}
+
+.footer-text {{
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    padding: 1rem 0;
+    border-top: 1px solid var(--border);
+    margin-top: 2rem;
+}}
+
+.theme-toggle {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.8rem;
+    border-radius: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    margin: 0.5rem auto;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}}
+
+.api-section {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+}}
+
+.api-section h4 {{
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}}
+
+.code-block {{
+    background: {'#12121F' if is_dark else '#F0F0F5'};
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.6;
+}}
+
+.endpoint-row {{
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border);
+}}
+
+.endpoint-row:last-child {{
+    border-bottom: none;
+}}
+
+.method-badge {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.5px;
+}}
+
+.method-post {{ background: rgba(0,184,148,0.2); color: #00B894; }}
+.method-get {{ background: rgba(116,185,255,0.2); color: #74B9FF; }}
+.method-put {{ background: rgba(253,203,110,0.2); color: #FDCB6E; }}
+.method-delete {{ background: rgba(225,112,85,0.2); color: #E17055; }}
+
+/* Promo & Main Owner Styles */
+.promo-card {{
+    border-radius: 16px;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+    margin-bottom: 1.5rem;
+}}
+
+.promo-card:hover {{
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px var(--shadow-color);
+}}
+
+.hero-card {{
+    background: linear-gradient(135deg, #6C5CE7 0%, #5A4BD1 100%);
+    padding: 2rem;
+    color: white;
+    min-height: 200px;
+    justify-content: center;
+}}
+
+.hero-card .card-headline {{
+    font-size: 1.75rem;
+    font-weight: 800;
+    margin-bottom: 0.75rem;
+    color: white !important;
+}}
+
+.hero-card .card-body {{
+    font-size: 1rem;
+    opacity: 0.9;
+    margin-bottom: 1.5rem;
+    max-width: 80%;
+    color: white !important;
+}}
+
+.card-cta {{
+    display: inline-block;
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 0.9rem;
+    text-align: center;
+    text-decoration: none;
+    transition: background 0.2s;
+}}
+
+.hero-card .card-cta {{
+    background: white;
+    color: #6C5CE7 !important;
+}}
+
+.hero-card .card-cta:hover {{
+    background: #F0F0F8;
+}}
+
+.compact-card {{
+    background: var(--bg-card);
+    padding: 1.25rem;
+    flex-direction: row;
+    align-items: center;
+    gap: 1rem;
+}}
+
+.compact-card .card-icon {{
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+}}
+
+.compact-card .card-headline {{
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}}
+
+.compact-card .card-body {{
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}}
+
+.compact-card .card-cta {{
+    background: var(--primary);
+    color: white !important;
+}}
+
+.mobile-tile {{
+    background: var(--bg-card);
+    padding: 1rem;
+    text-align: center;
+    aspect-ratio: 1 / 1;
+    justify-content: space-between;
+}}
+
+.mobile-tile .card-headline {{
+    font-size: 0.95rem;
+    font-weight: 700;
+}}
+
+.mobile-tile .card-cta {{
+    background: var(--primary);
+    color: white !important;
+}}
+
+.step-card {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+}}
+
+.step-number {{
+    width: 24px;
+    height: 24px;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+}}
+
+.step-title {{
+    font-weight: 700;
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+}}
+
+.step-desc {{
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}}
+</style>
+"""
+
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+@st.cache_resource
+def get_managers():
+    return Tasks(), Scraper()
+
+tasks_manager, scraper_manager = get_managers()
+
+
+def get_priority_badge(priority):
+    p = html.escape((priority or "Medium").lower())
+    return f'<span class="priority-badge badge-{p}">{html.escape(priority or "Medium")}</span>'
+
+def get_priority_class(priority):
+    return f"priority-{html.escape((priority or 'medium').lower())}"
+
+def parse_iso(iso_str):
+    """Robust ISO parser that handles Z and ensures timezone awareness."""
+    if not iso_str:
+        return None
+    try:
+        # Handle cases like '2023-10-27T10:00:00+00:00Z'
+        if iso_str.endswith('Z'):
+            clean_iso = iso_str.replace('Z', '+00:00')
+        else:
+            clean_iso = iso_str
+
+        dt = datetime.fromisoformat(clean_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except:
+        return html.escape(str(iso_str or "N/A"))
+
+def format_time_ago(iso_str):
+    try:
+        # Handle 'Z' suffix and possible double offset in Python 3.11+
+        clean_iso = iso_str
+        if clean_iso.endswith('Z'):
+            clean_iso = clean_iso[:-1]
+            if not ('+' in clean_iso or '-' in clean_iso.split('T')[-1]):
+                clean_iso += '+00:00'
+
+        dt = datetime.fromisoformat(clean_iso)
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        diff = datetime.now(timezone.utc) - dt
+        if diff.total_seconds() < 0:
+            return "Just now"
+        if diff.days > 0:
+            return f"{diff.days}d ago"
+        hours = diff.seconds // 3600
+        if hours > 0:
+            return f"{hours}h ago"
+        minutes = diff.seconds // 60
+        return f"{minutes}m ago" if minutes > 0 else "Just now"
+    except:
+        return html.escape(str(iso_str or ""))
+
+    now = datetime.now(timezone.utc)
+    diff = now - dt
+    seconds = int(diff.total_seconds())
+
+    if seconds < 0:
+        return "Just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    if diff.days < 30:
+        return f"{diff.days}d ago"
+    if diff.days < 365:
+        return f"{diff.days // 30}mo ago"
+    return f"{diff.days // 365}y ago"
+
+
+with st.sidebar:
+    st.markdown("""
+    <div class="sidebar-brand">
+        <div class="sidebar-brand-title">Satya</div>
+        <div class="sidebar-brand-sub">AI Agent Tracker</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # Handle Navigation via Query Parameters
+    query_params = st.query_params
+    is_public = query_params.get("is_public", "").lower() == "true"
+
+    if is_public:
+        nav_options = ["Dashboard", "Agent Pulse", "Task Board", "Truth Source", "Agent Logs"]
+    else:
+        nav_options = ["Dashboard", "Agent Pulse", "Task Board", "Truth Source", "Agent Logs", "Main Owner", "SDK Docs", "Agent Chat", "ROI Dashboard", "Template Galleries"]
+
+    default_index = 0
+    if "page" in query_params:
+        target_page = query_params["page"].replace("+", " ")
+        if target_page in nav_options:
+            default_index = nav_options.index(target_page)
+
+    page = st.radio(
+        "Navigation",
+        nav_options,
+        index=default_index,
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+
+    # Admin Auth for Mutations
+    if not is_public:
+        st.markdown("#### Operator Access")
+        admin_key = st.text_input("Admin Key", type="password", help="Enter the Admin Key to unlock mutating controls.")
+        is_admin = is_human_authorized(admin_key)
+        if is_admin:
+            st.success("Admin unlocked")
+        else:
+            st.info("Read-only mode")
+
+        # Add public sharing toggle/link
+        st.markdown("#### Public Link")
+        public_url = f"/?is_public=true&page={page.replace(' ', '+')}"
+        st.markdown(f"[Copy Public Link]({public_url})")
+    else:
+        is_admin = False
+        st.info("Public View (Read-only)")
+
+    st.markdown("---")
+
+    all_tasks = tasks_manager.list_all()
+
+    # Calculate stats and agent metrics in a single pass to avoid multiple file reads
+    stats = {
+        "total": len(all_tasks),
+        "queued": 0,
+        "in_progress": 0,
+        "done": 0,
+        "failed": 0
+    }
+
+    # Read heartbeats for live agents
+    heartbeats = storage.get_heartbeats()
+    live_agents_count = 0
+
+    for agent_name, hb in heartbeats.items():
+        if hb.get("status") == "online":
+            try:
+                # Handle 'Z' suffix and possible double offset in Python 3.11+
+                clean_iso = hb.get("last_seen", "")
+                if clean_iso.endswith('Z'):
+                    clean_iso = clean_iso[:-1]
+                    if not ('+' in clean_iso or '-' in clean_iso.split('T')[-1]):
+                        clean_iso += '+00:00'
+
+                dt = datetime.fromisoformat(clean_iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+
+                diff = datetime.now(timezone.utc) - dt
+                if diff.total_seconds() < 300: # 5 minutes
+                    live_agents_count += 1
+            except:
+                pass
+
+    agent_metrics = {}
+
+    for t in all_tasks:
+        # Update overall stats
+        status = t.get("status", "queued")
+        if status in stats:
+            stats[status] += 1
+
+        # Update agent metrics
+        assignee = t.get("assignee", "Unassigned")
+        if assignee not in agent_metrics:
+            agent_metrics[assignee] = {"completed": 0, "in_progress": 0, "total": 0}
+
+        agent_metrics[assignee]["total"] += 1
+        if status == "done":
+            agent_metrics[assignee]["completed"] += 1
+        elif status == "in_progress":
+            agent_metrics[assignee]["in_progress"] += 1
+
+    if stats["total"] > 0:
+        completion = int((stats["done"] / stats["total"]) * 100)
+    else:
+        completion = 0
+
+    st.markdown(f"""
+    <div style="padding: 0.5rem;">
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">
+            Overall Progress
+        </div>
+        <div style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary);">{completion}%</div>
+        <div class="progress-bar-container">
+            <div class="progress-bar-fill" style="width: {completion}%; background: linear-gradient(90deg, #6C5CE7, #00B894);"></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    theme_label = "Switch to Light" if is_dark else "Switch to Dark"
+    theme_icon = "&#9728;&#65039;" if is_dark else "&#127769;"
+    if st.button(f"{'Light Mode' if is_dark else 'Dark Mode'}", key="theme_toggle", use_container_width=True):
+        st.session_state.theme = "light" if is_dark else "dark"
+        st.rerun()
+
+    st.markdown("---")
+
+    # Variant Selection for A/B Testing Demo
+    headline_variant = "A" if datetime.now().second % 2 == 0 else "B"
+    cta_variant = "1" if datetime.now().second % 4 < 2 else "2"
+
+    mobile_headlines = {"A": "Main Owner", "B": "Lead Mission"}
+    mobile_ctas = {"1": "Setup", "2": "Start"}
+    st.markdown(f"""
+    <div class="promo-card promo-mobile" style="margin: 0.5rem; padding: 1rem;">
+        <div class="promo-icon" style="font-size: 1.5rem; margin-bottom: 0.5rem;">&#128081;</div>
+        <div style="font-weight: 700; font-size: 0.9rem; color: var(--text-primary);">{mobile_headlines[headline_variant]}</div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.8rem;">Establish Mission Authority</div>
+        <a href="?page=Main+Owner+Guide" class="promo-cta" style="padding: 0.3rem 0.8rem; font-size: 0.7rem; display: block;">{mobile_ctas[cta_variant]}</a>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="text-align: center; padding: 0.5rem;">
+        <div style="font-size: 0.7rem; color: var(--text-secondary);">
+            Powered by <strong>Anktechsol.com</strong>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def log_analytics(event_name, payload=None):
+    """Mock analytics event logging."""
+    # Simple deduplication for Streamlit reruns
+    last_event = st.session_state.get("last_analytics_event")
+    last_payload = st.session_state.get("last_analytics_payload")
+
+    if last_event == event_name and last_payload == payload:
+        return None
+
+    st.session_state.last_analytics_event = event_name
+    st.session_state.last_analytics_payload = payload
+
+    now = datetime.now().isoformat()
+    log_entry = {
+        "timestamp": now,
+        "event": event_name,
+        "payload": payload or {}
+    }
+    # For demo purposes, we'll log to a file
+    os.makedirs("satya_data/analytics", exist_ok=True)
+    with open("satya_data/analytics/events.log", "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
+    return log_entry
+
+
+# ─── DASHBOARD PAGE ─────────────────────────────────────
+if page == "Dashboard":
+    log_analytics("page_view", {"page": "Dashboard"})
+    st.markdown('<div class="hero-header">Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Overview of your AI agent operations and task progress</div>', unsafe_allow_html=True)
+
+    # Main Owner Promo Hero Card
+    st.markdown("""
+    <div class="promo-card hero-card">
+        <div class="card-headline">Master Your AI Fleet</div>
+        <div class="card-body">Designate a Main Owner for unified oversight, master permissions, and central governance across all agent sessions.</div>
+        <div>
+            <a href="#" class="card-cta">Start Onboarding</a>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    from satya.core import get_stale_tasks
+    # ⚡ Bolt Optimization:
+    # We already fetched all_tasks via tasks_manager.list_all().
+    # Passing them here prevents N+1 file reads, drastically speeding up the render.
+    stale = get_stale_tasks(all_tasks)
+    if stale:
+        st.warning(f"⚠️ {len(stale)} stale task(s) detected — agent may be stuck")
+        for t in stale:
+            st.write(f"- {t['title']} | locked by {t['locked_by']} | {t['elapsed_minutes']}m elapsed")
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">&#128202;</div>
+            <div class="metric-value" style="color: var(--primary-light);">{stats['total']}</div>
+            <div class="metric-label">Total Tasks</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">&#128204;</div>
+            <div class="metric-value" style="color: var(--info);">{stats['queued']}</div>
+            <div class="metric-label">Queued</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">&#9889;</div>
+            <div class="metric-value" style="color: var(--warning);">{stats['in_progress']}</div>
+            <div class="metric-label">In Progress</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">&#9989;</div>
+            <div class="metric-value" style="color: var(--success);">{stats['done']}</div>
+            <div class="metric-label">Done</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    # Variant Selection for A/B Testing Demo
+    headline_variant = "A" if datetime.now().second % 2 == 0 else "B"
+    cta_variant = "1" if datetime.now().second % 4 < 2 else "2"
+
+    hero_headlines = {
+        "A": "Command Your Mission: Meet the Main Owner",
+        "B": "Single Source of Truth, Single Point of Authority"
+    }
+    hero_ctas = {
+        "1": "Setup Main Owner",
+        "2": "Start Leading Now"
+    }
+
+    st.markdown(f"""
+    <div class="promo-card promo-hero" onclick="window.location.href='?page=Main+Owner+Guide'">
+        <div class="promo-tag">New Feature</div>
+        <div class="promo-title">{hero_headlines[headline_variant]}</div>
+        <div class="promo-subtitle">Establish ultimate accountability and truth with the Main Owner feature—the single source of authority for your AI agent's mission.</div>
+        <a href="?page=Main+Owner+Guide" class="promo-cta">{hero_ctas[cta_variant]}</a>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_left, col_right = st.columns([3, 2])
+
+    with col_left:
+        st.markdown("#### Recent Tasks")
+        sorted_tasks = sorted(all_tasks, key=lambda t: t.get("updated_at", ""), reverse=True)[:5]
+
+        if sorted_tasks:
+            for task in sorted_tasks:
+                priority = task.get("priority", "Medium")
+                st.markdown(f"""
+                <div class="task-card {get_priority_class(priority)}">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div class="task-title">{html.escape(task.get('title', 'Untitled'))}</div>
+                        {get_priority_badge(priority)}
+                    </div>
+                    <div class="task-meta">
+                        {html.escape(task.get('assignee', 'Unassigned'))} &middot;
+                        {html.escape(task.get('status', 'queued').replace('_', ' ').title())} &middot;
+                        {format_time_ago(task.get('updated_at', ''))}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="empty-state">
+                <div class="empty-state-icon">&#128203;</div>
+                <div class="empty-state-text">No tasks yet. Create your first task!</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with col_right:
+        st.markdown("#### Quick Stats")
+
+        truth_files = scraper_manager.list_sources()
+        log_files = []
+        if os.path.exists(storage.AGENTS_DIR):
+            log_files = [f for f in os.listdir(storage.AGENTS_DIR) if f.endswith(".log")]
+
+        st.markdown(f"""
+        <div class="metric-card" style="margin-bottom: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0;">
+                <span style="color: var(--text-secondary);">Live Agents</span>
+                <span style="font-weight: 700; font-size: 1.2rem; color: var(--success);">{live_agents_count}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0;">
+                <span style="color: var(--text-secondary);">Knowledge Sources</span>
+                <span style="font-weight: 700; font-size: 1.2rem; color: var(--primary-light);">{len(truth_files)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0;">
+                <span style="color: var(--text-secondary);">Agent Logs</span>
+                <span style="font-weight: 700; font-size: 1.2rem; color: var(--primary-light);">{len(log_files)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0;">
+                <span style="color: var(--text-secondary);">Completion Rate</span>
+                <span style="font-weight: 700; font-size: 1.2rem; color: var(--success);">{completion}%</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        compact_headlines = {"A": "Unlock Main Owner", "B": "Enable Priority Ownership"}
+        compact_ctas = {"1": "Get Started", "2": "Enable Now"}
+
+        st.markdown(f"""
+        <div class="promo-card promo-compact">
+            <div>
+                <div style="font-weight: 700; color: var(--text-primary);">{compact_headlines[headline_variant]}</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary);">Unify your agent's mission today.</div>
+            </div>
+            <a href="?page=Main+Owner+Guide" class="promo-cta" style="padding: 0.4rem 1rem; font-size: 0.75rem;">{compact_ctas[cta_variant]}</a>
+        </div>
+        """, unsafe_allow_html=True)
+
+        try:
+            if stats["total"] > 0:
+                st.markdown("#### Task Distribution")
+                import pandas as pd
+                chart_data = pd.DataFrame({
+                    "Status": ["Queued", "In Progress", "Done"],
+                    "Count": [stats["queued"], stats["in_progress"], stats["done"]]
+                })
+                st.bar_chart(chart_data, x="Status", y="Count", color="#6C5CE7", height=200)
+        except Exception as e:
+            st.error("Error rendering task distribution chart.")
+
+        if agent_metrics:
+            st.markdown("#### Agent Performance & Health")
+
+            # Show live agents first
+            if heartbeats:
+                for agent_name, hb in heartbeats.items():
+                    status_color = "var(--success)" if hb.get("status") == "online" else "var(--danger)"
+                    status_text = "Online" if hb.get("status") == "online" else "Offline"
+                    st.markdown(f"""
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem; padding: 0.5rem; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border);">
+                        <div style="width: 10px; height: 10px; border-radius: 50%; background-color: {status_color}; margin-right: 0.5rem;"></div>
+                        <div style="flex-grow: 1; font-weight: 600; color: var(--text-primary);">{html.escape(agent_name)}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">{status_text} &middot; {format_time_ago(hb.get('last_seen', ''))}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            try:
+                agent_data = []
+                for agent, data in agent_metrics.items():
+                    agent_data.append({"Agent": agent, "Completed": data["completed"], "In Progress": data["in_progress"]})
+
+                df_agents = pd.DataFrame(agent_data)
+                st.bar_chart(df_agents, x="Agent", y=["Completed", "In Progress"], height=200)
+            except Exception as e:
+                st.error("Error rendering agent metrics chart.")
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown("#### Audit Trail (Governance)")
+    # Extract audit trails across all tasks and sort by timestamp
+    audit_events = []
+    for task in all_tasks:
+        audit_trail = task.get("audit_trail", [])
+        for event in audit_trail:
+            # add task title to the event for display
+            event_copy = event.copy()
+            event_copy["task_title"] = task.get("title", "Unknown Task")
+            audit_events.append(event_copy)
+
+    if audit_events:
+        # Sort newest first
+        audit_events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+        # Display top 10
+        # ⚡ Bolt Optimization: Batching markdown calls to reduce Streamlit rendering overhead
+        batched_events_html = []
+        for event in audit_events[:10]:
+            ts = format_time_ago(event.get('timestamp', ''))
+            agent = event.get('agent', 'System')
+            action = event.get('action', 'Unknown Action')
+            details = event.get('details', '')
+            task_title = event.get('task_title', '')
+
+            batched_events_html.append(f"""
+            <div style="font-size: 0.85rem; padding: 0.5rem; border-left: 3px solid var(--info); margin-bottom: 0.5rem; background: var(--bg-card); border-radius: 4px;">
+                <span style="color: var(--text-secondary); font-size: 0.75rem;">{ts}</span> &mdash;
+                <strong>{html.escape(agent)}</strong> <span style="color: var(--primary-light);">{html.escape(action)}</span> on <em>{html.escape(task_title)}</em>: {html.escape(details)}
+            </div>
+            """)
+        st.markdown("".join(batched_events_html), unsafe_allow_html=True)
+    else:
+        st.markdown("<p style='color: var(--text-secondary); font-size: 0.85rem;'>No audit events recorded yet.</p>", unsafe_allow_html=True)
+
+# ─── AGENT PULSE PAGE ───────────────────────────────────
+elif page == "Agent Pulse":
+    log_analytics("page_view", {"page": "Agent Pulse"})
+    st.markdown('<div class="hero-header">Agent Pulse</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Real-time semantic health metrics, agent velocity, and goal alignment monitoring</div>', unsafe_allow_html=True)
+
+    # Compute latest pulse snapshot
+    from src.satya.core.pulse import snapshot_pulse
+    from src.satya.core.storage import get_pulse_latest, get_pulse_history
+    from src.satya.core.goal_guardian import load_goal, load_goal_alerts
+    
+    pulse_data = snapshot_pulse(all_tasks, heartbeats)
+    
+    # 1. Summary Metrics cards
+    summary = pulse_data.get("summary", {})
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Agents", summary.get("total_agents", 0))
+    with col2:
+        st.metric("Live Agents", summary.get("live_agents", 0))
+    with col3:
+        st.metric("Average Health", f"{summary.get('avg_health', 0)}%")
+    with col4:
+        st.metric("Goal Alerts", len(load_goal_alerts()))
+
+    # 2. Agent Health Scores section
+    st.markdown("### Agent Health Scores")
+    health_scores = pulse_data.get("health_scores", {})
+    if not health_scores:
+        st.info("No agent telemetry data available yet.")
+    else:
+        # Create columns of cards for agents
+        cols = st.columns(min(len(health_scores), 4))
+        for idx, (agent_name, hs) in enumerate(health_scores.items()):
+            col_target = cols[idx % len(cols)]
+            score = hs.get("score", 0)
+            grade = hs.get("grade", "N/A")
+            trend = hs.get("trend", "stable")
+            trend_icon = "📈" if trend == "up" else "📉" if trend == "down" else "➡️"
+            
+            # Determine card style based on score
+            if score >= 85:
+                border_color = "#00B894"
+                text_color = "#00B894"
+            elif score >= 70:
+                border_color = "#0984E3"
+                text_color = "#0984E3"
+            elif score >= 55:
+                border_color = "#F1C40F"
+                text_color = "#F1C40F"
+            else:
+                border_color = "#D63031"
+                text_color = "#D63031"
+
+            with col_target:
+                # Retrieve goal if set
+                g_data = load_goal(agent_name)
+                goal_str = g_data.get("goal") if g_data else "No project goal set."
+                st.markdown(f"""
+                <div style="border: 2px solid {border_color}; border-radius: 12px; padding: 1.2rem; background: var(--bg-card); margin-bottom: 1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                    <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.5rem; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                        {agent_name}
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+                        <span style="font-size: 2.2rem; font-weight: 800; color: {text_color};">{score}%</span>
+                        <span style="font-size: 1.2rem; font-weight: 800; background: {border_color}22; padding: 0.2rem 0.6rem; border-radius: 6px; color: {text_color};">{grade}</span>
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                        Trend: <b>{trend.upper()} {trend_icon}</b>
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.3rem;">
+                        Throughput: {hs.get('throughput', 0.0)} tasks/hr
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.3rem;">
+                        Rework Rate: {hs.get('rework_rate', 0.0)}
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.3rem;">
+                        Log Density: {hs.get('log_density', 0.0)} logs/task
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                        Time Overrun: {hs.get('overrun_rate', 0.0)}
+                    </div>
+                    <div style="font-size: 0.8rem; border-top: 1px solid var(--border-color); padding-top: 0.5rem; color: var(--text-muted); font-style: italic;">
+                        Goal: {goal_str}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # 3. Cross-Agent Velocity Heatmap & Goals section
+    st.markdown("### Cross-Agent Velocity & Task Metrics")
+    velocity = pulse_data.get("velocity", {})
+    if not velocity or not velocity.get("agents"):
+        st.info("No velocity metrics available.")
+    else:
+        # Render Heatmap Table
+        agents = velocity.get("agents", [])
+        priority_buckets = velocity.get("priority_buckets", {})
+        
+        # Build Heatmap HTML
+        table_html = """
+        <table style="width:100%; border-collapse: collapse; border-radius: 8px; overflow: hidden; background: var(--bg-card);">
+            <thead>
+                <tr style="background: var(--bg-sidebar); border-bottom: 2px solid var(--border-color);">
+                    <th style="padding: 12px; text-align: left; color: var(--text-primary);">Agent</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">Critical</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">High</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">Medium</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">Low</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+        for agent in agents:
+            buckets = priority_buckets.get(agent, {})
+            table_html += f'<tr style="border-bottom: 1px solid var(--border-color);">'
+            table_html += f'<td style="padding: 12px; font-weight: 600; color: var(--text-primary);">{agent}</td>'
+            for prio in ["Critical", "High", "Medium", "Low"]:
+                val = buckets.get(prio)
+                if val is None:
+                    table_html += f'<td style="padding: 12px; text-align: center; color: var(--text-muted); background: rgba(0,0,0,0.02);">N/A</td>'
+                else:
+                    # Color based on value
+                    bg = "rgba(46, 204, 113, 0.2)" if val < 15 else "rgba(241, 196, 15, 0.2)" if val < 45 else "rgba(231, 76, 60, 0.2)"
+                    color = "#27ae60" if val < 15 else "#d35400" if val < 45 else "#c0392b"
+                    table_html += f'<td style="padding: 12px; text-align: center; background: {bg}; color: {color}; font-weight: 700;">{val:.1f} m</td>'
+            table_html += "</tr>"
+        table_html += "</tbody></table>"
+        
+        st.markdown(table_html, unsafe_allow_html=True)
+
+    # 4. Alerts & Goal Guardian Audit Log
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("### Semantic & Cascade Alerts")
+        alerts = pulse_data.get("alerts", [])
+        if not alerts:
+            st.success("✅ No health anomalies or cascade failures detected.")
+        else:
+            for alert in alerts:
+                severity = alert.get("severity", "warning").upper()
+                bg_color = "rgba(231, 76, 60, 0.15)" if severity == "CRITICAL" else "rgba(241, 196, 15, 0.15)"
+                border_color = "#e74c3c" if severity == "CRITICAL" else "#f1c40f"
+                text_color = "#e74c3c" if severity == "CRITICAL" else "#d35400"
+                
+                st.markdown(f"""
+                <div style="border-left: 5px solid {border_color}; background: {bg_color}; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.8rem; color: var(--text-primary);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+                        <span style="font-weight: 800; color: {text_color}; font-size: 0.85rem;">{severity} ALERT</span>
+                        <span style="font-size: 0.75rem; color: var(--text-muted);">{alert.get('type')}</span>
+                    </div>
+                    <div style="font-size: 0.9rem; font-weight: 600; margin-bottom: 0.2rem;">{alert.get('message')}</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Agent: {alert.get('agent')}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+    with col_b:
+        st.markdown("### Goal Guardian Auditor")
+        if not is_public and is_admin:
+            with st.expander("Update Agent Project Goal"):
+                with st.form("set_goal_form"):
+                    selected_agent = st.selectbox("Select Agent", list(health_scores.keys()) if health_scores else ["default_agent"])
+                    new_goal = st.text_area("Target Goal / Scope", placeholder="Describe the strict alignment goal for this agent.")
+                    t_val = st.slider("Drift Threshold", 0.05, 0.50, 0.20, step=0.01)
+                    h_val = st.slider("Halt Threshold", 0.01, 0.30, 0.10, step=0.01)
+                    submitted = st.form_submit_button("Deploy Goal")
+                    if submitted:
+                        from src.satya.core.goal_guardian import save_goal
+                        save_goal(selected_agent, new_goal, t_val, h_val)
+                        st.success(f"Goal deployed for {selected_agent}.")
+                        st.rerun()
+
+        # Display Goal Alerts
+        goal_alerts = load_goal_alerts()
+        if not goal_alerts:
+            st.success("✅ Goal Guardian reports zero agent drifts.")
+        else:
+            for alert in reversed(goal_alerts[-10:]):
+                action = alert.get("action", "warn").upper()
+                bg_color = "rgba(231, 76, 60, 0.15)" if action == "HALT" else "rgba(241, 196, 15, 0.15)"
+                border_color = "#e74c3c" if action == "HALT" else "#f1c40f"
+                text_color = "#e74c3c" if action == "HALT" else "#d35400"
+                
+                st.markdown(f"""
+                <div style="border-left: 5px solid {border_color}; background: {bg_color}; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.8rem; color: var(--text-primary);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+                        <span style="font-weight: 800; color: {text_color}; font-size: 0.85rem;">GOAL DRIFT {action}</span>
+                        <span style="font-size: 0.75rem; color: var(--text-muted);">{alert.get('timestamp')[:19].replace('T', ' ')}</span>
+                    </div>
+                    <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.2rem;">
+                        Drift Score: {alert.get('score')}
+                    </div>
+                    <div style="font-size: 0.8rem; font-style: italic; color: var(--text-secondary); margin-bottom: 0.2rem;">
+                        "{alert.get('message_excerpt')}"
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--text-muted);">
+                        Goal: {alert.get('goal')}
+                    </div>
+                    {f'<div style="font-size: 0.7rem; color: var(--text-muted); font-family: monospace;">Snapshot: {alert.get("snapshot_path")}</div>' if alert.get("snapshot_path") else ''}
+                </div>
+                """, unsafe_allow_html=True)
+
+# ─── TASK BOARD PAGE ────────────────────────────────────
+elif page == "Task Board":
+    st.markdown('<div class="hero-header">Task Board</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Manage your Agile tasks across workflow stages</div>', unsafe_allow_html=True)
+
+    if is_admin:
+        with st.expander("Create New Task", expanded=False):
+            with st.form("new_task_form"):
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    new_title = st.text_input("Title", placeholder="Enter task title...")
+                    new_assignee = st.text_input("Assignee", value="User", placeholder="Agent or team member name")
+                with col_b:
+                    new_priority = st.selectbox("Priority", ["Low", "Medium", "High", "Critical"], index=1)
+                    new_desc = st.text_area("Description", placeholder="Describe the task...", height=76)
+
+                submitted = st.form_submit_button("Create Task", use_container_width=True)
+
+                if submitted and new_title:
+                    tasks_manager.create_task(new_title, new_desc, new_assignee, new_priority)
+                    st.success(f"Task '{new_title}' created successfully!")
+                    st.rerun()
+                elif submitted:
+                    st.warning("Please enter a task title.")
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    tasks_by_status = {"queued": [], "in_progress": [], "done": []}
+    for task in all_tasks:
+        status = task.get("status", "queued")
+        if status not in tasks_by_status:
+            status = "queued"
+        tasks_by_status[status].append(task)
+
+    for status_key in tasks_by_status:
+        tasks_by_status[status_key].sort(
+            key=lambda t: {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(t.get("priority", "Medium"), 2)
+        )
+
+    col1, col2, col3 = st.columns(3)
+
+    headers = {
+        "queued": ("header-todo", "&#128204; Queued", col1),
+        "in_progress": ("header-progress", "&#9889; In Progress", col2),
+        "done": ("header-done", "&#9989; Done", col3)
+    }
+
+    for status, (css_class, label, col) in headers.items():
+        count = len(tasks_by_status[status])
+        with col:
+            st.markdown(f'<div class="column-header {css_class}">{label} ({count})</div>', unsafe_allow_html=True)
+
+            if not tasks_by_status[status]:
+                st.markdown("""
+                <div class="empty-state" style="padding: 2rem 1rem;">
+                    <div style="font-size: 2rem; opacity: 0.3;">&#128466;</div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary);">No tasks</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            for task in tasks_by_status[status]:
+                priority = task.get("priority", "Medium")
+
+                st.markdown(f"""
+                <div class="task-card {get_priority_class(priority)}">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div class="task-title">{html.escape(task.get('title', 'Untitled'))}</div>
+                        {get_priority_badge(priority)}
+                    </div>
+                    <div style="font-size: 0.82rem; color: var(--text-secondary); margin: 0.3rem 0;">
+                        {html.escape(task.get('description', '')[:80])}{'...' if len(task.get('description', '')) > 80 else ''}
+                    </div>
+                    <div class="task-meta">
+                        <span title="Task ID" style="font-family: monospace; background: var(--border); padding: 1px 4px; border-radius: 4px; font-size: 0.7rem;">{html.escape(task.get('id', ''))}</span> &middot;
+                        &#128100; {html.escape(task.get('assignee', 'Unassigned'))} &middot;
+                        &#128197; {format_time_ago(task.get('created_at', ''))}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if is_admin:
+                    btn_cols = st.columns(3)
+
+                    if status == "queued":
+                        if btn_cols[1].button("Start", key=f"start_{task['id']}", use_container_width=True, help="Move task to In Progress"):
+                            tasks_manager.update_task_status(task['id'], "in_progress")
+                            st.rerun()
+                        if btn_cols[2].button("Delete", key=f"del_todo_{task['id']}", use_container_width=True, help="Permanently delete this task"):
+                            tasks_manager.delete_task(task['id'])
+                            st.rerun()
+
+                    elif status == "in_progress":
+                        # Cannot move back to queued legally in the data model
+                        if btn_cols[1].button("Done", key=f"done_{task['id']}", use_container_width=True, help="Mark task as Completed"):
+                            try:
+                                tasks_manager.update_task_status(task['id'], "done")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(str(e))
+                        if btn_cols[2].button("Delete", key=f"del_prog_{task['id']}", use_container_width=True, help="Permanently delete this task"):
+                            tasks_manager.delete_task(task['id'])
+                            st.rerun()
+
+                    elif status == "done":
+                        if btn_cols[2].button("Delete", key=f"del_done_{task['id']}", use_container_width=True, help="Permanently delete this task"):
+                            tasks_manager.delete_task(task['id'])
+                            st.rerun()
+
+                with st.expander("Activity Log", expanded=False):
+                    comments = task.get("comments", [])
+                    if comments:
+                        # ⚡ Bolt Optimization: Batching markdown calls to reduce Streamlit rendering overhead
+                        batched_comments_html = []
+                        for c in reversed(comments):
+                            try:
+                                ts_obj = datetime.fromisoformat(c.get("timestamp", ""))
+                                ts_str = ts_obj.strftime("%H:%M:%S")
+                            except ValueError:
+                                ts_str = html.escape(str(c.get("timestamp", "")))
+                            txt = html.escape(c.get("text", ""))
+                            batched_comments_html.append(f"<div style='font-size: 0.8rem; margin-bottom: 0.4rem; border-left: 2px solid var(--border); padding-left: 0.5rem;'><span style='color: var(--text-secondary);'>{ts_str}</span> {txt}</div>")
+                        st.markdown("".join(batched_comments_html), unsafe_allow_html=True)
+                    else:
+                        st.caption("No activity recorded yet.")
+
+
+# ─── TRUTH SOURCE PAGE ─────────────────────────────────
+elif page == "Truth Source":
+    st.markdown('<div class="hero-header">Truth Source</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Curate your knowledge base by scraping and saving web content</div>', unsafe_allow_html=True)
+
+    if is_admin:
+        with st.expander("Add New Source", expanded=False):
+            with st.form("scrape_form"):
+                url_to_scrape = st.text_input("URL", placeholder="https://example.com/article")
+                scrape_btn = st.form_submit_button("Scrape & Save", use_container_width=True)
+
+                if scrape_btn:
+                    if url_to_scrape:
+                        with st.spinner(f"Scraping {url_to_scrape}..."):
+                            filename = scraper_manager.fetch_and_save(url_to_scrape)
+                            if filename:
+                                st.success(f"Saved as: {filename}")
+                                st.rerun()
+                            else:
+                                st.error("Failed to scrape URL. Please check the URL and try again.")
+                    else:
+                        st.warning("Please enter a URL.")
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    files = scraper_manager.list_sources()
+
+    if files:
+        st.markdown(f"#### Knowledge Base ({len(files)} sources)")
+
+        for idx, fname in enumerate(files):
+            safe_fname = os.path.basename(fname)
+            file_path = os.path.join(storage.TRUTH_DIR, safe_fname)
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+            size_str = f"{file_size / 1024:.1f} KB" if file_size > 1024 else f"{file_size} B"
+
+            col_f, col_act = st.columns([5, 1])
+            with col_f:
+                st.markdown(f"""
+                <div class="truth-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: 600; color: var(--text-primary);">&#128196; {html.escape(fname)}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                                Size: {size_str}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            if is_admin:
+                with col_act:
+                    if st.button("Delete", key=f"del_truth_{idx}", use_container_width=True):
+                        storage.delete_truth_file(fname)
+                        st.rerun()
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+        selected_file = st.selectbox("View Source Content", files, label_visibility="collapsed", placeholder="Select a file to preview...")
+        if selected_file:
+            safe_selected_file = os.path.basename(selected_file)
+            file_path = os.path.join(storage.TRUTH_DIR, safe_selected_file)
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                with st.container(border=True):
+                    st.markdown(content)
+    else:
+        st.markdown("""
+        <div class="empty-state">
+            <div class="empty-state-icon">&#128218;</div>
+            <div class="empty-state-text">No knowledge sources yet.</div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.5rem;">
+                Add your first source by scraping a URL above.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ─── AGENT LOGS PAGE ───────────────────────────────────
+elif page == "Agent Logs":
+    st.markdown('<div class="hero-header">Agent Logs</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Monitor autonomous agent activity and session history</div>', unsafe_allow_html=True)
+
+    if not os.path.exists(storage.AGENTS_DIR):
+        st.markdown("""
+        <div class="empty-state">
+            <div class="empty-state-icon">&#128373;</div>
+            <div class="empty-state-text">No agent logs directory found.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        log_files = [f for f in os.listdir(storage.AGENTS_DIR) if f.endswith(".log")]
+
+        if log_files:
+            log_files.sort(
+                key=lambda x: os.path.getmtime(os.path.join(storage.AGENTS_DIR, x)),
+                reverse=True
+            )
+
+            st.markdown(f"#### Active Sessions ({len(log_files)} logs)")
+
+            col_sel, col_ref = st.columns([4, 1])
+            with col_sel:
+                selected_log = st.selectbox("Select Log", log_files, label_visibility="collapsed")
+            with col_ref:
+                if st.button("Refresh", use_container_width=True):
+                    st.rerun()
+
+            if selected_log:
+                safe_selected_log = os.path.basename(selected_log)
+                log_path = os.path.join(storage.AGENTS_DIR, safe_selected_log)
+
+                mod_time = datetime.fromtimestamp(os.path.getmtime(log_path))
+                file_size = os.path.getsize(log_path)
+
+                c1, c2, c3 = st.columns(3)
+                agent_name = selected_log.rsplit("_", 1)[0] if "_" in selected_log else selected_log
+                c1.metric("Agent", agent_name)
+                c2.metric("Last Modified", mod_time.strftime("%b %d, %H:%M"))
+                c3.metric("Size", f"{file_size / 1024:.1f} KB" if file_size > 1024 else f"{file_size} B")
+
+                st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+                with open(log_path, 'r') as f:
+                    log_content = f.read()
+
+                lines = log_content.strip().split('\n')
+
+                with st.container(border=True):
+                    # ⚡ Bolt Optimization: Batching markdown reduces Streamlit rendering overhead.
+                    batched_log_html = "".join([
+                        f'<div class="log-entry">{html.escape(line)}</div>'
+                        for line in lines if line.strip()
+                    ])
+                    if batched_log_html:
+                        st.markdown(batched_log_html, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="empty-state">
+                <div class="empty-state-icon">&#128373;</div>
+                <div class="empty-state-text">No log files found.</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.5rem;">
+                    Agent logs will appear here when agents start sessions using the SDK.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+# ─── MAIN OWNER PAGE ─────────────────────────────────────
+elif page == "Main Owner":
+    st.markdown('<div class="hero-header">Main Owner Setup</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Designate a primary human administrator for unified oversight and master control</div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="api-section">
+        <h4 style="color: var(--primary-light);">Feature Summary</h4>
+        <p style="color: var(--text-secondary); font-size: 0.95rem; line-height: 1.7;">
+            The Main Owner feature empowers you to take full control of your Satya environment. By designating a primary administrator,
+            you gain a single source of truth for agent sessions, knowledge bases, and compliance rules. This centralized role
+            streamlines multi-agent coordination, ensures consistent governance across all tasks, and provides the ultimate fallback
+            for session management.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("#### 3-Step Setup Guide")
+    col_s1, col_s2, col_s3 = st.columns(3)
+    with col_s1:
+        st.markdown("""
+        <div class="step-card">
+            <div class="step-number">1</div>
+            <div class="step-title">Access Settings</div>
+            <div class="step-desc">Navigate to the 'Governance' tab in your Satya dashboard and locate the 'Owner Management' section.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_s2:
+        st.markdown("""
+        <div class="step-card">
+            <div class="step-number">2</div>
+            <div class="step-title">Designate Identity</div>
+            <div class="step-desc">Enter the unique ID or email of the primary human administrator to be assigned as the Main Owner.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_s3:
+        st.markdown("""
+        <div class="step-card">
+            <div class="step-number">3</div>
+            <div class="step-title">Confirm & Lock</div>
+            <div class="step-desc">Review the master permissions and click 'Finalize Setup' to lock the identity and enable oversight.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    col_faq, col_spec = st.columns([3, 2])
+
+    with col_faq:
+        st.markdown("#### Frequently Asked Questions")
+        faqs = [
+            ("What is a Main Owner?", "The Main Owner is the primary human administrator who holds master permissions over all AI agent sessions, truth sources, and governance rules."),
+            ("Can there be more than one Main Owner?", "No, Satya enforces a single-owner model for absolute accountability."),
+            ("What happens if the Main Owner is unavailable?", "We recommend storing credentials in a secure vault. Ownership can be transferred through a verified recovery process."),
+            ("Does this affect agent performance?", "No, it is a governance layer. Agents continue to operate autonomously but with clearer boundaries."),
+            ("Is the setup reversible?", "Yes, but it requires high-level confirmation and an audit trail entry to ensure security.")
+        ]
+        for q, a in faqs:
+            with st.expander(q):
+                st.write(a)
+
+    with col_spec:
+        st.markdown("#### What to Expect")
+        checklist = [
+            "Centralized dashboard for all agent activity.",
+            "Master control over Truth Source additions.",
+            "Enforced governance rules across all agents.",
+            "Unified audit trail for every status change.",
+            "Priority support for owner interventions."
+        ]
+        for item in checklist:
+            st.markdown(f"&check; {item}")
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.markdown("#### Developer Spec")
+        st.markdown("""
+        <div class="code-block" style="font-size: 0.75rem;">
+// Analytics Events
+- main_owner_setup_start
+- main_owner_setup_complete
+
+// Sample Payload
+{
+  "event": "main_owner_setup_start",
+  "properties": {
+    "source": "onboarding_page",
+    "timestamp": "2026-02-07T..."
+  }
+}
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Webhooks Settings
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown("### 🪝 Webhooks Configuration")
+    st.markdown("Register webhook URLs to be notified of task events.")
+
+    from satya.core.webhooks import load_webhooks, add_webhook, remove_webhook
+
+    col_wh1, col_wh2 = st.columns([3, 1])
+    with col_wh1:
+        new_webhook_url = st.text_input("Webhook URL", key="new_webhook_url")
+    with col_wh2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Add Webhook", key="add_webhook_btn"):
+            if is_admin:
+                if new_webhook_url:
+                    add_webhook(new_webhook_url)
+                    st.success("Webhook added successfully!")
+                    st.rerun()
+            else:
+                st.error("Admin Access Required: You must enter a valid Admin Key.")
+
+    webhooks = load_webhooks()
+    if webhooks:
+        for wh in webhooks:
+            col_list1, col_list2 = st.columns([4, 1])
+            col_list1.code(wh["url"])
+            if col_list2.button("Remove", key=f"rm_wh_{wh['url']}"):
+                if is_admin:
+                    remove_webhook(wh["url"])
+                    st.success("Webhook removed.")
+                    st.rerun()
+                else:
+                    st.error("Admin Access Required: You must enter a valid Admin Key.")
+    else:
+        st.info("No webhooks configured.")
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown("### 🤖 AI Orchestrator Control")
+    st.markdown("Manually trigger the orchestrator to perform auto-triage, RCA spawning, and heartbeat checks.")
+
+    if st.button("Run Orchestrator Scan Now", key="orch_run_btn"):
+        if is_admin:
+            with st.spinner("Scanning heartbeats and queues..."):
+                from satya.core.project_manager import AIOrchestrator
+                orch = AIOrchestrator()
+                try:
+                    orch.scan_once()
+                    st.success("Orchestrator scan complete!")
+                except Exception as e:
+                    st.error(f"Orchestrator scan failed: {html.escape(str(e))}")
+        else:
+            st.error("Admin Access Required: You must enter a valid Admin Key to run the Orchestrator.")
+
+
+# ─── TEMPLATE GALLERIES ─────────────────────────────────────
+elif page == "Template Galleries":
+    st.markdown('<div class="hero-header">AI Template Galleries</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">1-click deployments of pre-configured AI task swarms</div>', unsafe_allow_html=True)
+
+    templates = [
+        {
+            "name": "Software Dev Swarm",
+            "description": "A set of tasks for developing a new feature, including coding, reviewing, and testing.",
+            "tasks": [
+                {"title": "Write Code", "description": "Implement the feature requirements.", "priority": "High", "required_skills": ["python", "coding"]},
+                {"title": "Code Review", "description": "Review the implemented code.", "priority": "Medium", "required_skills": ["python", "reviewing"]},
+                {"title": "Write Tests", "description": "Write unit and integration tests.", "priority": "Medium", "required_skills": ["python", "testing"]}
+            ]
+        },
+        {
+            "name": "SEO Content Swarm",
+            "description": "Tasks for generating SEO-optimized blog content.",
+            "tasks": [
+                {"title": "Keyword Research", "description": "Find top keywords for the topic.", "priority": "High", "required_skills": ["seo", "research"]},
+                {"title": "Write Article", "description": "Draft the article incorporating keywords.", "priority": "High", "required_skills": ["writing"]},
+                {"title": "SEO Optimization", "description": "Optimize the drafted article for search engines.", "priority": "Medium", "required_skills": ["seo", "editing"]}
+            ]
+        }
+    ]
+
+    for t in templates:
+        st.markdown(f"### {t['name']}")
+        st.write(t['description'])
+        if st.button(f"Deploy {t['name']}", key=f"deploy_{t['name']}"):
+            try:
+                for task_def in t['tasks']:
+                    tasks_manager.create_task(
+                        title=task_def["title"],
+                        description=task_def["description"],
+                        priority=task_def["priority"],
+                        required_skills=task_def["required_skills"]
+                    )
+                st.success(f"Successfully deployed {t['name']} tasks!")
+            except Exception as e:
+                st.error(f"Failed to deploy template: {e}")
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+# ─── AGENT CHAT PAGE ───────────────────────────────────
+elif page == "Agent Chat":
+    st.markdown('<div class="hero-header">Agent Chat</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Interact directly with live agents</div>', unsafe_allow_html=True)
+
+    if not is_admin:
+        st.error("Admin Access Required: You must enter a valid Admin Key to interact with agents.")
+    else:
+        st.info("Select an active agent and send direct instructions.")
+
+        # List online agents
+        online_agents = [agent for agent, hb in heartbeats.items() if hb.get("status") == "online"]
+        if not online_agents:
+            st.warning("No online agents available for chat.")
+        else:
+            selected_agent = st.selectbox("Select Agent", online_agents)
+
+            # Chat History
+            st.markdown("##### Chat History")
+
+            safe_selected_agent = os.path.basename(selected_agent)
+            chat_dir = os.path.join(storage.SATYA_DIR, "chat", safe_selected_agent)
+            chat_messages = []
+
+            if os.path.exists(chat_dir):
+                for filename in os.listdir(chat_dir):
+                    if filename.endswith(".json"):
+                        filepath = os.path.join(chat_dir, filename)
+                        try:
+                            msg_data = storage.load_json(filepath)
+                            if msg_data:
+                                chat_messages.append(msg_data)
+                        except Exception as e:
+                            pass
+
+            if chat_messages:
+                # Sort newest last (chronological)
+                chat_messages.sort(key=lambda m: m.get("timestamp", ""))
+
+                with st.container(border=True, height=400):
+                    for msg in chat_messages:
+                        sender = html.escape(str(msg.get("sender") or "Unknown"))
+                        text = html.escape(str(msg.get("message") or ""))
+                        status = html.escape(str(msg.get("status") or "unread"))
+                        ts_str = msg.get("timestamp", "")
+
+                        try:
+                            # Parse timestamp
+                            if ts_str.endswith('Z'):
+                                ts_str = ts_str[:-1]
+                                if not ('+' in ts_str or '-' in ts_str.split('T')[-1]):
+                                    ts_str += '+00:00'
+                            dt = datetime.fromisoformat(ts_str)
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            display_time = dt.strftime("%H:%M:%S")
+                        except Exception:
+                            display_time = html.escape(ts_str)
+
+                        align = "right" if sender == "Human Operator" else "left"
+                        bg_color = "var(--primary-dark)" if sender == "Human Operator" else "var(--bg-card-hover)"
+                        text_color = "#FFFFFF" if sender == "Human Operator" else "var(--text-primary)"
+                        status_icon = "✓✓" if status == "read" else "✓"
+
+                        st.markdown(f"""
+                        <div style="text-align: {align}; margin-bottom: 0.8rem;">
+                            <div style="display: inline-block; background-color: {bg_color}; color: {text_color}; padding: 0.6rem 1rem; border-radius: 12px; max-width: 80%; text-align: left; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+                                <div style="font-size: 0.75rem; opacity: 0.8; margin-bottom: 0.2rem; display: flex; justify-content: space-between; gap: 1rem;">
+                                    <span><b>{sender}</b></span>
+                                    <span>{display_time}</span>
+                                </div>
+                                <div style="font-size: 0.9rem; line-height: 1.4;">
+                                    {text}
+                                </div>
+                                <div style="text-align: right; font-size: 0.6rem; opacity: 0.6; margin-top: 0.2rem;">
+                                    {status_icon} {status}
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else:
+                st.info("No chat history with this agent.")
+
+            st.markdown("---")
+            chat_input = st.text_input("Send instruction to agent...", placeholder="E.g., use satya to fetch the latest data")
+            if st.button("Send", use_container_width=True):
+                if chat_input:
+                    # Append to agent's chat flat-file
+                    safe_selected_agent = os.path.basename(selected_agent)
+                    chat_dir = os.path.join(storage.SATYA_DIR, "chat", safe_selected_agent)
+                    os.makedirs(chat_dir, exist_ok=True)
+                    chat_file = os.path.join(chat_dir, f"msg_{datetime.now().timestamp()}.json")
+                    msg_payload = {
+                        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                        "sender": "Human Operator",
+                        "message": chat_input,
+                        "status": "unread"
+                    }
+                    storage.save_json(chat_file, msg_payload)
+                    st.success("Message sent to agent queue.")
+                    st.rerun()
+
+# ─── ROI DASHBOARD ─────────────────────────────────────
+elif page == "ROI Dashboard":
+    st.markdown('<div class="hero-header">Enterprise Grade Billing & Analytics</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Track per-agent task velocity and calculate ROI of autonomous vs manual execution.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    # ⚡ Bolt Optimization: Reuse all_tasks from root scope to prevent redundant file I/O.
+    completed_tasks = [t for t in all_tasks if t.get("status") == "done"]
+
+    total_completed = len(completed_tasks)
+
+    # Constants for ROI calculation
+    AGENT_COST_PER_TASK = 0.50 # e.g., LLM API cost estimate
+    MANUAL_COST_PER_TASK = 25.00 # e.g., human time cost estimate
+
+    total_agent_cost = total_completed * AGENT_COST_PER_TASK
+    total_manual_cost = total_completed * MANUAL_COST_PER_TASK
+    savings = total_manual_cost - total_agent_cost
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-value">{total_completed}</div>
+            <div class="stat-label">Tasks Completed</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--primary);">${total_agent_cost:,.2f}</div>
+            <div class="stat-label">Estimated Autonomous Cost</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--success);">${total_manual_cost:,.2f}</div>
+            <div class="stat-label">Estimated Manual Cost</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div style="background-color: var(--bg-card); border-radius: 12px; padding: 2rem; border: 1px solid var(--border-color); text-align: center; margin-bottom: 2rem;">
+        <h3 style="color: var(--text-primary); margin-bottom: 0.5rem; font-size: 1.5rem;">Total Estimated Savings</h3>
+        <div style="font-size: 3rem; font-weight: 700; color: var(--success); text-shadow: 0 0 20px rgba(74, 222, 128, 0.2);">${savings:,.2f}</div>
+        <div style="color: var(--text-secondary); margin-top: 0.5rem; font-size: 0.9rem;">By utilizing autonomous agents instead of manual labor</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Breakdown by agent
+    st.markdown("### Cost Breakdown by Agent")
+    agent_tasks = {}
+    for t in completed_tasks:
+        agent = t.get("assignee", "Unassigned")
+        agent_tasks[agent] = agent_tasks.get(agent, 0) + 1
+
+    if agent_tasks:
+        try:
+            agent_data = []
+            for agent, count in agent_tasks.items():
+                agent_data.append({
+                    "Agent": agent,
+                    "Tasks Completed": count,
+                    "Agent Cost": f"${count * AGENT_COST_PER_TASK:.2f}",
+                    "Manual Cost Equivalent": f"${count * MANUAL_COST_PER_TASK:.2f}",
+                    "Savings Generated": f"${(count * MANUAL_COST_PER_TASK) - (count * AGENT_COST_PER_TASK):.2f}"
+                })
+            import pandas as pd
+            df_agents = pd.DataFrame(agent_data)
+            st.dataframe(df_agents, use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.error("Error rendering agent ROI dataframe.")
+    else:
+        st.info("No completed tasks to display agent breakdown.")
+
+
+# ─── SDK DOCS PAGE ─────────────────────────────────────
+elif page == "SDK Docs":
+    st.markdown('<div class="hero-header">SDK Documentation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">Integration guide for AI agents to self-deploy, operate, and report progress through Satya</div>', unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="api-section" style="border-left: 4px solid var(--primary); padding-left: 1.5rem;">
+        <h4 style="color: var(--primary-light);">How Satya Works</h4>
+        <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.7;">
+            <strong style="color: var(--text-primary);">AI agents deploy and operate Satya.</strong> They install dependencies, start the dashboard, create tasks,
+            log progress, and scrape knowledge &mdash; all programmatically via the SDK below.<br><br>
+            <strong style="color: var(--text-primary);">Humans only observe.</strong> They open this dashboard URL in a browser to monitor tasks, read logs,
+            and review the knowledge base. No terminal, no code &mdash; just a web page.<br><br>
+            <strong style="color: var(--text-primary);">See <code>AGENTS.md</code></strong> in the repo root for the complete deployment manual written directly for AI agents.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="api-section">
+        <h4>Quick Start (For AI Agents)</h4>
+        <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+            AI agents: add the <code>src/</code> directory to your Python path, import the SDK, and start reporting your work. The human will see everything on this dashboard automatically.
+        </p>
+        <div class="code-block">import sys
+sys.path.insert(0, "src")
+import satya.sdk as satya
+
+client = satya.init(agent_name="my_agent")
+
+task = satya.create_task("Build login page", "Implement OAuth2 login flow")
+satya.log("Starting work on login page...")
+satya.update_task(task["id"], "in_progress")
+satya.scrape("https://docs.example.com/oauth2")
+satya.update_task(task["id"], "done")
+satya.log("Login page complete")
+client.flush_logs()</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("#### SDK Functions")
+
+    funcs = [
+        ("satya.init(agent_name, repo_path='.')", "Initialize the SDK client. Must be called first. Creates a log file in satya_data/agents/."),
+        ("satya.create_task(title, description)", "Create a new task in 'queued' status. Returns task dict with id, title, status, etc."),
+        ("satya.update_task(task_id, status)", "Update a task's status. Valid statuses: 'queued', 'in_progress', 'done', 'failed'."),
+        ("satya.log(message)", "Write a timestamped log entry to the agent's session log file."),
+        ("satya.scrape(url)", "Scrape a URL, convert to Markdown, and save to the Truth Source knowledge base."),
+    ]
+
+    # ⚡ Bolt Optimization: Batching markdown calls to reduce Streamlit rendering overhead
+    batched_funcs_html = []
+    for func_sig, func_desc in funcs:
+        batched_funcs_html.append(f"""
+        <div class="truth-card">
+            <div style="font-weight: 600; color: var(--primary-light); font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">
+                {func_sig}
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.3rem;">
+                {func_desc}
+            </div>
+        </div>
+        """)
+    st.markdown("".join(batched_funcs_html), unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("#### Governance Rules")
+
+    st.markdown(f"""
+    <div class="api-section">
+        <p style="color: var(--text-secondary); font-size: 0.9rem;">
+            Satya includes an enterprise governance layer to enforce high-quality multi-agent coordination:
+        </p>
+        <ul style="color: var(--text-primary); font-size: 0.85rem; line-height: 1.6;">
+            <li><strong>Audit Trails:</strong> Every creation, status change, comment, and update is permanently recorded per task, tied to the agent's name.</li>
+            <li><strong>Descriptive Tasks:</strong> Tasks cannot be created with less than 10 characters of description.</li>
+            <li><strong>Proof of Work:</strong> An agent cannot mark a task as <code>"done"</code> without providing at least one log entry explaining their progress.</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("#### Data Storage")
+
+    st.markdown(f"""
+    <div class="api-section">
+        <p style="color: var(--text-secondary); font-size: 0.9rem;">
+            All data is stored as flat files under <code>satya_data/</code>. No database required.
+        </p>
+        <div class="code-block">satya_data/
+  tasks/          # JSON files, one per task (e.g., a344b224.json)
+  truth/          # Markdown files from web scraping
+  agents/         # Log files per agent session</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("#### Full Agent Example")
+
+    st.markdown(f"""
+    <div class="api-section">
+        <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+            Complete session showing how an AI agent deploys Satya, creates tasks, logs progress, and scrapes knowledge &mdash; while the human monitors everything from this dashboard:
+        </p>
+        <div class="code-block">import sys
+sys.path.insert(0, "src")
+import satya.sdk as satya
+
+# 1. Initialize agent session
+client = satya.init(agent_name="coder_bot")
+satya.log("Agent session started")
+
+# 2. Create tasks for the work to be done
+task = client.create_task(
+    "Implement user auth",
+    "Add JWT-based authentication with refresh tokens"
+)
+satya.log(f"Created task: {{task['id']}}")
+
+# 3. Start working on a task
+client.update_task(task["id"], "in_progress")
+satya.log("Working on auth implementation...")
+
+# 4. Scrape reference docs into knowledge base
+client.scrape_url("https://jwt.io/introduction")
+satya.log("Scraped JWT docs for reference")
+
+# 5. Mark task complete
+client.update_task(task["id"], "done")
+satya.log("Auth implementation complete")
+
+# 6. Flush logs to ensure they are persisted
+client.flush_logs()</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+st.markdown("""
+<div class="footer-text" style="text-align: center; margin-top: 1rem;">
+    Satya v0.1.0 &middot; Built by <strong>Anktechsol.com</strong> &middot; Open Source AI Agent Tracker<br>
+    <a href="https://twitter.com/intent/tweet?text=I%20am%20tracking%20my%20AI%20agents%20with%20Satya%2C%20the%20open-source%20tracker!%20%F0%9F%9A%80&url=https://github.com/anktechsol/Satya_AI" target="_blank" style="text-decoration: none; color: #1DA1F2; font-weight: bold; margin-top: 0.5rem; display: inline-block;">
+        Share on Twitter / X
+    </a>
+</div>
+""", unsafe_allow_html=True)

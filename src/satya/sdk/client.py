@@ -1,0 +1,426 @@
+import os
+from datetime import datetime, timezone
+from ..core import storage, Tasks, Scraper, GitHandler
+from ..core.enforcer import RuntimeEnforcer
+from ..auth import require_agent, get_agent_key_from_env, append_audit_event
+from ..core.goal_guardian import load_goal, save_goal, GoalGuardian
+from ..core.pulse import compute_agent_health
+
+class GoalDriftError(ValueError):
+    """Raised when the agent deviates from the declared project goal."""
+    def __init__(self, message, score, goal, snapshot_path=None):
+        super().__init__(message)
+        self.score = score
+        self.goal = goal
+        self.snapshot_path = snapshot_path
+
+class SatyaClient:
+    def __init__(self, agent_name="default_agent", repo_path=".", adapters=None, skills=None):
+        self.agent_key = get_agent_key_from_env()
+        require_agent(self.agent_key)
+
+        self.agent_name = agent_name
+        self.repo_path = repo_path
+        storage.set_root(repo_path)
+        self.tasks = Tasks(repo_path)
+        self.scraper = Scraper(repo_path)
+        self.git = GitHandler(repo_path)
+        self.adapters = adapters or []
+        self.skills = skills or []
+        self.enforcer = RuntimeEnforcer()
+
+        self.current_task = None
+        storage.ensure_satya_dirs()
+        
+        # Load persisted goal if it exists
+        goal_data = load_goal(self.agent_name)
+        if goal_data:
+            self.goal_guardian = GoalGuardian(
+                agent_name=self.agent_name,
+                goal=goal_data["goal"],
+                threshold=goal_data.get("threshold", 0.20),
+                halt_threshold=goal_data.get("halt_threshold", 0.10)
+            )
+        else:
+            self.goal_guardian = None
+
+        # use daily log file format: agent_name_YYYYMMDD.log
+        today_str = datetime.now().strftime("%Y%m%d")
+        safe_agent_name = os.path.basename(self.agent_name)
+        self.log_filename = f"{safe_agent_name}_{today_str}.log"
+        self.log_path = os.path.join(storage.AGENTS_DIR, self.log_filename)
+
+        try:
+            with open(self.log_path, 'a') as f:
+                f.write(f"Session started for agent: {self.agent_name} at {datetime.now()}\n")
+            # We don't need a session ID for the commit message anymore, just the timestamp
+            self.git.commit_and_push([self.log_path], f"Agent {self.agent_name} active on {today_str}")
+        except Exception as e:
+            print(f"Failed to initialize log file: {e}")
+
+    def send_heartbeat(self, status: str = "online"):
+        """Sends a heartbeat to indicate the agent is alive."""
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        heartbeat_data = {
+            "last_seen": now,
+            "status": status,
+            "agent_name": self.agent_name,
+            "skills": self.skills,
+            "current_task_id": self.current_task["id"] if self.current_task else None
+        }
+        storage.save_heartbeat(self.agent_name, heartbeat_data)
+
+    def log(self, message):
+        # Check goal alignment if Guardian is active
+        if hasattr(self, "goal_guardian") and self.goal_guardian:
+            alignment = self.goal_guardian.check(
+                message, current_task=self.current_task, log_path=self.log_path
+            )
+            if alignment["action"] == "halt":
+                err_msg = f"⛔ GOAL GUARDIAN HALT: Agent drift detected! Score: {alignment['score']}. Goal: {self.goal_guardian.goal}"
+                print(err_msg)
+                raise GoalDriftError(
+                    err_msg,
+                    score=alignment["score"],
+                    goal=self.goal_guardian.goal,
+                    snapshot_path=alignment["snapshot_path"]
+                )
+
+        # Check for drift/jailbreaks
+        drift_violations = self.enforcer.check_drift(message)
+        if drift_violations:
+            task_id = self.current_task["id"] if self.current_task else "no_task"
+            trace_id = self.current_task.get("trace_id", "unknown") if self.current_task else "unknown"
+            append_audit_event(
+                self.agent_name,
+                task_id,
+                trace_id,
+                "drift_detected",
+                f"Drift/Jailbreak keywords detected in log: {drift_violations}"
+            )
+            # We will still process the log, but alert the observers via audit event.
+
+        # Mask PII
+        safe_message = self.enforcer.process_text(message)
+
+        timestamp = datetime.now(timezone.utc).isoformat() + "Z"
+        entry = f"[{timestamp}] {safe_message}\n"
+
+        # Log to file (always)
+        try:
+            with open(self.log_path, 'a') as f:
+                f.write(entry)
+        except Exception as e:
+            print(f"Failed to write log: {e}")
+
+        # Log to task context (if active)
+        if self.current_task:
+            try:
+                # Add comment to the task file
+                self.tasks.add_comment(self.current_task["id"], safe_message, commit=False, agent_name=self.agent_name)
+            except Exception as e:
+                print(f"Failed to add comment to task: {e}")
+
+        # Emit to adapters
+        task_id = self.current_task["id"] if self.current_task else None
+        for adapter in self.adapters:
+            try:
+                adapter.export_log(self.agent_name, safe_message, task_id)
+            except Exception as e:
+                pass
+
+    def flush_logs(self):
+        self.git.commit_and_push([self.log_path], f"Update logs for {self.agent_name}")
+
+    def can_do(self, action: str, task_id: str) -> bool:
+        task = self.tasks.get_task(task_id)
+        if not task:
+            self.log(f"BLOCKED: Task {task_id} not found")
+            return False
+
+        allowed = task.get("allowed_actions", [])
+        forbidden = task.get("forbidden_actions", [])
+
+        if action in allowed and action not in forbidden:
+            return True
+
+        self.log(f"BLOCKED: '{action}' not permitted for task {task_id}")
+        return False
+
+    def create_task(self, title, description, parent_trace_id=None, dependencies=None, required_skills=None):
+        require_agent(self.agent_key)
+        # GOVERNANCE RULE 1: Tasks must have meaningful descriptions
+        if not description or len(description.strip()) < 10:
+            err_msg = "Governance Error: Task description must be at least 10 characters."
+            print(err_msg)
+            raise ValueError(err_msg)
+
+        # Check for drift in the description/title
+        drift_violations = self.enforcer.check_drift(str(title) + " " + str(description))
+        if drift_violations:
+            append_audit_event(
+                self.agent_name,
+                "new_task",
+                parent_trace_id or "unknown",
+                "drift_detected",
+                f"Drift/Jailbreak keywords detected in task creation: {drift_violations}"
+            )
+
+        # Mask PII
+        safe_title = self.enforcer.process_text(title)
+        safe_description = self.enforcer.process_text(description)
+
+        self.log(f"Creating task: {safe_title}")
+        task = self.tasks.create_task(safe_title, safe_description, assignee=self.agent_name, agent_name=self.agent_name, parent_trace_id=parent_trace_id, dependencies=dependencies, required_skills=required_skills)
+        if task:
+            append_audit_event(self.agent_name, task["id"], task["trace_id"], "task_created", f"Created task: {safe_title}")
+            for adapter in self.adapters:
+                try:
+                    adapter.export_trace(task["trace_id"], self.agent_name, "task_created", {"task_id": task["id"], "title": safe_title})
+                except Exception as e:
+                    pass
+        return task
+
+    def update_task(self, task_id, status):
+        require_agent(self.agent_key)
+        # GOVERNANCE RULE 2: Tasks cannot be marked Done without at least one log entry
+        if status == "done":
+            task_data = self.tasks.get_task(task_id)
+            if task_data:
+                comments = task_data.get("comments", [])
+                agent_comments = [c for c in comments if c.get("agent") == self.agent_name]
+                if not agent_comments:
+                    err_msg = f"Governance Error: Agent '{self.agent_name}' cannot mark task '{task_id}' as Done without logging any progress."
+                    print(err_msg)
+                    raise ValueError(err_msg)
+
+        self.log(f"Updating task {task_id} to {status}")
+        result = self.tasks.update_task_status(task_id, status, agent_name=self.agent_name)
+        if result:
+            task = self.tasks.get_task(task_id)
+            trace_id = task.get("trace_id", "unknown")
+            append_audit_event(self.agent_name, task_id, trace_id, "status_updated", f"Status changed to {status}")
+            for adapter in self.adapters:
+                try:
+                    adapter.export_trace(trace_id, self.agent_name, "status_updated", {"task_id": task_id, "status": status})
+                except Exception as e:
+                    pass
+        return result
+
+    def scrape_url(self, url):
+        require_agent(self.agent_key)
+        self.log(f"Scraping URL: {url}")
+        filename = self.scraper.fetch_and_save(url)
+        if filename:
+            self.log(f"Saved scraped content to {filename}")
+            return filename
+        else:
+            self.log(f"Failed to scrape {url}")
+            return None
+
+    def pick_task(self):
+        """
+        Implements the Scrum Master logic:
+        1. Check if agent already has a task.
+        2. Find highest priority 'To Do' task.
+        3. Assign it and mark In Progress.
+        """
+        if self.current_task:
+            self.log(f"Guardrail: You already have a task in progress: {self.current_task['title']}")
+            return self.current_task
+
+        all_tasks = self.tasks.list_all()
+
+        # Persistent check: Any task already assigned to me and In Progress?
+        # This handles agent restarts.
+        for t in all_tasks:
+            if t.get("assignee") == self.agent_name and t.get("status") == "in_progress":
+                self.log(f"Resuming existing task: {t['title']}")
+                self.current_task = t
+                return t
+
+        # Guardrail: Check WIP limits (future: implement strict count)
+
+        done_task_ids = {t["id"] for t in all_tasks if t.get("status") == "done"}
+
+        todo_tasks = []
+        for t in all_tasks:
+            if t.get("status") != "queued":
+                continue
+
+            # Check dependencies (all must be done)
+            deps = t.get("dependencies", [])
+            if not all(d in done_task_ids for d in deps):
+                continue
+
+            # Check skills (agent must have all required skills)
+            req_skills = t.get("required_skills", [])
+            if not all(s in self.skills for s in req_skills):
+                continue
+
+            todo_tasks.append(t)
+
+        if not todo_tasks:
+            self.log("No available tasks in 'To Do' column (or blocked by dependencies/skills).")
+            return None
+
+        # Prioritization Logic
+        priority_map = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+
+        # Sort by Priority (asc) then Created At (asc - oldest first)
+        todo_tasks.sort(key=lambda t: (
+            priority_map.get(t.get("priority", "Medium"), 2),
+            t.get("created_at", "")
+        ))
+
+        best_task = todo_tasks[0]
+
+        # Assign and Start
+        self.log(f"Picking highest priority task: {best_task['title']}")
+        self.tasks.update_task(best_task["id"], {
+            "status": "in_progress",
+            "assignee": self.agent_name
+        }, agent_name=self.agent_name)
+        # Refresh task data to ensure we have latest state
+        self.current_task = self.tasks.get_task(best_task["id"])
+        if self.current_task:
+            append_audit_event(self.agent_name, self.current_task["id"], self.current_task.get("trace_id", "unknown"), "task_claimed", "Claimed and started task")
+        return self.current_task
+
+    def finish_task(self, status="done"):
+        require_agent(self.agent_key)
+        """
+        Completes the current task context.
+        """
+        if not self.current_task:
+            self.log("Guardrail: No active task to finish.")
+            return False
+
+        task_id = self.current_task["id"]
+
+        # Check governance before finishing
+        if status == "done":
+            # the task is kept in self.current_task but it might not have the latest comments loaded
+            # lets reload it from storage to be sure
+            latest_task = self.tasks.get_task(task_id)
+            if latest_task:
+                comments = latest_task.get("comments", [])
+                agent_comments = [c for c in comments if c.get("agent") == self.agent_name]
+                if not agent_comments:
+                    err_msg = f"Governance Error: Cannot finish task '{self.current_task['title']}' without logging any progress."
+                    print(err_msg)
+                    raise ValueError(err_msg)
+
+        self.log(f"Finishing task: {self.current_task['title']} -> {status}")
+
+        self.tasks.update_task_status(task_id, status, agent_name=self.agent_name)
+        append_audit_event(self.agent_name, task_id, self.current_task.get("trace_id", "unknown"), "task_completed", f"Finished with status {status}")
+        self.current_task = None
+        self.flush_logs()
+        return True
+
+    def poll_chat(self) -> list[dict]:
+        """
+        Polls for manual override messages sent from the Agent Chat control panel.
+        Returns a list of unread messages.
+        """
+        safe_agent_name = os.path.basename(self.agent_name)
+        chat_dir = os.path.join(storage.SATYA_DIR, "chat", safe_agent_name)
+        if not os.path.exists(chat_dir):
+            return []
+
+        unread_messages = []
+        for filename in os.listdir(chat_dir):
+            if not filename.endswith(".json"):
+                continue
+
+            filepath = os.path.join(chat_dir, filename)
+            data = storage.load_json(filepath)
+
+            if data and data.get("status") == "unread":
+                unread_messages.append(data)
+                # Mark as read
+                data["status"] = "read"
+                data["read_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+                storage.save_json(filepath, data)
+
+        # Sort oldest first
+        unread_messages.sort(key=lambda m: m.get("timestamp", ""))
+        return unread_messages
+
+    def use_satya(self, nl_instruction: str, parent_trace_id: str, capabilities: list = None):
+        """
+        Agent-level helper: when an agent receives instruction 'Use Satya from <repo> to ...',
+        call this function to create a subtask, return task id and trace.
+        """
+        require_agent(self.agent_key)
+        description = f"Instruction: {nl_instruction}\nCapabilities: {capabilities or []}"
+        task = self.create_task(
+            title=f"Subtask: {nl_instruction[:40]}...",
+            description=description,
+            parent_trace_id=parent_trace_id
+        )
+        if self.current_task:
+            append_audit_event(
+                self.agent_name,
+                self.current_task["id"],
+                self.current_task.get("trace_id", "unknown"),
+                "spawned_subtask",
+                str({"child_id": task.get("id"), "child_trace": task.get("trace_id")})
+            )
+        return task
+
+    def set_goal(self, goal: str, threshold: float = 0.20, halt_threshold: float = 0.10):
+        """Sets the project goal and initializes/resets the GoalGuardian."""
+        require_agent(self.agent_key)
+        save_goal(self.agent_name, goal, threshold, halt_threshold)
+        self.goal_guardian = GoalGuardian(
+            agent_name=self.agent_name,
+            goal=goal,
+            threshold=threshold,
+            halt_threshold=halt_threshold
+        )
+        self.log(f"Project goal updated: \"{goal}\"")
+        self.goal_guardian.reset_context()
+
+    def check_alignment(self, message: str) -> dict:
+        """Manually checks a message against the project goal."""
+        if not hasattr(self, "goal_guardian") or not self.goal_guardian:
+            return {"aligned": True, "score": 1.0, "action": "ok"}
+        
+        alignment = self.goal_guardian.check(
+            message, current_task=self.current_task, log_path=self.log_path
+        )
+        if alignment["action"] == "halt":
+            err_msg = f"⛔ GOAL GUARDIAN HALT: Agent drift detected! Score: {alignment['score']}. Goal: {self.goal_guardian.goal}"
+            print(err_msg)
+            raise GoalDriftError(
+                err_msg,
+                score=alignment["score"],
+                goal=self.goal_guardian.goal,
+                snapshot_path=alignment["snapshot_path"]
+            )
+        return alignment
+
+    def report_quality(self, task_id: str, score: float, notes: str) -> bool:
+        """Allows agents to self-report output quality. Updates task metadata."""
+        require_agent(self.agent_key)
+        task = self.tasks.get_task(task_id)
+        if not task:
+            self.log(f"report_quality: Task {task_id} not found.")
+            return False
+        
+        task["quality_score"] = score
+        task["quality_notes"] = notes
+        task["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+        
+        filepath = storage.get_task_path(task_id)
+        storage.save_json(filepath, task)
+        self.log(f"Self-reported task {task_id} quality: {score} ({notes})")
+        return True
+
+    def get_pulse(self) -> dict:
+        """Computes and returns the agent's current health score."""
+        tasks = self.tasks.list_all()
+        return compute_agent_health(self.agent_name, tasks)
+
