@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: open_meteo
+    description: "Hourly atmospheric wind conditions near Guam from Open-Meteo ERA5 archive, loaded incrementally by the open_meteo_assets Dagster asset via dlt."
+    schema: source    # dlt dataset_name
+
+    # No freshness config — dlt manages its own incremental cursor state.
+
+    tables:
+      - name: guam_atmo_hourly
+        description: "One row per hour near Guam (13.44°N 144.79°E). Atmospheric wind from Open-Meteo ERA5 archive model. Backfilled from 2025-01-01, updated daily."
+
+        columns:
+          - name: timestamp
+            description: "UTC hour of the observation (ISO 8601, e.g. 2025-01-01T00:00)."
+            data_tests:
+              - not_null
+              - unique
+
+          - name: wind_speed_10m_kn
+            description: "Wind speed at 10 m above sea level in knots."
+
+          - name: wind_direction_10m_deg
+            description: "Wind direction at 10 m in degrees."
+
+          - name: wind_gusts_10m_kn
+            description: "Wind gust speed at 10 m in knots."

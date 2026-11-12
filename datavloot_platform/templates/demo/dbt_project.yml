@@ -1,0 +1,31 @@
+name: 'noaa'
+version: '1.0.0'
+profile: 'noaa'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+seeds:
+  noaa:
+    +schema: seeds
+
+models:
+  elementary:
+    +schema: elementary
+  noaa:
+    source:
+      +schema: source
+      ais:
+        +materialized: incremental    # upsert on new broadcasts; pair with unique_key + incremental_column in the model
+      open_meteo:
+        +materialized: ephemeral      # dlt owns incrementality; inline into downstream models at compile time
+    business:
+      +materialized: table
+      +schema: business

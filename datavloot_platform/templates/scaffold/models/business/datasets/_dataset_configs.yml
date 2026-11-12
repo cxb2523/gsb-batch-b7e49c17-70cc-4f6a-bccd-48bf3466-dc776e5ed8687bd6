@@ -1,0 +1,29 @@
+version: 2
+
+# Dataset (one-big-table) docs and tests — one entry per dataset model.
+#
+# Build config (source, columns) lives inline in each model's SQL file, passed
+# directly to optimist.build_dataset(). Unlike dimensions and facts, a dataset
+# has no surrogate key and does no joining itself — it selects an explicit set
+# of columns from a source you've already prepared (typically a source_cte
+# joining source-layer models yourself).
+#
+# This file is for column descriptions and data_tests only.
+# ─────────────────────────────────────────────────────────────────────────────
+
+models: []      # <- remove the [] when you add your first entry below
+
+  # Add your datasets below.
+
+  # - name: dataset_<name>
+  #   description: ""
+  #
+  #   columns:
+  #     - name: <column>
+  #       description: ""
+  #
+  #   config:
+  #     meta:
+  #       columns:
+  #         - <column>
+  #         - <column>

@@ -1,0 +1,27 @@
+version: 2
+
+seeds:
+
+  - name: priority_levels
+    description: "Priority level reference table. Maps raw priority IDs to labels, sort order, and urgency flag."
+    columns:
+      - name: priority_id
+        description: "Numeric priority identifier used in source systems."
+        data_tests:
+          - unique
+          - not_null
+      - name: priority_label
+        description: "Human-readable priority label (e.g. Low, Medium, High, Critical)."
+        data_tests:
+          - not_null
+      - name: priority_order
+        description: "Sort order from least to most urgent (ascending)."
+        data_tests:
+          - not_null
+      - name: is_urgent
+        description: "True if this priority level requires immediate attention."
+        data_tests:
+          - not_null
+
+  # Add further seeds below following the same pattern.
+  # See how_to.md for guidance on when seeds are appropriate.

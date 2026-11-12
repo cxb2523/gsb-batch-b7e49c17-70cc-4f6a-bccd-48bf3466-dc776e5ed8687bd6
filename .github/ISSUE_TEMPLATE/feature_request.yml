@@ -1,0 +1,65 @@
+name: Feature request
+description: Propose a change before writing code for it
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The toolkit has firm opinions on structure (see `toolkit-developer-standards.md`). Describing the change here first avoids building something that will not be merged. New or changed macros and conventions go to [dbt-datavloot-optimist](https://github.com/datavloot/dbt-datavloot-optimist/issues).
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part does this touch?
+      multiple: true
+      options:
+        - CLI
+        - Scaffold template
+        - Demo project
+        - Crows Nest dashboard
+        - Dagster platform layer
+        - Dependencies / packaging
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do in a consuming project and why the toolkit gets in the way or does not cover it. Concrete beats abstract; a snippet of the model or config you wish you could write is ideal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What you would add or change, and where it would live. If it is a macro, include the intended call signature and the `meta` keys it reads.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: compat
+    attributes:
+      label: Does it change behaviour for existing projects?
+      description: Renaming a macro or `meta` key, changing a built-in model's columns or grain, or changing the scaffolded structure is a breaking change and gets batched into a major release rather than shipped on its own.
+      options:
+        - No, purely additive
+        - Yes, breaking for existing consumers
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "do it in my own project instead of the toolkit". If it only serves one project, that is usually where it belongs.
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Implementation
+      options:
+        - label: I am willing to open a pull request for this once the approach is agreed

@@ -1,0 +1,3 @@
+# The installers are served as-is from this repository (#113): bash stops on a
+# CRLF line, so install.sh keeps LF in every checkout.
+*.sh text eol=lf

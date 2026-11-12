@@ -1,0 +1,7 @@
+sea_state_code,label,beaufort_range,min_wind_speed_kn,max_wind_speed_kn,min_wave_height_m,max_wave_height_m,description
+CALM,Calm,0–2,0,8,0.0,0.5,Glassy to rippled sea. No impact on port operations.
+LIGHT,Light Breeze,3–4,8,16,0.5,1.25,Small wavelets. Normal port operations for all vessel types.
+MODERATE,Moderate,5,16,22,1.25,2.5,Moderate waves. Small craft may be affected.
+ROUGH,Rough,6,22,28,2.5,4.0,Large waves forming. Small craft advisories possible.
+VERY_ROUGH,Very Rough,7,28,34,4.0,6.0,Heaping seas with white foam. Gale-force winds.
+STORM,Storm,8+,34,999,6.0,99.0,Very high waves. Dangerous for all but large vessels.

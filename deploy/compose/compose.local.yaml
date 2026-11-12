@@ -1,0 +1,40 @@
+# Try the stack on a laptop, without TLS or DNS:
+#   docker compose --env-file local.env -f compose.yaml -f compose.local.yaml up -d --build
+# then http://crowsnest.localhost:8000, http://dagster.localhost:8000,
+# http://marimo.localhost:8000 and http://apps.localhost:8000 (browsers resolve
+# *.localhost themselves).
+
+services:
+  traefik:
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      # Basic auth only here: oauth2-proxy's cookies need HTTPS.
+      - --providers.file.filename=/etc/traefik/auth-basic.yml
+      - --entrypoints.web.address=:80
+    ports: !override
+      - "8000:80"
+
+  dagster-webserver:
+    labels:
+      - traefik.http.routers.dagster.entrypoints=web
+  crowsnest:
+    environment:
+      CROWSNEST_DAGSTER_PUBLIC_URL: http://dagster.localhost:8000
+      CROWSNEST_MARIMO_PUBLIC_URL: http://marimo.localhost:8000
+      CROWSNEST_APPS_PUBLIC_URL: http://apps.localhost:8000
+    labels:
+      - traefik.http.routers.crowsnest.entrypoints=web
+      - traefik.http.routers.crowsnest-health.entrypoints=web
+  marimo:
+    labels:
+      - traefik.http.routers.marimo.entrypoints=web
+  apps:
+    labels:
+      - traefik.http.routers.apps.entrypoints=web
+
+volumes:
+  # FALCON_DIR in local.env names this volume instead of a host directory:
+  # SQLite's locking, which the lake's catalog relies on, is not reliable on a
+  # Windows or macOS directory shared into a container.
+  falcon_local:

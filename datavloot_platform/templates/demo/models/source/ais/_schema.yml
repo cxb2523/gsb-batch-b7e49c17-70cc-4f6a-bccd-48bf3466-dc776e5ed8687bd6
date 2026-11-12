@@ -1,0 +1,75 @@
+version: 2
+
+# Naming convention: stg_<source_name>__<table_name>
+
+models:
+  - name: stg_noaa__guam_2025
+    description: "Staged AIS position broadcasts for vessels near Guam, 2025. Deduplicated to one row per vessel per timestamp. Each row represents a single position report broadcast by a vessel."
+
+    columns:
+
+      # --- Business columns ------------------------------------------------
+
+      - name: mmsi
+        description: "Maritime Mobile Service Identity — 9-digit unique vessel identifier."
+        data_tests:
+          - not_null
+
+      - name: base_date_time
+        description: "UTC timestamp of the AIS broadcast."
+        data_tests:
+          - not_null
+
+      - name: sog
+        description: "Speed Over Ground in knots (0–102.3)."
+
+      - name: cog
+        description: "Course Over Ground in degrees (0–360)."
+
+      - name: heading
+        description: "Direction the bow is pointing in degrees. Value 511 means unavailable."
+
+      - name: vessel_name
+        description: "Vessel name as entered by the operator."
+
+      - name: imo
+        description: "International Maritime Organization number."
+
+      - name: call_sign
+        description: "Radio call sign assigned to the vessel."
+
+      - name: vessel_type
+        description: "Numeric code for ship category (e.g. 52 = Tug, 70 = Cargo, 80 = Tanker)."
+
+      - name: status
+        description: "AIS navigational status code (0=underway engine, 1=at anchor, 5=moored, etc.)."
+
+      - name: length
+        description: "Vessel length in metres."
+
+      - name: width
+        description: "Vessel beam (width) in metres."
+
+      - name: draft
+        description: "Hull depth in water in metres."
+
+      - name: cargo
+        description: "Cargo type code."
+
+      - name: transceiver
+        description: "AIS transceiver class (A or B)."
+
+      - name: geometry
+        description: "Vessel position as WKT POINT (longitude latitude)."
+
+      # --- Audit columns ---------------------------------------------------
+      # Added automatically by optimist.stage_source().
+
+      - name: _loaded_at
+        description: "Timestamp of the dbt run that staged this record."
+
+      - name: _source_name
+        description: "Logical source name as declared in sources.yml."
+
+      - name: _source_table
+        description: "Table name as declared in sources.yml."

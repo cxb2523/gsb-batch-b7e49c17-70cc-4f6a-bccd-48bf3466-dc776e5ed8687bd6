@@ -1,0 +1,36 @@
+version: 2
+
+# Naming convention: stg_<source_name>__<table_name>
+# The double underscore separates the source from the table name.
+
+models: []      # <- remove the [] when you add your first entry below
+
+  # Add your staging models below.
+
+  # - name: stg_<source_name>__<table_name>
+  #   description: ""
+
+  #   columns:
+
+  #     # --- Business columns ------------------------------------------------
+  #     # Document all columns that come through from the source.
+  #     # These mirror the columns defined in _sources.yml.
+
+  #     - name: <column_name>
+  #       description: ""
+  #       data_tests:
+  #         - not_null
+  #         - unique         # remove if not a unique key
+
+  #     # --- Audit columns ---------------------------------------------------
+  #     # These are added automatically by optimist.stage_source().
+  #     # No need to select them manually — just document them here.
+
+  #     - name: _loaded_at
+  #       description: "Timestamp of the dbt run that staged this record."
+
+  #     - name: _source_name
+  #       description: "Logical source name as declared in sources.yml."
+
+  #     - name: _source_table
+  #       description: "Table name as declared in sources.yml."

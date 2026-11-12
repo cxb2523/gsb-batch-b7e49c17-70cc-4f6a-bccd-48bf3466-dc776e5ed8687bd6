@@ -1,0 +1,30 @@
+version: 2
+
+models:
+  - name: stg_open_meteo__guam_atmo_hourly
+    description: "Staged hourly atmospheric wind conditions near Guam. Strips dlt internal columns and adds audit columns. Ephemeral — inlined into downstream models at compile time."
+
+    columns:
+      - name: timestamp
+        description: "UTC hour of the observation."
+        data_tests:
+          - not_null
+          - unique
+
+      - name: wind_speed_10m_kn
+        description: "Wind speed at 10 m in knots."
+
+      - name: wind_direction_10m_deg
+        description: "Wind direction at 10 m in degrees."
+
+      - name: wind_gusts_10m_kn
+        description: "Wind gust speed at 10 m in knots."
+
+      - name: _loaded_at
+        description: "Timestamp of the dbt run that staged this record."
+
+      - name: _source_name
+        description: "Logical source name as declared in sources.yml."
+
+      - name: _source_table
+        description: "Table name as declared in sources.yml."

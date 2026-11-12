@@ -1,0 +1,30 @@
+[project]
+name = "noaa"
+version = "0.1.0"
+description = "NOAA AIS example project — Dagster + dbt + DuckDB, built on the datavloot toolkit"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "datavloot[optimist]~=<toolkit_version>",  # storage.py: how assets and notebooks reach the lake
+    "altair>=6.2.1",
+    "dagster",
+    "dagster-dbt",
+    "dagster-dlt",
+    "dagster-webserver",
+    "dbt-core",
+    "dbt-duckdb",
+    "dlt[duckdb]",
+    "duckdb",
+    "marimo>=0.23.9",
+    "pandas>=2.3.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.19.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["noaa_platform"]
+
+[tool.dagster]
+module_name = "noaa_platform.definitions"
+code_location_name = "noaa"

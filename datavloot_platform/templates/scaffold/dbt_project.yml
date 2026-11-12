@@ -1,0 +1,27 @@
+name: '<project_name>'
+version: '1.0.0'
+profile: '<project_name>'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+seeds:
+  <project_name>:
+    +schema: seeds
+
+models:
+  elementary:
+    +schema: elementary
+  <project_name>:
+    source:
+      +schema: source
+      +materialized: incremental  # only new rows per run; pair with incremental_column in stage_source and unique_key per model
+    business:
+      +materialized: table
+      +schema: business

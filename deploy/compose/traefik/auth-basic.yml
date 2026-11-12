@@ -1,0 +1,10 @@
+# Sign-in with FALCON_AUTH=basic: the `auth` middleware every router uses
+# (compose.yaml). Traefik reloads this file on change.
+http:
+  middlewares:
+    # Basic auth from users.htpasswd (git-ignored; see README). For single
+    # sign-on through the customer's identity provider: FALCON_AUTH=oidc.
+    auth:
+      basicAuth:
+        usersFile: /etc/traefik/users.htpasswd
+        removeHeader: true

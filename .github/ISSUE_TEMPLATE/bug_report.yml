@@ -1,0 +1,72 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, check whether the problem is already covered in an open issue. Problems with the dbt macros or conventions (the `optimist` dbt package) go to [dbt-datavloot-optimist](https://github.com/datavloot/dbt-datavloot-optimist/issues).
+
+  - type: input
+    id: version
+    attributes:
+      label: datavloot version
+      description: Output of `pip show datavloot | grep Version`. If you installed from a checkout, give the commit hash.
+      placeholder: "0.1.2"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version and OS
+      placeholder: "3.12.4 on Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is affected?
+      options:
+        - CLI (datavloot new / demo / start / launch)
+        - Scaffold template
+        - Demo project (NOAA)
+        - Crows Nest dashboard
+        - Dagster platform layer
+        - Packaging / install
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran, from a clean starting point if possible. A fresh `datavloot new` or `datavloot demo` project is the best baseline.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Paste the full output, including the traceback. For dbt problems, the relevant part of `logs/dbt.log` helps.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Modified templates, non-default `profiles.yml`, a proxy, Windows path quirks, or anything else that makes your setup different from a fresh scaffold.

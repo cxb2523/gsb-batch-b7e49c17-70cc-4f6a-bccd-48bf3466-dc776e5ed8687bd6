@@ -1,0 +1,34 @@
+# Sign-in with FALCON_AUTH=oidc: the `auth` middleware every router uses
+# (compose.yaml), backed by oauth2-proxy and the customer's identity provider.
+# The same pattern as SRDP's, so the Falcon and the Catamaran sign in alike.
+http:
+  middlewares:
+    auth:
+      chain:
+        middlewares:
+          - auth-errors
+          - auth-forward
+
+    # Not signed in (oauth2-proxy answers 401): send the browser to the sign-in,
+    # which goes straight on to the identity provider (skip-provider-button).
+    # Only 401: a 403 means signed in but not allowed (OIDC_ALLOWED_GROUPS), and
+    # sending that to the sign-in again would loop.
+    auth-errors:
+      errors:
+        status:
+          - "401"
+        statusRewrites:
+          "401": 302
+        service: oauth2-proxy@docker
+        query: /oauth2/sign_in
+
+    # Every request is checked with oauth2-proxy first; it passes who is signed
+    # in on to the service.
+    auth-forward:
+      forwardAuth:
+        address: http://oauth2-proxy:4180/oauth2/auth
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Auth-Request-User
+          - X-Auth-Request-Email
+          - X-Auth-Request-Groups

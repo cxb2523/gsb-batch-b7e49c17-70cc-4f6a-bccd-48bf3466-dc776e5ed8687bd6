@@ -1,0 +1,11 @@
+data/
+*.duckdb
+.venv/
+target/
+dbt_packages/
+logs/
+__pycache__/
+*.pyc
+.env
+.dagster/
+.datavloot/

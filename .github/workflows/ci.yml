@@ -1,0 +1,165 @@
+# Datavloot CI
+#
+# Checks, fastest-to-fail first:
+#
+#   lint       - the templates parse and declare nothing that does not exist
+#   crowsnest  - the Crows Nest security/auth tests, which need the web stack
+#   wheels     - every dependency of the optimist extra installs from a wheel
+#   smoke      - a clean install, `datavloot new`, and a fresh project built by
+#                dbt and by Dagster: on Linux for a pull request, on Linux,
+#                Windows and macOS on `main` and when run by hand
+#   package    - the built wheel contains no build inputs
+#
+# lint, crowsnest and package pull deps ephemerally with `uv run --with ...`, so
+# a test cannot pass because something unrelated happened to be installed.
+# smoke instead installs the optimist extra the way a user does, and the dbt
+# package a new project pins (github.com/datavloot/dbt-datavloot-optimist).
+
+name: CI
+
+# Pull requests, plus `main` after a merge. Not every branch push: a push to a
+# branch with an open pull request fires both `push` and `pull_request`, and the
+# two runs land in different concurrency groups (refs/heads/<branch> versus
+# refs/pull/<n>/merge), so every job ran twice. The pull_request run is the one
+# worth keeping -- it tests the branch merged into the current main. Open a
+# draft pull request to get CI on a branch early. Tag pushes match neither
+# trigger, so releases are excluded. `workflow_dispatch` runs everything on any
+# branch by hand (Actions > CI > Run workflow), including the full smoke matrix.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # uv.lock once drifted so far that it still described the project under its
+      # old name, and every `uv sync` rewrote it on contributors' machines. Fail
+      # when pyproject.toml changes without the lock.
+      - run: uv lock --check
+      - run: uv run --with pytest --with pyyaml python -m pytest tests/ -m "not slow and not package" -v
+
+  # The Crows Nest tests importorskip fastapi/duckdb, so `lint` silently skips
+  # them. This job installs the web stack so the security assertions actually run,
+  # and runs the extension and storage tests that need a real DuckDB alongside them.
+  # pytz: DuckDB imports it to return TIMESTAMPTZ values (the maintenance tests read
+  # snapshot times); users get it through pandas, which `[optimist]` installs.
+  # uvicorn: the signal tests run `datavloot launch` in a subprocess.
+  # test_remote.py is here for httpx: its fake GitHub and GitLab are httpx
+  # MockTransports, so `lint` skips those tests. The same goes for the fake
+  # Dagster in test_install_scripts.py (`start --run`) and the "Run everything"
+  # route in test_crowsnest_materialize.py.
+  crowsnest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: >
+          uv run --with pytest --with pyyaml --with "duckdb>=1.5,<2"
+          --with fastapi --with httpx --with pytz --with uvicorn
+          python -m pytest tests/test_crowsnest_security.py tests/test_crowsnest_auth.py tests/test_crowsnest_vm_mode.py
+          tests/test_crowsnest_config.py tests/test_crowsnest_notebooks.py tests/test_crowsnest_apps.py tests/test_extensions.py tests/test_storage.py tests/test_maintenance.py tests/test_remote.py
+          tests/test_install_scripts.py tests/test_crowsnest_materialize.py tests/test_crowsnest_status.py tests/test_crowsnest_shutdown.py tests/test_crowsnest_startup.py -v
+
+  # The runners have compilers, so a real install there succeeds even when a
+  # user's laptop would need Rust or a C compiler (cryptography 49+ on Intel Macs
+  # did exactly that). Instead, resolve the newest versions the bounds allow for
+  # each platform -- what `pip install` picks -- then require a wheel for every
+  # one of them. Pinning first matters: asked for wheels only, the resolver
+  # quietly falls back to older versions and the check proves nothing.
+  wheels:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - x86_64-unknown-linux-gnu
+          - x86_64-pc-windows-msvc
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Every dependency installs from a wheel
+        env:
+          # sdist-only, but pure Python: nothing to compile. Keep this list to
+          # what the resolution needs today; an entry nothing needs would let
+          # a returning sdist through unnoticed.
+          ALLOWED_SDISTS: ratelimit grapheme
+          # Known and documented in the README's Intel Mac note.
+          ALLOWED_SDISTS_INTEL_MAC: cryptography
+        run: |
+          allowed="$ALLOWED_SDISTS"
+          if [ "${{ matrix.platform }}" = x86_64-apple-darwin ]; then
+            allowed="$allowed $ALLOWED_SDISTS_INTEL_MAC"
+          fi
+          no_binary=$(printf -- '--no-binary %s ' $allowed)
+          # Oldest and newest supported Python: wheels are built per version.
+          for py in 3.10 3.13; do
+            echo "::group::${{ matrix.platform }}, Python $py"
+            uv pip compile pyproject.toml --extra optimist \
+              --python-platform ${{ matrix.platform }} --python-version $py \
+              --quiet --output-file pins.txt
+            uv pip compile pins.txt --only-binary :all: $no_binary \
+              --python-platform ${{ matrix.platform }} --python-version $py \
+              --quiet > /dev/null
+            echo "::endgroup::"
+          done
+
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        # A pull request waits for Linux only (1-2 minutes; Windows takes 4-5).
+        # Windows and macOS run after the merge on `main`, or by hand on a
+        # branch whose change could break there (paths, installs, storage).
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # Plain pip rather than uv: this job installs the way the README tells a
+      # user to, so it resolves the newest versions the bounds allow, not the
+      # lock file.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install ".[optimist]" pytest
+      # The console script itself, not just the functions behind it.
+      - run: datavloot new "${{ runner.temp }}/probe"
+      # git is preinstalled on all three runners, and `dbt deps` needs it to
+      # resolve the hub packages' metadata.
+      - run: python -m pytest tests/ -m slow -v
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv run --with pytest --with pyyaml python -m pytest tests/test_packaging.py -v
+      - run: uv build --wheel --out-dir dist/
+      - run: ls -lh dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/
+          retention-days: 7

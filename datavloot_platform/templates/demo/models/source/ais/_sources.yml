@@ -1,0 +1,65 @@
+version: 2
+
+sources:
+  - name: noaa
+    description: "AIS vessel position broadcasts sourced from NOAA Marine Cadastre, loaded into the raw schema via the noaa_guam_2025_raw Dagster asset."
+    schema: raw
+
+    # No freshness config — this is a static historical dataset loaded once.
+
+    tables:
+      - name: guam_2025
+        description: "Raw AIS position broadcasts for vessels near Guam, full year 2025. Each row is one broadcast from one vessel at one point in time."
+
+        columns:
+          - name: mmsi
+            description: "Maritime Mobile Service Identity — 9-digit unique vessel identifier."
+            data_tests:
+              - not_null
+
+          - name: base_date_time
+            description: "UTC timestamp of the AIS broadcast."
+            data_tests:
+              - not_null
+
+          - name: sog
+            description: "Speed Over Ground in knots (0–102.3). Values of 0 indicate the vessel is stationary."
+
+          - name: cog
+            description: "Course Over Ground in degrees (0–360)."
+
+          - name: heading
+            description: "Direction the bow is pointing in degrees (0–359). Value 511 is a sentinel meaning unavailable."
+
+          - name: vessel_name
+            description: "Vessel name as entered by the operator. May be blank or inconsistent."
+
+          - name: imo
+            description: "International Maritime Organization number (format: IMO + 7 digits)."
+
+          - name: call_sign
+            description: "Radio call sign assigned to the vessel."
+
+          - name: vessel_type
+            description: "Numeric code for ship category (e.g. 52 = Tug, 70 = Cargo, 80 = Tanker)."
+
+          - name: status
+            description: "AIS navigational status code (0=underway engine, 1=at anchor, 5=moored, etc.)."
+
+          - name: length
+            description: "Vessel length in metres as entered by the operator."
+
+          - name: width
+            description: "Vessel beam (width) in metres as entered by the operator."
+
+          - name: draft
+            description: "How deep the hull sits in the water in metres."
+
+          - name: cargo
+            description: "Cargo type code."
+
+          - name: transceiver
+            description: "AIS transceiver class (A or B). Class A is mandatory for large vessels; Class B is used by smaller craft."
+
+          - name: geometry
+            description: "Vessel position as WKT POINT (longitude latitude)."

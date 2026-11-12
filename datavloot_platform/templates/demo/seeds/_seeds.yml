@@ -1,0 +1,71 @@
+version: 2
+
+seeds:
+
+  - name: sea_state_categories
+    description: "Beaufort-inspired sea state classification thresholds. One row per category. Used as the source for dim_sea_state."
+    columns:
+      - name: sea_state_code
+        description: "Short uppercase code for the category (e.g. CALM, ROUGH, STORM)."
+        data_tests:
+          - not_null
+          - unique
+      - name: label
+        description: "Human-readable label."
+        data_tests:
+          - not_null
+      - name: beaufort_range
+        description: "Approximate Beaufort scale numbers covered by this category."
+      - name: min_wind_speed_kn
+        description: "Lower wind speed bound in knots (inclusive)."
+        data_tests:
+          - not_null
+      - name: max_wind_speed_kn
+        description: "Upper wind speed bound in knots (exclusive, except STORM which is open-ended)."
+        data_tests:
+          - not_null
+      - name: min_wave_height_m
+        description: "Typical lower wave height bound in metres."
+      - name: max_wave_height_m
+        description: "Typical upper wave height bound in metres."
+      - name: description
+        description: "Plain-English description of sea conditions and operational impact."
+
+  - name: ports
+    description: "Global port reference data from the NOAA/NGA World Port Index. One row per port. Used as the source for dim_port."
+    columns:
+      - name: port_index_number
+        description: "World Port Index number — unique numeric identifier for each port."
+        data_tests:
+          - not_null
+          - unique
+      - name: region_name
+        description: "Geographic region and sub-region as defined by the World Port Index."
+        data_tests:
+          - not_null
+      - name: port_name
+        description: "Official port name."
+        data_tests:
+          - not_null
+      - name: alternate_port_name
+        description: "Alternative name for the port, if any."
+      - name: un_locode
+        description: "UN/LOCODE — standardised 5-character location code (country + location)."
+      - name: country_code
+        description: "Country name where the port is located."
+        data_tests:
+          - not_null
+      - name: water_body
+        description: "Ocean or sea body in which the port sits (e.g. North Pacific Ocean)."
+      - name: harbor_size
+        description: "Relative size of the harbour (Very Small, Small, Medium, Large)."
+      - name: harbor_type
+        description: "Physical type of the harbour (e.g. Coastal (Breakwater), River (Natural))."
+      - name: latitude
+        description: "Port latitude in decimal degrees."
+        data_tests:
+          - not_null
+      - name: longitude
+        description: "Port longitude in decimal degrees."
+        data_tests:
+          - not_null

@@ -1,0 +1,201 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The default palette is datavloot's (the website's navy, sea, ochre and ivory),
+   as "r g b" for Tailwind (tailwind.config.js). A project's branding/ overrides
+   these at runtime: routes/branding.py, app/page.js.
+
+   Colour only where something needs attention; the rest stays calm. A finished
+   run is a green dot in plain text, a failed one a red pill. */
+:root {
+  --cn-accent-50: 234 242 246;   /* soft fills, selected rows */
+  --cn-accent-100: 211 227 235;
+  --cn-accent-200: 180 206 218;  /* soft borders */
+  --cn-accent-400: 95 143 165;
+  --cn-accent-600: 35 86 110;    /* sea: links, buttons, active elements */
+  --cn-accent-700: 31 72 94;     /* hover */
+  --cn-accent-800: 31 60 78;     /* navy */
+  --cn-accent-900: 24 47 62;     /* deep navy: the sidebar */
+  --cn-surface-1: 244 247 249;   /* page */
+  --cn-surface-2: 234 240 243;   /* hover, code, table head */
+  --cn-surface-3: 217 226 231;   /* borders */
+  --cn-ink-0: 31 60 78;          /* text: navy */
+  --cn-ink-1: 46 72 89;
+  --cn-ink-2: 78 100 112;        /* muted */
+  --cn-ink-3: 108 130 141;       /* dim, still readable on white */
+  --cn-highlight: 201 138 31;    /* ochre: the active tab, focus, brand touches */
+  --cn-highlight-700: 156 106 21; /* ochre, darker: links in a note on white */
+  --cn-sidebar: 24 47 62;        /* deep navy: the sidebar (accent-900 unless branding names one) */
+}
+
+@layer base {
+  body {
+    @apply bg-surface-1 text-ink-0 antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid rgb(var(--cn-highlight));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  ::selection {
+    background: rgb(var(--cn-highlight) / 0.25);
+  }
+}
+
+@layer components {
+  /* Page head: title with a short line under it, actions on the right. */
+  .page-head {
+    @apply flex items-end justify-between gap-4 flex-wrap;
+  }
+  .page-title {
+    @apply text-xl font-semibold text-ink-0 tracking-tight;
+  }
+  .page-lede {
+    @apply text-sm text-ink-2 mt-1;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 h-8 px-3 rounded-md border text-xs font-semibold
+           whitespace-nowrap transition-colors duration-150
+           bg-white text-ink-1 border-surface-3 hover:bg-surface-2 hover:text-ink-0
+           disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    @apply bg-datavloot-600 text-white border-transparent shadow-sm hover:bg-datavloot-700 hover:text-white;
+  }
+  .btn-ghost {
+    @apply bg-transparent border-transparent text-ink-2 hover:bg-surface-2;
+  }
+
+  .card {
+    @apply bg-white rounded-lg border border-surface-3;
+    box-shadow: 0 1px 2px rgb(var(--cn-accent-800) / 0.04);
+  }
+
+  .panel-header {
+    @apply flex items-center justify-between px-4 py-3 border-b border-surface-3;
+  }
+
+  .panel-title {
+    @apply text-sm font-semibold text-ink-0 tracking-tight;
+  }
+
+  .table-header {
+    @apply text-xs font-semibold text-ink-2 text-left px-4 py-2.5 border-b border-surface-3 bg-surface-1;
+  }
+
+  .table-cell {
+    @apply px-4 py-2.5 text-sm text-ink-1;
+  }
+
+  .table-row {
+    @apply border-t border-surface-2 first:border-t-0 hover:bg-surface-1 transition-colors;
+  }
+
+  /* Sidebar: deep navy, the active tab marked in ochre. */
+  .sidebar-link {
+    @apply relative flex items-center gap-3 h-9 px-3 rounded-md text-sm font-medium transition-colors duration-150;
+  }
+  .sidebar-link-active {
+    @apply bg-white/10 text-white;
+  }
+  .sidebar-link-active::before {
+    content: "";
+    @apply absolute -left-3 top-1.5 bottom-1.5 w-[3px] rounded-r;
+    background: rgb(var(--cn-highlight));
+  }
+  .sidebar-link-inactive {
+    @apply text-white/65 hover:bg-white/5 hover:text-white;
+  }
+
+  .health-pill {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium;
+  }
+
+  .text-highlight {
+    color: rgb(var(--cn-highlight));
+  }
+}
+
+/* Status labels sit outside @layer: the panels build their names (status-${status}),
+   which Tailwind cannot see, so inside a layer it would drop them. */
+/* Calm when fine, colour when something needs doing. */
+.status-badge {
+  @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium capitalize;
+}
+.status-badge::before {
+  content: "";
+  @apply inline-block w-1.5 h-1.5 rounded-full bg-current shrink-0;
+}
+.status-success, .status-pass {
+  @apply text-ink-2 px-0;
+}
+.status-success::before, .status-pass::before {
+  @apply bg-emerald-600;
+}
+.status-running {
+  @apply bg-datavloot-50 text-datavloot-700;
+}
+.status-running::before {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+.status-warning, .status-warn {
+  @apply bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200;
+}
+.status-failure, .status-error, .status-fail {
+  @apply bg-red-50 text-red-700 ring-1 ring-inset ring-red-200;
+}
+.status-queued, .status-pending, .status-cancelled, .status-skipped {
+  @apply text-ink-3 ring-1 ring-inset ring-surface-3;
+}
+.status-queued::before, .status-pending::before, .status-cancelled::before, .status-skipped::before {
+  @apply bg-transparent ring-1 ring-current;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-surface-3 rounded-full;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-ink-3;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* An indeterminate progress bar: stripes moving left to right (StartupBanner). */
+@keyframes progress-stripe {
+  from { background-position: 0 0; }
+  to { background-position: 28px 0; }
+}
+.progress-stripe {
+  background-color: rgb(var(--cn-accent-200));
+  background-image: linear-gradient(
+    -45deg,
+    rgb(var(--cn-accent-600)) 25%, transparent 25%,
+    transparent 50%, rgb(var(--cn-accent-600)) 50%,
+    rgb(var(--cn-accent-600)) 75%, transparent 75%
+  );
+  background-size: 28px 28px;
+  animation: progress-stripe 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-stripe { animation: none; }
+}

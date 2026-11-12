@@ -1,0 +1,116 @@
+{
+  "realm": "falcon",
+  "displayName": "Falcon test identity provider",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "loginWithEmailAllowed": true,
+  "requiredActions": [
+    {
+      "alias": "VERIFY_PROFILE",
+      "name": "Verify Profile",
+      "providerId": "VERIFY_PROFILE",
+      "enabled": false,
+      "defaultAction": false,
+      "priority": 90,
+      "config": {}
+    }
+  ],
+  "groups": [
+    {
+      "name": "falcon-users",
+      "path": "/falcon-users"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "falcon",
+      "name": "Falcon",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${FALCON_TEST_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://crowsnest.${DOMAIN}/oauth2/callback",
+        "https://dagster.${DOMAIN}/oauth2/callback",
+        "https://marimo.${DOMAIN}/oauth2/callback",
+        "https://apps.${DOMAIN}/oauth2/callback"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@example.nl",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${FALCON_TEST_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/falcon-users"
+      ]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "firstName": "Bob",
+      "lastName": "Test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${FALCON_TEST_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/falcon-users"
+      ]
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@example.nl",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${FALCON_TEST_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

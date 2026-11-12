@@ -1,0 +1,115 @@
+[project]
+name = "datavloot"
+version = "0.4.0rc3"
+description = "Open, modular, Python-native data platform — from a laptop to a fleet, without vendor lock-in."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+    "python-dotenv>=1.0,<2",
+    "pyyaml>=6.0,<7",
+]
+
+[project.optional-dependencies]
+# Upper bounds: this extra is a curated application environment, not a library's
+# dependency set, so capping is cheap insurance against an untested major landing
+# under a user. Policy: cap 1.x+ packages below the next major, 0.x packages below
+# the next minor (a 0.x minor is a major), and hold the dagster core/companion
+# series in lockstep -- dagster 1.13.x pairs with dagster-* 0.29.x, and mixing the
+# two series is the failure mode that actually bites.
+#
+# pandas is the live one: pandas 3 is released and untested here, which the old
+# unbounded ">=2.0" would have pulled in on any fresh install.
+#
+# dbt-core is held below 1.12, tighter than the policy: from 1.12 it depends on
+# dbt-core-experimental-parser, which PyPI has only as an sdist whose build step
+# downloads a binary from github.com. Behind a proxy that blocks GitHub,
+# `pip install datavloot[optimist]` then fails. Lift the cap once the parser
+# ships wheels on PyPI; until then the `wheels` CI job fails on it, so lifting
+# the cap early does not go unnoticed.
+#
+# There is no `ducklake` dependency: the PyPI package of that name is an empty
+# placeholder. The DuckLake extension is installed by DuckDB itself, see
+# datavloot_platform/extensions.py.
+#
+# `duckdb` is a direct dependency only to cap it. dbt-duckdb, dlt and
+# dagster-duckdb pull it in without an upper bound, so a new major would reach
+# every install the day it is released, with a lake format we have not tested.
+# DuckDB 2.0 (2026-10-21) cannot be read back by older versions. Lift the cap
+# after the lake has been tried on it.
+optimist = [
+    "altair>=6.0,<7",
+    "dagster>=1.13.6,<1.14",
+    # 0.29.28: DbtProject(install_deps=False), which the project templates use.
+    "dagster-dbt>=0.29.28,<0.30",
+    "dagster-dlt>=0.29.6,<0.30",
+    "dagster-duckdb>=0.29.6,<0.30",
+    "dagster-webserver>=1.13.6,<1.14",
+    "dbt-core>=1.11,<1.12",
+    "dbt-duckdb>=1.10,<2",
+    "dlt[duckdb,ducklake]>=1.28,<2",  # ducklake: the destination for the project lake, needs pyarrow
+    "duckdb>=1.5,<2",
+    "elementary-data[duckdb]>=0.25,<0.26",
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    # Where `datavloot new --from` keeps the token for a private repository:
+    # Windows Credential Manager, the macOS Keychain or the Secret Service.
+    "keyring>=25,<26",
+    "marimo>=0.23.9,<0.25",
+    "pandas>=2.0,<3",
+    # dagster-dbt asks for sqlglot[rs], which from 30.0 pulls in sqlglotc: a C
+    # extension without wheels for Python 3.10, so pip would compile it there.
+    "sqlglot<30; python_version < '3.11'",
+    "uvicorn[standard]>=0.30,<1",
+]
+dev = [
+    "pytest",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+datavloot = "datavloot_platform.cli:main"
+
+[build-system]
+# Upper bound pins the emitted core-metadata version, not just the backend.
+# hatchling >=1.32 emits Metadata-Version 2.5, which twine 6.x rejects outright
+# ("InvalidDistribution: '2.5' is not a valid metadata version") and which only
+# very recent packaging releases accept. 1.27-1.31 emit 2.4 -- the version PEP 639
+# defined and PyPI has supported since, so the artifact uploads with whatever
+# twine a maintainer happens to have. Lower bound is 1.27 for PEP 639 support.
+requires = ["hatchling>=1.27,<1.32"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+# Applies to BOTH the wheel and the sdist. Scoping this to targets.wheel only
+# left the sdist at 64 MB compressed / 282 MB expanded, and `uv publish` uploads
+# both, so the exclusion has to live here.
+exclude = [
+  # Tooling state that lands inside the tree. CI sets UV_CACHE_DIR=.uv-cache
+  # because GitLab can only cache paths under the build directory, and the sdist
+  # packs whatever is not excluded: on Linux that cache holds absolute symlinks
+  # into /usr/local/bin and the build dies with "Invalid tar file"; on Windows it
+  # silently produced a 22.78 MB sdist instead of 0.68 MB.
+  ".uv-cache",
+  ".venv",
+  ".pytest_cache",
+  "dist",
+  "build",
+  "datavloot_platform/crowsnest/frontend",
+  "datavloot_platform/templates/*/target",
+  "datavloot_platform/templates/*/dbt_packages",
+  "datavloot_platform/templates/*/logs",
+  "*.duckdb",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["datavloot_platform"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: runs dbt deps/parse/run; needs dbt and network. Deselect with -m 'not slow'.",
+    "package: builds a wheel and inspects it; slow. Deselect with -m 'not package'.",
+]

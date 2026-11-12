@@ -1,0 +1,14 @@
+# Build context is the repository root; send only what the image installs.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!datavloot_platform
+!deploy/compose/prepare.sh
+datavloot_platform/crowsnest/frontend
+**/__pycache__
+datavloot_platform/templates/*/target
+datavloot_platform/templates/*/dbt_packages
+datavloot_platform/templates/*/logs
+**/*.duckdb

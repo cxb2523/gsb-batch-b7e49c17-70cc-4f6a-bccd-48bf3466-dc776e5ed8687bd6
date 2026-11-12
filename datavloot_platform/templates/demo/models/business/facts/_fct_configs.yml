@@ -1,0 +1,96 @@
+version: 2
+
+# Fact docs, tests, and build config — one entry per fact model.
+#
+# Source is declared inline in each model's SQL file (so dbt discovers
+# the ref() dependency at parse time). Everything else lives here under
+# config.meta and is read by build_fact() at compile time.
+# ─────────────────────────────────────────────────────────────────────────────
+
+models:
+
+  - name: fct_port_event
+    description: >
+      One row per vessel arrival or departure at a port near Guam.
+      Events are derived from AIS position broadcasts: an arrival is detected when a vessel
+      crosses within 1.5 nautical miles of a port, and a departure when it crosses back out.
+      Grain: one event per vessel per port per crossing (arrival OR departure).
+
+    columns:
+      - name: fct_port_event_key
+        description: "Surrogate key; MD5 hash of mmsi + port_index_number + event_time."
+        data_tests:
+          - not_null
+          - unique
+      - name: vessel_key
+        description: "FK to dim_vessel."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_vessel')
+                field: vessel_key
+      - name: port_key
+        description: "FK to dim_port."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_port')
+                field: port_key
+      - name: event_date_key
+        description: "FK to dim_date — date of the arrival or departure."
+        data_tests:
+          - not_null
+      - name: event_time_key
+        description: "FK to dim_time — time of day (minute precision) of the arrival or departure."
+        data_tests:
+          - not_null
+      - name: event_time
+        description: "UTC timestamp of the first broadcast that triggered the arrival or departure transition."
+        data_tests:
+          - not_null
+      - name: is_departure
+        description: "True if this event is a departure; false if it is an arrival."
+        data_tests:
+          - not_null
+      - name: sea_state_key
+        description: "FK to dim_sea_state — sea conditions at the time of the event. Null when no weather data is available for that hour."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_sea_state')
+                field: sea_state_key
+      - name: sog
+        description: "Speed Over Ground in knots at the moment of the event broadcast."
+      - name: status
+        description: "AIS navigational status code at the moment of the event broadcast."
+
+    config:
+      meta:
+        surrogate_key:
+          columns: [mmsi, port_index_number, event_time]
+          alias: fct_port_event_key
+        dimensions:
+          - dim: dim_vessel
+            fk: mmsi
+          - dim: dim_port
+            fk: port_index_number
+            dim_fk: port_index_number
+          - dim: dim_date
+            fk: event_time
+            dim_fk: date_day
+            fk_cast: date
+            alias: event_date_key
+          - dim: dim_time
+            fk: event_time_minute
+            dim_fk: time_of_day
+            alias: event_time_key
+          - dim: dim_sea_state
+            fk: sea_state_code
+            dim_fk: sea_state_code
+        columns:
+          - event_time
+          - is_departure
+          - sog
+          - status

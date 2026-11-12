@@ -1,0 +1,5 @@
+priority_id,priority_label,priority_order,is_urgent
+1,Low,1,false
+2,Medium,2,false
+3,High,3,true
+4,Critical,4,true

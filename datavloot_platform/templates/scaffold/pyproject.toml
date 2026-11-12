@@ -1,0 +1,27 @@
+[project]
+name = "<project_name>"
+version = "0.1.0"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "datavloot[optimist]~=<toolkit_version>",  # storage.py: how assets and notebooks reach the lake
+    "dagster",
+    "dagster-dbt",
+    "dagster-dlt",
+    "dagster-webserver",
+    "dbt-core",
+    "dbt-duckdb",
+    "duckdb",
+    "marimo",
+    "python-dotenv",
+]
+
+[build-system]
+requires = ["hatchling>=1.19.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["project_platform"]
+
+[tool.dagster]
+module_name = "project_platform.definitions"
+code_location_name = "<project_name>"

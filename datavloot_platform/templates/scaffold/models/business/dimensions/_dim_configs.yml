@@ -1,0 +1,87 @@
+version: 2
+
+# Dimension docs and tests — one entry per dimension model.
+#
+# Build config (source, surrogate_key, columns) lives inline in each model's
+# SQL file, passed directly to optimist.build_dimension(). See Step 4 in
+# dbt_packages/optimist/data-instructions.md for the full workflow.
+#
+# This file is for column descriptions and data_tests only.
+# ─────────────────────────────────────────────────────────────────────────────
+
+models:
+
+  - name: dim_date
+    description: "Calendar date dimension. One row per day from dim_date_start to dim_date_end."
+    columns:
+      - name: date_key
+        description: "Surrogate key; calendar date as a YYYYMMDD integer (no hash)."
+        data_tests:
+          - not_null
+          - unique
+      - name: date_day
+        description: "Calendar date (YYYY-MM-DD); natural key for this dimension."
+      - name: year
+        description: "Calendar year (e.g. 2024)."
+      - name: quarter
+        description: "Quarter of the year (1-4)."
+      - name: month_num
+        description: "Month number (1-12)."
+      - name: month_name
+        description: "Full month name (e.g. January)."
+      - name: quarter_start_date
+        description: "First day of the quarter."
+      - name: month_start_date
+        description: "First day of the month."
+      - name: week_of_year
+        description: "Week number within the year (1-53)."
+      - name: week_start_date
+        description: "First day of the week (Monday)."
+      - name: day_of_year
+        description: "Day number within the year (1-366)."
+      - name: day_of_month
+        description: "Day number within the month (1-31)."
+      - name: day_of_week
+        description: "Day number within the week (0 = Sunday, 6 = Saturday)."
+      - name: day_name
+        description: "Full day name (e.g. Monday)."
+      - name: is_weekend
+        description: "True if the day falls on a Saturday or Sunday."
+      - name: is_weekday
+        description: "True if the day falls on a Monday through Friday."
+
+  - name: dim_time
+    description: "Time-of-day dimension. Grain defaults to minute (1 440 rows); set the dim_time_grain var to 'second' for second-level granularity (86 400 rows)."
+    columns:
+      - name: time_key
+        description: "Surrogate key; seconds elapsed since midnight as an integer (no hash)."
+        data_tests:
+          - not_null
+          - unique
+      - name: time_of_day
+        description: "Time of day at the configured grain; natural key for this dimension."
+      - name: hour
+        description: "Hour of the day (0-23)."
+      - name: minute
+        description: "Minute of the hour (0-59)."
+      - name: second
+        description: "Second of the minute (0-59). Always 0 at minute grain."
+      - name: time_hhmmss
+        description: "Time formatted as HH:MM:SS."
+      - name: period_of_day
+        description: "Named time period: night (00-05h), morning (06-11h), afternoon (12-16h), evening (17-20h)."
+      - name: is_business_hours
+        description: "True if the hour falls between 09:00 and 17:59."
+
+  # Add your dimensions below.
+
+  # - name: dim_<entity>
+  #   description: ""
+  #
+  #   columns:
+  #     - name: <entity>_key
+  #       description: "Surrogate key; MD5 hash of <natural_key_column>."
+  #     - name: <natural_key_column>
+  #       description: ""
+  #     - name: <attribute_column>
+  #       description: ""

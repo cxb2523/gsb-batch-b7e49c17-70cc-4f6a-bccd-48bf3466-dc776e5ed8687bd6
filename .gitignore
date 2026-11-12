@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.uv-cache/
+.pytest_cache/
+
+# Dagster
+.dagster/
+
+# Data — keep directory, ignore generated files
+*.duckdb
+data/*.parquet
+data/*.csv
+
+# Environment
+.env
+
+# Temp — lokale werkbestanden
+temp/

@@ -1,0 +1,13 @@
+# Dagster instance settings. Dagster reads them from DAGSTER_HOME. `datavloot
+# start` uses .dagster/ in this project when DAGSTER_HOME is not set, and copies
+# this file there on every start, so edit it here; Dagster keeps its run history
+# and schedule state in that directory between starts. With DAGSTER_HOME set to
+# a directory of your own, copy this file into it, or the limit below is gone.
+concurrency:
+  pools:
+    # One asset at a time per pool, across runs and within a run. Every asset
+    # that writes to the lake is in the "lake" pool (see the platform module's
+    # assets.py), because the lake takes one commit at a time: a second writer
+    # committing at the same moment fails with "database is locked".
+    default_limit: 1
+    granularity: op

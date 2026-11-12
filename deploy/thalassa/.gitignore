@@ -1,0 +1,8 @@
+# This directory is a module and keeps no state: run OpenTofu from a customer's
+# own directory (see README). Should someone apply here anyway, the state, the
+# variables and the provider cache must not end up in the repository.
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars

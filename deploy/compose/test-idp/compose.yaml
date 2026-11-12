@@ -1,0 +1,43 @@
+# A stand-in for a customer's identity provider, to test FALCON_AUTH=oidc
+# without one: Keycloak with a test realm (realm-falcon.json), at idp.<DOMAIN>,
+# behind the Falcon's own Traefik. Not for production: dev mode, an in-container
+# database, test users. See "Testing single sign-on" in ../README.md.
+#
+# Start the Falcon first (its network must exist), then from this directory:
+#   docker compose up -d
+
+name: falcon-test-idp
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    command:
+      - start-dev
+      - --import-realm
+      - --hostname=https://idp.${DOMAIN:?set DOMAIN in .env}
+      - --proxy-headers=xforwarded
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+      # Small enough to sit next to Dagster on the Falcon's VM.
+      JAVA_OPTS_KC_HEAP: -Xms256m -Xmx512m
+      # Read by the realm import (realm-falcon.json).
+      DOMAIN: ${DOMAIN}
+      FALCON_TEST_CLIENT_SECRET: ${FALCON_TEST_CLIENT_SECRET:?set FALCON_TEST_CLIENT_SECRET in .env}
+      FALCON_TEST_PASSWORD: ${FALCON_TEST_PASSWORD:?set FALCON_TEST_PASSWORD in .env}
+    volumes:
+      - ./realm-falcon.json:/opt/keycloak/data/import/realm-falcon.json:ro
+    networks:
+      - falcon
+    labels:
+      # No `auth` middleware: the provider is where people sign in.
+      - traefik.enable=true
+      - traefik.http.routers.idp.rule=Host(`idp.${DOMAIN}`)
+      - traefik.http.routers.idp.entrypoints=websecure
+      - traefik.http.services.idp.loadbalancer.server.port=8080
+
+networks:
+  # The Falcon's network, so its Traefik can reach Keycloak.
+  falcon:
+    external: true
+    name: falcon_default

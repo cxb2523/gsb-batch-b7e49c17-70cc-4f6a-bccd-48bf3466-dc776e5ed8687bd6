@@ -1,0 +1,42 @@
+version: 2
+
+# Fact docs, tests, and build config — one entry per fact model.
+#
+# Source is declared inline in each model's SQL file (so dbt discovers
+# the ref() dependency at parse time). Everything else lives here under
+# config.meta and is read by build_fact() at compile time.
+# ─────────────────────────────────────────────────────────────────────────────
+
+models: []      # <- remove the [] when you add your first entry below
+
+  # Add your facts below.
+
+  # - name: fct_<event>
+  #   description: ""
+  #
+  #   columns:
+  #     - name: fct_<event>_key
+  #       description: "Surrogate key; MD5 hash of <grain_column>."
+  #     - name: <grain_column>
+  #       description: ""
+  #     - name: <entity>_key
+  #       description: "FK to dim_<entity>."
+  #     - name: <measure_column>
+  #       description: ""
+  #
+  #   config:
+  #     meta:
+  #       surrogate_key:
+  #         columns: [<grain_column>]
+  #         alias: fct_<event>_key
+  #       dimensions:
+  #         - dim: dim_<entity>
+  #           fk: <fk_column>
+  #         - dim: dim_date
+  #           fk: <timestamp_column>
+  #           dim_fk: date_day
+  #           fk_cast: date
+  #           alias: <event>_date_key
+  #       columns:
+  #         - <grain_column>
+  #         - <measure_column>

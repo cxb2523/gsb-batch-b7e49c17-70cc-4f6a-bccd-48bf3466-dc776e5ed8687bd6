@@ -1,0 +1,237 @@
+version: 2
+
+# Dimension docs and tests — one entry per dimension model.
+#
+# Source is declared inline in each model's SQL file (so dbt discovers
+# the ref() dependency at parse time). Everything else lives here under
+# config.meta and is read by build_dimension() at compile time.
+# ─────────────────────────────────────────────────────────────────────────────
+
+models:
+
+  - name: dim_date
+    description: "Calendar date dimension. One row per day from dim_date_start to dim_date_end."
+    columns:
+      - name: date_key
+        description: "Surrogate key; calendar date as a YYYYMMDD integer (no hash)."
+        data_tests:
+          - not_null
+          - unique
+      - name: date_day
+        description: "Calendar date (YYYY-MM-DD); natural key for this dimension."
+      - name: year
+        description: "Calendar year (e.g. 2024)."
+      - name: quarter
+        description: "Quarter of the year (1-4)."
+      - name: month_num
+        description: "Month number (1-12)."
+      - name: month_name
+        description: "Full month name (e.g. January)."
+      - name: quarter_start_date
+        description: "First day of the quarter."
+      - name: month_start_date
+        description: "First day of the month."
+      - name: week_of_year
+        description: "Week number within the year (1-53)."
+      - name: week_start_date
+        description: "First day of the week (Monday)."
+      - name: day_of_year
+        description: "Day number within the year (1-366)."
+      - name: day_of_month
+        description: "Day number within the month (1-31)."
+      - name: day_of_week
+        description: "Day number within the week (0 = Sunday, 6 = Saturday)."
+      - name: day_name
+        description: "Full day name (e.g. Monday)."
+      - name: is_weekend
+        description: "True if the day falls on a Saturday or Sunday."
+      - name: is_weekday
+        description: "True if the day falls on a Monday through Friday."
+
+
+  - name: dim_time
+    description: "Time-of-day dimension at minute granularity. 1 440 rows covering a full 24-hour period."
+    columns:
+      - name: time_key
+        description: "Surrogate key; seconds elapsed since midnight as an integer (no hash)."
+        data_tests:
+          - not_null
+          - unique
+      - name: time_of_day
+        description: "Time of day at minute precision (HH:MM:00); natural key for this dimension."
+      - name: hour
+        description: "Hour of the day (0-23)."
+      - name: minute
+        description: "Minute of the hour (0-59)."
+      - name: second
+        description: "Second of the minute. Always 0 at this dimension's minute grain."
+      - name: time_hhmmss
+        description: "Time formatted as HH:MM:SS (e.g. 09:05:00)."
+      - name: period_of_day
+        description: "Named time period: night (00-05h), morning (06-11h), afternoon (12-16h), evening (17-20h)."
+      - name: is_business_hours
+        description: "True if the hour falls between 09:00 and 17:59."
+
+
+  - name: dim_sea_state
+    description: "Six sea state categories derived from Beaufort scale wind speed thresholds. Used to classify conditions at the time of each port event."
+
+    columns:
+      - name: sea_state_key
+        description: "Surrogate key; MD5 hash of sea_state_code."
+        data_tests:
+          - not_null
+          - unique
+      - name: sea_state_code
+        description: "Short uppercase identifier (e.g. CALM, ROUGH, STORM)."
+        data_tests:
+          - not_null
+          - unique
+          - accepted_values:
+              arguments:
+                values: ['CALM', 'LIGHT', 'MODERATE', 'ROUGH', 'VERY_ROUGH', 'STORM']
+      - name: label
+        description: "Human-readable label."
+        data_tests:
+          - not_null
+      - name: beaufort_range
+        description: "Approximate Beaufort scale numbers covered by this category."
+      - name: min_wind_speed_kn
+        description: "Lower wind speed bound in knots (inclusive)."
+      - name: max_wind_speed_kn
+        description: "Upper wind speed bound in knots (exclusive, except STORM)."
+      - name: min_wave_height_m
+        description: "Typical lower wave height bound in metres."
+      - name: max_wave_height_m
+        description: "Typical upper wave height bound in metres."
+      - name: description
+        description: "Plain-English description of sea conditions and operational impact."
+
+    config:
+      meta:
+        surrogate_key:
+          columns: [sea_state_code]
+          # alias omitted -> defaults to sea_state_key
+        columns:
+          - sea_state_code
+          - label
+          - beaufort_range
+          - min_wind_speed_kn
+          - max_wind_speed_kn
+          - min_wave_height_m
+          - max_wave_height_m
+          - description
+
+
+  - name: dim_vessel
+    description: "One row per unique vessel (MMSI) observed in the Guam 2025 AIS data. Vessel attributes are operator-entered and may be incomplete or inconsistent."
+
+    columns:
+      - name: vessel_key
+        description: "Surrogate key; MD5 hash of mmsi."
+        data_tests:
+          - not_null
+          - unique
+      - name: mmsi
+        description: "Maritime Mobile Service Identity — 9-digit unique vessel identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: vessel_name
+        description: "Vessel name as entered by the operator. May be blank."
+      - name: imo
+        description: "International Maritime Organization number."
+      - name: call_sign
+        description: "Radio call sign."
+      - name: vessel_type
+        description: "Numeric ship category code (e.g. 52 = Tug, 70 = Cargo, 80 = Tanker)."
+      - name: length
+        description: "Vessel length in metres."
+      - name: width
+        description: "Vessel beam (width) in metres."
+      - name: draft
+        description: "Hull depth in water in metres."
+      - name: cargo
+        description: "Cargo type code."
+      - name: transceiver
+        description: "AIS transceiver class (A or B)."
+
+    config:
+      meta:
+        surrogate_key:
+          columns: [mmsi]
+          # alias omitted -> defaults to vessel_key
+        deduplicate:
+          partition_by: [mmsi]
+          order_by: base_date_time desc
+        columns:
+          - mmsi
+          - vessel_name
+          - imo
+          - call_sign
+          - vessel_type
+          - length
+          - width
+          - draft
+          - cargo
+          - transceiver
+
+
+  - name: dim_port
+    description: "One row per port from the NOAA/NGA World Port Index. Covers all global ports; the fact model filters to ports near Guam at query time."
+
+    columns:
+      - name: port_key
+        description: "Surrogate key; MD5 hash of port_index_number."
+        data_tests:
+          - not_null
+          - unique
+      - name: port_index_number
+        description: "World Port Index number — unique numeric identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: region_name
+        description: "Geographic region and sub-region."
+      - name: port_name
+        description: "Official port name."
+        data_tests:
+          - not_null
+      - name: alternate_port_name
+        description: "Alternative port name, if any."
+      - name: un_locode
+        description: "UN/LOCODE 5-character location code."
+      - name: country_code
+        description: "Country where the port is located."
+      - name: water_body
+        description: "Ocean or sea body."
+      - name: harbor_size
+        description: "Relative harbour size (Very Small, Small, Medium, Large)."
+      - name: harbor_type
+        description: "Physical harbour type."
+      - name: latitude
+        description: "Port latitude in decimal degrees."
+        data_tests:
+          - not_null
+      - name: longitude
+        description: "Port longitude in decimal degrees."
+        data_tests:
+          - not_null
+
+    config:
+      meta:
+        surrogate_key:
+          columns: [port_index_number]
+          # alias omitted -> defaults to port_key
+        columns:
+          - port_index_number
+          - region_name
+          - port_name
+          - alternate_port_name
+          - un_locode
+          - country_code
+          - water_body
+          - harbor_size
+          - harbor_type
+          - latitude
+          - longitude
