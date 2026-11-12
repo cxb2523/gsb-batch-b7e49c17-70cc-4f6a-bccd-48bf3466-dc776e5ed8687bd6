@@ -7,7 +7,8 @@
 | **频率** | 每周一 01:00 UTC（约北京时间 09:00） |
 | **Workflow** | [`.github/workflows/weekly-x-crawl.yml`](../.github/workflows/weekly-x-crawl.yml) |
 | **脚本** | [`scripts/weekly_x_crawl.py`](../scripts/weekly_x_crawl.py) |
-| **产物** | `docs/x-crawl-candidates/YYYY-MM-DD.md` + 自动 PR（有变更时） |
+| **自测** | `python scripts/test_weekly_x_crawl.py`（不联网，覆盖成功 / 全失败 / 无 Token 三种情形） |
+| **产物** | `docs/x-crawl-candidates/YYYY-MM-DD.md` + `.json` + 自动 PR（有变更时） |
 | **手动触发** | GitHub → Actions → **Weekly X Prompt Crawl** → Run workflow |
 
 ### 启用实时搜索（推荐）
@@ -16,7 +17,9 @@
 
 - `TWITTER_BEARER_TOKEN`（或 `X_BEARER_TOKEN`）= X/Twitter API v2 Bearer Token
 
-无 Token 时仍会每周产出 **checklist 报告 / Issue**，需人工或 Agent 按查询补爬。
+无 Token（离线清单模式）时仍会每周产出 **checklist 报告 / Issue**：报告会明确标注离线模式并保留建议查询，不伪造任何推文条目，需人工或 Agent 按查询补爬。有 Token 时若某个查询 HTTP / 网络失败，报告会在对应分类下列出失败查询与原因摘要，且该分类不会显示成「本周无推文」；JSON 摘要中的 `query_failures` / `categories` 字段与 Markdown 报告数字一致。
+
+已收录帖子的跳过数按 **I2V / Seedance / Kling 3.0** 分别统计（Markdown 头部、各分类小节与 JSON 的 `i2v_skipped_known` / `seedance_skipped_known` / `kling3_skipped_known` 同步）；同一条推文被多个查询命中时只保留一次，并保留得分最高的那条。
 
 ### 晋升规则（与全库一致）
 

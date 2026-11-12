@@ -6,6 +6,10 @@ Thumbs.db
 *.mp4
 !videos/.gitkeep
 
+# Python bytecode from local scripts/tests
+__pycache__/
+*.pyc
+
 # X / Twitter secrets
 scripts/x-mcp.env
 .env

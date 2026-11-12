@@ -4,9 +4,13 @@
 Weekly X (Twitter) prompt crawl for awesome-kling.
 
 - Requires TWITTER_BEARER_TOKEN (or X_BEARER_TOKEN) for live search.
-- Without a token, writes a checklist-only report so the workflow still produces output.
-- Does NOT auto-merge into curated packs; writes candidates under docs/x-crawl-candidates/
-  for human/agent review (newest-first rule when promoting to prompts/*).
+- Without a token, writes an explicit offline-checklist report so the workflow
+  still produces output (no tweet entries are fabricated).
+- Every query failure (HTTP status or network/parse error) is recorded per
+  category and surfaced in the report instead of looking like an empty week.
+- Does NOT auto-merge into curated packs; writes candidates under
+  docs/x-crawl-candidates/ for human/agent review (newest-first rule when
+  promoting to prompts/*).
 
 Usage:
   python scripts/weekly_x_crawl.py
@@ -23,6 +27,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,6 +50,13 @@ QUERIES = {
     ],
 }
 
+# key, human title, report order (Kling 3.0 first, as in curated docs)
+CATEGORY_ORDER = [
+    ("kling3", "Kling 3.0 / Omni candidates"),
+    ("i2v", "I2V / Kling candidates"),
+    ("seedance", "Seedance candidates"),
+]
+
 STATUS_RE = re.compile(r"status/(\d+)")
 
 PROMPTISH = re.compile(
@@ -53,14 +65,110 @@ PROMPTISH = re.compile(
 )
 
 
+@dataclass
+class QueryResult:
+    category: str
+    query: str
+    tweets: list[dict] = field(default_factory=list)
+    ok: bool = True
+    error_type: str = ""
+    error_summary: str = ""
+
+
+@dataclass
+class CategoryState:
+    key: str
+    title: str
+    query_count: int
+    results: list[QueryResult] = field(default_factory=list)
+    items: list[dict] = field(default_factory=list)
+    skipped: list[dict] = field(default_factory=list)
+
+    @property
+    def failure_count(self) -> int:
+        return sum(1 for r in self.results if not r.ok)
+
+    @property
+    def failures(self) -> list[QueryResult]:
+        return [r for r in self.results if not r.ok]
+
+    def status(self, has_token: bool) -> str:
+        if not has_token:
+            return "offline"
+        if self.query_count and self.failure_count >= self.query_count:
+            return "all_failed"
+        if self.failure_count:
+            return "partial"
+        return "ok"
+
+
 def bearer_token() -> str | None:
     return os.environ.get("TWITTER_BEARER_TOKEN") or os.environ.get("X_BEARER_TOKEN")
 
 
-def search_recent(query: str, max_results: int = 20) -> list[dict]:
-    token = bearer_token()
+def _body_detail(body: str) -> str:
+    """Prefer a concise API message from a JSON error body over a raw dump."""
+    compact = re.sub(r"\s+", " ", body or "").strip()
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return compact[:300]
+    if not isinstance(payload, dict):
+        return compact[:300]
+    detail = payload.get("detail") or payload.get("title")
+    errors = payload.get("errors")
+    if not detail and isinstance(errors, list) and errors:
+        first = errors[0]
+        if isinstance(first, dict):
+            detail = first.get("message") or first.get("detail") or first.get("title")
+    return str(detail)[:300] if detail else compact[:300]
+
+
+def _describe_http_error(err: urllib.error.HTTPError) -> str:
+    body = ""
+    try:
+        body = err.read().decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
+    reason = f"HTTP {err.code}"
+    phrase = str(getattr(err, "msg", "") or "").strip()
+    if not phrase:
+        phrase = str(getattr(err, "reason", "") or "").strip()
+    if phrase and "http error" not in phrase.lower():
+        reason += f" {phrase}"
+    detail = _body_detail(body)
+    if detail and detail.lower() not in reason.lower():
+        reason += f" — {detail}"
+    return reason[:400]
+
+
+def _describe_network_error(err: Exception) -> str:
+    if isinstance(err, urllib.error.URLError) and getattr(err, "reason", None):
+        return f"URLError: {err.reason}"[:300]
+    return f"{type(err).__name__}: {err}"[:300]
+
+
+def _api_error_summary(errors: list) -> str:
+    first = errors[0] if errors else None
+    if isinstance(first, dict):
+        msg = first.get("message") or first.get("detail") or first.get("title")
+        if msg:
+            return f"API error: {str(msg)[:300]}"
+    return "API error reported with no data"
+
+
+def search_recent(
+    query: str, max_results: int = 20, token: str | None = None
+) -> tuple[list[dict], dict | None]:
+    """Run one recent-search query.
+
+    Returns (tweets, failure). ``failure`` is None on success; a successful
+    request that legitimately returned no posts is ``([], None)``. Failures are
+    ``{"type": "http"|"network"|"parse"|"api"|"request", "summary": ...}``.
+    """
+    token = token or bearer_token()
     if not token:
-        return []
+        return [], {"type": "no_token", "summary": "No bearer token configured"}
 
     params = {
         "query": query,
@@ -77,29 +185,59 @@ def search_recent(query: str, max_results: int = 20) -> list[dict]:
             "User-Agent": "awesome-kling-weekly-crawl/1.0",
         },
     )
+
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+            payload = json.loads(raw)
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"[warn] HTTP {e.code} for query={query!r}: {body[:500]}", file=sys.stderr)
-        return []
+        summary = _describe_http_error(e)
+        print(f"[warn] HTTP failure for query={query!r}: {summary}", file=sys.stderr)
+        return [], {"type": "http", "summary": summary}
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        summary = _describe_network_error(e)
+        print(f"[warn] network failure for query={query!r}: {summary}", file=sys.stderr)
+        return [], {"type": "network", "summary": summary}
+    except json.JSONDecodeError as e:
+        summary = f"Invalid JSON response: {e}"[:300]
+        print(f"[warn] parse failure for query={query!r}: {summary}", file=sys.stderr)
+        return [], {"type": "parse", "summary": summary}
     except Exception as e:  # noqa: BLE001
-        print(f"[warn] search failed: {e}", file=sys.stderr)
-        return []
+        summary = _describe_network_error(e)
+        print(f"[warn] request failure for query={query!r}: {summary}", file=sys.stderr)
+        return [], {"type": "request", "summary": summary}
+
+    if not isinstance(payload, dict):
+        summary = "Unexpected response shape (not a JSON object)"
+        print(f"[warn] parse failure for query={query!r}: {summary}", file=sys.stderr)
+        return [], {"type": "parse", "summary": summary}
+
+    data = payload.get("data") or []
+    if not isinstance(data, list):
+        summary = "Unexpected response shape (`data` is not a list)"
+        print(f"[warn] parse failure for query={query!r}: {summary}", file=sys.stderr)
+        return [], {"type": "parse", "summary": summary}
+
+    errors = payload.get("errors")
+    if not data and isinstance(errors, list) and errors:
+        summary = _api_error_summary(errors)
+        print(f"[warn] API error for query={query!r}: {summary}", file=sys.stderr)
+        return [], {"type": "api", "summary": summary}
 
     users = {
         u["id"]: u for u in (payload.get("includes") or {}).get("users", [])
     }
     out = []
-    for tw in payload.get("data") or []:
+    for tw in data:
+        if not isinstance(tw, dict) or not tw.get("id"):
+            continue
         uid = tw.get("author_id")
         user = users.get(uid, {})
         metrics = tw.get("public_metrics") or {}
         likes = int(metrics.get("like_count") or 0)
         out.append(
             {
-                "id": tw["id"],
+                "id": str(tw["id"]),
                 "text": tw.get("text") or "",
                 "created_at": tw.get("created_at"),
                 "username": user.get("username") or "unknown",
@@ -108,7 +246,7 @@ def search_recent(query: str, max_results: int = 20) -> list[dict]:
                 "url": f"https://x.com/{user.get('username', 'i')}/status/{tw['id']}",
             }
         )
-    return out
+    return out, None
 
 
 def score_tweet(t: dict) -> float:
@@ -124,6 +262,7 @@ def score_tweet(t: dict) -> float:
 
 
 def dedupe(tweets: list[dict]) -> list[dict]:
+    """Keep one copy per tweet id, preferring the highest-scoring occurrence."""
     seen = set()
     out = []
     for t in sorted(tweets, key=score_tweet, reverse=True):
@@ -132,6 +271,35 @@ def dedupe(tweets: list[dict]) -> list[dict]:
         seen.add(t["id"])
         out.append(t)
     return out
+
+
+def dedupe_across_categories(states: dict[str, CategoryState]) -> None:
+    """Dedupe tweets matched by several queries/categories, highest score wins.
+
+    Applies to both fresh candidates and already-in-repo skips, so a tweet is
+    counted once overall and lands in exactly one category.
+    """
+    order = {key: idx for idx, (key, _title) in enumerate(CATEGORY_ORDER)}
+
+    def collapse(attr: str) -> None:
+        bucket: list[tuple[float, int, str, dict]] = []
+        for key, state in states.items():
+            for t in getattr(state, attr):
+                bucket.append((score_tweet(t), order.get(key, len(order)), key, t))
+        bucket.sort(key=lambda entry: (-entry[0], entry[1]))
+
+        seen: set[str] = set()
+        kept: dict[str, list[dict]] = {key: [] for key in states}
+        for _score, _order, key, t in bucket:
+            if t["id"] in seen:
+                continue
+            seen.add(t["id"])
+            kept[key].append(t)
+        for key, state in states.items():
+            setattr(state, attr, kept[key])
+
+    collapse("items")
+    collapse("skipped")
 
 
 def known_status_ids() -> set[str]:
@@ -159,18 +327,50 @@ def filter_known(tweets: list[dict], known: set[str]) -> tuple[list[dict], list[
 
 
 def render_report(
-    date: str,
-    i2v: list[dict],
-    seedance: list[dict],
-    kling3: list[dict],
-    has_token: bool,
-    skipped_n: int,
+    date: str, states: dict[str, CategoryState], has_token: bool
 ) -> str:
+    skipped_total = sum(len(s.skipped) for s in states.values())
+    failure_total = sum(s.failure_count for s in states.values())
+    skipped_parts = ", ".join(
+        f"{label}={len(states[key].skipped)}"
+        for key, label in (
+            ("i2v", "I2V"),
+            ("seedance", "Seedance"),
+            ("kling3", "Kling 3.0"),
+        )
+    )
+    failure_parts = ", ".join(
+        f"{label}={states[key].failure_count}/{states[key].query_count}"
+        for key, label in (
+            ("i2v", "I2V"),
+            ("seedance", "Seedance"),
+            ("kling3", "Kling 3.0"),
+        )
+    )
+
+    if has_token:
+        mode_line = (
+            "Live API: **yes**. Mode: **live crawl** "
+            "(Twitter API v2 recent search)."
+        )
+        failure_line = (
+            f"> Query failures: **{failure_total}** ({failure_parts})."
+        )
+    else:
+        mode_line = (
+            "Live API: **no**. Mode: **offline checklist** — no bearer token "
+            "(`TWITTER_BEARER_TOKEN` / `X_BEARER_TOKEN`); no live search was "
+            "attempted and no tweet entries are fabricated."
+        )
+        failure_line = "> Query failures: **0** (live search not attempted)."
+
     lines = [
         f"# X crawl candidates — {date}",
         "",
-        f"> Generated by `scripts/weekly_x_crawl.py` (UTC). Live API: **{'yes' if has_token else 'no (checklist only)'}**. "
-        f"Skipped already-in-repo URLs: **{skipped_n}**.",
+        f"> Generated by `scripts/weekly_x_crawl.py` (UTC). {mode_line}",
+        f"> Skipped already-in-repo URLs (after cross-query dedupe): **{skipped_parts}** "
+        f"(total **{skipped_total}**).",
+        failure_line,
         "",
         "## Review checklist",
         "",
@@ -197,14 +397,72 @@ def render_report(
         "",
     ]
 
-    def section(title: str, items: list[dict]) -> None:
-        lines.append(f"## {title}")
+    def section(state: CategoryState) -> None:
+        status = state.status(has_token)
+        lines.append(f"## {state.title}")
         lines.append("")
-        if not items:
-            lines.append("_No tweets returned this week (or API unavailable)._")
+        if has_token:
+            lines.append(
+                f"Queries: **{state.query_count}** · Failed: **{state.failure_count}** · "
+                f"Candidates: **{len(state.items)}** · "
+                f"Skipped already-in-repo: **{len(state.skipped)}**"
+            )
+        else:
+            lines.append(
+                f"Queries: **{state.query_count}** (not attempted) · Failed: **0** · "
+                "Candidates: **0** · Skipped already-in-repo: **0**"
+            )
+        lines.append("")
+
+        if state.failures:
+            lines.append("**Failed queries:**")
+            lines.append("")
+            for r in state.failures:
+                label = "" if r.error_type == "http" else f"{r.error_type}: "
+                lines.append(f"- `{r.query}` — {label}{r.error_summary}")
+            lines.append("")
+
+        if status == "offline":
+            lines.append(
+                "_Offline checklist mode: no live data was fetched for this category, "
+                "so this is not a \"no tweets\" result. Use the suggested queries above "
+                "and add findings manually._"
+            )
             lines.append("")
             return
-        for i, t in enumerate(items, 1):
+
+        if status == "all_failed":
+            all_q = "the only query" if state.query_count == 1 else f"all {state.query_count} queries"
+            lines.append(
+                f"_**Fetch failed for {all_q} in this category — "
+                "this is NOT reported as \"no tweets this week\".** Fix the API/network "
+                "errors above and re-run._"
+            )
+            lines.append("")
+            return
+
+        if not state.items:
+            if status == "partial":
+                ok_count = state.query_count - state.failure_count
+                ok_phrase = "the only query that succeeded" if ok_count == 1 else f"the {ok_count} queries that succeeded"
+                lines.append(
+                    f"_No tweets from {ok_phrase}; {state.failure_count} of "
+                    f"{state.query_count} failed._"
+                )
+            elif state.skipped:
+                lines.append(
+                    f"_All {len(state.skipped)} returned tweet(s) are already in the repo "
+                    f"(skipped); all {state.query_count} queries succeeded, so there is "
+                    "no fresh candidate from this category this week._"
+                )
+            else:
+                lines.append(
+                    f"_No tweets returned this week (all {state.query_count} queries succeeded)._"
+                )
+            lines.append("")
+            return
+
+        for i, t in enumerate(state.items, 1):
             preview = (t["text"] or "").replace("\n", " ").strip()
             if len(preview) > 400:
                 preview = preview[:400] + "…"
@@ -219,9 +477,8 @@ def render_report(
             lines.append("```")
             lines.append("")
 
-    section("Kling 3.0 / Omni candidates", kling3)
-    section("I2V / Kling candidates", i2v)
-    section("Seedance candidates", seedance)
+    for key, _title in CATEGORY_ORDER:
+        section(states[key])
 
     lines.extend(
         [
@@ -267,6 +524,57 @@ def append_log_row(
         LOG_PATH.write_text(text, encoding="utf-8", newline="\n")
 
 
+def build_summary(
+    date: str, states: dict[str, CategoryState], has_token: bool, out_path: Path
+) -> dict:
+    categories: dict[str, dict] = {}
+    query_failures: list[dict] = []
+    for key in ("i2v", "seedance", "kling3"):
+        state = states[key]
+        categories[key] = {
+            "status": state.status(has_token),
+            "query_count": state.query_count,
+            "failed_queries": state.failure_count,
+            "candidate_count": len(state.items),
+            "skipped_known": len(state.skipped),
+            "errors": [
+                {
+                    "query": r.query,
+                    "error_type": r.error_type,
+                    "reason": r.error_summary,
+                }
+                for r in state.failures
+            ],
+        }
+        for r in state.failures:
+            query_failures.append(
+                {
+                    "category": key,
+                    "query": r.query,
+                    "error_type": r.error_type,
+                    "reason": r.error_summary,
+                }
+            )
+
+    return {
+        "date": date,
+        "has_token": has_token,
+        "mode": "live" if has_token else "offline-checklist",
+        "i2v_count": len(states["i2v"].items),
+        "seedance_count": len(states["seedance"].items),
+        "kling3_count": len(states["kling3"].items),
+        "candidate_count": sum(len(s.items) for s in states.values()),
+        "skipped_known": sum(len(s.skipped) for s in states.values()),
+        "i2v_skipped_known": len(states["i2v"].skipped),
+        "seedance_skipped_known": len(states["seedance"].skipped),
+        "kling3_skipped_known": len(states["kling3"].skipped),
+        "query_failure_count": len(query_failures),
+        "query_failures": query_failures,
+        "categories": categories,
+        "path": str(out_path.relative_to(ROOT)).replace("\\", "/"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-results", type=int, default=20)
@@ -275,60 +583,78 @@ def main() -> int:
     args = parser.parse_args()
 
     date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    has_token = bool(bearer_token())
+    token = bearer_token()
+    has_token = bool(token)
 
-    i2v_raw: list[dict] = []
-    seed_raw: list[dict] = []
-    k3_raw: list[dict] = []
+    states: dict[str, CategoryState] = {}
+    for key, title in CATEGORY_ORDER:
+        state = CategoryState(key, title, query_count=len(QUERIES[key]))
+        if has_token:
+            for query in QUERIES[key]:
+                tweets, failure = search_recent(query, args.max_results, token)
+                state.results.append(
+                    QueryResult(
+                        category=key,
+                        query=query,
+                        tweets=tweets,
+                        ok=failure is None,
+                        error_type=(failure or {}).get("type", ""),
+                        error_summary=(failure or {}).get("summary", ""),
+                    )
+                )
+        states[key] = state
 
-    if has_token:
-        for q in QUERIES["i2v"]:
-            i2v_raw.extend(search_recent(q, args.max_results))
-        for q in QUERIES["seedance"]:
-            seed_raw.extend(search_recent(q, args.max_results))
-        for q in QUERIES["kling3"]:
-            k3_raw.extend(search_recent(q, args.max_results))
+    if not has_token:
+        print("[info] No TWITTER_BEARER_TOKEN / X_BEARER_TOKEN — offline checklist mode.")
     else:
-        print("[info] No TWITTER_BEARER_TOKEN / X_BEARER_TOKEN — checklist-only mode.")
+        failed = sum(s.failure_count for s in states.values())
+        if failed:
+            print(f"[warn] {failed} query/queries failed; details are recorded in the report.")
 
+    # Per-category dedupe first, then split fresh vs already-in-repo so each
+    # category's skipped counter reflects what that category's queries matched.
+    # Cross-category dedupe then runs on both lists: a tweet matched by several
+    # queries is counted once overall, kept in the highest-scoring category.
     known = known_status_ids()
-
-    def filt(items: list[dict]) -> tuple[list[dict], int]:
-        items = dedupe(items)
+    for state in states.values():
+        items = dedupe([t for r in state.results if r.ok for t in r.tweets])
         if args.min_likes:
             items = [t for t in items if t["likes"] >= args.min_likes]
-        fresh, skipped = filter_known(items, known)
-        return fresh[:30], len(skipped)
-
-    i2v, sk1 = filt(i2v_raw)
-    seed, sk2 = filt(seed_raw)
-    kling3, sk3 = filt(k3_raw)
-    skipped_n = sk1 + sk2 + sk3
+        state.items, state.skipped = filter_known(items, known)
+    dedupe_across_categories(states)
+    for state in states.values():
+        state.items = state.items[:30]
 
     CANDIDATES_DIR.mkdir(parents=True, exist_ok=True)
     out_path = CANDIDATES_DIR / f"{date}.md"
-    report = render_report(date, i2v, seed, kling3, has_token, skipped_n)
+    report = render_report(date, states, has_token)
     out_path.write_text(report, encoding="utf-8", newline="\n")
-    print(
-        f"[ok] wrote {out_path.relative_to(ROOT)} "
-        f"(i2v={len(i2v)}, seedance={len(seed)}, k3={len(kling3)}, skipped={skipped_n})"
-    )
 
-    mode = "Twitter API v2 recent search" if has_token else "checklist-only (no token)"
-    append_log_row(date, len(i2v), len(seed), len(kling3), mode)
-
-    # Machine-readable summary for CI
-    summary = {
-        "date": date,
-        "has_token": has_token,
-        "i2v_count": len(i2v),
-        "seedance_count": len(seed),
-        "kling3_count": len(kling3),
-        "skipped_known": skipped_n,
-        "path": str(out_path.relative_to(ROOT)).replace("\\", "/"),
-    }
+    summary = build_summary(date, states, has_token, out_path)
     summary_path = CANDIDATES_DIR / f"{date}.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    print(
+        f"[ok] wrote {out_path.relative_to(ROOT)} "
+        f"(i2v={summary['i2v_count']}, seedance={summary['seedance_count']}, "
+        f"k3={summary['kling3_count']}, skipped={summary['skipped_known']}, "
+        f"query_failures={summary['query_failure_count']})"
+    )
+
+    if has_token:
+        mode = "Twitter API v2 recent search"
+        if summary["query_failure_count"]:
+            mode += f"; {summary['query_failure_count']} query failure(s)"
+    else:
+        mode = "offline checklist (no token)"
+    append_log_row(
+        date,
+        summary["i2v_count"],
+        summary["seedance_count"],
+        summary["kling3_count"],
+        mode,
+    )
+
     print(json.dumps(summary))
     return 0
 

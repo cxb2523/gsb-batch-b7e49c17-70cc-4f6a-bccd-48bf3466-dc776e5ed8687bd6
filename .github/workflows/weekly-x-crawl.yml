@@ -25,12 +25,25 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Offline self-test (no network)
+        run: python scripts/test_weekly_x_crawl.py
+
       - name: Run weekly crawl
         env:
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
           X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
         run: |
           python scripts/weekly_x_crawl.py --max-results 25 --min-likes 0
+
+      - name: Summarize crawl result
+        run: |
+          DATE=$(date -u +%F)
+          FILE="docs/x-crawl-candidates/${DATE}.json"
+          if [ ! -f "$FILE" ]; then
+            echo "No summary file for ${DATE}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python scripts/render_crawl_summary.py "$FILE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Detect changes
         id: diff
@@ -83,7 +96,9 @@ jobs:
 
           ### Optional
           Add repository secret `TWITTER_BEARER_TOKEN` (X API v2 Bearer) for live search results.
-          Without it, the report is checklist-only.
+          Without it, the report is an explicit offline checklist (no fabricated entries).
+          Failed queries are listed per category in the report — a category that failed
+          is never presented as "no tweets this week".
 
           /cc maintainers
           EOF
