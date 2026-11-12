@@ -11,7 +11,7 @@ export interface SshKeysModalProps {
   selectedSshUser: string;
   sshKeys: Array<SshKeyItem | string>;
   sshLoading: boolean;
-  handleDeleteSshKey: (index: number) => Promise<void>;
+  handleDeleteSshKey: (keyItem: SshKeyItem | string) => Promise<void>;
   handleAddSshKey: (e: React.FormEvent) => Promise<void>;
   newSshKey: string;
   setNewSshKey: (key: string) => void;
@@ -85,7 +85,7 @@ export const SshKeysModal: React.FC<SshKeysModalProps> = ({
                       className="btn btn-xs btn-ghost"
                       style={{ color: '#f87171' }}
                       title="Delete Key"
-                      onClick={() => handleDeleteSshKey(idx)}
+                      onClick={() => handleDeleteSshKey(item)}
                     >
                       <Trash2 size={13} />
                     </button>

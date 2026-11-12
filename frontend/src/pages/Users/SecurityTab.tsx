@@ -19,7 +19,7 @@ export interface SecurityTabProps {
   sshKeys: Array<SshKeyItem | string>;
   handleCopyKey: (rawKey: string, index: number) => void;
   copiedKeyStr: string | null;
-  handleDeleteSshKey: (index: number) => void;
+  handleDeleteSshKey: (keyItem: SshKeyItem | string) => void;
 }
 
 export const SecurityTab: React.FC<SecurityTabProps> = ({
@@ -227,7 +227,6 @@ export const SecurityTab: React.FC<SecurityTabProps> = ({
                   ? item.slice(0, 48) + '…'
                   : '';
                 const rawKey = isObj ? (item as SshKeyItem).raw || (item as SshKeyItem).preview : String(item);
-                const keyIndex = isObj ? (item as SshKeyItem).index ?? idx : idx;
 
                 return (
                   <div key={idx} className="ssh-key-row">
@@ -252,7 +251,7 @@ export const SecurityTab: React.FC<SecurityTabProps> = ({
 
                       <button
                         className="btn btn-xs btn-danger"
-                        onClick={() => handleDeleteSshKey(keyIndex)}
+                        onClick={() => handleDeleteSshKey(item)}
                         title="Remove this public key"
                         style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                       >

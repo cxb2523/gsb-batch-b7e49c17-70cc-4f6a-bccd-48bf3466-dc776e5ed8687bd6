@@ -102,7 +102,8 @@ Lavender exposes RESTful JSON endpoints and a Server-Sent Events (SSE) telemetry
 | `POST` | `/api/users/session/terminate`| Admin | Terminate active terminal/SSH session (`who -u`) | JSON: `{"tty": "...", "pid": 1234}` |
 | `GET` | `/api/users/{user}/ssh-keys` | Self/Admin | List public keys in `authorized_keys` | None |
 | `POST` | `/api/users/{user}/ssh-keys` | Self/Admin | Add public SSH key to user's authorized keys | JSON: `{"key": "ssh-ed25519 ..."}` |
-| `DELETE`| `/api/users/{user}/ssh-keys/{idx}` | Self/Admin | Delete public SSH key by 0-indexed line position | None |
+| `DELETE`| `/api/users/{user}/ssh-keys/{line_no}` | Self/Admin | Delete public SSH key by its real line number in `authorized_keys`; fails (400) if the line is not a parsed key or the index is out of range | None |
+| `POST` | `/api/users/{user}/ssh-keys/delete` | Self/Admin | Delete a public SSH key by content; matches key type and base64 data, ignoring leading options (`command=`, `no-pty`, …) and comments. A bare key type or any non-key text never matches | JSON: `{"key": "ssh-ed25519 AAAA..."}` |
 | `POST` | `/api/users/{user}/groups` | Admin | Update secondary group memberships | JSON: `{"groups": ["wheel", "docker"]}` |
 | `POST` | `/api/users/{user}/password`| Self/Admin | Change user password | JSON: `{"new_password": "..."}` |
 

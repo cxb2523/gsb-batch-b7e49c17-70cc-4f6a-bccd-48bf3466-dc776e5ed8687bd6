@@ -274,12 +274,19 @@ export const UsersPage: React.FC = () => {
     }
   };
 
-  // Delete SSH Key
-  const handleDeleteSshKey = async (index: number) => {
+  // Delete SSH Key — match by key content so duplicate keys and comment
+  // lines can never cause the wrong authorized_keys row to be removed.
+  const handleDeleteSshKey = async (keyItem: SshKeyItem | string) => {
     if (!selectedSshUser) return;
+    const keyContent =
+      typeof keyItem === 'object' && keyItem !== null
+        ? keyItem.raw || `${keyItem.type} ${keyItem.preview}`
+        : String(keyItem);
+    if (!keyContent.trim()) return;
     try {
-      const res = await api.delete<{ success: boolean }>(
-        `/api/users/${encodeURIComponent(selectedSshUser)}/ssh-keys/${index}`
+      const res = await api.post<{ success: boolean }>(
+        `/api/users/${encodeURIComponent(selectedSshUser)}/ssh-keys/delete`,
+        { key: keyContent.trim() }
       );
       if (res.success) {
         addToast('SSH key removed', 'success');

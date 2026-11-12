@@ -134,19 +134,50 @@ async def api_add_ssh_key(
     return {"success": True, "message": "SSH key added successfully"}
 
 
-@router.delete("/{username}/ssh-keys/{key_index}", summary="Delete public SSH key")
+@router.delete("/{username}/ssh-keys/{key_index}", summary="Delete public SSH key by line number")
 @router.delete("/users/{username}/ssh-keys/{key_index}", include_in_schema=False)
 async def api_delete_ssh_key(
     username: str,
     key_index: int,
     session: UserSession = Depends(require_session),
 ):
-    """Delete a public SSH key by index."""
+    """Delete a public SSH key by its real line number in authorized_keys."""
     if session.username != username and not session.is_elevated():
         raise HTTPException(status_code=403, detail="Admin privileges required to modify other users' keys")
     success = await asyncio.to_thread(delete_user_ssh_key, username, key_index)
     if not success:
-        raise HTTPException(status_code=400, detail="Failed to delete key")
+        raise HTTPException(
+            status_code=400,
+            detail="Line number out of range or line is not a public key matching the parsed keys",
+        )
+    return {"success": True, "message": "SSH key removed"}
+
+
+@router.post("/{username}/ssh-keys/delete", summary="Delete public SSH key by content")
+@router.post("/users/{username}/ssh-keys/delete", include_in_schema=False)
+async def api_delete_ssh_key_by_content(
+    username: str,
+    payload: dict,
+    session: UserSession = Depends(require_session),
+):
+    """Delete a public SSH key by matching its content.
+
+    Matching compares the key type and base64 data, ignoring leading options
+    (e.g. ``command=``, ``no-pty``) and trailing comments. A bare key type
+    without key data never matches a line, and comment/empty lines cannot be
+    deleted this way.
+    """
+    if session.username != username and not session.is_elevated():
+        raise HTTPException(status_code=403, detail="Admin privileges required to modify other users' keys")
+    key_content = (payload.get("key") or "").strip()
+    if not key_content:
+        raise HTTPException(status_code=400, detail="Key content is required")
+    success = await asyncio.to_thread(delete_user_ssh_key, username, key_content)
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="No matching public key found for the provided content",
+        )
     return {"success": True, "message": "SSH key removed"}
 
 
