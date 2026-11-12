@@ -1,0 +1,298 @@
+---
+title: Utilities
+description: "Utility functions for browser profiles and configuration."
+---
+
+## getProfiles()
+
+Get a list of all available browser profile labels.
+
+### Signature
+
+```typescript
+function getProfiles(): BrowserProfile[]
+```
+
+### Returns
+
+Array of profile names that can be used with the `browser` option.
+
+### Example
+
+```typescript
+import { getProfiles } from 'wreq-js';
+
+const profiles = getProfiles();
+console.log(profiles);
+// Example output: ['chrome_142', 'firefox_139', 'safari_18', ...]
+```
+
+### Using a random profile
+
+Picking from `getProfiles()` directly mixes years-old versions with current ones and
+leaves the OS to chance, which produces fingerprints no real browser sends. Use
+[`randomProfile()`](#randomprofile) instead.
+
+---
+
+## getOperatingSystems()
+
+Get a list of all available operating systems for emulation.
+
+### Signature
+
+```typescript
+function getOperatingSystems(): EmulationOS[]
+```
+
+### Returns
+
+Array of OS names that can be used with the `os` option.
+
+### Example
+
+```typescript
+import { getOperatingSystems } from 'wreq-js';
+
+const systems = getOperatingSystems();
+console.log(systems);
+// Example output: ['windows', 'macos', 'linux', 'android', 'ios']
+```
+
+### Combining browser and OS
+
+```typescript
+import { fetch, getProfiles, getOperatingSystems } from 'wreq-js';
+
+// Chrome on Windows
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  os: 'windows',
+});
+
+// Safari on iOS
+const mobileResponse = await fetch('https://example.com', {
+  browser: 'safari_18',
+  os: 'ios',
+});
+```
+
+---
+
+## resolveProfile()
+
+Resolve a browser family alias to the concrete profile it points at.
+
+### Signature
+
+```typescript
+function resolveProfile(browser: BrowserProfile | BrowserAlias): BrowserProfile
+```
+
+### Returns
+
+The concrete profile. Concrete profiles pass through unchanged, so this is safe to call on
+any value accepted by the `browser` option.
+
+### Example
+
+```typescript
+import { resolveProfile } from 'wreq-js';
+
+resolveProfile('firefox');     // 'firefox_149'
+resolveProfile('firefox_143'); // 'firefox_143'
+```
+
+An alias resolves against the profile set shipped with your installed version of wreq-js,
+so the result moves when you upgrade. Log it when you need to know which fingerprint a
+given run actually used.
+
+---
+
+## randomProfile()
+
+Pick a random browser profile together with an operating system that browser actually
+ships on.
+
+### Signature
+
+```typescript
+function randomProfile(options?: RandomProfileOptions): RandomProfile
+
+interface RandomProfileOptions {
+  families?: BrowserAlias[]; // default: ['chrome', 'edge', 'firefox', 'opera', 'safari']
+  latest?: number;           // newest profiles per family to choose from, default 2
+  os?: EmulationOS[];        // default: ['windows', 'macos', 'linux']
+  random?: () => number;     // default: Math.random
+}
+
+interface RandomProfile {
+  browser: BrowserProfile;
+  os: EmulationOS;
+}
+```
+
+### Returns
+
+A `{ browser, os }` pair to spread into `createSession()`, `createTransport()` or `fetch()`
+options.
+
+A family is chosen first, then one of its newest `latest` profiles, then one of the
+operating systems it runs on, each uniformly at random. Picks are not weighted by market
+share. Each family is only paired with platforms it really ships on:
+
+| Family | Operating systems |
+| ------ | ----------------- |
+| `chrome`, `edge`, `firefox` | windows, macos, linux, android |
+| `opera` | windows, macos |
+| `firefox_private` | windows, macos, linux |
+| `safari` | macos |
+| `safari_ios`, `safari_ipad` | ios |
+| `firefox_android`, `okhttp` | android |
+
+Chrome, Edge and Firefox are never paired with iOS: on iOS they use WebKit's network
+stack, so their own TLS fingerprint with an iOS User-Agent is a combination no real
+browser produces.
+
+### Example
+
+```typescript
+import { createSession, randomProfile } from 'wreq-js';
+
+// One pick per session
+const session = await createSession({ ...randomProfile() });
+
+// Newest Chrome or Safari, phones only
+const mobile = randomProfile({
+  families: ['chrome', 'safari_ios'],
+  os: ['android', 'ios'],
+  latest: 1,
+});
+```
+
+<Warning>
+Keep a pick for the whole session. A fingerprint that changes between requests on the
+same cookies or IP stands out more than a fixed one.
+</Warning>
+
+Throws `RequestError` for an unknown family or OS, a `latest` that is not a positive
+integer, or options that leave no family with an allowed OS (such as `safari` with only
+`windows`).
+
+---
+
+## getEmulationHeaders()
+
+Get the headers a browser profile injects into every request, without sending one.
+
+### Signature
+
+```typescript
+function getEmulationHeaders(browser?: BrowserProfile, os?: EmulationOS): Headers
+```
+
+Both arguments default to the same profile and OS as [`fetch`](/api-reference/fetch).
+
+### Returns
+
+A `Headers` instance holding the profile's headers, in the profile's own order and casing.
+
+Transport-level headers are not included: `Host`, `Connection`, `Content-Length`, and
+`Accept-Encoding` are added per request rather than by the emulation profile.
+
+### Example
+
+```typescript
+import { getEmulationHeaders } from 'wreq-js';
+
+const defaults = getEmulationHeaders('firefox_147');
+console.log(defaults.get('user-agent'));
+// Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:147.0) Gecko/20100101 Firefox/147.0
+```
+
+### Reusing a profile's User-Agent
+
+Passing a header through `headers` replaces the profile's matching header and leaves the
+rest of the fingerprint intact, so read the value first when you want to build on it.
+
+```typescript
+import { fetch, getEmulationHeaders } from 'wreq-js';
+
+const userAgent = getEmulationHeaders('firefox_147', 'windows').get('user-agent');
+
+const response = await fetch('https://example.com', {
+  browser: 'firefox_147',
+  os: 'windows',
+  headers: { 'X-Forwarded-User-Agent': userAgent ?? '' },
+});
+```
+
+---
+
+## Headers
+
+The `Headers` class for working with HTTP headers.
+
+### Constructor
+
+```typescript
+declare class Headers {
+  constructor(init?: HeadersInit);
+}
+```
+
+### Methods
+
+- `append(name, value)`: add a header value
+- `delete(name)`: remove a header
+- `get(name)`: get a header value
+- `has(name)`: check if header exists
+- `set(name, value)`: set a header value
+- `entries()`: iterate over header entries
+- `keys()`: iterate over header names
+- `values()`: iterate over header values
+
+### Example
+
+```typescript
+import { fetch, Headers } from 'wreq-js';
+
+const headers = new Headers();
+headers.set('Authorization', 'Bearer token');
+headers.set('Content-Type', 'application/json');
+
+const response = await fetch('https://api.example.com', {
+  browser: 'chrome_142',
+  headers,
+});
+```
+
+---
+
+## Response
+
+The `Response` class representing HTTP responses.
+
+### Properties
+
+- `status`: HTTP status code
+- `statusText`: HTTP status text
+- `headers`: response headers
+- `ok`: `true` if status is 200-299
+- `url`: final URL after redirects
+- `redirected`: `true` if the response is the result of a redirect
+- `body`: `ReadableStream<Uint8Array>` or `null`
+- `bodyUsed`: `true` if body has been read
+- `contentLength`: content length from headers, or `null`
+- `cookies`: parsed response cookies as `Record<string, string | string[]>`
+
+### Methods
+
+- `json()`: parse body as JSON
+- `text()`: get body as string
+- `textStream()`: get body as a `ReadableStream<string>` of UTF-8 decoded chunks
+- `arrayBuffer()`: get body as ArrayBuffer
+- `bytes()`: get body as Uint8Array
+- `blob()`: get body as Blob
+- `formData()`: parse body as FormData
+- `clone()`: clone the response

@@ -1,0 +1,257 @@
+---
+title: fetch()
+description: "Make HTTP requests with browser profile and transport options."
+---
+
+## Signature
+
+```typescript
+function fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>
+```
+
+## Parameters
+
+<ParamField path="input" type="string | URL | Request" required>
+  The resource to fetch. Can be a URL string, URL object, or a Request object.
+</ParamField>
+
+<ParamField path="init" type="RequestInit">
+  Optional request configuration.
+</ParamField>
+
+## RequestInit options
+
+<ParamField path="method" type="string" default="GET">
+  HTTP method: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`.
+</ParamField>
+
+<ParamField path="headers" type="HeadersInit">
+  Request headers. Can be a `Headers` object, plain object, or array of key-value pairs.
+</ParamField>
+
+<ParamField path="body" type="BodyInit | null">
+  Request body. Supported types: `string`, `Buffer`, `URLSearchParams`, `ArrayBuffer`, `ArrayBufferView` (for example `Uint8Array`), `Blob`, `FormData`, `ReadableStream<Uint8Array>`, and any sync or async iterable of `Uint8Array`.
+
+  Stream and iterable bodies are read fully into memory before the request is sent, so an unbounded stream means an unbounded allocation.
+</ParamField>
+
+<ParamField path="transport" type="Transport">
+  Reusable transport context for this request (proxy + emulation settings, with connection behavior handled by the native layer). When provided, you must not also set `browser`, `os`, `proxy`, `insecure`, or `resolve`.
+</ParamField>
+
+<ParamField path="browser" type="BrowserProfile | BrowserAlias" default="chrome">
+  Browser fingerprint profile to use (e.g., `'chrome_142'`, `'firefox_139'`), or a family
+  alias such as `'firefox'` that resolves to the newest profile in that family. See
+  [browser profiles](/concepts/browser-profiles#family-aliases).
+</ParamField>
+
+<ParamField path="os" type="EmulationOS">
+  Operating system to emulate: `'windows'`, `'macos'`, `'linux'`, `'android'`, `'ios'`.
+</ParamField>
+
+<ParamField path="proxy" type="string">
+  Proxy URL. Support depends on the native layer and proxy scheme.
+</ParamField>
+
+<ParamField path="resolve" type="Record<string, string | string[]>">
+  DNS overrides for this request only: each host maps to one address or a list of fallbacks, as
+  `ip` or `ip:port` (the port is ignored; the URL's port is used). Use it to connect to an address
+  you have already resolved and checked. Only the listed hosts are overridden: a redirect to any
+  other host is resolved through normal DNS, so when the pin is a security boundary (keeping a
+  request off private networks, say) set `redirect: 'manual'` and vet each `Location` before
+  following it. Not allowed with `transport` (set `resolve` on the transport instead) or with a
+  session from `createSession()`.
+</ParamField>
+
+<ParamField path="timeout" type="number" default="30000">
+  Request timeout in milliseconds. Set to `0` to disable the timeout.
+</ParamField>
+
+<ParamField path="signal" type="AbortSignal">
+  AbortSignal for cancelling the request.
+</ParamField>
+
+<ParamField path="redirect" type="'follow' | 'manual' | 'error'" default="follow">
+  Redirect handling mode.
+</ParamField>
+
+<ParamField path="disableDefaultHeaders" type="boolean" default="false">
+  When `true`, prevents browser emulation headers from being automatically added.
+</ParamField>
+
+<ParamField path="insecure" type="boolean" default="false">
+  When `true`, accepts invalid/self-signed certificates. **Use only in development.**
+</ParamField>
+
+<ParamField path="onRequestEvent" type="(event: RequestEvent) => void">
+  Optional callback for structured request lifecycle events emitted by the native layer. Use this to observe phases such as request start, response headers, and body download progress.
+</ParamField>
+
+<ParamField path="captureDiagnostics" type="boolean" default="false">
+  When `true`, captures a final diagnostics payload on the response where supported by the native layer. This can include timing, address, and TLS peer details.
+</ParamField>
+
+## Response
+
+Returns a `Response` object with:
+
+- `status`: HTTP status code
+- `statusText`: HTTP status text
+- `headers`: response headers
+- `ok`: `true` if status is 200-299
+- `url`: final URL after redirects
+- `redirected`: `true` if the response is the result of a redirect
+- `body`: `ReadableStream<Uint8Array>` or `null`
+- `bodyUsed`: `true` if body has been consumed
+- `contentLength`: content length from headers, or `null`
+- `cookies`: parsed response cookies as `Record<string, string | string[]>`
+- `diagnostics`: optional native diagnostics payload, or `null`
+
+### Response methods
+
+- `json()`: parse body as JSON
+- `text()`: get body as string
+- `textStream()`: get body as a `ReadableStream<string>` of UTF-8 decoded chunks
+- `arrayBuffer()`: get body as ArrayBuffer
+- `bytes()`: get body as Uint8Array
+- `blob()`: get body as Blob
+- `formData()`: parse body as FormData
+- `clone()`: clone the response
+
+See [/concepts/compatibility-matrix](/concepts/compatibility-matrix) for detailed compatibility notes and intentional deviations.
+
+## Request lifecycle events
+
+When `onRequestEvent` is provided, `fetch()` emits structured events from the native bridge.
+
+| Event | Meaning |
+| --- | --- |
+| `request_start` | The request has started in the native layer. |
+| `request_sent` | Request headers/body have been handed off to the socket and the client is waiting for a response. |
+| `response_headers` | Response headers have been received. Includes `status` and optional `contentLength`. |
+| `body_progress` | Additional response body bytes were downloaded. Includes `downloadedBytes` and optional `contentLength`. |
+| `body_complete` | The response body finished downloading. |
+| `done` | The native request lifecycle completed successfully. |
+| `error` | The native request lifecycle failed. Includes `message` when available. |
+
+Each event includes a `timestamp`, and some events include `status`, `url`, `contentLength`, `downloadedBytes`, or `message`.
+
+For a full worked example, see [/guides/request-events](/guides/request-events).
+
+## Convenience helpers
+
+```typescript
+import { get, post, request } from 'wreq-js';
+```
+
+- `get(url, init?)` calls `fetch(url, { ...init, method: "GET" })`.
+- `post(url, body?, init?)` calls `fetch(url, { ...init, method: "POST", body })`.
+- `request(options)` is deprecated and kept for compatibility. Prefer `fetch(url, init)`.
+
+## Examples
+
+### Basic GET request
+
+```typescript
+import { fetch } from 'wreq-js';
+
+const response = await fetch('https://api.example.com/data', {
+  browser: 'chrome_142',
+});
+
+const data = await response.json();
+```
+
+### POST with JSON body
+
+```typescript
+const response = await fetch('https://api.example.com/submit', {
+  method: 'POST',
+  browser: 'chrome_142',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({ name: 'John', email: 'john@example.com' }),
+});
+```
+
+### POST with form data
+
+```typescript
+const response = await fetch('https://example.com/login', {
+  method: 'POST',
+  browser: 'chrome_142',
+  body: new URLSearchParams({
+    username: 'user',
+    password: 'pass',
+  }),
+});
+```
+
+### Observe request events and diagnostics
+
+```typescript
+const response = await fetch('https://example.com/large-file', {
+  browser: 'chrome_142',
+  captureDiagnostics: true,
+  onRequestEvent(event) {
+    if (event.type === 'response_headers') {
+      console.log('status:', event.status);
+      console.log('content-length:', event.contentLength);
+    }
+
+    if (event.type === 'body_progress' && event.contentLength) {
+      const pct = ((event.downloadedBytes ?? 0) / event.contentLength) * 100;
+      console.log(`downloaded ${pct.toFixed(1)}%`);
+    }
+  },
+});
+
+console.log(response.diagnostics);
+```
+
+### With timeout and abort
+
+```typescript
+const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+try {
+  const response = await fetch('https://example.com/slow', {
+    browser: 'chrome_142',
+    timeout: 10000,
+    signal: controller.signal,
+  });
+  console.log(await response.text());
+} finally {
+  clearTimeout(timeoutId);
+}
+```
+
+### Reuse connections via Transport
+
+```typescript
+import { createTransport, fetch } from "wreq-js";
+
+const transport = await createTransport({ proxy: "http://proxy.example.com:8080" });
+
+try {
+  const response = await fetch("https://example.com", { transport });
+  console.log(await response.text());
+} finally {
+  await transport.close();
+}
+```
+
+### Custom headers without defaults
+
+```typescript
+const response = await fetch('https://api.example.com', {
+  browser: 'chrome_142',
+  headers: {
+    'User-Agent': 'MyBot/1.0',
+    'Accept': 'application/json',
+  },
+  disableDefaultHeaders: true,
+});
+```

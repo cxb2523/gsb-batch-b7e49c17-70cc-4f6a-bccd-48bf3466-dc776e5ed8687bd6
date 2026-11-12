@@ -1,0 +1,183 @@
+---
+title: websocket()
+description: "Connect to WebSocket servers with browser profile options."
+---
+
+## Signature
+
+```typescript
+function websocket(url: string | URL, options?: WebSocketOptions): Promise<WebSocket>
+```
+
+`websocket(...)` resolves after the connection opens.
+
+## Constructor shape
+
+`WebSocket` also supports constructor usage for browser-style ergonomics.
+
+```typescript
+declare class WebSocket {
+  constructor(url: string | URL, protocols?: string | string[]);
+  constructor(url: string | URL, options?: WebSocketOptions);
+  constructor(url: string | URL, protocols?: string | string[], options?: WebSocketOptions);
+}
+```
+
+## WebSocketOptions
+
+<ParamField path="browser" type="BrowserProfile">
+  Browser fingerprint profile for the connection.
+</ParamField>
+
+<ParamField path="os" type="EmulationOS">
+  Operating system fingerprint for the connection.
+</ParamField>
+
+<ParamField path="proxy" type="string">
+  Proxy URL for the connection.
+</ParamField>
+
+<ParamField path="headers" type="HeadersInit">
+  Additional headers for the WebSocket handshake.
+</ParamField>
+
+<ParamField path="protocols" type="string | string[]">
+  Optional subprotocol list for compatibility with standard WebSocket shape.
+  Values are validated for non-empty unique entries and sent in the `Sec-WebSocket-Protocol` handshake header.
+</ParamField>
+
+<ParamField path="maxFrameSize" type="number">
+  Maximum size in bytes for a single incoming WebSocket frame.
+  Increase this when the peer sends large unfragmented frames.
+</ParamField>
+
+<ParamField path="maxMessageSize" type="number">
+  Maximum size in bytes for a complete incoming WebSocket message.
+  Increase this when the peer sends very large fragmented messages.
+</ParamField>
+
+<ParamField path="binaryType" type="'nodebuffer' | 'arraybuffer' | 'blob'" default="nodebuffer">
+  Binary payload format exposed at `event.data`.
+</ParamField>
+
+## Returned WebSocket instance
+
+The instance mirrors familiar WebSocket APIs.
+
+1. Properties
+   1. `url`
+   2. `readyState`
+   3. `binaryType`
+   4. `bufferedAmount`
+   5. `protocol`
+   6. `extensions`
+   7. `onopen`
+   8. `onmessage`
+   9. `onclose`
+   10. `onerror`
+
+`protocol` and `extensions` reflect negotiated values from the upgrade response when the server provides them.
+
+2. Methods
+   1. `send(data)` where data can be `string`, `Buffer`, `ArrayBuffer`, `ArrayBufferView`, or `Blob`
+   2. `close(code?, reason?)`
+   3. `addEventListener(type, listener)`
+   4. `removeEventListener(type, listener)`
+
+`close(code, reason)` accepts code `1000` or codes in the `3000` to `4999` range.
+
+When providing a reason, the UTF-8 byte length must be `123` or fewer.
+
+3. Constants
+   1. `WebSocket.CONNECTING`
+   2. `WebSocket.OPEN`
+   3. `WebSocket.CLOSING`
+   4. `WebSocket.CLOSED`
+
+## Session support
+
+For authenticated socket flows, use [`createSession()`](/api-reference/sessions) and then `session.websocket(url, options)`.
+
+Within a session, WebSocket uses the same session context and transport settings.
+
+```typescript
+import { createSession } from 'wreq-js';
+
+const session = await createSession({ browser: 'chrome_142' });
+
+await session.fetch('https://example.com/login', {
+  method: 'POST',
+  body: new URLSearchParams({ user: 'name', pass: 'secret' }),
+});
+
+const ws = await session.websocket('wss://example.com/ws');
+
+ws.onmessage = (event) => {
+  console.log(event.data);
+};
+```
+
+## Examples
+
+### Helper style
+
+```typescript
+import { websocket } from 'wreq-js';
+
+const ws = await websocket('wss://example.com/socket', {
+  browser: 'chrome_142',
+  headers: { Authorization: 'Bearer token' },
+});
+
+ws.onmessage = (event) => {
+  console.log(event.data);
+};
+
+void ws.send('hello');
+```
+
+### Constructor style
+
+```typescript
+import { WebSocket } from 'wreq-js';
+
+const ws = new WebSocket('wss://example.com/socket', {
+  browser: 'firefox_139',
+  proxy: 'http://proxy.example.com:8080',
+});
+
+ws.addEventListener('open', () => {
+  void ws.send(JSON.stringify({ type: 'ping' }));
+});
+
+ws.addEventListener('close', (event) => {
+  console.log(event.code, event.reason);
+});
+```
+
+### Binary payload mode
+
+```typescript
+const ws = await websocket('wss://example.com/socket', { browser: 'chrome_142' });
+
+ws.binaryType = 'arraybuffer';
+
+ws.onmessage = (event) => {
+  if (event.data instanceof ArrayBuffer) {
+    console.log('received array buffer', event.data.byteLength);
+  }
+};
+```
+
+### Large incoming messages
+
+Some providers send very large WebSocket payloads in a single frame. If you see an error such as
+`Space limit exceeded: Message too long`, raise the frame or message limits explicitly.
+
+```typescript
+const ws = await websocket('wss://example.com/socket', {
+  browser: 'chrome_142',
+  maxFrameSize: 32 * 1024 * 1024,
+  maxMessageSize: 32 * 1024 * 1024,
+});
+```

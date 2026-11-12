@@ -1,0 +1,95 @@
+---
+title: Quickstart
+description: "Get started with wreq-js."
+---
+
+## Install the package
+
+<CodeGroup>
+```bash npm
+npm install wreq-js
+```
+
+```bash yarn
+yarn add wreq-js
+```
+
+```bash pnpm
+pnpm add wreq-js
+```
+
+```bash bun
+bun add wreq-js
+```
+</CodeGroup>
+
+## Make your first request
+
+<Note>
+For multi-step flows, prefer **sessions** after your first request.
+One-off `fetch()` calls use an isolated request context by default.
+</Note>
+
+```typescript
+import { fetch } from 'wreq-js';
+
+const response = await fetch('https://httpbin.org/get', {
+  browser: 'chrome_142',
+});
+
+console.log(await response.json());
+```
+
+## Use a session for multiple requests
+
+Sessions keep a shared session context across requests:
+
+```typescript
+import { createSession } from 'wreq-js';
+
+const session = await createSession({ browser: 'chrome_142' });
+
+// Login
+await session.fetch('https://example.com/login', {
+  method: 'POST',
+  body: new URLSearchParams({ user: 'name', pass: 'secret' }),
+});
+
+// Access authenticated endpoint in the same session context
+const account = await session.fetch('https://example.com/account');
+console.log(await account.text());
+
+// Clean up
+await session.close();
+```
+
+## Use a proxy
+
+```typescript
+import { fetch } from 'wreq-js';
+
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  proxy: 'http://user:pass@proxy.example.com:8080',
+});
+```
+
+## What's next?
+
+<CardGroup cols={2}>
+  <Card title="Browser Profiles" icon="browser" href="/concepts/browser-profiles">
+    Learn about available browser profiles and operating systems.
+  </Card>
+  <Card title="Sessions" icon="cookie" href="/concepts/sessions">
+    Understand session management and cookie isolation.
+  </Card>
+  <Card title="Transport" icon="route" href="/concepts/transport">
+    Reuse transport settings across requests (ideal per proxy).
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference/overview">
+    Explore the full API documentation.
+  </Card>
+  <Card title="WebSockets" icon="plug" href="/guides/websockets">
+    Connect to WebSocket servers with browser profile options.
+  </Card>
+</CardGroup>

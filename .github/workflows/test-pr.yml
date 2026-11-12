@@ -1,0 +1,185 @@
+name: 🧪 Test (PR)
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'coverage/**'
+      - 'tmp/**'
+      - 'version-bench/**'
+      - '**/*.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_types:
+    name: "Build TypeScript bundle"
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          # tsdown requires ^22.18.0 || >=24.11.0, so the bundle is built once here
+          # rather than inside the test matrix, which still covers Node 20.
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build TypeScript bundle
+        run: npm run build:ts
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-bundle
+          path: dist
+          if-no-files-found: error
+
+  build_native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+            platform-arch: linux-x64-gnu
+          - os: macos-14
+            arch: arm64
+            platform-arch: darwin-arm64
+
+    name: "Build native addon - ${{ matrix.platform-arch }}"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          architecture: ${{ matrix.arch }}
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          shared-key: pr-native-${{ matrix.platform-arch }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build native module
+        run: npm run build:rust
+
+      - name: Smoke test native addon
+        env:
+          WREQ_PLATFORM_ARCH: ${{ matrix.platform-arch }}
+        run: node scripts/smoke-native.cjs
+
+      - name: Upload native addon artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bindings-${{ matrix.platform-arch }}
+          path: rust/*.node
+          if-no-files-found: error
+
+  test_pr:
+    needs: [build_native, build_types]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            node-version: 20
+            arch: x64
+            platform-arch: linux-x64-gnu
+          - os: ubuntu-24.04
+            node-version: 24
+            arch: x64
+            platform-arch: linux-x64-gnu
+          - os: ubuntu-24.04
+            node-version: 26
+            arch: x64
+            platform-arch: linux-x64-gnu
+          - os: macos-14
+            node-version: 24
+            arch: arm64
+            platform-arch: darwin-arm64
+
+    name: "Tests: Node ${{ matrix.node-version }} (${{ matrix.arch }}) - ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          architecture: ${{ matrix.arch }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Download native addon artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bindings-${{ matrix.platform-arch }}
+          path: artifacts
+
+      - name: Place native addon into rust/
+        shell: bash
+        run: |
+          mkdir -p rust
+          find artifacts -name "*.node" -exec cp {} rust/ \;
+          echo "Collected binaries:"
+          ls -la rust/*.node
+
+      - name: Download TypeScript bundle
+        # The type-conformance test compiles dist/wreq-js.d.ts, so the published
+        # bundle has to be present before the suite runs.
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-bundle
+          path: dist
+
+      - name: Run tests
+        run: npm exec -- tsx src/test/run-with-local-server.ts
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Check TypeScript types
+        run: npm run typecheck
+
+      - name: Check code formatting
+        run: npm run ci:biome

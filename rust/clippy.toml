@@ -1,0 +1,20 @@
+# Clippy configuration for wreq-js
+# https://rust-lang.github.io/rust-clippy/master/index.html
+
+# Minimum supported Rust version (edition 2024 stabilized on 1.85).
+msrv = "1.85"
+
+# Tight thresholds to catch complexity.
+cognitive-complexity-threshold = 25
+too-many-lines-threshold = 120
+type-complexity-threshold = 250
+
+# Keep structs with lots of boolean flags in check.
+max-struct-bools = 3
+
+# Keep short bindings limited to the most readable cases.
+single-char-binding-names-threshold = 2
+
+# Explicitly allow common conveniences in tests only.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true

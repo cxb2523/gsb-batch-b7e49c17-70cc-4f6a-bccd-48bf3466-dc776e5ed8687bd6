@@ -1,0 +1,287 @@
+---
+title: Sessions
+description: "Create and manage persistent sessions with cookie storage."
+---
+
+## createSession()
+
+Create a persistent session context for related requests.
+
+Within a session, `browser`, `os`, and `proxy` are fixed at creation time (unless you pass an explicit [`transport`](/api-reference/transport) per request).
+
+### Signature
+
+```typescript
+function createSession(options?: CreateSessionOptions): Promise<Session>
+```
+
+### Options
+
+<ParamField path="browser" type="BrowserProfile">
+  Default browser fingerprint profile for all session requests.
+</ParamField>
+
+<ParamField path="os" type="EmulationOS">
+  Default operating system to emulate.
+</ParamField>
+
+<ParamField path="proxy" type="string">
+  Default proxy URL for all session requests.
+</ParamField>
+
+<ParamField path="timeout" type="number" default="30000">
+  Default request timeout in milliseconds.
+</ParamField>
+
+<ParamField path="defaultHeaders" type="HeadersInit">
+  Default headers to include in every session request. Can be a `Headers` object, plain object, or array of key-value pairs.
+</ParamField>
+
+<ParamField path="sessionId" type="string">
+  Explicit session identifier. When omitted, a random ID is generated.
+</ParamField>
+
+<ParamField path="insecure" type="boolean" default="false">
+  Accept invalid certificates for all session requests. **Use only in development.**
+</ParamField>
+
+<ParamField path="captureDiagnostics" type="boolean" default="false">
+  Enable extra connection and TLS diagnostics for requests made through this session by default.
+</ParamField>
+
+### Session object
+
+The returned `Session` object has:
+
+#### session.fetch(url, init?)
+
+Make a request using the session context.
+
+```typescript
+const response = await session.fetch('https://example.com/api', {
+  method: 'POST',
+  body: JSON.stringify({ data: 'value' }),
+});
+```
+
+Per-request options override session defaults.
+
+`session.fetch()` also accepts request-scoped `onRequestEvent` and `captureDiagnostics` options from [`fetch()`](/api-reference/fetch). When diagnostics are enabled, inspect `response.diagnostics` on the returned response.
+
+#### session.websocket(url, options?)
+
+Open a WebSocket that reuses the session transport and context.
+
+Use this after login or any other HTTP flow that sets cookies.
+
+```typescript
+const ws = await session.websocket('wss://example.com/ws', {
+  headers: {
+    Authorization: 'Bearer token',
+  },
+});
+
+ws.onmessage = (event) => {
+  console.log(event.data);
+};
+
+ws.close();
+```
+
+`session.websocket(...)` accepts `headers`, `protocols`, and `binaryType`.
+
+It does not accept `browser`, `os`, or `proxy` because those are owned by the session transport.
+
+`protocols` values are validated for non-empty unique entries and sent in the `Sec-WebSocket-Protocol` handshake header.
+
+#### session.getCookies(url)
+
+Return cookies that would be sent to the given URL (RFC 6265 domain/path matching).
+
+```typescript
+const cookies: Record<string, string> = session.getCookies('https://example.com');
+// { "session_id": "abc123", "theme": "dark" }
+```
+
+<ParamField path="url" type="string | URL" required>
+  Target URL. Only cookies whose domain and path match this URL are returned.
+</ParamField>
+
+**Returns** `Record<string, string>` — cookie name/value pairs.
+
+#### session.getAllCookies()
+
+Return every cookie currently stored in the session jar, regardless of URL matching.
+
+```typescript
+const cookies = session.getAllCookies();
+// [
+//   {
+//     name: 'session_id',
+//     value: 'abc123',
+//     secure: true,
+//     httpOnly: true,
+//     domain: 'example.com',
+//     path: '/',
+//   },
+// ]
+```
+
+**Returns** `SessionCookie[]` — all cookies in the jar, with scope metadata such as `domain`, `path`, `sameSite`, and `expiresAtMs` when available.
+
+#### session.setCookie(name, value, url)
+
+Add a cookie to the session jar, scoped to the domain/path of the given URL.
+
+```typescript
+session.setCookie('token', 'abc123', 'https://example.com');
+```
+
+<ParamField path="name" type="string" required>
+  Cookie name.
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  Cookie value.
+</ParamField>
+
+<ParamField path="url" type="string | URL" required>
+  URL that determines the cookie's domain and path scope.
+</ParamField>
+
+#### session.setCookies(cookies, url?)
+
+Restore a batch of cookies into the session jar, keeping every attribute. Accepts the output of
+[`getAllCookies()`](#session-getallcookies) directly, so a jar can round-trip through JSON.
+
+```typescript
+// Export
+fs.writeFileSync('cookies.json', JSON.stringify(session.getAllCookies()));
+
+// Import, in another process
+const restored = await createSession({ browser: 'chrome' });
+restored.setCookies(JSON.parse(fs.readFileSync('cookies.json', 'utf8')), 'https://example.com');
+```
+
+<ParamField path="cookies" type="SessionCookieInit[]" required>
+  Cookies to store. Only `name` and `value` are required; `domain`, `path`, `secure`, `httpOnly`,
+  `sameSite`, and `expiresAtMs` are applied when present.
+</ParamField>
+
+<ParamField path="url" type="string | URL">
+  Origin used to scope host-only cookies — those without a `domain`. Required whenever the batch
+  contains one, unless the cookie carries its own `url`.
+</ParamField>
+
+<Note>
+  A cookie with a `domain` describes its own scope. A cookie without one is host-only, and the jar
+  keeps that host as an internal key it never returns, so it is missing from the export. `url`
+  supplies it — which means a jar holding host-only cookies from **several** hosts cannot be
+  restored from a single `url`: they would all land on that one host. Set `url` on the individual
+  cookie to place each one precisely.
+</Note>
+
+The batch is validated before anything is stored, so a rejected cookie leaves the jar untouched
+instead of applying half the restore. Cookies whose `expiresAtMs` is already in the past are
+dropped rather than stored, matching how the jar treats an expired `Set-Cookie`.
+
+#### session.clearCookies()
+
+Clear all cookies from the session cookie jar.
+
+```typescript
+await session.clearCookies();
+```
+
+#### session.close()
+
+Close the session and release resources. Always call this when done.
+
+```typescript
+await session.close();
+```
+
+### Example
+
+```typescript
+import { createSession } from 'wreq-js';
+
+const session = await createSession({
+  browser: 'chrome_142',
+  os: 'windows',
+});
+
+// Login in the same session context
+await session.fetch('https://example.com/login', {
+  method: 'POST',
+  body: new URLSearchParams({ user: 'name', pass: 'secret' }),
+});
+
+// Subsequent requests use the same session context
+const profile = await session.fetch('https://example.com/profile');
+console.log(await profile.json());
+
+// Always close when done
+await session.close();
+```
+
+---
+
+## withSession()
+
+Auto-disposing session helper that closes the session when the callback completes.
+
+### Signature
+
+```typescript
+function withSession<T>(
+  fn: (session: Session) => Promise<T> | T,
+  options?: CreateSessionOptions
+): Promise<T>
+```
+
+### Example
+
+```typescript
+import { withSession } from 'wreq-js';
+
+const result = await withSession(async (session) => {
+  await session.fetch('https://example.com/login', {
+    method: 'POST',
+    body: 'credentials',
+  });
+  
+  const response = await session.fetch('https://example.com/data');
+  return response.json();
+}, {
+  browser: 'chrome_142',
+});
+
+// Session is automatically closed
+console.log(result);
+```
+
+### With options
+
+```typescript
+const data = await withSession(
+  async (session) => {
+    const response = await session.fetch('https://example.com/api');
+    return response.json();
+  },
+  {
+    browser: 'firefox_139',
+    proxy: 'http://proxy.example.com:8080',
+  }
+);
+```
+
+---
+
+## Session vs. Ephemeral
+
+| Feature | Ephemeral (default `fetch`) | Session |
+| ------- | --------------------------- | ------- |
+| Cookies | Separate request context | Shared session context |
+| Transport settings | Request scoped | Session scoped unless overridden by transport |
+| Use case | Isolated requests | Multi-step flows |

@@ -1,0 +1,175 @@
+---
+title: WebSockets
+description: "Connect to WebSocket servers with browser profile options."
+---
+
+wreq-js supports both a convenience helper and a constructor-style API.
+
+## 1. Quick connection with the helper
+
+Use `websocket(url, options)` when you want a connected socket from a single `await`.
+
+```typescript
+import { websocket } from 'wreq-js';
+
+const ws = await websocket('wss://example.com/socket', {
+  browser: 'chrome_142',
+  headers: {
+    Authorization: 'Bearer token',
+  },
+});
+
+ws.onmessage = (event) => {
+  console.log('Received:', event.data);
+};
+
+void ws.send('hello');
+ws.close();
+```
+
+## 2. Constructor style
+
+Use `new WebSocket(...)` when you want browser-like shape with `CONNECTING` state.
+
+```typescript
+import { WebSocket } from 'wreq-js';
+
+const ws = new WebSocket('wss://example.com/socket', {
+  browser: 'chrome_142',
+  os: 'windows',
+});
+
+ws.onopen = () => {
+  void ws.send('hello from constructor api');
+};
+
+ws.addEventListener('message', (event) => {
+  console.log(event.data);
+});
+
+ws.onerror = () => {
+  console.error('WebSocket error');
+};
+```
+
+## 3. Sessions, impersonation, and cookies
+
+For authenticated flows, create a session, log in with HTTP, then open the WebSocket with the same session.
+
+`session.websocket(...)` reuses the session transport and context.
+
+```typescript
+import { createSession } from 'wreq-js';
+
+const session = await createSession({
+  browser: 'chrome_142',
+  os: 'windows',
+  proxy: 'http://proxy.example.com:8080',
+});
+
+try {
+  await session.fetch('https://example.com/login', {
+    method: 'POST',
+    body: new URLSearchParams({ user: 'name', pass: 'secret' }),
+  });
+
+  const ws = await session.websocket('wss://example.com/ws', {
+    headers: {
+      'X-Client': 'dashboard',
+    },
+  });
+
+  ws.onmessage = (event) => {
+    console.log(event.data);
+  };
+
+  void ws.send(JSON.stringify({ type: 'subscribe', channel: 'updates' }));
+  ws.close(1000, 'done');
+} finally {
+  await session.close();
+}
+```
+
+## 4. Event model
+
+Event handlers and listeners follow familiar WebSocket patterns.
+
+```typescript
+const ws = await websocket('wss://example.com/socket', { browser: 'chrome_142' });
+
+ws.onmessage = (event) => {
+  console.log(event.data);
+};
+
+ws.onclose = (event) => {
+  console.log(event.code, event.reason, event.wasClean);
+};
+
+ws.addEventListener('error', () => {
+  console.error('error');
+});
+```
+
+## 5. Binary messages
+
+`binaryType` defaults to `nodebuffer`. You can set it to `arraybuffer` or `blob`.
+
+```typescript
+const ws = await websocket('wss://example.com/socket', { browser: 'chrome_142' });
+
+ws.binaryType = 'arraybuffer';
+
+ws.onmessage = (event) => {
+  if (event.data instanceof ArrayBuffer) {
+    console.log('ArrayBuffer bytes:', event.data.byteLength);
+    return;
+  }
+
+  if (Buffer.isBuffer(event.data)) {
+    console.log('Buffer bytes:', event.data.byteLength);
+    return;
+  }
+
+  console.log('Text:', event.data);
+};
+```
+
+```typescript
+ws.binaryType = 'blob';
+```
+
+## 6. Close behavior
+
+Use `close()` or `close(code, reason)`.
+
+```typescript
+ws.close();
+ws.close(1000, 'normal shutdown');
+```
+
+If you pass a custom close code, use `1000` or a code in the `3000` to `4999` range.
+
+If you pass a reason, keep it to `123` UTF-8 bytes or fewer.
+
+## 7. Large frames and message limits
+
+Incoming WebSocket data is bounded by default to avoid unbounded memory use.
+If a provider sends a very large payload in one frame, you may see an error like
+`Space limit exceeded: Message too long`.
+
+Raise `maxFrameSize` when the peer sends large unfragmented frames. Raise `maxMessageSize`
+when the peer sends very large fragmented messages.
+
+```typescript
+const ws = await websocket('wss://example.com/socket', {
+  browser: 'chrome_142',
+  maxFrameSize: 32 * 1024 * 1024,
+  maxMessageSize: 32 * 1024 * 1024,
+});
+```
+
+## Related
+
+1. API reference: [`websocket()`](/api-reference/websocket)
+2. Session API: [`createSession()`](/api-reference/sessions)
+3. Session concepts: [/concepts/sessions](/concepts/sessions)

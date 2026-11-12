@@ -1,0 +1,72 @@
+name: Bug report
+description: Something is not working as expected
+labels: ['bug']
+body:
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Describe the bug
+      description: What happened, and what did you expect instead?
+      placeholder: When I do X, Y happens. I expected Z.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal code to reproduce the issue
+      render: typescript
+      placeholder: |
+        import wreq from 'wreq-js';
+
+        const res = await wreq('https://example.com');
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error output
+      description: Full error message or stack trace, if any
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: wreq-js version
+      placeholder: 2.1.1
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime
+      description: Output of `node --version` or `bun --version`
+      placeholder: node v22.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x64)
+        - Linux (arm64)
+        - Windows (x64)
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else relevant (proxy setup, target website, network environment, etc.)
+    validations:
+      required: false

@@ -1,0 +1,139 @@
+---
+title: Transport
+description: "Reusable transport configuration for high-volume request workflows."
+---
+
+## What is a Transport?
+
+A `Transport` is a reusable network context handle for transport level settings such as browser profile, OS emulation, proxy, and TLS verification options.
+
+Use it when you want reusable transport settings without creating a full session per proxy, for example when you keep one transport handle per proxy in a long running worker.
+
+## createTransport()
+
+Create a reusable transport.
+
+### Signature
+
+```typescript
+function createTransport(options?: CreateTransportOptions): Promise<Transport>
+```
+
+### Options
+
+<ParamField path="proxy" type="string">
+  Proxy URL for all requests made through this transport. Support depends on the native layer and proxy scheme.
+</ParamField>
+
+<ParamField path="browser" type="BrowserProfile | BrowserAlias" default="chrome">
+  Browser fingerprint profile to use for this transport, or a family alias such as
+  `'firefox'` that resolves to the newest profile in that family.
+</ParamField>
+
+<ParamField path="os" type="EmulationOS" default="macos">
+  Operating system to emulate for this transport.
+</ParamField>
+
+<ParamField path="insecure" type="boolean" default="false">
+  When `true`, accepts invalid/self-signed certificates. Use only if you understand the security tradeoffs.
+</ParamField>
+
+<ParamField path="poolIdleTimeout" type="number">
+  Native transport idle timeout option (ms).
+</ParamField>
+
+<ParamField path="poolMaxIdlePerHost" type="number">
+  Native transport per host idle connection limit option.
+</ParamField>
+
+<ParamField path="poolMaxSize" type="number">
+  Native transport total connection limit option.
+</ParamField>
+
+<ParamField path="connectTimeout" type="number">
+  TCP connect timeout (ms).
+</ParamField>
+
+<ParamField path="readTimeout" type="number">
+  Read timeout (ms).
+</ParamField>
+
+<ParamField path="captureDiagnostics" type="boolean" default="false">
+  Enable extra connection and TLS diagnostics for requests made through this transport by default.
+</ParamField>
+
+## Using a transport with fetch()
+
+Pass the transport via `RequestInit.transport`.
+
+```typescript
+import { createTransport, fetch } from "wreq-js";
+
+const transport = await createTransport({
+  proxy: "http://user:pass@proxy.example.com:8080",
+  browser: "chrome_142",
+  poolMaxSize: 64,
+});
+
+try {
+  const res = await fetch("https://httpbin.org/get", {
+    transport,
+    timeout: 10_000,
+  });
+
+  console.log(res.status);
+} finally {
+  await transport.close();
+}
+```
+
+You can still pass per-request `onRequestEvent` callbacks when using a transport. If `captureDiagnostics` is enabled on the transport, returned responses expose `response.diagnostics` without having to repeat the flag on every request.
+
+### Important: request options that become invalid
+
+When you provide `transport`, you must not also set `browser`, `os`, `proxy`, or `insecure` on that request. Those settings are owned by the transport.
+
+## Thousands of proxies: recommended pattern
+
+Create **one transport per proxy**, reuse it for all requests that should go through that proxy, and close transports when you no longer need them.
+
+```typescript
+import { createTransport, fetch, type Transport } from "wreq-js";
+
+const transports = new Map<string, Transport>();
+
+async function getTransportForProxy(proxy: string): Promise<Transport> {
+  const cached = transports.get(proxy);
+  if (cached && !cached.closed) return cached;
+
+  const transport = await createTransport({ proxy, poolMaxSize: 32 });
+  transports.set(proxy, transport);
+  return transport;
+}
+
+export async function fetchViaProxy(url: string, proxy: string) {
+  const transport = await getTransportForProxy(proxy);
+  return fetch(url, { transport, timeout: 30_000 });
+}
+
+export async function shutdown() {
+  await Promise.all([...transports.values()].map((t) => t.close()));
+  transports.clear();
+}
+```
+
+## Transport lifecycle
+
+### transport.close()
+
+Always close transports you create.
+
+```typescript
+await transport.close();
+```
+
+After closing, `transport.closed` becomes `true` and the transport can no longer be used.
+
+## Sharing a transport across cookie jars
+
+If you need separate cookie jars with shared transport settings (for example, multiple sessions through the same proxy), you can pass the same transport to multiple `Session.fetch()` calls.

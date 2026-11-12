@@ -1,0 +1,106 @@
+---
+title: Proxy Usage
+description: "Configure proxy URLs for your requests."
+---
+
+## Basic proxy usage
+
+Pass the `proxy` option to route requests through a proxy server:
+
+```typescript
+import { fetch } from 'wreq-js';
+
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  proxy: 'http://proxy.example.com:8080',
+});
+```
+
+## Authenticated proxies
+
+Include credentials in the proxy URL:
+
+```typescript
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  proxy: 'http://username:password@proxy.example.com:8080',
+});
+```
+
+## SOCKS proxies
+
+SOCKS proxy behavior depends on native layer support in your environment:
+
+```typescript
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  proxy: 'socks5://proxy.example.com:1080',
+});
+
+// With authentication
+const authedResponse = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  proxy: 'socks5://user:pass@proxy.example.com:1080',
+});
+```
+
+## Proxy rotation
+
+Rotate through a list of proxies for each request:
+
+```typescript
+import { fetch } from 'wreq-js';
+
+const proxies = [
+  'http://user:pass@proxy-1.example.com:8080',
+  'http://user:pass@proxy-2.example.com:8080',
+  'http://user:pass@proxy-3.example.com:8080',
+];
+
+function getRandomProxy() {
+  return proxies[Math.floor(Math.random() * proxies.length)];
+}
+
+// Each request uses a random proxy
+for (let i = 0; i < 10; i++) {
+  const response = await fetch('https://example.com', {
+    browser: 'chrome_142',
+    proxy: getRandomProxy(),
+  });
+  console.log(`Request ${i + 1}: ${response.status}`);
+}
+```
+
+## Session with proxy
+
+Set a default proxy for all session requests:
+
+```typescript
+import { createSession } from 'wreq-js';
+
+const session = await createSession({
+  browser: 'chrome_142',
+  proxy: 'http://proxy.example.com:8080',
+});
+
+// All requests use the session proxy
+await session.fetch('https://example.com/page1');
+await session.fetch('https://example.com/page2');
+
+await session.close();
+```
+
+## Common proxy URL formats
+
+| Protocol | URL Format | Notes |
+| -------- | ---------- | ----- |
+| HTTP | `http://host:port` | Common format |
+| HTTPS | `https://host:port` | Availability depends on native layer support |
+| SOCKS5 | `socks5://host:port` | Availability depends on native layer support |
+| SOCKS5h | `socks5h://host:port` | Availability depends on native layer support |
+
+## Related
+
+1. Transport concept: [/concepts/transport](/concepts/transport)
+2. Transport API: [`createTransport()`](/api-reference/transport)
+3. Fetch API options: [`fetch()`](/api-reference/fetch)

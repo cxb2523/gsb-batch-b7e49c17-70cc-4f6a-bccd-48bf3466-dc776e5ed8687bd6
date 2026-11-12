@@ -1,0 +1,75 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "wreq-js",
+  "logo": {
+    "dark": "/logo/dark.svg",
+    "light": "/logo/light.svg"
+  },
+  "favicon": "/favicon.svg",
+  "seo": {
+    "metatags": {
+      "description": "wreq-js documentation for fetch-style HTTP and WebSocket APIs with browser profile and transport controls.",
+      "keywords": "wreq-js, fetch, websocket, nodejs, typescript, browser profile, proxy, session, transport, http client",
+      "og:title": "wreq-js Documentation",
+      "og:description": "Fetch-style HTTP and WebSocket APIs with browser profile and transport controls.",
+      "og:image": "https://wreq.sqdsh.win/logo/light.svg",
+      "twitter:card": "summary_large_image",
+      "twitter:title": "wreq-js Documentation",
+      "twitter:description": "Fetch-style HTTP and WebSocket APIs with browser profile and transport controls.",
+      "twitter:image": "https://wreq.sqdsh.win/logo/light.svg"
+    }
+  },
+  "colors": {
+    "primary": "#0D9373",
+    "light": "#07C983",
+    "dark": "#0D9373"
+  },
+  "navigation": {
+    "dropdowns": [
+      {
+        "dropdown": "Documentation",
+        "icon": "book",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": ["introduction", "installation", "quickstart"]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/sessions",
+              "concepts/transport",
+              "concepts/browser-profiles",
+              "concepts/compatibility-matrix"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": ["guides/proxy-usage", "guides/streaming", "guides/request-events", "guides/websockets"]
+          }
+        ]
+      },
+      {
+        "dropdown": "API Reference",
+        "icon": "code",
+        "groups": [
+          {
+            "group": "API Reference",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/fetch",
+              "api-reference/transport",
+              "api-reference/sessions",
+              "api-reference/websocket",
+              "api-reference/utilities"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "contextual": {
+    "options": ["copy", "chatgpt", "claude", "perplexity", "cursor", "vscode"]
+  }
+}

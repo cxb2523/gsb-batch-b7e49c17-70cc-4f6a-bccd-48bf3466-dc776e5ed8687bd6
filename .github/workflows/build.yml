@@ -1,0 +1,610 @@
+name: 🏗️ Build and Publish Package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_full:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+            build: npm run build:rust -- --target x86_64-apple-darwin
+          - host: macos-14
+            target: aarch64-apple-darwin
+            arch: arm64
+            build: npm run build:rust -- --target aarch64-apple-darwin
+          - host: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            arch: x64
+            build: npm run build:rust -- --target x86_64-unknown-linux-gnu
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
+            build: npm run build:rust -- --target aarch64-unknown-linux-gnu
+          - host: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            arch: x64
+            build: npm run build:rust -- --target x86_64-unknown-linux-musl
+          - host: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            arch: x64
+            build: npm run build:rust -- --target aarch64-unknown-linux-musl
+          - host: windows-2022
+            target: x86_64-pc-windows-msvc
+            arch: x64
+            generator: Visual Studio 17 2022
+            build: npm run build:rust -- --target x86_64-pc-windows-msvc
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+            generator: Ninja
+            build: npm run build:rust -- --target aarch64-pc-windows-msvc
+          # Cross-compiled: the Android SDK is only on the x86_64 runner images.
+          - host: ubuntu-24.04
+            target: aarch64-linux-android
+            arch: x64
+            build: npm run build:rust -- --target aarch64-linux-android
+
+    name: Build - ${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          architecture: ${{ matrix.settings.arch }}
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          shared-key: ${{ matrix.settings.target }}
+          
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # windows-11-arm ships Ninja in the image and choco has no native
+          # arm64 build, so only reach for choco when ninja is missing.
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y
+          }
+          ninja --version
+
+      - name: Setup NASM (Windows x64)
+        if: matrix.settings.target == 'x86_64-pc-windows-msvc'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Verify NASM (Windows x64)
+        if: matrix.settings.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: nasm -v
+
+      - name: Cache musl cross toolchain (x86_64-linux-musl)
+        if: matrix.settings.target == 'x86_64-unknown-linux-musl'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/musl-cross
+          key: musl-cross-${{ runner.os }}-x86_64-11-20211120
+
+      - name: Install musl cross toolchain (x86_64-linux-musl)
+        if: matrix.settings.target == 'x86_64-unknown-linux-musl'
+        run: |
+          set -eux
+          rustup target add x86_64-unknown-linux-musl
+
+          TOOLCHAIN_URL="https://github.com/troglobit/misc/releases/download/11-20211120/x86_64-linux-musl-cross.tgz"
+          TOOLCHAIN_DIR="$HOME/musl-cross/x86_64-linux-musl-cross"
+
+          if [ ! -d "$TOOLCHAIN_DIR" ]; then
+            mkdir -p "$HOME/musl-cross"
+            curl -L "$TOOLCHAIN_URL" -o /tmp/x86_64-linux-musl-cross.tgz
+            tar -xzf /tmp/x86_64-linux-musl-cross.tgz -C "$HOME/musl-cross"
+          fi
+
+          echo "$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Cache musl cross toolchain (aarch64-linux-musl)
+        if: matrix.settings.target == 'aarch64-unknown-linux-musl'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/musl-cross
+          key: musl-cross-${{ runner.os }}-aarch64-11-20211120
+
+      - name: Install musl cross toolchain (aarch64-linux-musl)
+        if: matrix.settings.target == 'aarch64-unknown-linux-musl'
+        run: |
+          set -eux
+          rustup target add aarch64-unknown-linux-musl
+
+          TOOLCHAIN_URL="https://github.com/troglobit/misc/releases/download/11-20211120/aarch64-linux-musl-cross.tgz"
+          TOOLCHAIN_DIR="$HOME/musl-cross/aarch64-linux-musl-cross"
+
+          if [ ! -d "$TOOLCHAIN_DIR" ]; then
+            mkdir -p "$HOME/musl-cross"
+            curl -L "$TOOLCHAIN_URL" -o /tmp/aarch64-linux-musl-cross.tgz
+            tar -xzf /tmp/aarch64-linux-musl-cross.tgz -C "$HOME/musl-cross"
+          fi
+
+          echo "$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
+          echo "AARCH64_MUSL_SYSROOT=$TOOLCHAIN_DIR/aarch64-linux-musl" >> "$GITHUB_ENV"
+
+      - name: Setup MSVC arm64 environment
+        # Ninja resolves cl.exe and clang-cl from PATH rather than from a
+        # toolset, so the arm64 developer environment has to be set up first.
+        if: matrix.settings.target == 'aarch64-pc-windows-msvc'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Patch btls-sys on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd rust
+          
+          cargo fetch
+
+          # wreq swapped the TLS backend from boring2 to btls, so the
+          # BoringSSL build script this patches now ships in btls-sys.
+          FILE=$(find ~/.cargo/registry/src -name "main.rs" | grep "btls-sys" | grep "build")
+          
+          if [ -z "$FILE" ]; then
+            echo "Error: Could not find btls-sys build/main.rs to patch"
+            exit 1
+          fi
+          
+          echo "Patching $FILE"
+
+          # sed exits 0 when a pattern matches nothing, so an upstream rename would
+          # silently produce an unpatched build. Verify each edit landed instead.
+          patch_and_verify() {
+            sed -i "$1" "$FILE"
+
+            if ! grep -q -F -- "$2" "$FILE"; then
+              echo "Error: patch did not apply, upstream build script likely changed: $2"
+              exit 1
+            fi
+          }
+
+          patch_and_verify \
+            's/let bssl_dir = build_boringssl_or_get_prebuilt(config);/let bssl_dir = build_boringssl_or_get_prebuilt(config); if config.target.ends_with("-msvc") { println!("cargo:rustc-link-search=native={}\/lib", bssl_dir.display()); }/' \
+            'build_boringssl_or_get_prebuilt(config); if config.target.ends_with("-msvc")'
+
+          # ALL_BUILD is a Visual Studio generator target and does not exist
+          # under Ninja, where ssl and crypto build as upstream intends.
+          if [ "${{ matrix.settings.generator }}" = "Visual Studio 17 2022" ]; then
+            patch_and_verify \
+              's/cfg.build_target("ssl").build();/\/\/ cfg.build_target("ssl").build();/' \
+              '// cfg.build_target'
+
+            patch_and_verify \
+              's/cfg.build_target("crypto").build()/cfg.build_target("ALL_BUILD").build()/' \
+              'cfg.build_target("ALL_BUILD").build()'
+          fi
+
+      - name: Patch btls-sys for windows-arm64
+        if: matrix.settings.target == 'aarch64-pc-windows-msvc'
+        shell: bash
+        run: |
+          set -eux
+          cd rust
+
+          FILE=$(find ~/.cargo/registry/src -name "main.rs" | grep "btls-sys" | grep "build")
+
+          if [ -z "$FILE" ]; then
+            echo "Error: Could not find btls-sys build/main.rs to patch"
+            exit 1
+          fi
+
+          # BoringSSL ships arm64 Windows assembly (gen/**/*-armv8-win.S) but it
+          # is gas syntax, and its CMakeLists only routes x86 Windows through
+          # ASM_NASM:
+          #
+          #   if(WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|...")
+          #     enable_language(ASM_NASM)
+          #   else()
+          #     enable_language(ASM)
+          #
+          # arm64 takes the else branch, where CMake nominates cl.exe, which
+          # cannot assemble gas syntax. Point the ASM language at clang-cl: it
+          # understands the syntax and accepts the MSVC-style flags cmake-rs puts
+          # in CMAKE_ASM_FLAGS, which plain clang rejects ("unknown argument:
+          # '-nologo'").
+          #
+          # Deliberately not OPENSSL_NO_ASM. btls-sys would set that for us, but
+          # only on its cross-compilation path, and dropping assembly costs bulk
+          # crypto throughput for every arm64 user.
+          python3 - "$FILE" <<'PY'
+          import io, sys
+
+          path = sys.argv[1]
+          src = io.open(path, encoding="utf-8").read()
+
+          # Swatinem/rust-cache caches ~/.cargo/registry per target, so a cache
+          # hit restores a registry this step already patched on an earlier run.
+          # That is a no-op, not the upstream change the count check below is
+          # meant to catch, and failing on it breaks every run after the first.
+          if 'CMAKE_ASM_COMPILER", "clang-cl"' in src:
+              print("already patched, from a restored cargo registry")
+              raise SystemExit(0)
+
+          old = (
+              '            boringssl_cmake.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreadedDLL");\n'
+              "        }\n"
+              "    }\n"
+          )
+          new = (
+              '            boringssl_cmake.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreadedDLL");\n'
+              "        }\n"
+              "\n"
+              '        if config.target_arch == "aarch64" {\n'
+              '            boringssl_cmake.define("CMAKE_ASM_COMPILER", "clang-cl");\n'
+              "        }\n"
+              "    }\n"
+          )
+
+          # A count check rather than a bare replace: an upstream edit has to
+          # fail the build instead of silently producing an unpatched binding.
+          if src.count(old) != 1:
+              sys.exit(f"expected 1 windows block to patch, found {src.count(old)} -- upstream build script changed")
+
+          io.open(path, "w", encoding="utf-8").write(src.replace(old, new, 1))
+          print("pointed the ASM language at clang-cl for windows-arm64")
+          PY
+
+      - name: Locate libclang for bindgen (Android)
+        if: matrix.settings.target == 'aarch64-linux-android'
+        # The image ships Clang, so no apt install: asking for clang and
+        # libclang-dev here once sat for an hour before being cancelled.
+        run: |
+          set -eux
+          libclang=$(find /usr/lib/llvm-* -name "libclang.so*" 2>/dev/null | head -1)
+          test -n "$libclang"
+          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+
+      - name: Build native module (Android)
+        if: matrix.settings.target == 'aarch64-linux-android'
+        env:
+          CARGO_BUILD_TARGET: aarch64-linux-android
+          CARGO_TARGET_DIR: rust/target
+        run: |
+          set -eux
+          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          export PATH="$NDK_BIN:$PATH"
+
+          # API 24 is Termux's floor; btls-sys asks cmake for 21.
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android24 --sysroot=$SYSROOT"
+
+          ${{ matrix.settings.build }}
+
+      - name: Build native module (x86_64 musl target)
+        if: matrix.settings.target == 'x86_64-unknown-linux-musl'
+        env:
+          # Tell Cargo what we are targeting
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
+
+          # Tell rustc which linker to use for that target
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
+
+          # Point btls-sys / cc / cmake at the musl cross toolchain
+          CC_x86_64_unknown_linux_musl: x86_64-linux-musl-gcc
+          CXX_x86_64_unknown_linux_musl: x86_64-linux-musl-g++
+          AR_x86_64_unknown_linux_musl: x86_64-linux-musl-ar
+          RANLIB_x86_64_unknown_linux_musl: x86_64-linux-musl-ranlib
+
+          # Optional: keep it static
+          RUSTFLAGS: -C target-feature=-crt-static
+        run: npm run build:rust
+
+      - name: Build native module (aarch64 musl target)
+        if: matrix.settings.target == 'aarch64-unknown-linux-musl'
+        env:
+          CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
+          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
+          CXX_aarch64_unknown_linux_musl: aarch64-linux-musl-g++
+          AR_aarch64_unknown_linux_musl: aarch64-linux-musl-ar
+          RANLIB_aarch64_unknown_linux_musl: aarch64-linux-musl-ranlib
+          RUSTFLAGS: -C target-feature=-crt-static
+        # This used to build inside node:20-alpine on an arm runner, taking its
+        # Rust from apk. That broke when wreq 0.16 raised the MSRV past what
+        # Alpine packages, and replacing it with rustup only moved the problem:
+        # on a native musl host the toolchain defaults to crt-static, so the
+        # bindgen build script could not dlopen libclang.
+        #
+        #   Unable to find libclang: ... could not be opened: Dynamic loading
+        #   not supported
+        #
+        # RUSTFLAGS cannot fix that, because cargo applies it to the target and
+        # not to host build scripts once a --target is in play. Cross compiling
+        # from the glibc host sidesteps all of it: build scripts stay dynamic
+        # x86_64 binaries, and only the addon is musl. It is also what the
+        # x86_64 musl target above already does.
+        run: |
+          set -eux
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-musl --sysroot=$AARCH64_MUSL_SYSROOT"
+          npm run build:rust
+
+      - name: Build native module (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RUST_BACKTRACE: "1"
+          CARGO_TERM_VERBOSE: "true"
+          CMAKE_GENERATOR: ${{ matrix.settings.generator }}
+          CARGO_BUILD_TARGET: ${{ matrix.settings.target }}
+          CARGO_TARGET_DIR: rust/target
+          DEBUG: "false"
+          OPT_LEVEL: "3"
+          CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL: 3
+          CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_DEBUG: "false"
+        run: ${{ matrix.settings.build }}
+
+      - name: Build native module (other non-musl targets)
+        # Only macOS remains on the host runner. The linux-*-gnu targets are
+        # built inside manylinux_2_28 containers below to pin a portable
+        # glibc baseline (glibc 2.28). Building on the ubuntu-24.04 runner
+        # (glibc 2.39) produces binaries that require GLIBC_2.33/2.34 and fail
+        # to load on older glibc (e.g. 2.31 on CentOS/RHEL-family). See #182.
+        if: runner.os == 'macOS'
+        run: ${{ matrix.settings.build }}
+
+      - name: Build native module (x86_64-gnu target, manylinux_2_28)
+        if: matrix.settings.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          docker run --rm \
+            -v "$PWD:/app" \
+            -w /app \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            sh -lc '
+              set -eux
+              # manylinux_2_28 ships gcc-toolset / cmake / perl / python3, enough
+              # for BoringSSL (btls) to build with gcc. We avoid the EPEL repo
+              # (EPEL 8 is EOL with flaky mirrors); clang-devel 17 is available
+              # from AppStream and provides libclang.so + clang builtin headers
+              # (incl. stddef.h) needed by bindgen (btls-sys FFI generation).
+              dnf install -y --disablerepo=epel git make clang-devel
+              export LIBCLANG_PATH=/usr/lib64
+              # Rust toolchain (manylinux images do not ship Rust).
+              curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+              source "$HOME/.cargo/env"
+              rustup target add x86_64-unknown-linux-gnu
+              # Node.js is required by @napi-rs/cli (napi build).
+              curl -fsSL https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz \
+                | tar -xJ -C /usr/local --strip-components=1
+              npm ci --ignore-scripts
+              npm run build:rust -- --target x86_64-unknown-linux-gnu
+            '
+
+      - name: Build native module (aarch64-gnu target, manylinux_2_28)
+        if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          docker run --rm \
+            -v "$PWD:/app" \
+            -w /app \
+            quay.io/pypa/manylinux_2_28_aarch64 \
+            sh -lc '
+              set -eux
+              dnf install -y --disablerepo=epel git make clang-devel
+              export LIBCLANG_PATH=/usr/lib64
+              curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+              source "$HOME/.cargo/env"
+              rustup target add aarch64-unknown-linux-gnu
+              curl -fsSL https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-arm64.tar.xz \
+                | tar -xJ -C /usr/local --strip-components=1
+              npm ci --ignore-scripts
+              npm run build:rust -- --target aarch64-unknown-linux-gnu
+            '
+
+      - name: Smoke test native addon
+        if: runner.os == 'macOS' || runner.os == 'Windows'
+        env:
+          WREQ_TARGET: ${{ matrix.settings.target }}
+        run: node scripts/smoke-native.cjs
+
+      - name: Smoke test native addon (x86_64-gnu, manylinux_2_28)
+        if: matrix.settings.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          docker run --rm \
+            -e WREQ_PLATFORM_ARCH=linux-x64-gnu \
+            -v "$PWD:/app" \
+            -w /app \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            sh -lc '
+              curl -fsSL https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz \
+                | tar -xJ -C /usr/local --strip-components=1
+              node scripts/smoke-native.cjs
+            '
+
+      - name: Smoke test native addon (aarch64-gnu, manylinux_2_28)
+        if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          docker run --rm \
+            -e WREQ_PLATFORM_ARCH=linux-arm64-gnu \
+            -v "$PWD:/app" \
+            -w /app \
+            quay.io/pypa/manylinux_2_28_aarch64 \
+            sh -lc '
+              curl -fsSL https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-arm64.tar.xz \
+                | tar -xJ -C /usr/local --strip-components=1
+              node scripts/smoke-native.cjs
+            '
+
+      - name: Smoke test native addon (musl)
+        if: matrix.settings.target == 'x86_64-unknown-linux-musl'
+        run: |
+          docker run --rm \
+            -e WREQ_PLATFORM_ARCH=linux-x64-musl \
+            -v "$PWD:/app" \
+            -w /app \
+            node:20-alpine \
+            node scripts/smoke-native.cjs
+
+      - name: Smoke test native addon (arm64 musl)
+        if: matrix.settings.target == 'aarch64-unknown-linux-musl'
+        # The build moved to an x86_64 host, so loading an arm64 addon needs
+        # binfmt and an explicit platform, the same way the Termux check does.
+        run: |
+          set -eux
+          docker run --rm --privileged aptman/qus -s -- -p aarch64
+
+          docker run --rm --platform linux/arm64 \
+            -e WREQ_PLATFORM_ARCH=linux-arm64-musl \
+            -v "$PWD:/app" \
+            -w /app \
+            node:20-alpine \
+            node scripts/smoke-native.cjs
+
+      - name: Smoke test native addon (Termux, android-arm64)
+        if: matrix.settings.target == 'aarch64-linux-android'
+        # termux/termux-docker is the Termux userland - Bionic, the $PREFIX
+        # layout, pkg - as an image. The aarch64 tag matches what we just built
+        # and needs binfmt here, since the Android SDK pins the build to x86_64.
+        #
+        # This exists because the addon carries NEEDED libc++_shared.so, which
+        # ships with the NDK rather than with Android. Termux has it in
+        # $PREFIX/lib, so the load works - assert that rather than trust it.
+        run: |
+          set -eux
+          docker run --rm --privileged aptman/qus -s -- -p aarch64
+
+          docker run --rm --privileged \
+            -v "$PWD:/data/data/com.termux/files/home/wreq-js" \
+            -w /data/data/com.termux/files/home/wreq-js \
+            termux/termux-docker:aarch64 \
+            /entrypoint.sh bash -lc '
+              set -eux
+              # /entrypoint.sh hands off to a login shell, which rebuilds the
+              # environment, so docker -e does not reach in here.
+              export WREQ_PLATFORM_ARCH=android-arm64
+
+              pkg update -y
+              pkg install -y nodejs
+              node -e "console.log(process.platform, process.arch)"
+              ls -l "$PREFIX/lib/libc++_shared.so"
+              node scripts/smoke-native.cjs
+            '
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: rust/*.node
+          if-no-files-found: error
+
+  publish:
+    name: Publish Package
+    runs-on: ubuntu-24.04
+    needs: build_full
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC trusted publishing
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm 11.5.1+ for trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Collect artifacts into platform packages
+        shell: bash
+        run: |
+          # Fans artifacts/**/*.node out into npm/<platform>/ and fails if any
+          # configured target is missing an addon.
+          npm run artifacts
+          echo "Collected binaries:"
+          ls -la npm/*/*.node
+
+      - name: Build TypeScript
+        run: npm run build:ts
+
+      - name: Sync versions into platform packages
+        shell: bash
+        run: |
+          # Stamps the root version into every npm/<platform>/package.json and
+          # rewrites the root optionalDependencies to match. Publishing is left
+          # to the steps below so they keep --provenance and --access public.
+          npm run prepublish:napi
+          git --no-pager diff --stat -- package.json npm
+
+      - name: Publish to npm with trusted publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          publish() {
+            local dir="$1"
+            local out
+
+            if out=$(npm publish "$dir" --provenance --access public 2>&1); then
+              printf '%s\n' "$out"
+              return 0
+            fi
+
+            printf '%s\n' "$out"
+
+            # Re-running a release must not fail on packages that already
+            # landed before an earlier attempt died part-way through.
+            case "$out" in
+              *"cannot publish over"*)
+                echo "::warning::$dir is already published at this version, skipping"
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          # Platform packages first: the root package's optionalDependencies
+          # point at this exact version and must resolve on install.
+          for dir in npm/*/; do
+            publish "$dir"
+          done
+
+          publish .

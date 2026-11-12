@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an idea or enhancement
+labels: ['enhancement']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Specifics about your use case and code examples help. They make it easy for anyone to verify the outcome and propose solutions.
+      placeholder: I want to be able to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should it work? Include a usage example if you have one.
+    validations:
+      required: false

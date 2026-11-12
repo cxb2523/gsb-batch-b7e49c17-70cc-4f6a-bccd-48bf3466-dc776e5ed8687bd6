@@ -1,0 +1,131 @@
+---
+title: Request Events and Diagnostics
+description: "Observe native request lifecycle events and inspect optional diagnostics payloads."
+---
+
+## Overview
+
+`wreq-js` can emit structured native request lifecycle events through `onRequestEvent` and can attach an optional diagnostics payload to the final `Response` when `captureDiagnostics` is enabled.
+
+Use this when you need to:
+
+- render transport-phase progress such as connecting, waiting, and loading
+- observe native download progress without consuming `response.body` first
+- capture timing, address, or TLS peer details for debugging
+
+## Enable request events
+
+```typescript
+import { fetch } from 'wreq-js';
+
+const response = await fetch('https://example.com/file.zip', {
+  browser: 'chrome_142',
+  onRequestEvent(event) {
+    console.log(event.type, event);
+  },
+});
+
+console.log(response.status);
+```
+
+## Event types
+
+| Event | Meaning | Common fields |
+| --- | --- | --- |
+| `request_start` | Request has started in the native layer. | `timestamp`, `url` |
+| `request_sent` | Request has been sent and the client is waiting for a response. | `timestamp`, `url` |
+| `response_headers` | Response headers have arrived. | `timestamp`, `status`, `contentLength`, `url` |
+| `body_progress` | More response bytes were downloaded. | `timestamp`, `downloadedBytes`, `contentLength`, `url` |
+| `body_complete` | Response body download finished. | `timestamp`, `contentLength`, `url` |
+| `done` | Native request lifecycle completed successfully. | `timestamp`, `status`, `url` |
+| `error` | Native request lifecycle failed. | `timestamp`, `message`, `url` |
+
+## Progress example
+
+```typescript
+const response = await fetch('https://example.com/file.zip', {
+  browser: 'chrome_142',
+  onRequestEvent(event) {
+    switch (event.type) {
+      case 'request_start':
+        console.log('connecting');
+        break;
+      case 'request_sent':
+        console.log('waiting');
+        break;
+      case 'response_headers':
+        console.log('status:', event.status);
+        break;
+      case 'body_progress':
+        if (event.contentLength) {
+          const downloaded = event.downloadedBytes ?? 0;
+          const pct = (downloaded / event.contentLength) * 100;
+          console.log(`loading ${pct.toFixed(1)}%`);
+        }
+        break;
+      case 'body_complete':
+        console.log('download complete');
+        break;
+      case 'error':
+        console.error(event.message);
+        break;
+    }
+  },
+});
+
+console.log(await response.arrayBuffer());
+```
+
+## Enable diagnostics
+
+```typescript
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  captureDiagnostics: true,
+});
+
+console.log(response.diagnostics);
+```
+
+When available, `response.diagnostics` may include:
+
+- `totalDurationMs`
+- `headersDurationMs`
+- `status`
+- `localAddr`
+- `remoteAddr`
+- `tlsPeerCertificatePresent`
+- `tlsPeerCertificateChainLength`
+
+## Session and transport defaults
+
+You can enable diagnostics by default on a session or transport:
+
+```typescript
+import { createSession, createTransport } from 'wreq-js';
+
+const session = await createSession({
+  browser: 'chrome_142',
+  captureDiagnostics: true,
+});
+
+const transport = await createTransport({
+  proxy: 'http://proxy.example.com:8080',
+  captureDiagnostics: true,
+});
+```
+
+`onRequestEvent` remains a per-request callback, so you still pass it to `fetch()` or `session.fetch()` for the specific requests you want to observe.
+
+## Notes
+
+- Request events come from the native layer and reflect transport lifecycle phases, not application-level parsing.
+- `body_progress` is emitted during native download. You can still consume `response.body`, `response.text()`, `response.json()`, and the other body helpers normally.
+- Diagnostics are optional and may vary by platform or native support level.
+
+## Related
+
+- [`fetch()`](/api-reference/fetch)
+- [`Sessions`](/api-reference/sessions)
+- [`Transport`](/api-reference/transport)
+- [`Streaming Responses`](/guides/streaming)

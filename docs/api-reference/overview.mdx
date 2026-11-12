@@ -1,0 +1,117 @@
+---
+title: API Overview
+description: "Complete API reference for wreq-js."
+---
+
+## Exports
+
+wreq-js exports the following functions and classes:
+
+```typescript
+import {
+  // Core functions
+  fetch,
+  request,
+  get,
+  post,
+  createTransport,
+  createSession,
+  withSession,
+  websocket,
+  
+  // Utilities
+  getProfiles,
+  getOperatingSystems,
+  getEmulationHeaders,
+  randomProfile,
+  resolveProfile,
+  
+  // Classes
+  Headers,
+  Response,
+  Transport,
+  Session,
+  WebSocket,
+  
+  // Errors
+  RequestError,
+} from 'wreq-js';
+```
+
+## Quick reference
+
+| Function | Description |
+| -------- | ----------- |
+| [`fetch()`](/api-reference/fetch) | Make HTTP requests with browser profile options |
+| `get()` / `post()` | Convenience wrappers around `fetch()` |
+| `request()` | Deprecated helper kept for compatibility |
+| [`createTransport()`](/api-reference/transport) | Create a reusable transport context |
+| [`createSession()`](/api-reference/sessions) | Create a persistent session with cookie storage |
+| [`withSession()`](/api-reference/sessions#withsession) | Auto-disposing session helper |
+| [`websocket()`](/api-reference/websocket) | Connect to WebSocket servers |
+| [`getProfiles()`](/api-reference/utilities#getprofiles) | List available browser profiles |
+| [`getOperatingSystems()`](/api-reference/utilities#getoperatingsystems) | List available operating systems |
+| [`getEmulationHeaders()`](/api-reference/utilities#getemulationheaders) | Read the headers a browser profile injects |
+| [`resolveProfile()`](/api-reference/utilities#resolveprofile) | Resolve a family alias to a concrete profile |
+| [`randomProfile()`](/api-reference/utilities#randomprofile) | Pick a random profile with an OS it ships on |
+
+## TypeScript support
+
+wreq-js includes TypeScript definitions for its public API:
+
+```typescript
+import type {
+  BrowserProfile,
+  EmulationOS,
+  RequestInit,
+  CreateTransportOptions,
+  CreateSessionOptions,
+  Transport,
+  Session,
+} from 'wreq-js';
+```
+
+## Fetch style surface
+
+wreq-js provides a fetch like API surface with additional transport and profile options:
+
+| Surface | wreq-js |
+| ------- | ------- |
+| `fetch(url, init)` | Available |
+| `fetch(Request, init)` | Available |
+| `Request` class export | Not currently exposed |
+| `Response` class | Available from the package |
+| `Headers` class | Available from the package |
+| `AbortController` | Standard signal inputs are accepted |
+| `ReadableStream` body | Available on response bodies |
+
+`Session`, `Transport`, and `WebSocket` are exported classes, but you should create them via `createSession()`, `createTransport()`, and `websocket()` or `new WebSocket(url, ...)`.
+
+Detailed compatibility notes live at [/concepts/compatibility-matrix](/concepts/compatibility-matrix).
+
+## wreq-js extensions
+
+Additional options beyond the standard Fetch API:
+
+```typescript
+interface RequestInit {
+  // Standard options
+  method?: string;
+  headers?: HeadersInit;
+  body?: BodyInit | null;
+  signal?: AbortSignal | null;
+  redirect?: 'follow' | 'manual' | 'error';
+
+  // wreq-js extensions
+  transport?: Transport;         // Reusable transport (pool/proxy/browser/os)
+  browser?: BrowserProfile;      // Browser fingerprint profile
+  os?: EmulationOS;              // Operating system emulation
+  proxy?: string;                // Proxy URL
+  timeout?: number;              // Request timeout in ms
+  session?: Session;             // Bind to an existing session
+  sessionId?: string;            // Bind to a session by ID
+  cookieMode?: 'session' | 'ephemeral'; // Cookie scoping strategy
+  disableDefaultHeaders?: boolean; // Disable auto-added headers
+  insecure?: boolean;            // Accept invalid certificates
+}
+```

@@ -1,0 +1,149 @@
+---
+title: Browser Profiles
+description: "Understand browser profiles and operating system emulation."
+---
+
+## What are browser profiles?
+
+Browser profiles define the network profile labels that `wreq-js` sends to the native layer. Profiles can influence behavior such as:
+
+1. TLS handshake preferences
+2. HTTP protocol behavior
+3. Default request headers
+4. Platform-specific header values
+
+Final wire behavior is determined by the native engine and may vary by profile and runtime.
+
+## Available browsers
+
+wreq-js profile families include:
+
+1. Chrome
+2. Firefox
+3. Safari
+4. Edge
+5. Opera
+6. OkHttp
+
+## Listing profiles
+
+```typescript
+import { getProfiles } from 'wreq-js';
+
+const profiles = getProfiles();
+console.log(profiles);
+// ['chrome_142', 'chrome_141', 'firefox_139', 'safari_18', ...]
+```
+
+## Using a profile
+
+Specify the `browser` option in your fetch call:
+
+```typescript
+import { fetch } from 'wreq-js';
+
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+});
+```
+
+## Family aliases
+
+Instead of a concrete profile you can pass a family alias, which resolves to the newest
+profile in that family:
+
+```typescript
+import { fetch, resolveProfile } from 'wreq-js';
+
+const response = await fetch('https://example.com', {
+  browser: 'firefox',
+});
+
+resolveProfile('firefox'); // 'firefox_149'
+```
+
+Available aliases: `chrome`, `firefox`, `safari`, `edge`, `opera`, `okhttp`,
+`firefox_private`, `firefox_android`, `safari_ios`, `safari_ipad`.
+
+Families are matched exactly, so `safari` resolves to the newest desktop Safari and never
+to an iOS or iPad profile. Those have their own aliases.
+
+<Warning>
+An alias resolves to the newest profile shipped with the version of `wreq-js` you have
+installed, so upgrading the library changes the fingerprint an alias produces. That is the
+point of using one, but it does mean a `wreq-js` upgrade can change how a target responds
+to you without any change in your own code.
+
+Pin a concrete profile when you need a fingerprint that never moves, and use
+`resolveProfile()` to record which one an alias picked.
+</Warning>
+
+The default `browser` is the `chrome` alias, so requests that do not set `browser` track
+the newest Chrome profile rather than a pinned version that goes stale over time.
+
+## Rotating profiles
+
+`randomProfile()` picks one of the newest profiles from a set of families and pairs it
+with an operating system that browser actually ships on, so you never send Safari on
+Windows or a years-old Chrome. Pick once per session:
+
+```typescript
+import { createSession, randomProfile } from 'wreq-js';
+
+const session = await createSession({ ...randomProfile() });
+```
+
+See [`randomProfile()`](/api-reference/utilities#randomprofile) for the options and the
+browser-to-OS table.
+
+## Operating systems
+
+Different operating systems have different header values and behaviors. Use the `os` option to emulate a specific platform:
+
+```typescript
+import { getOperatingSystems } from 'wreq-js';
+
+console.log(getOperatingSystems());
+// ['windows', 'macos', 'linux', 'android', 'ios']
+```
+
+### Example: Windows Chrome
+
+```typescript
+const response = await fetch('https://example.com', {
+  browser: 'chrome_142',
+  os: 'windows',
+});
+```
+
+### Example: iOS Safari
+
+```typescript
+const response = await fetch('https://example.com', {
+  browser: 'safari_18',
+  os: 'ios',
+});
+```
+
+## Profile updates
+
+Profile labels are sourced from the native layer and can evolve with upstream updates.
+
+<Tip>
+Use a recent version of `wreq-js` if you want the latest profile set.
+</Tip>
+
+## Custom headers
+
+By default, browser emulation headers are automatically added. To use only your custom headers:
+
+```typescript
+const response = await fetch('https://api.example.com', {
+  browser: 'chrome_142',
+  headers: {
+    'Accept': '*/*',
+    'User-Agent': 'CustomBot/1.0',
+  },
+  disableDefaultHeaders: true,
+});
+```

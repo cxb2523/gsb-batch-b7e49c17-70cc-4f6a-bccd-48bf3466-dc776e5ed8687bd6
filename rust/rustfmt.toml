@@ -1,0 +1,9 @@
+# Rustfmt configuration for wreq-js
+
+edition = "2024"
+max_width = 100
+use_small_heuristics = "Default"
+newline_style = "Unix"
+
+# Prefer concise initialization.
+use_field_init_shorthand = true

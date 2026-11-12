@@ -1,0 +1,140 @@
+name: 🧪 Experiment - android-arm64
+
+# Probes aarch64-linux-android, requested in discussions#110 for Termux.
+#
+# Not in napi.targets: entries there are release-blocking (npm run artifacts
+# fails on a missing addon) and this cannot be smoke tested here — there is no
+# Android runner, and an emulator would not be Termux's Bionic anyway. Build it,
+# prove the ELF is what we claim, publish it as an artifact, and let the person
+# who asked confirm it loads before anything becomes permanent.
+#
+# btls-sys has real NDK support (cmake_params_android, ANDROID_ABI=arm64-v8a,
+# pick_best_android_ndk_toolchain, android.toolchain.cmake) and ubuntu-24.04
+# already exports ANDROID_NDK_HOME, so there is no NDK install step.
+#
+# armv7 was probed alongside this and dropped: Node stopped shipping
+# linux-armv7l tarballs at v24 (v22.20.0 has them, v24.0.0 does not), so the
+# target only serves runtimes that are already sunsetting.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: android-arm64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Locate libclang for bindgen
+        # The image ships Clang 16/17/18, so no apt install: a previous run of
+        # this probe sat on `apt-get install clang libclang-dev` for an hour
+        # before being cancelled.
+        run: |
+          set -eux
+          libclang=$(find /usr/lib/llvm-* -name "libclang.so*" 2>/dev/null | head -1)
+          test -n "$libclang"
+          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Show the NDK we are about to use
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "LIBCLANG_PATH=$LIBCLANG_PATH"
+          ls "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" | grep -E "aarch64-linux-android[0-9]+-clang$" | head
+
+      - name: Build native module
+        env:
+          CARGO_BUILD_TARGET: aarch64-linux-android
+          CARGO_TARGET_DIR: rust/target
+        run: |
+          set -eux
+          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          export PATH="$NDK_BIN:$PATH"
+
+          # API 24 is Termux's floor; btls-sys asks cmake for 21.
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android24 --sysroot=$SYSROOT"
+
+          npm run build:rust -- --target aarch64-linux-android
+
+      - name: Prove the addon is the architecture we claim
+        run: |
+          set -eux
+          ls -la rust/*.node
+          file rust/*.node
+          readelf -h rust/*.node | grep -E "Class|Machine|OS/ABI"
+          file rust/*.node | grep -q "aarch64"
+          # The most likely Termux failure mode: btls-sys sets
+          # CMAKE_ANDROID_STL_TYPE=c++_shared, so watch for libc++_shared.so.
+          echo "--- NEEDED ---"
+          readelf -d rust/*.node | grep NEEDED || true
+
+      - name: Load the addon in a real Termux userland
+        # The question this probe exists to answer. btls-sys links libc++ as a
+        # shared library, so the addon carries NEEDED libc++_shared.so, which
+        # ships with the NDK rather than with Android. Termux resolves it from
+        # $PREFIX/lib, and its nodejs package depends on libc++, so any Termux
+        # that can run Node already has it - but that has to be demonstrated,
+        # not assumed.
+        #
+        # termux/termux-docker is the Termux userland (Bionic, $PREFIX layout,
+        # pkg) as an image. The aarch64 tag matches the addon we just built and
+        # needs binfmt on an x86_64 runner; the Android SDK is only on the
+        # x86_64 runner images, so building here and emulating for the load is
+        # the way round that works.
+        run: |
+          set -eux
+          docker run --rm --privileged aptman/qus -s -- -p aarch64
+
+          docker run --rm --privileged \
+            -e WREQ_PLATFORM_ARCH=android-arm64 \
+            -v "$PWD:/data/data/com.termux/files/home/wreq-js" \
+            -w /data/data/com.termux/files/home/wreq-js \
+            termux/termux-docker:aarch64 \
+            /entrypoint.sh bash -lc '
+              set -eux
+              # /entrypoint.sh hands off to a login shell, which rebuilds the
+              # environment from Termux profile, so docker -e does not survive
+              # into here. Set it where the test actually runs.
+              export WREQ_PLATFORM_ARCH=android-arm64
+
+              pkg update -y
+              pkg install -y nodejs
+              node --version
+
+              # The loader keys off these two, and Bionic answers "android".
+              node -e "console.log(process.platform, process.arch)"
+
+              # The dependency this probe exists to check. libc++ is baseline in
+              # Termux and a declared dependency of its nodejs package, so it is
+              # here before we ask for it - show that rather than assume it.
+              ls -l "$PREFIX/lib/libc++_shared.so"
+
+              node scripts/smoke-native.cjs
+            '
+
+      - name: Upload addon
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-android-arm64
+          path: rust/*.node
+          if-no-files-found: error
