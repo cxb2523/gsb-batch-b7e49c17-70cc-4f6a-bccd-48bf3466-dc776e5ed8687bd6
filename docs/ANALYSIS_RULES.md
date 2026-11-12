@@ -1,0 +1,1364 @@
+# 📋 Analysis Rules Reference
+
+**Complete documentation of all 22+ code quality checks in Hefesto.**
+
+---
+
+## Table of Contents
+
+1. [Complexity Issues](#1-complexity-issues)
+2. [Security Vulnerabilities](#2-security-vulnerabilities)
+3. [Code Smells](#3-code-smells)
+4. [Best Practices](#4-best-practices)
+5. [Severity Guidelines](#5-severity-guidelines)
+
+---
+
+## 1. Complexity Issues
+
+### 1.1 High Cyclomatic Complexity
+
+**Rule ID:** `COMPLEXITY_001`
+
+**Description:** Functions with too many decision points become hard to understand, test, and maintain.
+
+**Detection Logic:**
+- Complexity = 1 + one point per decision point in the function body.
+- Python: each `if` and `elif` (an `elif` is a nested `if`), `for`, `async for`,
+  `while`, and each `try` statement (one point per `try`, however many `except`
+  clauses it has).
+- Not counted in Python: `and`, `or`, `with`, `except` clauses, conditional
+  expressions (`x if c else y`), comprehension loops and filters, `match`/`case`,
+  and `assert`.
+- Other languages: `if`, `switch`/`match`, loops, `try`, and `catch` clauses;
+  JavaScript and TypeScript also count conditional (`?:`) expressions.
+- A nested function's decision points also count toward the enclosing function,
+  and the nested function gets its own score.
+- The score is lower than tools such as radon, which also count boolean
+  operators: radon scores `if a and b and c:` as 3, Hefesto as 1.
+
+**Severity Levels:**
+- **MEDIUM:** Complexity 6-10
+- **HIGH:** Complexity 11-20
+- **CRITICAL:** Complexity 21+
+
+**Example - BAD (Hefesto complexity = 12):**
+
+```python
+def process_order(order, user, payment, shipping):
+    if not order:
+        return None
+
+    if user.is_authenticated:
+        if user.has_credit:
+            if order.total > 0:
+                if payment.is_valid:
+                    if payment.amount >= order.total:
+                        if shipping.is_available:
+                            if shipping.address:
+                                if shipping.address.is_valid:
+                                    if order.items:
+                                        if all(item.in_stock for item in order.items):
+                                            # Process order
+                                            return True
+    return False
+```
+
+**Example - GOOD (Hefesto complexity = 5 for `process_order`, 1 for each helper):**
+
+```python
+def process_order(order, user, payment, shipping):
+    # Early returns reduce nesting
+    if not order or not order.items:
+        return False
+
+    if not _validate_user(user):
+        return False
+
+    if not _validate_payment(payment, order.total):
+        return False
+
+    if not _validate_shipping(shipping):
+        return False
+
+    return _complete_order(order)
+
+def _validate_user(user):
+    return user.is_authenticated and user.has_credit
+
+def _validate_payment(payment, total):
+    return payment.is_valid and payment.amount >= total
+
+def _validate_shipping(shipping):
+    return (shipping.is_available and
+            shipping.address and
+            shipping.address.is_valid)
+```
+
+**Why It Matters:**
+- Hard to test (need 2^n test cases for n decision points)
+- Higher bug probability
+- Difficult to understand and modify
+- Code review takes longer
+
+**Refactoring Strategies:**
+1. Extract complex conditions into helper functions
+2. Use early returns to reduce nesting
+3. Replace nested conditionals with guard clauses
+4. Consider strategy pattern for complex branching
+
+**Message:** the finding names the score and the threshold it crossed, for
+example `Cyclomatic complexity too high (22, threshold 21 for CRITICAL)`
+(MEDIUM from 6, HIGH from 11, CRITICAL from 21). Up to 4.20.4 the message was
+`Cyclomatic complexity too high (22)`. The `hefesto pr-review` dedup key and
+the SARIF fingerprint ignore the threshold clause, so they are the same as
+before.
+
+---
+
+## 2. Security Vulnerabilities
+
+### 2.1 Hardcoded Secrets
+
+**Rule ID:** `SECURITY_001`
+
+**Severity:** CRITICAL
+
+**CWE:** [CWE-798](https://cwe.mitre.org/data/definitions/798.html) (Use of Hard-coded Credentials). SARIF relationship kind `equal`. Tag `external/cwe/cwe-798`.
+
+**Description:** API keys, passwords, tokens hardcoded in source code.
+
+**Detection Patterns:**
+```python
+# Detects patterns like:
+api_key = "sk-proj-..."      # OpenAI API keys
+API_KEY = "AIza..."          # Google API keys
+password = "secret123"       # Passwords
+token = "ghp_..."            # GitHub tokens
+AWS_ACCESS_KEY = "AKIA..."  # AWS credentials
+```
+
+**Example - BAD:**
+
+```python
+# ❌ CRITICAL: Secret exposed in code
+STRIPE_API_KEY = "sk_live_51H1234567890"
+OPENAI_API_KEY = "sk-proj-abcdef123456"
+DATABASE_URL = "postgresql://user:password@localhost/db"
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Load from environment
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+STRIPE_API_KEY = os.getenv("STRIPE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Validate that secrets are loaded
+if not STRIPE_API_KEY:
+    raise ValueError("STRIPE_API_KEY not found in environment")
+```
+
+**Why It Matters:**
+- Secrets leaked to version control
+- Anyone with repo access can steal credentials
+- Difficult to rotate compromised keys
+- Compliance violations (PCI, SOC2, etc.)
+
+**Test and example code is skipped.** To reduce noise, this rule does not run
+on test or example code. Hefesto decides that from whole path segments and
+file-name conventions, never from substrings:
+
+- Skipped: files under a directory named exactly `test`, `tests`, `__tests__`,
+  `example` or `examples`; files named `test_*`, `*_test.<ext>`,
+  `*.test.<ext>`, `*.spec.<ext>`, `conftest.py`, `test.py` or `tests.py`; and
+  `*.example` templates such as `.env.example`.
+- Scanned: everything else, including paths that only *contain* those words,
+  such as `src/contest/config.py`, `latest_settings.py`, `latest_app/` or
+  `counterexample.py`, and `fixtures/` directories outside `tests/`.
+- Absolute paths are judged relative to the directory Hefesto runs from when
+  the file is inside it, so a checkout under `/home/me/tests/myrepo/` is not
+  treated as test code.
+
+Up to and including v4.14.0, any path containing the substring `test` or
+`example` was skipped (SEC-03).
+
+**Only three rules skip test paths.** The skip applies to this rule (Python
+hardcoded secrets, test and example paths), to
+[Assert in Production](#25-assert-in-production) (test paths only) and to
+`OT-IMPORTS-001` (`UNDECLARED_DEPENDENCY`), which does not scan Python files
+under any `tests/`, `test/`, `testing/`, `docs/`, `examples/` or `example/`
+directory (nor build, virtualenv and cache directories such as `build/`,
+`dist/`, `venv/`, `.venv/` or `node_modules/`), since test and docs
+dependencies are usually development-only. Every other rule still reports
+under `tests/`, including the secret rules for JSON, TOML
+and IaC files (for example `J001`, `T001` and `TF011`) and the rules of the
+DevOps, cloud and COBOL analyzers. This is on purpose: a real
+credential committed in a test fixture is still leaked. To leave test code out
+of a run, pass `--exclude tests/` or list it under `exclude` in
+`.hefesto.yaml` (entries are path segments, such as `tests/fixtures/`, not
+globs).
+
+---
+
+### 2.2 SQL Injection Risk
+
+**Rule ID:** `SECURITY_002`
+
+**Severity:** CRITICAL
+
+**CWE:** [CWE-89](https://cwe.mitre.org/data/definitions/89.html) (SQL Injection). SARIF relationship kind `superset`: the check is line-based and does not track taint, so it finds a subset of CWE-89. Tag `external/cwe/cwe-89`.
+
+**Description:** Dynamic SQL queries vulnerable to SQL injection attacks.
+
+**Example - BAD:**
+
+```python
+# ❌ CRITICAL: SQL injection vulnerability
+def get_user(username):
+    query = f"SELECT * FROM users WHERE username = '{username}'"
+    return db.execute(query)
+
+# Attacker input: "admin' OR '1'='1"
+# Resulting query: SELECT * FROM users WHERE username = 'admin' OR '1'='1'
+# Returns all users!
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Use parameterized queries
+def get_user(username):
+    query = "SELECT * FROM users WHERE username = ?"
+    return db.execute(query, (username,))
+
+# OR with ORM
+def get_user(username):
+    return User.objects.filter(username=username).first()
+```
+
+**Why It Matters:**
+- Full database compromise possible
+- Data theft and manipulation
+- Authentication bypass
+- OWASP Top 10 vulnerability
+
+---
+
+### 2.3 Dangerous eval() Usage
+
+**Rule ID:** `SECURITY_003`
+
+**Severity:** CRITICAL
+
+**CWE:** [CWE-95](https://cwe.mitre.org/data/definitions/95.html) (Eval Injection). SARIF relationship kind `relevant`. Tag `external/cwe/cwe-95`.
+
+**Description:** Using `eval()` or `exec()` with untrusted input allows arbitrary code execution.
+
+**Example - BAD:**
+
+```python
+# ❌ CRITICAL: Code injection vulnerability
+def calculate(expression):
+    result = eval(expression)  # User can execute ANY Python code!
+    return result
+
+# Attacker input: "__import__('os').system('rm -rf /')"
+# System compromised!
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Use safe alternatives
+import ast
+import operator
+
+OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+}
+
+def calculate(expression):
+    tree = ast.parse(expression, mode='eval')
+    # Validate that expression only contains safe operations
+    return _eval_node(tree.body)
+
+# OR use a safe expression library
+from simpleeval import simple_eval
+result = simple_eval(expression, functions={"abs": abs, "min": min})
+```
+
+**Why It Matters:**
+- Complete system compromise
+- Remote code execution (RCE)
+- Data theft and destruction
+- OWASP Top 10 vulnerability
+
+---
+
+### 2.4 Pickle import (PICKLE_USAGE)
+
+**Rule ID:** `PICKLE_USAGE`
+
+**Severity:** HIGH
+
+**Description:** `pickle.load()` can execute arbitrary code during deserialization.
+
+**What Hefesto flags:** the `import pickle` / `import cPickle` / `from pickle import …` line. The `pickle.load()` call itself is not reported separately, and `yaml.load` is not detected.
+
+**Example - BAD:**
+
+```python
+# ❌ HIGH: Pickle can execute code
+import pickle
+
+def load_data(filename):
+    with open(filename, 'rb') as f:
+        return pickle.load(f)  # Can execute arbitrary code!
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Use safe serialization formats
+import json
+
+def load_data(filename):
+    with open(filename, 'r') as f:
+        return json.load(f)
+
+# OR for complex objects
+import jsonpickle
+
+def load_data(filename):
+    with open(filename, 'r') as f:
+        return jsonpickle.decode(f.read())
+```
+
+**Why It Matters:**
+- Code execution via malicious pickle files
+- Hard to detect malicious payloads
+- No safe way to unpickle untrusted data
+
+**CWE:** [CWE-502](https://cwe.mitre.org/data/definitions/502.html) (Deserialization of Untrusted Data). SARIF relationship kind `relevant`, and the rule precision is `low`. Hefesto flags the `import pickle` / `import cPickle` line only. The finding does not mean untrusted data was deserialized. Tag `external/cwe/cwe-502`.
+
+---
+
+### 2.5 Assert in Production
+
+**Rule ID:** `SECURITY_005`
+
+**Severity:** MEDIUM
+
+**CWE:** none. [CWE-617](https://cwe.mitre.org/data/definitions/617.html) (Reachable Assertion) is about assertions that crash; this rule is about `assert` being removed by `python -O`. [CWE-703](https://cwe.mitre.org/data/definitions/703.html) is a Pillar and discouraged for mapping. SARIF emits no CWE tag and no relationship.
+
+**Description:** `assert` statements are removed when Python runs in optimized mode (`-O` flag).
+
+**Example - BAD:**
+
+```python
+# ❌ MEDIUM: Assert removed in production
+def process_payment(amount, user):
+    assert user.is_authenticated, "User must be authenticated"
+    assert amount > 0, "Amount must be positive"
+    # Process payment
+
+# When running with `python -O app.py`:
+# - Asserts are completely removed
+# - No validation happens!
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Use explicit validation
+def process_payment(amount, user):
+    if not user.is_authenticated:
+        raise ValueError("User must be authenticated")
+    if amount <= 0:
+        raise ValueError("Amount must be positive")
+    # Process payment
+```
+
+**Why It Matters:**
+- Security checks bypassed in production
+- Silent failures and unexpected behavior
+- Cannot rely on asserts for validation
+
+**Test code is skipped.** `assert` is expected in tests, so this rule does not
+run on test code, using the same path-segment rules as
+[Hardcoded Secrets](#21-hardcoded-secrets) (test directories and test
+file-name conventions only; example code *is* checked). Paths that merely
+contain `test`, such as `src/contest/app.py`, are checked.
+
+---
+
+### 2.6 Bare Except Clause
+
+**Rule ID:** `SECURITY_006`
+
+**Severity:** MEDIUM
+
+**CWE:** [CWE-396](https://cwe.mitre.org/data/definitions/396.html) (Declaration of Catch for Generic Exception). SARIF relationship kind `equal`. Tag `external/cwe/cwe-396`.
+
+**Description:** Catching all exceptions can hide bugs and security issues.
+
+**Example - BAD:**
+
+```python
+# ❌ MEDIUM: Hides all errors including KeyboardInterrupt
+def process_data(data):
+    try:
+        result = dangerous_operation(data)
+        return result
+    except:  # Catches EVERYTHING
+        return None
+
+# Problems:
+# - Hides KeyboardInterrupt (can't stop program)
+# - Hides SystemExit (can't exit cleanly)
+# - Hides actual bugs
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Catch specific exceptions
+def process_data(data):
+    try:
+        result = dangerous_operation(data)
+        return result
+    except ValueError as e:
+        logger.error(f"Invalid data: {e}")
+        return None
+    except IOError as e:
+        logger.error(f"IO error: {e}")
+        raise
+```
+
+**Why It Matters:**
+- Security errors silently swallowed
+- Debugging nightmares
+- Masks underlying issues
+- Program can't be interrupted
+
+---
+
+### 2.7 CWE in SARIF
+
+Python security rules carry a CWE in SARIF 2.1.0 from one mapping (`hefesto/reports/cwe_map.py`, CWE list 4.20, approved 2026-10-17). The same id is written two ways:
+
+- a rule tag `external/cwe/cwe-N`, which GitHub code scanning reads (no zero-padding, so CWE-89 is `cwe-89`);
+- a `run.taxonomies` entry named `CWE` (organization MITRE, version 4.20) and a `relationships` entry on the rule. The taxonomy lists only the ids used in that run.
+
+| Issue type | CWE | Relationship | Notes |
+|------------|-----|--------------|-------|
+| HARDCODED_SECRET | 798 | `equal` | Use of Hard-coded Credentials |
+| SQL_INJECTION_RISK | 89 | `superset` | Line-based; no taint tracking |
+| COMMAND_INJECTION | 78 | `superset` | OS command injection. Emitted by the security analyzer; no separate section above |
+| EVAL_USAGE | 95 | `relevant` | Eval Injection (`eval` / `exec`) |
+| PICKLE_USAGE | 502 | `relevant` | Precision `low`. Flags the `import pickle` / `cPickle` line only |
+| BARE_EXCEPT | 396 | `equal` | Declaration of Catch for Generic Exception |
+| ASSERT_IN_PRODUCTION | none | | No CWE. See [Assert in Production](#25-assert-in-production) |
+
+An issue field `metadata.cwe` overrides this table. COBOL rules that already set one keep the same tag text (`external/cwe/cwe-798`, `external/cwe/cwe-20`); those tags are not zero-padded.
+
+### 2.8 Unquoted variable in shell scripts (SHELL_UNQUOTED_VARIABLE)
+
+**Rule id:** `unquoted-var` · **Severity:** MEDIUM · **Analyzer:** shell (`.sh`, `.bash` and files with a shell shebang)
+
+An unquoted `$NAME` or `${NAME}` is split into words and expanded as a glob, so `rm -rf $DIR` with `DIR="my dir"` removes `my` and `dir`. The rule reports one finding per line when such a variable is:
+
+- an argument of `rm` or `cd` used as a command (at the start of the line, after a newline, `;`, `&&`, `||`, `|`, `(`, or after `sudo`, `then`, `do`, `else`, `exec`, `command`, `nohup`, `!`, `{`, `if`, `elif`, `while`, `until`, `time`, `xargs`);
+- the operand of a single-bracket test, e.g. `[ -f $FILE ]`.
+
+An unquoted command substitution in those `rm` or `cd` arguments is reported as well, in either form (`rm $(echo $X)`, ``rm `cat "$LIST"` ``, `cd $(echo $X)`). The shell field-splits and pathname-expands that result when the substitution is not in double quotes (POSIX command substitution, including the backquoted form). `rm "$(echo $X)"` and ``rm "`cat "$LIST"`"`` are not reported. Arithmetic `$((N+1))` is not a command substitution and is not itself reported.
+
+The body of `$(...)` or of backticks is a separate command with its own quotes. Quotes around the substitution do not quote that body: `x="$(cd $DIR && pwd)"` and `` echo "`cd $DIR && pwd`" `` are reported, and `x=$(cd "$DIR" && pwd)` is not. The same rule applies inside the body (`x=$(/bin/rm -f $FILE)`, `x=$(case $Z in *) rm -f $FILE ;; esac)`). A `)` ends the substitution only when it is the substitution's closer; a pattern `)` after a `case` command does not. One finding is still reported per physical line.
+
+The command word may be a path (`/bin/rm`, `./rm`, `$HOME/bin/rm`, `${PREFIX}/bin/rm`) or a backslash-escaped name (`\rm`). A `)` that stands outside quotes and substitutions introduces the next command, with or without a space (`*)rm`, `*) rm`, `foo)rm`, `a)cd`). A `)` that only closes `$(...)` does not (`$(echo hi)rm`, `echo $(echo hi) rm`). Space and tab are the blanks that separate words. A newline separates commands. A vertical tab, form feed, carriage return, or any other character for which Python's `str.isspace()` is true is not a shell separator: the line is left unreported and the scan does not raise.
+
+Not reported: quoted expansions (`rm -f "$TMPFILE"`, `rm -rf "$DIR"/cache`, `rm -rf "$(path "$v")"`), single-quoted text, escaped `\$`, `[[ ... ]]` tests (no word splitting there), `rm`/`cd` inside a string (`echo "run: rm $X"`), and subcommands named `rm` (`docker image rm $ID`, `git rm $FILE`, `docker run --rm`).
+
+```bash
+rm -rf $BUILD_DIR/cache     # reported
+rm -rf "$BUILD_DIR"/cache   # fix
+```
+
+Limits: line-based, no data flow. Text inside a quoted string is not a command, so `bash -c "cd $TMP"`, `echo "rm $X"`, and any other quoted wrapper are not analyzed. A flag or assignment between a prefix and the command is not skipped, so `xargs -0 rm -f $FILE`, `sudo -u root rm -f $FILE`, and `env A=1 rm -f $FILE` are not reported. A shell assignment prefix is not a command prefix either, so `A=1 rm -f $FILE` and `CDPATH= cd $DIR` are not reported. The released checker reports `A=1 rm -f $FILE`. It reports `CDPATH= cd $DIR` when a blank follows the name, as in `CDPATH= cd $DIR && true`; the end-of-line form matches neither checker. `trap 'rm -f $FILE' EXIT` is a quoted command string and is not reported. `$1`, `$@` and other special parameters are not checked. A `)` inside quotes does not end a `$(...)`.
+
+---
+
+## 3. Code Smells
+
+### 3.1 Long Function
+
+**Rule ID:** `SMELL_001`
+
+**Severity:** MEDIUM (>50 lines), HIGH (>100 lines)
+
+**Description:** Functions should do one thing. Long functions do too many things.
+
+**Example - BAD:**
+
+```python
+# ❌ MEDIUM: 78 lines, does everything
+def process_user_registration(email, password, name, address, phone,
+                             payment_method, subscription_tier, referral_code):
+    # Validate email (10 lines)
+    if not email or '@' not in email:
+        # ... validation logic
+        pass
+
+    # Validate password (15 lines)
+    if len(password) < 8:
+        # ... validation logic
+        pass
+
+    # Create user (10 lines)
+    user = User()
+    # ... user creation
+
+    # Send welcome email (10 lines)
+    # ... email sending
+
+    # Process payment (15 lines)
+    # ... payment processing
+
+    # Apply referral code (10 lines)
+    # ... referral logic
+
+    # Log analytics (8 lines)
+    # ... analytics
+
+    return user
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Each function has single responsibility
+def process_user_registration(email, password, name, address, phone,
+                             payment_method, subscription_tier, referral_code):
+    # Validate
+    _validate_email(email)
+    _validate_password(password)
+
+    # Create user
+    user = _create_user(email, password, name, address, phone)
+
+    # Setup subscription
+    _setup_subscription(user, payment_method, subscription_tier)
+
+    # Apply benefits
+    if referral_code:
+        _apply_referral(user, referral_code)
+
+    # Notify
+    _send_welcome_email(user)
+    _log_registration(user)
+
+    return user
+```
+
+**Why It Matters:**
+- Hard to understand
+- Hard to test
+- Hard to reuse
+- High chance of bugs
+
+---
+
+### 3.2 Long Parameter List
+
+**Rule ID:** `SMELL_002`
+
+**Severity:** LOW (6-7 params), MEDIUM (8-10 params), HIGH (>10 params)
+
+**Description:** Functions with many parameters are hard to call and maintain.
+
+**Example - BAD:**
+
+```python
+# ❌ HIGH: 11 parameters
+def create_order(user_id, product_id, quantity, price, tax, shipping_cost,
+                discount_code, shipping_address, billing_address,
+                payment_method, notes):
+    pass
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Use data classes or dictionaries
+from dataclasses import dataclass
+
+@dataclass
+class OrderDetails:
+    user_id: str
+    product_id: str
+    quantity: int
+    price: float
+
+@dataclass
+class PricingInfo:
+    tax: float
+    shipping_cost: float
+    discount_code: Optional[str]
+
+@dataclass
+class DeliveryInfo:
+    shipping_address: str
+    billing_address: str
+    payment_method: str
+    notes: Optional[str]
+
+def create_order(details: OrderDetails, pricing: PricingInfo,
+                delivery: DeliveryInfo):
+    pass
+```
+
+**Why It Matters:**
+- Easy to mix up parameter order
+- Difficult to extend
+- Hard to read at call sites
+- Testing becomes complex
+
+---
+
+### 3.3 Deep Nesting
+
+**Rule ID:** `SMELL_003`
+
+**Severity:** LOW (4 levels), MEDIUM (5 levels), HIGH (6+ levels)
+
+**Description:** Deep nesting makes code hard to follow and reason about.
+
+**Example - BAD:**
+
+```python
+# ❌ HIGH: 6 levels of nesting
+def process(data):
+    if data:
+        if data.is_valid:
+            if data.user:
+                if data.user.is_active:
+                    if data.user.has_permission:
+                        if data.user.subscription.is_active:
+                            # Finally do something
+                            return process_data(data)
+    return None
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Use guard clauses
+def process(data):
+    # Guard clauses at the top
+    if not data:
+        return None
+    if not data.is_valid:
+        return None
+    if not data.user or not data.user.is_active:
+        return None
+    if not data.user.has_permission:
+        return None
+    if not data.user.subscription.is_active:
+        return None
+
+    # Happy path at the end with no nesting
+    return process_data(data)
+```
+
+**Why It Matters:**
+- Cognitive load increases exponentially
+- Hard to track state at each level
+- Error handling becomes complex
+- Testing requires many nested conditions
+
+---
+
+### 3.4 Magic Numbers
+
+**Rule ID:** `SMELL_004`
+
+**Severity:** LOW
+
+**Description:** Numbers without clear meaning reduce code readability.
+
+**Example - BAD:**
+
+```python
+# ❌ LOW: What do these numbers mean?
+def calculate_price(base_price):
+    if base_price > 100:
+        return base_price * 0.85
+    elif base_price > 50:
+        return base_price * 0.90
+    return base_price * 0.95
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Named constants explain intent
+BULK_DISCOUNT_THRESHOLD = 100
+BULK_DISCOUNT_RATE = 0.85
+
+STANDARD_DISCOUNT_THRESHOLD = 50
+STANDARD_DISCOUNT_RATE = 0.90
+
+MINIMUM_DISCOUNT_RATE = 0.95
+
+def calculate_price(base_price):
+    if base_price > BULK_DISCOUNT_THRESHOLD:
+        return base_price * BULK_DISCOUNT_RATE
+    elif base_price > STANDARD_DISCOUNT_THRESHOLD:
+        return base_price * STANDARD_DISCOUNT_RATE
+    return base_price * MINIMUM_DISCOUNT_RATE
+```
+
+**Why It Matters:**
+- Reduces readability
+- Hard to maintain (change in multiple places)
+- No context for why number was chosen
+- Can't search for usage
+
+---
+
+### 3.5 Duplicate Code
+
+**Rule ID:** `SMELL_005`
+
+**Severity:** MEDIUM
+
+**Description:** Identical or very similar code in multiple places.
+
+**Example - BAD:**
+
+```python
+# ❌ MEDIUM: Duplicated validation logic
+def create_user(email, password):
+    if not email or '@' not in email:
+        raise ValueError("Invalid email")
+    if len(password) < 8:
+        raise ValueError("Password too short")
+    # Create user...
+
+def update_user(user_id, email, password):
+    if not email or '@' not in email:
+        raise ValueError("Invalid email")
+    if len(password) < 8:
+        raise ValueError("Password too short")
+    # Update user...
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Extract common logic
+def validate_email(email):
+    if not email or '@' not in email:
+        raise ValueError("Invalid email")
+
+def validate_password(password):
+    if len(password) < 8:
+        raise ValueError("Password too short")
+
+def create_user(email, password):
+    validate_email(email)
+    validate_password(password)
+    # Create user...
+
+def update_user(user_id, email, password):
+    validate_email(email)
+    validate_password(password)
+    # Update user...
+```
+
+**Why It Matters:**
+- Bug fixes needed in multiple places
+- Inconsistent behavior over time
+- Increases codebase size
+- Makes refactoring harder
+
+---
+
+### 3.6 God Class
+
+**Rule ID:** `SMELL_006`
+
+**Severity:** HIGH
+
+**Description:** Classes with too many responsibilities (>500 lines).
+
+**Example - BAD:**
+
+```python
+# ❌ HIGH: 800 lines, does everything
+class UserManager:
+    def create_user(self): pass
+    def update_user(self): pass
+    def delete_user(self): pass
+    def send_email(self): pass
+    def send_sms(self): pass
+    def process_payment(self): pass
+    def refund_payment(self): pass
+    def generate_report(self): pass
+    def export_csv(self): pass
+    def import_csv(self): pass
+    def validate_email(self): pass
+    def hash_password(self): pass
+    def check_permissions(self): pass
+    # ... 50 more methods
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Split into focused classes
+class UserRepository:
+    def create(self, user): pass
+    def update(self, user): pass
+    def delete(self, user_id): pass
+
+class NotificationService:
+    def send_email(self, to, subject, body): pass
+    def send_sms(self, to, message): pass
+
+class PaymentProcessor:
+    def process_payment(self, amount, method): pass
+    def refund_payment(self, transaction_id): pass
+
+class UserValidator:
+    def validate_email(self, email): pass
+    def validate_password(self, password): pass
+```
+
+**Why It Matters:**
+- Violates Single Responsibility Principle
+- Hard to test
+- Changes affect many areas
+- Difficult to reuse
+
+---
+
+### 3.7 Incomplete TODOs/FIXMEs
+
+**Rule ID:** `SMELL_007`
+
+**Severity:** LOW
+
+**Description:** Unfinished work or known issues left in code.
+
+**Example - BAD:**
+
+```python
+# ❌ LOW: Vague TODOs without context
+def process_payment(amount):
+    # TODO: Fix this
+    result = legacy_process(amount)
+
+    # FIXME: Sometimes fails
+    save_to_db(result)
+
+    # TODO: Optimize
+    return result
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Clear, actionable TODOs with context
+def process_payment(amount):
+    # TODO(john, 2025-02-01): Replace with new Stripe API v3
+    # Current implementation uses deprecated v2 API
+    # Ticket: JIRA-1234
+    result = legacy_process(amount)
+
+    # FIXME(sarah, 2025-02-15): Fails when amount > 10000
+    # Add validation or split into multiple transactions
+    # Ticket: JIRA-1235
+    save_to_db(result)
+
+    return result
+```
+
+**Why It Matters:**
+- Incomplete work accumulates
+- No accountability
+- Can't prioritize fixes
+- Indicates potential bugs
+
+---
+
+### 3.8 Commented-Out Code
+
+**Rule ID:** `SMELL_008`
+
+**Severity:** LOW
+
+**Description:** Dead code left as comments clutters the codebase.
+
+**Example - BAD:**
+
+```python
+# ❌ LOW: Commented code confuses readers
+def calculate_total(items):
+    total = sum(item.price for item in items)
+
+    # Old calculation method
+    # total = 0
+    # for item in items:
+    #     total += item.price
+    #     if item.discount:
+    #         total -= item.discount
+
+    return total
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Remove dead code, use version control
+def calculate_total(items):
+    # Calculate base total
+    total = sum(item.price for item in items)
+
+    # Apply discounts
+    total -= sum(item.discount for item in items if item.discount)
+
+    return total
+
+# If you need old code, check git history:
+# git log -p -- file.py
+```
+
+**Why It Matters:**
+- Clutters codebase
+- Confuses readers (is it important?)
+- Version control already tracks history
+- Can't tell if it should be used
+
+---
+
+## 4. Best Practices
+
+### 4.1 Missing Docstrings
+
+**Rule ID:** `PRACTICE_001`
+
+**Severity:** LOW
+
+**Description:** Public functions and classes should have docstrings.
+
+**Example - BAD:**
+
+```python
+# ❌ LOW: No documentation
+def calculate_discount(price, tier, referral):
+    if tier == "premium":
+        discount = 0.20
+    elif tier == "standard":
+        discount = 0.10
+    else:
+        discount = 0.05
+
+    if referral:
+        discount += 0.05
+
+    return price * (1 - discount)
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Clear documentation
+def calculate_discount(price: float, tier: str, referral: bool) -> float:
+    """Calculate final price after applying tier and referral discounts.
+
+    Args:
+        price: Base price before discounts
+        tier: Customer tier ("premium", "standard", or "basic")
+        referral: Whether customer used a referral code
+
+    Returns:
+        Final price after all discounts applied
+
+    Examples:
+        >>> calculate_discount(100.0, "premium", True)
+        75.0  # 20% tier + 5% referral = 25% total
+    """
+    if tier == "premium":
+        discount = 0.20
+    elif tier == "standard":
+        discount = 0.10
+    else:
+        discount = 0.05
+
+    if referral:
+        discount += 0.05
+
+    return price * (1 - discount)
+```
+
+**Why It Matters:**
+- Helps other developers understand code
+- Auto-generates API documentation
+- Makes code more maintainable
+- Clarifies intent and edge cases
+
+---
+
+### 4.2 Poor Variable Naming
+
+**Rule ID:** `PRACTICE_002`
+
+**Severity:** LOW
+
+**Description:** Single-letter or unclear variable names reduce readability.
+
+**Example - BAD:**
+
+```python
+# ❌ LOW: Unclear names
+def f(x, y, z):
+    a = x * y
+    b = a * z
+    c = b * 0.08
+    d = b + c
+    return d
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Descriptive names
+def calculate_order_total(item_price, quantity, tax_rate):
+    subtotal = item_price * quantity
+    taxable_amount = subtotal * tax_rate
+    tax = taxable_amount * 0.08
+    total = subtotal + tax
+    return total
+```
+
+**Why It Matters:**
+- Code reads like a story
+- No need for comments
+- Easier to spot bugs
+- Reduces cognitive load
+
+---
+
+### 4.3 PEP 8 Violations
+
+**Rule ID:** `PRACTICE_003`
+
+**Severity:** LOW
+
+**Description:** Python code should follow PEP 8 style guidelines.
+
+**Common Issues:**
+- Lines >100 characters
+- Missing whitespace around operators
+- Incorrect indentation
+- Wrong naming conventions
+
+**Example - BAD:**
+
+```python
+# ❌ LOW: Multiple PEP 8 violations
+def calculateTotal(ItemPrice,Quantity):
+    Total=ItemPrice*Quantity # No spaces around operators
+    if Total>100:return Total*0.9 # Multiple statements on one line
+    else:return Total
+```
+
+**Example - GOOD:**
+
+```python
+# ✅ Follows PEP 8
+def calculate_total(item_price, quantity):
+    """Calculate total with bulk discount."""
+    total = item_price * quantity
+
+    # Apply bulk discount for orders >100
+    if total > 100:
+        return total * 0.9
+
+    return total
+```
+
+**Why It Matters:**
+- Consistency across team
+- Easier to read
+- Industry standard
+- Tool compatibility
+
+---
+
+## 5. Severity Guidelines
+
+### Severity Levels Explained
+
+| Severity | When to Use | Action Required | Blocks Pre-Push |
+|----------|-------------|-----------------|-----------------|
+| **CRITICAL** | Security vulnerability, data loss risk | **Fix immediately** | ✅ Yes |
+| **HIGH** | Major code quality issue, high complexity | **Fix before merge** | ✅ Yes |
+| **MEDIUM** | Code smell, maintainability issue | **Fix soon** | ❌ No |
+| **LOW** | Minor style issue, missing docs | **Fix when convenient** | ❌ No |
+
+### Decision Tree
+
+```
+Is it a security vulnerability?
+├─ Yes → CRITICAL
+│
+Is it high complexity (>20) or god class (>500)?
+├─ Yes → HIGH
+│
+Does it significantly hurt maintainability?
+├─ Yes → MEDIUM
+│
+Is it a minor style or documentation issue?
+└─ Yes → LOW
+```
+
+### Examples by Severity
+
+**CRITICAL:**
+- Hardcoded API keys
+- SQL injection vulnerability
+- eval() with user input
+- Exposed passwords in code
+
+**HIGH:**
+- Cyclomatic complexity >20
+- God class >500 lines
+- Unsafe pickle usage
+- Critical logic without tests
+
+**MEDIUM:**
+- Long functions (50-100 lines)
+- 8+ function parameters
+- Deep nesting (5+ levels)
+- Duplicate code blocks
+- No error handling
+
+**LOW:**
+- Missing docstrings
+- Poor variable names (x, y, z)
+- Magic numbers
+- TODOs without context
+- PEP 8 violations
+
+---
+
+## C#, Go and Rust security rules (experimental)
+
+These rules are an experimental feature, named `lang-security`, and are off by default. Turn them on with `hefesto analyze . --experimental lang-security` or with `experimental: [lang-security]` in `.hefesto.yaml`.
+
+**Experimental** means: off by default; its results have not been measured yet; and a run without it gives the same output as a run of a release that did not have it. A name given on the command line replaces the list in `.hefesto.yaml`. An unknown name stops the run with exit code 2; a name that is no longer experimental only prints a warning. When the feature is on, the JSON report lists it in `meta.experimental` and the SARIF run in `properties.experimental`. The GitHub Action has no input for it, and the MCP server never turns it on.
+
+**Memory and time:** the rules walk the syntax tree the generic checks already built, so they add no parser. Peak resident memory of the `hefesto` process, off / on, `--severity LOW --output json`, one run each: Newtonsoft.Json `0a2e291` 106 / 107 MB (9.9 / 9.3 s), gin 73 / 73 MB (2.6 / 2.6 s), ripgrep 83 / 83 MB (3.8 / 3.9 s).
+
+With the feature on, these rules run on `.cs`, `.go` and `.rs` files, and on C and C++ files when `--experimental c-cpp` is also on (`--experimental c-cpp,lang-security`), when the `[multilang]` extra is installed. They read the syntax tree, so text inside string literals and comments never matches. Files under test paths are skipped: `test`/`tests`/`__tests__` directories and test file names (see SEC-03), plus .NET test projects (a directory ending in `.Tests`, `.Test`, `.UnitTests` or `.IntegrationTests`) and C# files named `*Tests.cs` or `*Test.cs`. The .NET test-project paths apply to these rules only; the other checks keep the SEC-03 test paths. When a rule and the generic SQL or command check report the same line, only the rule's finding is kept. A labelled measurement on 2026-11-03 (public pinned corpora, recorded seed, labels A and B) is summarised in the rule notes and CHANGELOG; several rules are below the published bar or were narrowed, so they stay experimental until a rule meets the bar in `docs/MEASUREMENT_METHOD.md`.
+
+**Measured** means: for each rule, its findings on a labelled corpus were checked by hand and reported as `correct/n`. A precision claim of 95% or more needs n ≥ 59 findings for that rule with all of them correct (the smallest n where 0 errors gives a one-sided 95% lower bound of at least 95%). Until a rule is measured, it is experimental. The method (held-out repositories, recorded seed, labels A and B, second labeller) is in `docs/MEASUREMENT_METHOD.md`; the published number is label B.
+
+| Rule | What it reports | Issue type | Severity | CWE |
+|------|-----------------|------------|----------|-----|
+| CS001 | `new SqlCommand(...)` (also OleDb, Odbc, Npgsql, MySql, Sqlite), `CommandText = ...` or `ExecuteSqlRaw`/`FromSqlRaw` whose SQL is built with `+`, `$"...{x}"` or `string.Format` | `SQL_INJECTION_RISK` | HIGH | 89 |
+| CS002 | `new BinaryFormatter()`, `SoapFormatter`, `NetDataContractSerializer`, `LosFormatter`, `ObjectStateFormatter` | `INSECURE_DESERIALIZATION` | HIGH | 502 |
+| CS003 | `Process.Start(...)` or `new ProcessStartInfo(...)` with an argument built from strings | `COMMAND_INJECTION` | MEDIUM | 78 |
+| CS004 | `MD5`, `SHA1`, `DES`, `TripleDES`, `RC2` `.Create()`/`.HashData()`, and the `*CryptoServiceProvider` / `SHA1Managed` classes | `INSECURE_CRYPTOGRAPHY` | LOW for MD5/SHA-1 (inventory); MEDIUM for DES/TripleDES/RC2 | 327 |
+| GO001 | `exec.Command` / `exec.CommandContext` running `sh`/`bash` `-c` with a string built by `fmt.Sprintf` or `+` | `COMMAND_INJECTION` | HIGH | 78 |
+| GO003 | `md5.New`/`Sum`, `sha1.New`/`Sum`, `des.NewCipher`/`NewTripleDESCipher`, `rc4.NewCipher`, only when the package is imported from `crypto/...` | `INSECURE_CRYPTOGRAPHY` | LOW for md5/sha1 (inventory); MEDIUM for des/rc4 | 327 |
+| GO004 | `InsecureSkipVerify: true` | `INSECURE_COMMUNICATION` | HIGH | 295 |
+| RS001 | `unsafe { ... }` blocks and `unsafe fn` (inventory) | `UNSAFE_CODE` | LOW | — |
+| RS002 | `mem::transmute` (any path, with or without turbofish) | `UNSAFE_CODE` | MEDIUM | 843 |
+| RS003 | `Command::new("sh"/"bash")` with `-c` and a `format!` string in the same call chain | `COMMAND_INJECTION` | HIGH | 78 |
+| CC001 | `gets(...)` (also `std::gets`) | `UNSAFE_BUFFER_FUNCTION` | HIGH | 242 |
+| CC002 | `strcpy`/`strcat`/`wcscpy`/`wcscat` whose source is not a constant string (literal, ALL-CAPS macro) and whose length is not taken with `strlen`/`strnlen` in the three statements before; `sprintf`/`vsprintf` with a literal format holding `%s` without precision; `scanf` family with `%s` or `%[` without a width | `UNSAFE_BUFFER_FUNCTION` | MEDIUM | 120 |
+| CC003 | `printf` family (`printf`, `fprintf`, `sprintf`, `snprintf`, `syslog`, `err`/`warn`...) called with a format that is not a constant string and **no arguments after it** (`printf(buf)`, `fprintf(f, msg)`, `syslog(p, msg)`). Literals, ALL-CAPS macro names, `"lit" + n`, `c ? "a" : "b"` and `_("lit")`/`gettext("lit")` count as constant; a format forwarded by a variadic or `va_list` wrapper is skipped | `FORMAT_STRING_RISK` | MEDIUM | 134 |
+| CC004 | `system`/`popen` (also `std::system`, `_popen`, `_wsystem`) whose command is not a string literal | `COMMAND_INJECTION` | HIGH | 78 |
+
+RS001 is LOW, so the default `--severity MEDIUM` hides it; use `--severity LOW` to list every `unsafe` block.
+
+Known limits:
+
+- Rust unit tests that live in the same file under `#[cfg(test)]` are **not** skipped: only the path decides what is test code, so `unsafe` blocks and `transmute` calls in an in-file `mod tests` are reported like any other code.
+- CS004 and GO003 report every use of MD5 and SHA-1 as LOW "(inventory)", the same way RS001 lists `unsafe`. The earlier MEDIUM claim was refuted by measurement. On pinned repositories (MailKit, ShareX, jellyfin, gitea, rclone; 2026-11-03), 0/20 CS004 hits and 1/24 sampled GO003 hits needed action. The rest were protocol-mandated digests (SASL DIGEST-MD5/CRAM-MD5/SCRAM-SHA-1, APOP, OAuth 1, S3 Content-MD5 and SSE-C, storage APIs) or non-security checksums and cache keys. DES, TripleDES, RC2 and RC4 stay MEDIUM. The tree does not show why a hash is computed, so the default `--severity MEDIUM` hides the inventory; use `--severity LOW` to list it. Inline `hefesto: ignore[...]` comments apply to Python files only, so they cannot silence these findings yet; `--exclude` removes a whole path and `--exclude-types INSECURE_CRYPTOGRAPHY` removes the type.
+- GO002 (Go SQL built with `fmt.Sprintf` or `+`) was dropped from v1. All 57 hits on gitea were non-actionable:
+  - 38 were DDL with internal schema identifiers.
+  - 11 were a table name interpolated, with values passed as placeholders.
+  - 5 were `setval('%s')` sequence names.
+  - 3 were `%d` row counts.
+  A narrower form (value positions only, no DDL, no `%d`) still kept 5 FP and had no true positive to keep, so it was not shipped. Go SQL lines get the generic SQL check, as without the feature.
+- Deserialization has two issue types, both CWE-502 in SARIF (`external/cwe/cwe-502`). **INSECURE_DESERIALIZATION**: deserializing untrusted data with a formatter that can create arbitrary types (CWE-502). New languages use this type; Python keeps `PICKLE_USAGE`, which flags the `import pickle` line (precision `low`).
+
+  | Language | Rule | Issue type | What is flagged | CWE |
+  |----------|------|------------|-----------------|-----|
+  | Python | `PICKLE_USAGE` | `PICKLE_USAGE` | `import pickle` / `cPickle` | 502 |
+  | C# | CS002 | `INSECURE_DESERIALIZATION` | `new BinaryFormatter()`, `SoapFormatter`, `NetDataContractSerializer`, `LosFormatter`, `ObjectStateFormatter` | 502 |
+
+C and C++ (CC001-CC004): only direct calls by name (`f(...)`, `std::f(...)`, `::f(...)`) count; `obj.f(...)` and `p->f(...)` do not. Macros are not expanded, so a call hidden behind a macro is not seen, and a macro named like a function (`#define strcpy safe_strcpy`) is still reported. Bounded calls (`snprintf`, `strncpy`, `strlcpy`, `%31s`, `%.8s`) and literal commands (`system("ls")`) are not reported.
+
+Not reported on purpose: Go SQL built from strings (GO002 was dropped, see above); a SQL or command argument that is a plain variable (`db.Query(q)`, `exec.Command("sh", "-c", cmd)`), because the tree does not show where the value came from; `Process.Start` with fixed arguments.
+
+## 📊 Quick Reference
+
+### All Rules Summary
+
+| ID | Rule | Severity | Analyzer |
+|----|------|----------|----------|
+| COMPLEXITY_001 | High Cyclomatic Complexity | MEDIUM-CRITICAL | Complexity |
+| SECURITY_001 | Hardcoded Secrets | CRITICAL | Security |
+| SECURITY_002 | SQL Injection | CRITICAL | Security |
+| SECURITY_003 | eval() Usage | CRITICAL | Security |
+| PICKLE_USAGE | Pickle import | HIGH | Security |
+| SECURITY_005 | Assert in Production | MEDIUM | Security |
+| SECURITY_006 | Bare Except | MEDIUM | Security |
+| SMELL_001 | Long Function | MEDIUM-HIGH | Code Smells |
+| SMELL_002 | Long Parameter List | LOW-HIGH | Code Smells |
+| SMELL_003 | Deep Nesting | LOW-HIGH | Code Smells |
+| SMELL_004 | Magic Numbers | LOW | Code Smells |
+| SMELL_005 | Duplicate Code | MEDIUM | Code Smells |
+| SMELL_006 | God Class | HIGH | Code Smells |
+| SMELL_007 | Incomplete TODOs | LOW | Code Smells |
+| SMELL_008 | Commented Code | LOW | Code Smells |
+| PRACTICE_001 | Missing Docstrings | LOW | Best Practices |
+| PRACTICE_002 | Poor Variable Names | LOW | Best Practices |
+| PRACTICE_003 | PEP 8 Violations | LOW | Best Practices |
+
+**Total: 18 core rules + additional pattern variations = 22+ checks**
+
+---
+
+## 🔧 Customizing Rules
+
+### Adjusting Severity Thresholds
+
+```python
+from hefesto.core.analyzer_engine import AnalyzerEngine
+
+# Only show HIGH and CRITICAL issues
+engine = AnalyzerEngine(severity_threshold="HIGH")
+
+# Show everything including LOW
+engine = AnalyzerEngine(severity_threshold="LOW")
+```
+
+### Disabling Specific Analyzers
+
+```python
+from hefesto.analyzers import (
+    ComplexityAnalyzer,
+    SecurityAnalyzer,
+    # Don't import what you don't want
+)
+
+engine = AnalyzerEngine()
+engine.register_analyzer(ComplexityAnalyzer())
+engine.register_analyzer(SecurityAnalyzer())
+# Skipped: CodeSmellAnalyzer, BestPracticesAnalyzer
+```
+
+### Suppressing findings and excluding paths or types
+
+#### Line suppression (Python only)
+
+In Python files, a comment on the line a finding is reported on suppresses
+that finding:
+
+```python
+data = pickle.loads(blob)  # hefesto: ignore[PICKLE_USAGE] blob is our own HMAC-signed cache
+```
+
+- Syntax: `# hefesto: ignore[TYPE] reason`, or `ignore[TYPE_A, TYPE_B] reason`.
+  `TYPE` is the finding type (`type` in JSON). The reason is required.
+- Only `.py` files are read. Comments in other languages change nothing.
+- Findings up to HIGH can be suppressed. **CRITICAL findings are never
+  suppressed** (for example exposed secrets or complexity above 20): fix them,
+  exclude the path, or report a false positive.
+- A function-level finding (complexity, long function) is reported on the
+  `def` line, so the comment goes on that line.
+- A directive without a reason, without `[TYPE]`, whose `TYPE` matches no
+  finding on that line, or that targets a CRITICAL finding suppresses nothing
+  and prints a warning on stderr (`meta.suppression_warnings` in JSON).
+- Suppressed findings do not count in the summary or for `--fail-on`. The text
+  summary shows `Suppressed: N`. JSON lists them per file under
+  `suppressed_issues` with `"suppressed": true` and `"suppression_reason"`,
+  and `summary.suppressed` has the count. SARIF keeps them as results with
+  `suppressions: [{"kind": "inSource", "justification": "<reason>"}]`, so
+  GitHub code scanning shows them as suppressed.
+- `hefesto pr-review` lists every suppression comment the diff adds under
+  `new_suppressions` (and on stderr); `--fail-on-new-suppressions` exits 1 when
+  there is any, so a CI job can require review before new suppressions land.
+
+#### Excluding paths and issue types
+
+To silence findings for whole paths or types:
+
+- `--exclude`: comma-separated path patterns that are not analyzed at all,
+  e.g. `hefesto analyze . --exclude tests/,docs/`.
+- `--exclude-types`: comma-separated issue types that do not fail the
+  `--fail-on` gate. The findings are still reported.
+  e.g. `hefesto analyze . --fail-on HIGH --exclude-types LONG_FUNCTION,VERY_HIGH_COMPLEXITY`.
+- `exclude` and `exclude_types` in `.hefesto.yaml` (or `.hefesto.yml`), the
+  config-file form of the two flags. Explicit flags win over the file.
+
+```yaml
+# .hefesto.yaml
+exclude:
+  - tests/
+  - docs/
+exclude_types:
+  - LONG_FUNCTION
+```
+
+---
+
+## Declaration names in tree-sitter languages
+
+For Java, Go, Rust, C#, JavaScript and TypeScript, a finding names its function,
+method or type with the name the declaration declares (the grammar's `name`
+field), not the first identifier inside it:
+
+| Declaration | Name in findings |
+|---|---|
+| C# `public async Task WriteLazy()` | `WriteLazy` |
+| Go `func (s *Server) Run()` | `Run` |
+| Go `type Server struct{}` | `Server` (a grouped `type ( ... )` is named only when it holds one spec; `type (A int; B string)` stays `<anonymous>`) |
+| Rust `impl<T> Display for Vec<T>` | `Vec` |
+| Rust `impl a::B` | `B` |
+| Rust `impl Tr for (A, B)` | no name (tuple and array types have none) |
+
+---
+
+## 📚 Related Documentation
+
+- **[Getting Started](GETTING_STARTED.md)** - Quick tutorial
+- **[Integration Guide](INTEGRATION.md)** - CLI, JSON output and Python API
+- **[CLI Reference](CLI_REFERENCE.md)** - All commands
+- **Live API Schema (OpenAPI/Swagger)** - Available at `/docs` when running `hefesto serve`. Generated automatically from code.
+
+---
+
+<div align="center">
+
+**Questions?** Check the [FAQ](FAQ.md) or [open an issue](https://github.com/artvepa80/Agents-Hefesto/issues).
+
+**Built with ❤️ by [Narapa LLC](https://narapallc.com)**
+
+</div>

@@ -1,0 +1,33 @@
+# OMEGA Guardian - Development Dependencies
+# All requirements for development and testing
+
+# Include base requirements
+-r requirements.txt
+
+# Include cloud requirements for full testing
+-r requirements-cloud.txt
+
+# Development tools
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+pytest-asyncio>=0.21.0
+
+# Code quality and formatting
+black>=23.0.0
+isort>=5.12.0
+flake8>=6.0.0
+mypy>=1.0.0
+pre-commit>=3.0.0
+
+# Documentation
+sphinx>=7.0.0
+sphinx-rtd-theme>=1.3.0
+
+# Debugging and profiling
+ipdb>=0.13.0
+memory-profiler>=0.60.0
+
+# Type checking
+types-requests>=2.31.0
+types-PyYAML>=6.0.0

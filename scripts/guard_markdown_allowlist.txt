@@ -1,0 +1,30 @@
+# Allowlist for the Markdown/skill scan in scripts/guard_public_repo.py.
+#
+# Format: <path relative to the repo root> <rule id>   (# starts a comment)
+# Rule ids: memory-md, swarm-path, iris-path, hefesto-pro, private-repo,
+#           private-repo-mention, private-pr, private-path, agent-name.
+#
+# An entry lets that one file contain that one rule. Paths under .claude/ and
+# .cursor/ (agent skills and rules) can never be listed: they must be clean.
+# Every entry below existed on main when the scan was added (2026-10-16).
+# Add new entries only for a legitimate public mention, with a reason.
+
+# Public package name of the paid add-on, named on purpose in license/docs.
+LICENSE-COMMERCIAL.md hefesto-pro
+README.md hefesto-pro
+docs/PRO_OPTIONAL_FEATURES.md hefesto-pro
+
+# Release history: past entries are not rewritten.
+CHANGELOG.md hefesto-pro
+CHANGELOG.md memory-md
+CHANGELOG.md private-pr
+CHANGELOG.md private-repo
+CHANGELOG.md private-repo-mention
+
+# Public statement that the gate's audit history is kept internally (2026-10-22).
+README.md private-repo-mention
+
+# Pre-existing docs that name private paths for context.
+# Candidates for a later cleanup PR; kept so the scan can land without rewriting history.
+docs/INTEGRATION.md iris-path
+docs/telemetry.md swarm-path

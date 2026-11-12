@@ -1,0 +1,201 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hefesto-ai"
+version = "4.22.0"
+description = "Release truth engine for AI-generated code: checks that what a project declares matches what it does, plus security and complexity analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Narapa LLC", email = "sales@narapallc.com"}
+]
+maintainers = [
+    {name = "Narapa LLC", email = "sales@narapallc.com"}
+]
+keywords = ["ai", "code-quality", "refactoring", "security", "static-analysis", "devtools"]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Code Generators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "click>=8.0.0,<9.0.0",
+    "pydantic>=2.5.0,<3.0.0",
+    "tree-sitter>=0.20.0,<1.0.0",
+    "radon>=6.0.1,<7.0.0",
+    "mccabe>=0.7.0,<1.0.0",
+    "jinja2>=3.1.2,<4.0.0",
+    "pyyaml>=6.0,<7.0",
+]
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.104.0,<1.0.0",
+    "uvicorn>=0.24.0,<1.0.0",
+    "httpx>=0.25.0,<1.0.0",
+]
+cloud = [
+    "google-cloud-bigquery>=3.13.0,<4.0.0",
+    "google-generativeai>=0.3.0,<1.0.0",
+]
+lint = [
+    "pylint>=3.0.0,<4.0.0",
+    "bandit>=1.7.5,<2.0.0",
+    "vulture>=2.10,<3.0.0",
+    "black==26.1.0",
+    "flake8>=6.1.0",
+    "isort==6.1.0",
+    "ruff>=0.8.0",
+]
+dev = [
+    "pytest>=7.4.0,<8.0.0",
+    "pytest-cov>=4.1.0,<5.0.0",
+    "pytest-asyncio>=0.21.0,<1.0.0",
+    "mypy>=1.7.0",
+    "pyyaml>=6.0,<7.0",
+    "packaging>=23.0,<25.0",
+    "types-PyYAML>=6.0,<7.0",
+    "jsonschema>=4.17,<5",
+    "build>=1.2,<2",
+    "anyio>=4.5",
+]
+ml = [
+    "numpy>=1.24.0,<3.0.0",
+    "sentence-transformers>=2.2.0,<4.0.0",
+    "torch>=2.0.0",
+]
+multilang = [
+    # 1.6.3 excluded: upstream's malformed accidental publish ships only a
+    # cp312 wheel whose top-level was renamed to `_native/`, breaking
+    # `import tree_sitter_language_pack` on Python 3.12. Tracked upstream as
+    # kreuzberg-dev/tree-sitter-language-pack#108 (closed; superseded by
+    # 1.7.0) and #116 (open). 1.7.0+ is unaffected.
+    "tree-sitter-language-pack>=1.0.0,!=1.6.3,<2.0",
+]
+# Optional: enables `hefesto analyze --format-check` (Black in check mode).
+format = [
+    "black>=24",
+]
+# Optional: local stdio MCP adapter (`hefesto-mcp`). Core deps stay the same.
+# ToolAnnotations and FastMCP.add_tool(annotations=) arrived in mcp 1.7.
+# `mcp` requires Python >=3.10, below the [project] requires-python floor (3.11),
+# so this extra does not need its own environment marker.
+mcp = [
+    "mcp>=1.7,<2",
+]
+ci = [
+    "pyyaml>=6.0,<7.0",
+    "packaging>=23.0,<25.0",
+]
+all = [
+    "hefesto-ai[server,cloud,lint,dev,ml]",
+]
+[project.scripts]
+hefesto = "hefesto.cli.main:cli"
+hefesto-mcp = "hefesto.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/artvepa80/Agents-Hefesto"
+Documentation = "https://github.com/artvepa80/Agents-Hefesto#readme"
+Repository = "https://github.com/artvepa80/Agents-Hefesto"
+Issues = "https://github.com/artvepa80/Agents-Hefesto/issues"
+
+[tool.setuptools.packages.find]
+include = ["hefesto*"]
+exclude = [
+    "hefesto.api*",
+    "hefesto.llm*",
+    "hefesto.licensing*",
+    "hefesto.omega*",
+    "hefesto.aegis*",
+    "tests*",
+    "tests_pro*",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py311', 'py312']
+required-version = "26.1.0"
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+
+# Local `ruff check` mirrors CI's `python -m flake8 hefesto tests`.
+# Flake8 reads `.flake8` (max-line-length 100, extend-ignore E203,W503) and
+# its own default ignore list. It does not read this [tool.flake8] table.
+# McCabe (C90) stays off: neither `.flake8` nor CI sets max-complexity.
+# https://docs.astral.sh/ruff/configuration/
+# https://docs.astral.sh/ruff/linter/
+# https://docs.astral.sh/ruff/faq/#how-does-ruffs-linter-compare-to-flake8
+# https://docs.astral.sh/ruff/settings/#extend-exclude
+# https://docs.astral.sh/ruff/settings/#lint_per-file-ignores
+# https://flake8.pycqa.org/en/latest/user/options.html#cmdoption-flake8-ignore
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# CI lints only `hefesto` and `tests` (`python -m flake8 hefesto tests`).
+# `ruff check` with no paths walks the tree, so these directories are omitted:
+# Flake8 does not lint them, and they are not rewritten in this change.
+extend-exclude = [
+    "scripts",
+    "examples",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # Pyflakes
+]
+# Flake8's default `--ignore` is E121,E123,E126,E226,E24,E704,W503,W504.
+# `.flake8` adds E203 (and repeats W503) via extend-ignore.
+# Ruff only implements some of those codes. Ignore the ones it implements;
+# the rest cannot fire, so they are not listed (Ruff rejects unknown selectors).
+# Not implemented here: E121, E123, E126, E704, W503, W504.
+ignore = [
+    "E203",
+    "E226",
+    "E24",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short --cov=hefesto --cov-report=html --cov-report=term"
+
+# Custom markers for different test categories
+markers = [
+    "unit: Unit tests that don't require external services",
+    "integration: Integration tests that may require external services",
+    "slow: Tests that take significant time to run",
+]

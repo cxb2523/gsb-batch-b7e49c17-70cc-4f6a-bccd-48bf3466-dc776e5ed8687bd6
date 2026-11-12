@@ -1,0 +1,62 @@
+name: COBOL corpus baseline
+
+# Runs on every PR and every push to main, without a paths filter: the
+# baseline includes non-COBOL findings (YAML, shell) of the corpora, so a change
+# to any analyzer can move it (4.16.x: the YAML_INDENTATION fix changed
+# zopeneditor-sample while this check was skipped).
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cobol-corpus-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  corpus-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HEFESTO_TELEMETRY: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install HefestoAI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Cache pinned corpora
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/hefesto-cobol-corpus
+          key: cobol-corpus-${{ hashFiles('scripts/cobol_corpus_baseline.py') }}
+
+      - name: Compare against the committed baseline
+        run: |
+          python scripts/cobol_corpus_baseline.py compare \
+            --workdir ~/.cache/hefesto-cobol-corpus \
+            --save cobol-corpus-run.json
+
+      - name: Upload the fresh run
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cobol-corpus-run
+          path: cobol-corpus-run.json
+          if-no-files-found: ignore

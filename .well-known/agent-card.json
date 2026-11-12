@@ -1,0 +1,69 @@
+{
+  "name": "HefestoAI",
+  "description": "Release truth engine for AI-generated code. Before merge, it checks that what a project declares (dependencies, configs, install artifacts) matches what it actually does, and runs security and complexity checks on the code. Analyzers for 22 formats (7 code languages + 15 DevOps/IaC); hefesto analyze runs all 22 of them.",
+  "version": "4.22.0",
+  "supportedInterfaces": [
+    {
+      "url": "https://hefestoai.narapallc.com/api/mcp-protocol",
+      "protocolBinding": "MCP",
+      "protocolVersion": "2025-11-25"
+    }
+  ],
+  "provider": {
+    "organization": "Narapa LLC",
+    "url": "https://narapallc.com"
+  },
+  "documentationUrl": "https://github.com/artvepa80/Agents-Hefesto#readme",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "analyze",
+      "name": "Analyze code",
+      "description": "MCP tool analyze: runs the open-source hefesto-ai engine (hefesto analyze --no-config, free tier) on the files you send and returns findings with rule id, severity, file, line, message and SARIF fingerprint. Limits: 20 files, 100 KB per file, 256 KB in total, 20 seconds, 10 requests per minute per IP. Nothing is stored. For a whole repository, run hefesto analyze . locally.",
+      "tags": [
+        "code-analysis",
+        "security",
+        "sarif",
+        "ci",
+        "ai-generated-code"
+      ],
+      "examples": [
+        "Analyze this Python file for hardcoded secrets and pickle imports."
+      ]
+    },
+    {
+      "id": "install",
+      "name": "Install",
+      "description": "MCP tool install: returns the install commands for the open-source package (pip install hefesto-ai, Python 3.11+). Installs nothing.",
+      "tags": [
+        "install",
+        "pip"
+      ]
+    },
+    {
+      "id": "pricing",
+      "name": "Pricing",
+      "description": "MCP tool pricing: returns current prices (Free $0, PRO $8/month per user, OMEGA $19/month). Static text.",
+      "tags": [
+        "pricing"
+      ]
+    },
+    {
+      "id": "compare",
+      "name": "Compare tools",
+      "description": "MCP tool compare: returns a short static comparison with sonarqube, snyk, github-advanced-security, semgrep, claude-code-security, coderabbit or qodo. No live lookup; no code is inspected.",
+      "tags": [
+        "comparison"
+      ]
+    }
+  ]
+}

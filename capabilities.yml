@@ -1,0 +1,200 @@
+# capabilities.yml
+# Source of truth for Hefesto capability coverage.
+# Used by scripts/verify_capabilities.py and CI parity checks.
+
+schema_version: 1
+product:
+  name: hefesto
+  package_name: hefesto-ai
+  repo: artvepa80/Agents-Hefesto
+
+coverage:
+  # Ola 1: Code languages (semantic + structural analyzers)
+  code_languages:
+    declared_count: 7
+    items:
+      - id: python
+        display: Python
+        status: GA
+      - id: typescript
+        display: TypeScript
+        status: GA
+      - id: javascript
+        display: JavaScript
+        status: GA
+      - id: java
+        display: Java
+        status: GA
+      - id: go
+        display: Go
+        status: GA
+      - id: rust
+        display: Rust
+        status: GA
+      - id: csharp
+        display: C#
+        status: GA
+
+  # Ola 2: DevOps / Config analyzers (file-format analyzers)
+  devops_formats:
+    declared_count: 11
+    items:
+      - id: dockerfile
+        display: Dockerfile
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.dockerfile_analyzer
+        file_globs: ["Dockerfile", "**/Dockerfile*"]
+      - id: jenkins_groovy
+        display: Jenkins/Groovy
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.groovy_jenkins_analyzer
+        file_globs: ["Jenkinsfile", "**/*.groovy"]
+      - id: json
+        display: JSON
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.json_analyzer
+        file_globs: ["**/*.json"]
+      - id: makefile
+        display: Makefile
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.makefile_analyzer
+        file_globs: ["Makefile", "makefile", "GNUmakefile", "**/*.mk"]
+      - id: powershell
+        display: PowerShell
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.powershell_analyzer
+        file_globs: ["**/*.ps1", "**/*.psm1", "**/*.psd1"]
+      - id: shell
+        display: Shell
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.shell_analyzer
+        file_globs: ["**/*.sh", "**/*.bash", "**/*.zsh"]
+      - id: sql
+        display: SQL
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.sql_analyzer
+        file_globs: ["**/*.sql"]
+      - id: terraform
+        display: Terraform
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.terraform_analyzer
+        file_globs: ["**/*.tf", "**/*.tfvars", "**/*.tf.json"]
+      - id: toml
+        display: TOML
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.toml_analyzer
+        file_globs: ["**/*.toml"]
+      - id: yaml
+        display: YAML
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.yaml_analyzer
+        file_globs: ["**/*.yml", "**/*.yaml"]
+      - id: cobol
+        display: COBOL
+        status: GA
+        analyzer_module: hefesto.analyzers.devops.cobol_governance_analyzer
+        file_globs: ["**/*.cbl", "**/*.cob", "**/*.cobol", "**/*.cpy", "**/*.pco"]
+
+  # Ola 4: Cloud Infrastructure analyzers
+  cloud_formats:
+    declared_count: 4
+    items:
+      - id: cloudformation
+        display: CloudFormation
+        status: GA
+        analyzer_module: hefesto.analyzers.cloud.cloudformation
+        file_globs: ["**/*.json", "**/*.yml", "**/*.yaml", "**/*.cfn.json", "**/*.cfn.yaml", "**/*.cfn.yml"]
+        notes: "Dispatched when the file has AWSTemplateFormatVersion or a Resources object whose Type starts with AWS::. See docs/design/devops-analyzers-wiring.md."
+      - id: arm
+        display: ARM Templates
+        status: GA
+        analyzer_module: hefesto.analyzers.cloud.arm
+        file_globs: ["**/*.json"]
+        notes: "Dispatched when $schema contains deploymentTemplate.json. *.tf.json stays Terraform."
+      - id: helm
+        display: Helm Charts
+        status: GA
+        analyzer_module: hefesto.analyzers.cloud.helm
+        file_globs: ["values.yaml", "values.yml", "values-*.yaml", "values-*.yml"]
+        notes: "Dispatched only when Chart.yaml is in the same directory. Chart.yaml and templates/ stay YAML."
+      - id: serverless
+        display: Serverless Framework
+        status: GA
+        analyzer_module: hefesto.analyzers.cloud.serverless
+        file_globs: ["serverless.yml", "serverless.yaml"]
+        notes: "Dispatched when the file is one mapping with service or provider and it is not CloudFormation."
+
+  # Convenience rollup (used for badges, README display, etc.)
+  totals:
+    declared_total_formats: 22
+    computed_from:
+      - coverage.code_languages.declared_count
+      - coverage.devops_formats.declared_count
+      - coverage.cloud_formats.declared_count
+
+capabilities:
+  # Keep these high-level and stable; they map to docs, pricing, and CI assertions.
+  features:
+    - id: ai_semantic_analysis
+      display: AI Analysis (semantic understanding)
+      status: GA
+      notes: "PRO only: duplicate-code detection (DUPLICATE_CODE) with local sentence-transformers embeddings; runs only with HEFESTO_TIER=professional or omega. No LLM provider is bundled; AI enrichment providers are brought by the user via the PRO EnrichmentProvider contract."
+    - id: security_scanning
+      display: Security Scanning
+      status: GA
+      checks:
+        - sql_injection
+        - hardcoded_secrets
+        - command_injection
+    - id: code_smells
+      display: Code Smells
+      status: GA
+      checks:
+        - long_functions
+        - deep_nesting
+        - high_complexity
+    - id: pre_push_hooks
+      display: Pre-Push Hooks
+      status: GA
+      notes: "Runs validation before every commit."
+    - id: rest_api
+      display: REST API
+      status: GA
+      declared_endpoints: 8
+
+quality_gates:
+  # CI parity rules; scripts should enforce these.
+  readme_parity:
+    enabled: true
+    checks:
+      - code_languages_count_matches
+      - devops_formats_count_matches
+      - total_formats_badge_matches
+      - quickstart_version_matches_latest
+  capabilities_parity:
+    enabled: true
+    checks:
+      - analyzer_modules_importable
+      - devops_analyzer_modules_discoverable
+      - declared_counts_match_discovery
+
+release_policy:
+  # Optional but useful if you want “docs-only patch” rules.
+  documentation_only_patch_allowed: true
+  requires_changelog_entry: true
+
+roadmap:
+  ola4_cloud_formats:
+    status: SHIPPED
+    items:
+      - cloudformation
+      - helm
+      - arm_templates
+      - serverless
+  # The unreleased adapter adds packaging/hefesto-mcp (uvx hefesto-mcp) and server.json packages.
+  local_stdio_mcp:
+    status: SHIPPED
+    items:
+      - analyze_local
+      - version
+      - uvx_hefesto_mcp

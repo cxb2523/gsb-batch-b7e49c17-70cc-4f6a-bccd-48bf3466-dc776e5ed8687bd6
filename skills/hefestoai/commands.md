@@ -1,0 +1,178 @@
+# HefestoAI CLI Reference
+
+Entry point: `hefesto` (installed via `pip install hefesto-ai`)
+
+## analyze
+
+Run static analysis on files or directories.
+
+```bash
+hefesto analyze <paths...> [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--severity` | MEDIUM | Minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL |
+| `--output` | text | Output format: text, json, html |
+| `--fail-on` | (none) | Exit 1 if issues at this severity or above found |
+| `--exclude` | (none) | Comma-separated patterns: tests/,docs/ |
+| `--exclude-types` | (none) | Comma-separated issue types to skip in gate |
+| `--quiet` | false | Summary only, no pipeline details |
+| `--max-issues` | all | Cap displayed issues |
+| `--save-html` | (none) | Save HTML report to file path |
+| `--enable-memory-budget-gate` | false | Enable memory budget gate (EPIC 4) |
+| `--format-check` | false | Run Black in check mode on analyzed Python files; each file Black would reformat becomes a LOW `FORMAT_DRIFT` finding. Needs `pip install "hefesto-ai[format]"` (warns and skips if Black is missing) |
+| `--config` | (auto) | Use this `.hefesto.yaml` instead of the nearest one found from the first path up to the repo root |
+| `--no-config` | false | Ignore `.hefesto.yaml` / `.hefesto.yml` files |
+
+**Config file:** `.hefesto.yaml` keys `severity`, `fail_on`, `output`,
+`exclude`, `exclude_types`, `quiet`, `max_issues`, `format_check`,
+`enable_memory_budget_gate` set the same options. Explicit flags win over the
+file; an invalid file exits 2.
+
+**Scope gating (PRO):**
+`--include-third-party`, `--include-generated`, `--include-fixtures`,
+`--scope-allow <pattern>`, `--scope-deny <pattern>`
+
+**Enrichment (PRO):**
+`--enrich off|local|remote`, `--enrich-provider <name>`,
+`--enrich-timeout <sec>`, `--enrich-cache-ttl <sec>`, `--enrich-cache-max <n>`
+
+### Examples
+
+```bash
+# Analyze current directory
+hefesto analyze .
+
+# CI gate — fail on HIGH or CRITICAL
+hefesto analyze . --fail-on HIGH --exclude tests/,docs/
+
+# JSON output for piping
+hefesto analyze src/ --output json --quiet
+
+# HTML report
+hefesto analyze . --output html --save-html report.html
+
+# Skip specific issue types in gate
+hefesto analyze . --fail-on HIGH --exclude-types VERY_HIGH_COMPLEXITY,LONG_FUNCTION
+
+# Analyze multiple paths
+hefesto analyze src/ lib/ types/
+
+# Also report Black formatting drift (opt-in); gate on it with --fail-on LOW
+hefesto analyze . --format-check --fail-on LOW
+```
+
+## init
+
+Install the git hooks (same installer as `install-hooks`) and print the plans link.
+
+```bash
+hefesto init
+```
+
+After the hooks are installed it may print one stderr line: `Plans: PRO $8/mo · OMEGA $19/mo.` and `https://hefestoai.narapallc.com/?utm_source=hefesto-cli&utm_medium=cli&utm_campaign=growth_q4_2026&utm_content=init#pricing`. That line follows the upgrade-notice rules in `docs/telemetry.md` (TTY, not CI, at most once a week). Running it again leaves hooks that already match in place.
+
+## install-hooks
+
+Install pre-commit and pre-push git hooks.
+
+```bash
+hefesto install-hooks [--force]
+```
+
+In your own project, installs the hooks shipped with the package. Pre-commit analyzes the staged files with `--fail-on HIGH` (the staged index content, not the working tree). Pre-push analyzes the repository with `--fail-on CRITICAL`. Both honour `SKIP_HEFESTO_HOOKS=1`. The contributor hooks in `scripts/git-hooks/` are used only in a clone of Agents-Hefesto. The command exits 1 when nothing was installed or when `core.hooksPath` is set.
+
+## drift
+
+Detect configuration drift in Infrastructure-as-Code.
+
+```bash
+hefesto drift <template_file> --region <aws-region> [options]
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--region` | yes | AWS region |
+| `--stack-name` | no | CloudFormation stack name |
+| `--tags` | no | Tags: key=value,key2=value2 |
+| `--fail-on` | no | Exit 2 if severity >= level (default: HIGH) |
+
+## check
+
+Verify HefestoAI installation and dependencies.
+
+```bash
+hefesto check
+```
+
+Checks: Python version (3.11+), click, pydantic, radon, bandit, vulture,
+pylint, jinja2.
+
+## check-ci-parity
+
+Compare local and CI environments for discrepancies.
+
+```bash
+hefesto check-ci-parity [--project-root <path>]
+```
+
+Compares tool versions (flake8, black, isort, pytest), flake8 config, and
+Python version. Exits 1 if HIGH priority parity issues found.
+
+## check-test-contradictions
+
+Find contradictory assertions in test suite.
+
+```bash
+hefesto check-test-contradictions [<test_directory>]
+```
+
+Default directory: `tests/`. Detects same function called with same inputs
+but different expected outputs. Exits 1 if contradictions found.
+
+## telemetry
+
+Pseudonymous usage events (random install id) are on by default. Turn them off for this machine:
+
+```bash
+hefesto telemetry disable
+```
+
+Also off when `HEFESTO_TELEMETRY=0` or `DO_NOT_TRACK=1`.
+`HEFESTO_TELEMETRY_DEBUG=1` prints the event instead of sending it.
+In the GitHub Action, telemetry is off unless the `telemetry` input is `1` or `true`.
+
+## License Management (PRO)
+
+```bash
+hefesto activate HFST-XXXX-XXXX-XXXX-XXXX-XXXX
+hefesto deactivate
+hefesto status
+hefesto info
+```
+
+The license is the `HEFESTO_LICENSE_KEY` environment variable; nothing is
+stored. `activate` checks the key format and prints the `export` line,
+`deactivate` prints the `unset` line, and `status` shows whether the Pro
+package is installed and a key is set (prefix only). `info` requires PRO.
+
+## serve (PRO)
+
+Start the HefestoAI API server.
+
+```bash
+hefesto serve [--host <addr>] [--port <port>] [--reload]
+```
+
+Requires PRO. Starts a uvicorn server with MCP, REST, and OpenAPI endpoints.
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Analysis passed (or no `--fail-on` set) |
+| 1 | Gate failure: issues at or above `--fail-on` severity found |
+| 1 | Installation/runtime error |
+| 2 | Drift detection: findings at or above threshold (`drift` command) |
+| 2 | `analyze`: invalid command-line usage or invalid `.hefesto.yaml` |

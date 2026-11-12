@@ -1,0 +1,158 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Environments
+.env
+.env.local
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+
+# Distribution
+*.tar.gz
+*.whl
+
+# Secrets (never commit these!)
+*secret*
+*credentials*
+*api_key*
+*.pem
+*.key
+
+# E2E Testing
+test_output/
+*.test.log
+
+# Scripts runtime
+scripts/*.log
+scripts/__pycache__/
+
+# Generated emails (fulfillment)
+email_*.txt
+
+# GCP Credentials
+*service-account*.json
+gcp-*.json
+bigquery-*.json
+*-credentials.json
+
+# Private Components (now in private repo)
+iris/
+omega/implementation/
+
+# BigQuery & GCP Configs
+*.bigquery.json
+bigquery_*.yaml
+gcp_config.yaml
+
+# Test/Dev Environments
+test_install_env/
+
+.env.omega
+
+
+# === OMEGA GUARDIAN CONFIGURATION (SENSITIVE) ===
+# NEVER commit .env.omega - contains license key
+.env.omega
+*.env.omega
+config/.env.omega
+
+# === PRIVATE REPOSITORY FILES ===
+# These belong in Agents-Hefesto-Pro-Private only
+# Ignore entire private/ directory (was git submodule, now removed)
+private/
+internal/
+customer_data/
+
+# === PROPRIETARY CODE (Moved to Private Repo) ===
+# License system implementation (keep only stubs public)
+**/licensing/*_ORIGINAL.py
+**/licensing/*_PRIVATE.py
+**/omega/*_ORIGINAL.py
+**/omega/*_PRIVATE.py
+
+# Backup of original implementations (if accidentally created)
+**/*_backup.py
+**/*_original.py
+
+# NOTE: Public repo contains STUB versions only:
+# - hefesto/licensing/key_generator.py (STUB)
+# - hefesto/licensing/license_validator.py (STUB)
+# - hefesto/licensing/feature_gate.py (STUB)
+# - hefesto/omega/hefesto_enricher.py (STUB)
+# - hefesto/omega/iris_alert_manager.py (STUB)
+# - hefesto/llm/license_validator.py (STUB)
+#
+# Real implementations are in: Agents-Hefesto-Pro-Private
+
+# OMEGA Guardian configuration (contains sensitive data)
+OMEGA_GUARDIAN_SETUP.md
+iris_config.yaml
+
+# TreeSitter build artifacts
+build/grammars/
+build/languages.so
+.vercel
+
+# MCP Registry tokens
+.mcpregistry_*
+.release-gate/

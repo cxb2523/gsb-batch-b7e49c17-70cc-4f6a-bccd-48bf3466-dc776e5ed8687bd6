@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Allow bypass: SKIP_HEFESTO_HOOKS=1 git push
+if [[ "${SKIP_HEFESTO_HOOKS:-0}" == "1" ]]; then
+  echo "[hefesto] SKIP_HEFESTO_HOOKS=1 set; skipping pre-push checks."
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Prefer local venv if present
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PY="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PY="python3"
+else
+  PY="python"
+fi
+
+cd "$ROOT"
+
+# Optional timeout (Linux has coreutils timeout; macOS may not)
+if command -v timeout >/dev/null 2>&1; then
+  T="timeout 120"
+else
+  T=""
+fi
+
+# --- Step 1: Boundary guard (always runs) ---
+echo "[hefesto] Running boundary guard..."
+$PY scripts/guard_public_repo.py
+
+# --- Step 2: Linters (always runs) ---
+echo "[hefesto] Running linters..."
+$T $PY -m black --check hefesto/ tests/
+$T $PY -m isort --check-only hefesto/ tests/
+$T $PY -m flake8 hefesto/ --max-line-length=100 --extend-ignore=E203,W503
+
+# --- Step 3: Tests (only if Python source changed) ---
+CHANGED=$(git diff --name-only @{push}.. -- 'hefesto/*.py' 'tests/*.py' 2>/dev/null || true)
+if [[ -n "$CHANGED" ]]; then
+  echo "[hefesto] Python files changed — running tests..."
+  $T $PY -m pytest -q -m "not integration and not slow" --tb=short --maxfail=3
+else
+  echo "[hefesto] No Python source changes — skipping tests."
+fi
+
+echo "[hefesto] Pre-push checks OK."

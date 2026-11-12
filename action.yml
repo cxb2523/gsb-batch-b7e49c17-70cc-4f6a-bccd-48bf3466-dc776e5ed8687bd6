@@ -1,0 +1,106 @@
+name: 'Hefesto Code Guardian'
+description: 'Deterministic pass/fail gate for Python, IaC, SQL and COBOL: declared-vs-real drift, secrets and risky code, with SARIF.'
+author: 'Narapa LLC'
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  target:
+    description: 'Path to analyze (file or directory)'
+    required: false
+    default: '.'
+  fail_on:
+    description: 'Exit with error if issues found at or above this severity (CRITICAL, HIGH, MEDIUM, LOW)'
+    required: false
+    default: 'CRITICAL'
+  allow_no_files:
+    description: 'true: pass --allow-no-files to hefesto analyze, so a run that analyzes no files keeps exit 0 under fail_on (for intentionally empty targets). The "no files were analyzed" warning is still printed. Default false: an empty run fails the gate.'
+    required: false
+    default: 'false'
+  allow_not_analyzed:
+    description: 'true: pass --allow-not-analyzed to hefesto analyze, so a found file that could not be analyzed (read error or analyzer failure) does not fail the gate under fail_on. The file is still listed as "Not analyzed" and warned about. Default false: such a file fails the gate (since 4.20.1).'
+    required: false
+    default: 'false'
+  min_severity:
+    description: 'Minimum severity to report (CRITICAL, HIGH, MEDIUM, LOW). INFO is accepted for backward compatibility and treated as LOW.'
+    required: false
+    default: 'LOW'
+  format:
+    description: 'Output format printed to the log (text, json, html, sarif)'
+    required: false
+    default: 'text'
+  sarif:
+    description: 'true: also write a SARIF 2.1.0 file (see sarif_file) and, unless upload_sarif is false, upload it to GitHub code scanning. Uploading needs "permissions: security-events: write".'
+    required: false
+    default: 'false'
+  sarif_file:
+    description: 'Path of the SARIF file written when sarif is true (relative to the workspace)'
+    required: false
+    default: 'hefesto.sarif'
+  upload_sarif:
+    description: 'With sarif: true, upload the SARIF file with github/codeql-action/upload-sarif (set to false to only write the file, e.g. to upload it yourself or keep it as an artifact)'
+    required: false
+    default: 'true'
+  sarif_category:
+    description: 'Code scanning category of the upload (distinguishes several Hefesto runs in one repository)'
+    required: false
+    default: 'hefesto'
+  multilang:
+    description: 'Opt-in. true: install the [multilang] extra, so TypeScript, JavaScript, Java, Go, Rust and C# files are analyzed too (their grammars are downloaded on the first run; a file whose grammar cannot be loaded is listed as not analyzed and fails fail_on). Default false: base package only, those files are skipped (parser unavailable).'
+    required: false
+    default: 'false'
+  telemetry:
+    description: 'Opt-in telemetry. Only 1 or true enables it: one anonymous ping per run (version, file count, issue count, exit code; no id) and the CLI''s pseudonymous usage events. Any other value, including the default 0, sends nothing.'
+    required: false
+    default: '0'
+
+outputs:
+  exit_code:
+    description: 'Exit code of hefesto analyze (0 = gate passed, 1 = gate failed or error, 2 = usage error)'
+    value: ${{ steps.analyze.outputs.exit_code }}
+  sarif_file:
+    description: 'Path of the SARIF file, when sarif is true and the file was written'
+    value: ${{ steps.analyze.outputs.sarif_file }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Install HefestoAI from this action's own checkout (the package is not
+    # pulled from PyPI) into a private virtualenv, so the job's Python is
+    # left untouched. Needs python3 >= 3.11 on the runner (ubuntu-latest has it).
+    # multilang: 'true' adds the [multilang] extra (opt-in, default off).
+    - name: Install HefestoAI
+      shell: bash
+      env:
+        INPUT_MULTILANG: ${{ inputs.multilang }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/action_install.sh"
+
+    - name: Run HefestoAI
+      id: analyze
+      shell: bash
+      env:
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_FAIL_ON: ${{ inputs.fail_on }}
+        INPUT_ALLOW_NO_FILES: ${{ inputs.allow_no_files }}
+        INPUT_ALLOW_NOT_ANALYZED: ${{ inputs.allow_not_analyzed }}
+        INPUT_MIN_SEVERITY: ${{ inputs.min_severity }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_SARIF: ${{ inputs.sarif }}
+        INPUT_SARIF_FILE: ${{ inputs.sarif_file }}
+        INPUT_UPLOAD_SARIF: ${{ inputs.upload_sarif }}
+        INPUT_SARIF_CATEGORY: ${{ inputs.sarif_category }}
+        INPUT_TELEMETRY: ${{ inputs.telemetry }}
+        INPUT_MULTILANG: ${{ inputs.multilang }}
+      # The virtualenv is put on PATH for this step only (not via GITHUB_PATH),
+      # so later steps of the job keep their own python.
+      run: PATH="$RUNNER_TEMP/hefesto-venv/bin:$PATH" bash "$GITHUB_ACTION_PATH/scripts/action_entrypoint.sh"
+
+    # Runs even when the gate failed, so the findings that failed it show up
+    # in Security > Code scanning. Skipped when no SARIF file was written.
+    - name: Upload SARIF to GitHub code scanning
+      if: ${{ always() && steps.analyze.outputs.sarif_file != '' && steps.analyze.outputs.upload_sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ steps.analyze.outputs.sarif_file }}
+        category: ${{ inputs.sarif_category }}

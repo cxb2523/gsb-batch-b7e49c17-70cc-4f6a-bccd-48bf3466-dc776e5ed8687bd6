@@ -1,0 +1,63 @@
+# Full-repository HefestoAI scan with results in Security > Code scanning.
+#
+# Non-blocking for now: the scan step has continue-on-error, so the job stays
+# green while a known CRITICAL finding remains on main
+# (scripts/validate_aggregates_jsonl.py:48, complexity 22). The SARIF upload
+# inside the Action runs even when the gate fails, so every finding still
+# reaches code scanning. To make this gate blocking, delete the
+# continue-on-error line. The blocking changed-file gate is dogfood.yml.
+#
+# Paths excluded from the scan live in .hefesto.yaml. This scan also leaves
+# out tests/ (step "Leave tests/ out of code scanning" below).
+
+name: Hefesto
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write  # upload SARIF to code scanning
+
+concurrency:
+  group: hefesto-scan-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hefesto-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # tests/ holds inputs that are vulnerable on purpose (SQL and command
+      # injection strings, long or complex functions) so the analyzer's own
+      # tests can assert on them. They are not findings in shipped code, so
+      # they stay out of code scanning. The Action has no exclude input, so
+      # tests/ is appended to the exclude list of .hefesto.yaml in this job's
+      # checkout only. The committed list is unchanged, so local runs and the
+      # changed-file gate still analyze tests/ (except tests/fixtures/).
+      # Patterns are whole path components: tests/ matches a directory named
+      # tests at any depth; hefesto/ has none.
+      - name: Leave tests/ out of code scanning
+        run: |
+          tail -n 1 .hefesto.yaml | grep -q '^  - ' || {
+            echo "::error::.hefesto.yaml must end with its exclude list"
+            exit 1
+          }
+          printf '  - tests/\n' >> .hefesto.yaml
+          cat .hefesto.yaml
+
+      - name: HefestoAI full scan
+        # Floating major tag. Pin a commit if policy requires it:
+        # artvepa80/Agents-Hefesto@2b72fd0910edc46ab92afc6dbeb068d6856ae3a1 # v4.20.2
+        uses: artvepa80/Agents-Hefesto@113b91b82eb7cf29267fef99a74534c7b60f5c54 # v4.20.4
+        continue-on-error: true  # remove to make the gate blocking
+        with:
+          target: .
+          fail_on: CRITICAL
+          sarif: true
+          sarif_category: hefesto

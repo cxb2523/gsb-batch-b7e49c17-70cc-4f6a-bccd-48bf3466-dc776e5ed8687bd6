@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.15"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,lint]"
+
+      - name: Guard (public repo boundary)
+        run: python scripts/guard_public_repo.py
+
+      - name: Commit metadata (PR range)
+        # Commit authors and Co-authored-by trailers in the PR must not name
+        # internal agents. Fetch the base branch's commit history only (no
+        # trees or blobs) so the shallow checkout can compute the range.
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags --unshallow --filter=tree:0 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          python scripts/guard_public_repo.py --check-commits "origin/${BASE_REF}..${HEAD_SHA}"
+
+      - name: Mypy (blocking)
+        run: python -m mypy hefesto --ignore-missing-imports
+
+      - name: Black (check)
+        run: python -m black --check hefesto tests
+
+      - name: Isort (check)
+        run: python -m isort --check-only hefesto tests
+
+      - name: Flake8
+        run: python -m flake8 hefesto tests
+
+      - name: Check Docs Emails
+        run: |
+            if grep -rIn --exclude-dir=.git --exclude-dir=venv --exclude-dir=htmlcov --include="*.md" -E "[A-Za-z0-9._%+-]+@narapa\.ai" . ; then
+              echo "❌ Found @narapa.ai emails."
+              exit 1
+            fi
+            if grep -rIn --exclude-dir=.git --exclude-dir=venv --exclude-dir=htmlcov --include="*.md" "security@narapallc\.com" . ; then
+              echo "❌ Found security@narapallc.com."
+              exit 1
+            fi
+            # sales@narapallc.com is intentionally in README/docs as enterprise contact
+
+      - name: Verify Capabilities Parity
+        run: python scripts/verify_capabilities.py
+
+      - name: Verify README Parity
+        run: python scripts/verify_readme.py
+
+      - name: Verify MCP server.json
+        run: python scripts/verify_server_json.py
+
+      - name: Pytest (unit)
+        env:
+          CI: true
+          PYTHONPATH: .
+          HEFESTO_TELEMETRY: "0"
+        run: |
+          python -m pytest -q --tb=short --maxfail=5 \
+            -m "not integration and not slow" \
+            --cov=hefesto --cov-report=xml --cov-report=term
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-${{ matrix.python-version }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  wheel-leak-check:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Assert no PRO paths in wheel
+        run: |
+          python -c "
+          import zipfile, glob, sys
+          whl = glob.glob('dist/*.whl')[0]
+          z = zipfile.ZipFile(whl)
+          suspects = [n for n in z.namelist() if any(x in n for x in ('/omega/','/aegis/','/iris/','/licensing/','/llm/','/api/'))]
+          if suspects:
+              print('LEAK DETECTED:', suspects[:20])
+              sys.exit(1)
+          print('WHEEL CLEAN — 0 suspect PRO paths')
+          "
+
+      - name: Smoke test wheel imports
+        run: |
+          pip install dist/*.whl --force-reinstall
+          python -c "
+          import hefesto
+          import hefesto.cli.main
+          import hefesto.core
+          import hefesto.analyzers
+          print('OSS_WHEEL_OK')
+          "
+
+  ci-required:
+    # Single required check for branch protection: depends on the whole
+    # matrix, so a Python version change does not require a ruleset edit.
+    if: always()
+    needs: [lint-and-test, wheel-leak-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any needed job failed, was cancelled or skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != "success" ]; then
+              echo "::error::a required job finished with result '$r'"
+              exit 1
+            fi
+          done

@@ -1,0 +1,220 @@
+# Hefesto Scripts
+
+Utility scripts for development and operations.
+
+## Available Scripts
+
+### `release_gate.py`
+Runs `hefesto analyze --output json` with no flags from main and from the branch on pinned corpora (`release_gate_corpora.txt`, fetched by SHA and only read). It ignores timing fields and exits 1 on any difference. CI: `.github/workflows/release-gate.yml`.
+
+```bash
+python scripts/release_gate.py --base origin/main --head HEAD
+```
+
+### `test_e2e.sh`
+End-to-end testing suite. Run before launch or after major changes.
+
+```bash
+./scripts/test_e2e.sh
+```
+
+**Tests:**
+- Installation & setup
+- Free tier functionality
+- License key validation
+- Professional tier activation
+- License management (activate/deactivate)
+- Feature gating
+- Stripe configuration
+- License key generation
+
+**Expected output:**
+- ✅ Passed: ~28 tests
+- ❌ Failed: 0 tests
+
+### `generate_key.py`
+Manual license key generator for customer orders.
+
+```bash
+python scripts/generate_key.py customer@email.com sub_ABC123 true
+```
+
+**Arguments:**
+1. Customer email address
+2. Stripe subscription ID (starts with `sub_`)
+3. Is founding member: `true` or `false`
+
+**Output:**
+- Generated license key
+- Ready-to-send email template
+- Customer details summary
+
+**Examples:**
+```bash
+# PRO $8/mo or OMEGA $19/mo
+python scripts/generate_key.py john@acme.com sub_1SKN true
+
+# PRO $8/mo or OMEGA $19/mo
+python scripts/generate_key.py jane@startup.io sub_1SKP false
+```
+
+## Running Tests
+
+### Full E2E Test Suite
+```bash
+cd /path/to/hefesto-standalone
+./scripts/test_e2e.sh
+```
+
+### Single Test
+```bash
+# Test CLI installation
+hefesto --help
+
+# Test license activation
+hefesto activate HFST-1234-5678-9ABC-DEF0-1234
+
+# Check license status
+hefesto status
+```
+
+## Adding New Scripts
+
+1. Create script in `scripts/`
+2. Make executable: `chmod +x scripts/your_script.sh`
+3. Add entry points to `setup.py` if CLI command
+4. Document here
+5. Test thoroughly before committing
+
+## Dependencies
+
+Scripts may require:
+- Python 3.11+
+- Bash (for .sh scripts)
+- Hefesto installed locally (`pip install -e .`)
+
+## Troubleshooting
+
+### "Command not found: hefesto"
+```bash
+pip install -e .
+```
+
+### "Permission denied"
+```bash
+chmod +x scripts/test_e2e.sh
+chmod +x scripts/generate_key.py
+```
+
+### Tests failing?
+1. Ensure you're in project root: `cd /path/to/hefesto-standalone`
+2. Install package: `pip install -e .`
+3. Check Python version: `python --version` (need 3.11+)
+4. Clear license: `hefesto deactivate` then rerun tests
+
+---
+
+## ⚠️  Private Scripts
+
+Some internal scripts are in the **private repository** for security:
+
+- **`generate_key.py`** - Real implementation in `private/scripts/`
+- **`fulfill_order.py`** - Real implementation in `private/scripts/`
+
+These scripts contain proprietary business logic and require credentials.
+
+### Access Private Scripts
+
+```bash
+# Initialize private repository submodule
+git submodule update --init
+
+# Run private scripts
+python private/scripts/generate_key.py [email] [sub_id] [is_founding]
+python private/scripts/fulfill_order.py [email] [sub_id] [is_founding]
+```
+
+For access to the private repository, contact: **sales@narapallc.com**
+
+---
+
+### `fulfill_order.py` (PRIVATE) ⭐ RECOMMENDED
+**Automated fulfillment for Hefesto Pro orders with S3 distribution.**
+
+Combines license key generation, S3 presigned URL creation, and email template generation in one command.
+
+**Prerequisites:**
+- AWS CLI configured: `aws configure`
+- boto3 installed: `pip install boto3`
+- S3 bucket `hefesto-pro-dist` with wheel uploaded
+
+**Usage:**
+```bash
+# PRO $8/mo or OMEGA $19/mo
+python scripts/fulfill_order.py john@acme.com sub_1ABC123XYZ true
+
+# PRO $8/mo or OMEGA $19/mo
+python scripts/fulfill_order.py jane@startup.io sub_1XYZ789ABC false
+```
+
+**Output:**
+1. Generates license key (HFST-XXXX-XXXX-XXXX-XXXX-XXXX)
+2. Creates S3 presigned URL (7-day expiration)
+3. Generates complete customer email with instructions
+4. Saves email to file: `email_customer_at_domain_TIMESTAMP.txt`
+
+**Fulfillment Workflow (2 minutes per customer):**
+
+```
+WHEN STRIPE PAYMENT ARRIVES:
+1. Extract: customer email + subscription ID + amount
+2. Determine tier from the Stripe price: PRO $8/mo, OMEGA $19/mo
+3. Run: python scripts/fulfill_order.py EMAIL SUB_ID TIER
+4. Open: cat email_*.txt
+5. Copy and send from support@narapallc.com
+6. Log in tracking spreadsheet
+```
+
+**Note:** Current pricing: PRO $8/mo, OMEGA $19/mo. Older prices are deprecated.
+
+**Time per customer:** ~2 minutes (fully automated key + URL + email)
+
+**Example:**
+```bash
+$ python scripts/fulfill_order.py john@acme.com sub_1SKNC8ABC true
+
+🚀 HEFESTO PRO - AUTOMATED FULFILLMENT
+═══════════════════════════════════════
+
+📝 Step 1/3: Generating license key...
+✅ License key: HFST-XXXX-XXXX-XXXX-XXXX-XXXX
+
+🔗 Step 2/3: Generating download URL...
+✅ Download URL generated (expires in 7 days)
+
+📧 Step 3/3: Generating customer email...
+
+✅ FULFILLMENT COMPLETE
+Customer:           john@acme.com
+License Key:        HFST-XXXX-XXXX-XXXX-XXXX-XXXX
+Founding Member:    Yes
+Price:              $8/mo (PRO) or $19/mo (OMEGA)
+Email saved to:     email_john_at_acme_com_20251020_183045.txt
+```
+
+---
+
+## Security Notes
+
+- Never commit generated license keys to git
+- Keep subscription IDs private
+- Use `.env` files for sensitive data (already in `.gitignore`)
+- Email files (email_*.txt) are generated locally and not tracked by git
+
+---
+
+For full documentation, see:
+- [docs/MANUAL_FULFILLMENT.md](../docs/MANUAL_FULFILLMENT.md) - Customer fulfillment process
+- [docs/STRIPE_SETUP.md](../docs/STRIPE_SETUP.md) - Stripe configuration
+- [README.md](../README.md) - Main project README
+

@@ -1,0 +1,161 @@
+# Smoke job for the [multilang] extra.
+#
+# Validates that `pip install hefesto-ai[multilang]` resolves cleanly and that
+# `tree_sitter_language_pack.get_parser(<lang>)` returns a working parser for
+# each of the 6 languages Hefesto supports through the extra.
+#
+# This job is INTENTIONALLY narrow — it does NOT validate:
+#   - Hefesto's `meta.parser_failures` surfacing (see test_parser_failures.py)
+#   - `HAS_MULTILANG=False` graceful degradation when the extra is absent
+#   - Hefesto's TreeSitterParser wrapper (redundant with integration tests)
+#   - The bridge to PRO (`hefesto.pro_optional`)
+#
+# One exception: the last step runs the unit tests that need real grammars
+# (they `importorskip("tree_sitter_language_pack")`, so lint-and-test, which
+# installs only [dev,lint], skips them). Today: EVAL_USAGE from the syntax tree.
+#
+# Naming map (three names exist for C# in this codebase; do not "correct" them):
+#   - `Language.CSHARP.value`                                    = "csharp"
+#   - `ParserFactory.GRAMMAR_NAMES[Language.CSHARP]`             = "c_sharp"
+#   - `LANG_MAP["c_sharp"]` (translates to language-pack)        = "csharp"
+#   - `tree_sitter_language_pack` manifest canonical name        = "csharp"
+# This smoke uses the manifest canonical name ("csharp", no underscore)
+# because it calls `get_parser` directly, bypassing Hefesto's layers.
+
+name: Multilang Extra Smoke
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multilang-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  multilang-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.15"]
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install [multilang] extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[multilang]"
+
+      - name: Prefetch the 6 grammars (no download during the smoke)
+        env:
+          TREE_SITTER_LANGUAGE_PACK_CACHE_DIR: ${{ runner.temp }}/tslp-cache
+        run: |
+          python - <<'PY'
+          import os, time, traceback
+          from tree_sitter_language_pack import download, downloaded_languages
+
+          langs = ["javascript", "typescript", "java", "go", "rust", "csharp"]
+          cache = os.environ["TREE_SITTER_LANGUAGE_PACK_CACHE_DIR"]
+          os.makedirs(cache, exist_ok=True)
+          last = None
+          for attempt in range(1, 4):
+              try:
+                  print(f"download({langs}) attempt {attempt}/3 (cache={cache})")
+                  download(langs)
+                  have = set(downloaded_languages())
+                  missing = [l for l in langs if l not in have]
+                  if missing:
+                      raise RuntimeError(f"still missing after download: {missing}")
+                  print("Prefetched:", ", ".join(sorted(have & set(langs))))
+                  break
+              except Exception as e:
+                  last = e
+                  print(f"attempt {attempt} failed: {type(e).__name__}: {e}")
+                  traceback.print_exc()
+                  if attempt < 3:
+                      delay = 2 ** attempt
+                      print(f"backoff {delay}s")
+                      time.sleep(delay)
+          else:
+              raise SystemExit(
+                  f"::error::Grammar prefetch failed after 3 attempts: "
+                  f"{type(last).__name__}: {last}"
+              )
+          PY
+
+      - name: Smoke — get_parser + parse for the 6 supported languages
+        env:
+          TREE_SITTER_LANGUAGE_PACK_CACHE_DIR: ${{ runner.temp }}/tslp-cache
+        run: |
+          python - <<'PY'
+          from tree_sitter_language_pack import get_parser
+
+          # Manifest canonical names (NOT Hefesto's internal LANG_MAP keys).
+          # See workflow header comment for the naming map rationale.
+          samples = {
+              "javascript": b"function f() { return 1; }",
+              "typescript": b"function f(): number { return 1; }",
+              "java":       b"class Foo { int bar() { return 1; } }",
+              "go":         b"package main\nfunc Foo() int { return 1 }\n",
+              "rust":       b"pub fn foo() -> i32 { 1 }",
+              "csharp":     b"class Foo { int Bar() { return 1; } }",
+          }
+          failures = []
+          for lang, code in samples.items():
+              try:
+                  parser = get_parser(lang)
+                  if parser is None:
+                      failures.append(f"{lang}: get_parser returned None")
+                      continue
+                  tree = parser.parse(code)
+                  if not tree.root_node.children:
+                      failures.append(f"{lang}: AST has no children (empty parse)")
+                      continue
+                  print(f"  {lang:12s} -> OK ({len(tree.root_node.children)} top-level nodes)")
+              except Exception as e:
+                  failures.append(f"{lang}: {type(e).__name__}: {e}")
+          if failures:
+              print("FAILURES:")
+              for f in failures:
+                  print(f"  - {f}")
+              raise SystemExit(1)
+          print("All 6 languages OK")
+          PY
+
+      - name: Unit tests that need the grammars
+        env:
+          TREE_SITTER_LANGUAGE_PACK_CACHE_DIR: ${{ runner.temp }}/tslp-cache
+        run: |
+          pip install -e ".[multilang,dev]"
+          python -m pytest -q -rs -p no:cacheprovider --no-cov tests/test_eval_usage_ast.py tests/test_default_exclude_vendored_js.py tests/test_zero_files_invariant.py tests/test_missing_grammar_not_analyzed.py
+
+  multilang-smoke-required:
+    # Single required check for branch protection: depends on the whole
+    # matrix, so a Python version change does not require a ruleset edit.
+    if: always()
+    needs: [multilang-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any needed job failed, was cancelled or skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != "success" ]; then
+              echo "::error::a required job finished with result '$r'"
+              exit 1
+            fi
+          done

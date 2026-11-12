@@ -1,0 +1,392 @@
+"""
+Analysis Data Models for Hefesto Analyze Command
+
+Data structures for code analysis results, issues, and reports.
+v4.4.0: Added enterprise fields (engine, rule_id, confidence, source)
+        and DevOps issue types for Ola 1 languages.
+
+Copyright 2025 Narapa LLC, Miami, Florida
+"""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
+
+
+def _utc_now_naive() -> datetime:
+    """Current UTC time as a naive datetime, same as the deprecated utcnow()."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class AnalysisIssueSeverity(str, Enum):
+    """Analysis issue severity levels."""
+
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class AnalysisIssueType(str, Enum):
+    """Types of analysis issues."""
+
+    # Complexity
+    HIGH_COMPLEXITY = "HIGH_COMPLEXITY"
+    VERY_HIGH_COMPLEXITY = "VERY_HIGH_COMPLEXITY"
+
+    # Code Smells
+    LONG_FUNCTION = "LONG_FUNCTION"
+    LONG_PARAMETER_LIST = "LONG_PARAMETER_LIST"
+    DEEP_NESTING = "DEEP_NESTING"
+    DUPLICATE_CODE = "DUPLICATE_CODE"
+    DEAD_CODE = "DEAD_CODE"
+    MAGIC_NUMBER = "MAGIC_NUMBER"
+    GOD_CLASS = "GOD_CLASS"
+    INCOMPLETE_TODO = "INCOMPLETE_TODO"
+
+    # Security
+    HARDCODED_SECRET = "HARDCODED_SECRET"
+    SQL_INJECTION_RISK = "SQL_INJECTION_RISK"
+    COMMAND_INJECTION = "COMMAND_INJECTION"
+    EVAL_USAGE = "EVAL_USAGE"
+    PICKLE_USAGE = "PICKLE_USAGE"
+    ASSERT_IN_PRODUCTION = "ASSERT_IN_PRODUCTION"
+    BARE_EXCEPT = "BARE_EXCEPT"
+
+    # Best Practices
+    MISSING_DOCSTRING = "MISSING_DOCSTRING"
+    POOR_NAMING = "POOR_NAMING"
+    STYLE_VIOLATION = "STYLE_VIOLATION"
+
+    # Formatting (opt-in via --format-check)
+    FORMAT_DRIFT = "FORMAT_DRIFT"
+
+    # YAML Issues (v4.4.0)
+    YAML_SYNTAX_ERROR = "YAML_SYNTAX_ERROR"
+    YAML_DUPLICATE_KEY = "YAML_DUPLICATE_KEY"
+    YAML_INDENTATION = "YAML_INDENTATION"
+    YAML_SECRET_EXPOSURE = "YAML_SECRET_EXPOSURE"
+    YAML_UNSAFE_COMMAND = "YAML_UNSAFE_COMMAND"
+
+    # Terraform/HCL Issues (v4.4.0)
+    TF_OPEN_SECURITY_GROUP = "TF_OPEN_SECURITY_GROUP"
+    TF_HARDCODED_SECRET = "TF_HARDCODED_SECRET"
+    TF_MISSING_ENCRYPTION = "TF_MISSING_ENCRYPTION"
+    TF_PUBLIC_ACCESS = "TF_PUBLIC_ACCESS"
+    TF_OVERLY_PERMISSIVE = "TF_OVERLY_PERMISSIVE"
+
+    # Shell Issues (v4.4.0)
+    SHELL_UNQUOTED_VARIABLE = "SHELL_UNQUOTED_VARIABLE"
+    SHELL_COMMAND_INJECTION = "SHELL_COMMAND_INJECTION"
+    SHELL_UNSAFE_TEMP = "SHELL_UNSAFE_TEMP"
+    SHELL_DEPRECATED_SYNTAX = "SHELL_DEPRECATED_SYNTAX"
+    SHELL_UNSAFE_COMMAND = "SHELL_UNSAFE_COMMAND"
+    SHELL_MISSING_SAFETY = "SHELL_MISSING_SAFETY"
+
+    # PowerShell Issues (Ola 2)
+    PS_INVOKE_EXPRESSION = "PS_INVOKE_EXPRESSION"
+    PS_REMOTE_CODE_EXECUTION = "PS_REMOTE_CODE_EXECUTION"
+    PS_COMMAND_INJECTION = "PS_COMMAND_INJECTION"
+    PS_HARDCODED_SECRET = "PS_HARDCODED_SECRET"
+    PS_EXECUTION_POLICY_BYPASS = "PS_EXECUTION_POLICY_BYPASS"
+    PS_TLS_BYPASS = "PS_TLS_BYPASS"
+
+    # Generic Security Issues (cross-language)
+    INSECURE_COMMUNICATION = "INSECURE_COMMUNICATION"
+    SECURITY_MISCONFIGURATION = "SECURITY_MISCONFIGURATION"
+    INSECURE_DESERIALIZATION = "INSECURE_DESERIALIZATION"
+    INSECURE_CRYPTOGRAPHY = "INSECURE_CRYPTOGRAPHY"
+    UNSAFE_CODE = "UNSAFE_CODE"
+    UNSAFE_BUFFER_FUNCTION = "UNSAFE_BUFFER_FUNCTION"
+    FORMAT_STRING_RISK = "FORMAT_STRING_RISK"
+
+    # Dockerfile Security
+    DOCKERFILE_INSECURE_BASE_IMAGE = "DOCKERFILE_INSECURE_BASE_IMAGE"
+    DOCKERFILE_LATEST_TAG = "DOCKERFILE_LATEST_TAG"
+    DOCKERFILE_MISSING_USER = "DOCKERFILE_MISSING_USER"
+    DOCKERFILE_PRIVILEGE_ESCALATION = "DOCKERFILE_PRIVILEGE_ESCALATION"
+    DOCKERFILE_SECRET_EXPOSURE = "DOCKERFILE_SECRET_EXPOSURE"
+    DOCKERFILE_WEAK_PERMISSIONS = "DOCKERFILE_WEAK_PERMISSIONS"
+
+    # Dockerfile Issues (v4.4.0)
+    DOCKER_LATEST_TAG = "DOCKER_LATEST_TAG"
+    DOCKER_ROOT_USER = "DOCKER_ROOT_USER"
+    DOCKER_APT_CLEANUP = "DOCKER_APT_CLEANUP"
+    DOCKER_CURL_BASH = "DOCKER_CURL_BASH"
+    DOCKER_SECRET_IN_ENV = "DOCKER_SECRET_IN_ENV"
+
+    # SQL Issues (v4.4.0)
+    SQL_SYNTAX_ERROR = "SQL_SYNTAX_ERROR"
+    SQL_DROP_WITHOUT_WHERE = "SQL_DROP_WITHOUT_WHERE"
+    SQL_SELECT_STAR = "SQL_SELECT_STAR"
+    SQL_MISSING_INDEX_HINT = "SQL_MISSING_INDEX_HINT"
+    SQL_OVERLY_PERMISSIVE_GRANT = "SQL_OVERLY_PERMISSIVE_GRANT"
+    SQL_DELETE_WITHOUT_WHERE = "SQL_DELETE_WITHOUT_WHERE"
+    SQL_UPDATE_WITHOUT_WHERE = "SQL_UPDATE_WITHOUT_WHERE"
+
+    # COBOL Governance (v4.12.0 — Phase 1)
+    COBOL_GOTO_EXCESSIVE = "COBOL_GOTO_EXCESSIVE"
+    COBOL_HARDCODED_CREDENTIALS = "COBOL_HARDCODED_CREDENTIALS"
+    COBOL_ACCEPT_UNVALIDATED = "COBOL_ACCEPT_UNVALIDATED"
+    COBOL_REDEFINES_SENSITIVE = "COBOL_REDEFINES_SENSITIVE"
+    COBOL_OCCURS_DEPENDING_ON = "COBOL_OCCURS_DEPENDING_ON"
+    COBOL_PERFORM_THRU_CHAIN = "COBOL_PERFORM_THRU_CHAIN"
+    COBOL_COPYBOOK_BLAST_RADIUS = "COBOL_COPYBOOK_BLAST_RADIUS"
+    COBOL_HARDCODED_SECRET_VALUE = "COBOL_HARDCODED_SECRET_VALUE"
+    COBOL_CONNECTION_STRING_SECRET = "COBOL_CONNECTION_STRING_SECRET"
+    COBOL_SQL_CONNECT_LITERAL_CREDENTIAL = "COBOL_SQL_CONNECT_LITERAL_CREDENTIAL"
+    COBOL_FILE_STATUS_MISSING = "COBOL_FILE_STATUS_MISSING"
+    COBOL_FILE_STATUS_UNCHECKED = "COBOL_FILE_STATUS_UNCHECKED"
+    COBOL_DEAD_CODE = "COBOL_DEAD_CODE"
+    COBOL_UNUSED_PARAGRAPH = "COBOL_UNUSED_PARAGRAPH"
+    COBOL_COPYBOOK_NOT_FOUND = "COBOL_COPYBOOK_NOT_FOUND"
+    COBOL_PLATFORM_DEPENDENT_LAYOUT = "COBOL_PLATFORM_DEPENDENT_LAYOUT"
+
+    # Reliability Drift (EPIC 4 — Resource Safety Pack v1)
+    RELIABILITY_UNBOUNDED_GLOBAL = "RELIABILITY_UNBOUNDED_GLOBAL"
+    RELIABILITY_UNBOUNDED_CACHE = "RELIABILITY_UNBOUNDED_CACHE"
+    RELIABILITY_SESSION_LIFECYCLE = "RELIABILITY_SESSION_LIFECYCLE"
+    RELIABILITY_LOGGING_HANDLER_DUP = "RELIABILITY_LOGGING_HANDLER_DUP"
+    RELIABILITY_THREAD_IN_REQUEST = "RELIABILITY_THREAD_IN_REQUEST"
+
+    # Operational Truth (Phase 1a)
+    UNDECLARED_DEPENDENCY = "UNDECLARED_DEPENDENCY"
+    DOCS_ENTRYPOINT_DRIFT = "DOCS_ENTRYPOINT_DRIFT"
+    PACKAGING_VERSION_DRIFT = "PACKAGING_VERSION_DRIFT"
+    INSTALL_ARTIFACT_DRIFT = "INSTALL_ARTIFACT_DRIFT"
+
+    # CI Parity (Phase 1b — converged from hefesto/validators/ci_parity.py)
+    CI_CONFIG_DRIFT = "CI_CONFIG_DRIFT"
+
+    # Narrow Semantic (Phase 4)
+    ATTRIBUTE_NAME_MISMATCH = "ATTRIBUTE_NAME_MISMATCH"
+    SILENT_EXCEPTION_SWALLOW = "SILENT_EXCEPTION_SWALLOW"
+
+    # Generic/External Provider
+    EXTERNAL_FINDING = "EXTERNAL_FINDING"
+
+
+@dataclass
+class AnalysisIssue:
+    """
+    Represents a single code analysis issue.
+
+    v4.4.0 Enterprise fields:
+    - engine: Source of the finding (internal:<analyzer> or provider:<name>)
+    - rule_id: External rule ID (SC2086, DL3000, etc.)
+    - confidence: Detection confidence (0.0-1.0)
+    - source: Code context (code, string_literal, template_literal, comment)
+
+    end_line: last line of the function for function-level findings.
+    """
+
+    file_path: str
+    line: int
+    column: int
+    issue_type: AnalysisIssueType
+    severity: AnalysisIssueSeverity
+    message: str
+    function_name: Optional[str] = None
+    suggestion: Optional[str] = None
+    code_snippet: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # Enterprise fields (v4.4.0)
+    engine: str = "internal"
+    rule_id: Optional[str] = None
+    confidence: Optional[float] = None
+    source: Optional[Literal["code", "string_literal", "template_literal", "comment"]] = None
+
+    # Last line of the reported construct for function-level findings
+    # (complexity, long function, deep nesting), whose ``line`` is the
+    # ``def`` line. ``hefesto pr-review`` uses it to tell whether a diff
+    # hunk touches the function. Not part of ``to_dict``.
+    end_line: Optional[int] = None
+
+    # Set when a line suppression comment (hefesto/core/suppressions.py) hid this
+    # finding; the value is the reason written in the comment.
+    suppression_reason: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        result = {
+            "file": self.file_path,
+            "line": self.line,
+            "column": self.column,
+            "type": self.issue_type.value,
+            "severity": self.severity.value,
+            "message": self.message,
+            "function": self.function_name,
+            "suggestion": self.suggestion,
+            "code_snippet": self.code_snippet,
+            "metadata": self.metadata,
+            "engine": self.engine,
+        }
+        if self.rule_id:
+            result["rule_id"] = self.rule_id
+        if self.confidence is not None:
+            result["confidence"] = self.confidence
+        if self.source:
+            result["source"] = self.source
+        if self.suppression_reason is not None:
+            result["suppressed"] = True
+            result["suppression_reason"] = self.suppression_reason
+        return result
+
+
+@dataclass
+class ProviderResult:
+    """
+    Result from an external provider execution.
+
+    Provides traceability and error handling for enterprise deployments.
+    """
+
+    provider_name: str
+    provider_version: str
+    issues: List[AnalysisIssue]
+    duration_ms: float
+    success: bool = True
+    errors: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "provider": self.provider_name,
+            "version": self.provider_version,
+            "issues_count": len(self.issues),
+            "duration_ms": self.duration_ms,
+            "success": self.success,
+            "errors": self.errors,
+        }
+
+
+@dataclass
+class FileAnalysisResult:
+    """Analysis results for a single file."""
+
+    file_path: str
+    issues: List[AnalysisIssue]
+    lines_of_code: int
+    analysis_duration_ms: float
+    language: Optional[str] = None
+    provider_results: List[ProviderResult] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    # Findings removed by a line suppression comment. Not counted anywhere.
+    suppressed_issues: List[AnalysisIssue] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        result = {
+            "file": self.file_path,
+            "issues": [issue.to_dict() for issue in self.issues],
+            "loc": self.lines_of_code,
+            "duration_ms": self.analysis_duration_ms,
+        }
+        if self.language:
+            result["language"] = self.language
+        if self.provider_results:
+            result["providers"] = [pr.to_dict() for pr in self.provider_results]
+        if self.metadata:
+            result["file_meta"] = self.metadata
+        if self.suppressed_issues:
+            result["suppressed_issues"] = [i.to_dict() for i in self.suppressed_issues]
+        return result
+
+
+@dataclass
+class AnalysisSummary:
+    """Summary statistics for analysis run."""
+
+    files_analyzed: int
+    total_issues: int
+    critical_issues: int
+    high_issues: int
+    medium_issues: int
+    low_issues: int
+    total_loc: int
+    duration_seconds: float
+    providers_used: List[str] = field(default_factory=list)
+    suppressed_issues: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        result: Dict[str, Any] = {
+            "files_analyzed": self.files_analyzed,
+            "total_issues": self.total_issues,
+            "critical": self.critical_issues,
+            "high": self.high_issues,
+            "medium": self.medium_issues,
+            "low": self.low_issues,
+            "total_loc": self.total_loc,
+            "duration_seconds": self.duration_seconds,
+            "suppressed": self.suppressed_issues,
+        }
+        if self.providers_used:
+            result["providers_used"] = self.providers_used
+        return result
+
+
+@dataclass
+class AnalysisReport:
+    """Complete analysis report."""
+
+    summary: AnalysisSummary
+    file_results: List[FileAnalysisResult]
+    timestamp: datetime = field(default_factory=_utc_now_naive)
+    # Enterprise/Pro fields
+    license_tier: str = "COMMUNITY"
+    ml_enabled: bool = False
+    phase_0_enabled: bool = True
+    phase_1_enabled: bool = False
+    # Optional metadata populated by PRO features (scope gating, multilang, etc.)
+    meta: Dict[str, Any] = field(default_factory=dict)
+    # COBOL program lineage (only when the run analyzed COBOL; see cobol_lineage).
+    lineage: Optional[Dict[str, Any]] = None
+
+    def get_all_issues(self) -> List[AnalysisIssue]:
+        """Get all issues across all files."""
+        issues = []
+        for file_result in self.file_results:
+            issues.extend(file_result.issues)
+        return issues
+
+    def get_suppressed_issues(self) -> List[AnalysisIssue]:
+        """Findings removed by line suppression comments."""
+        out: List[AnalysisIssue] = []
+        for file_result in self.file_results:
+            out.extend(file_result.suppressed_issues)
+        return out
+
+    def get_issues_by_severity(self, severity: AnalysisIssueSeverity) -> List[AnalysisIssue]:
+        """Get all issues of a specific severity."""
+        return [issue for issue in self.get_all_issues() if issue.severity == severity]
+
+    def get_issues_by_engine(self, engine: str) -> List[AnalysisIssue]:
+        """Get all issues from a specific engine/provider."""
+        return [issue for issue in self.get_all_issues() if issue.engine == engine]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        result = {
+            "summary": self.summary.to_dict(),
+            "files": [file_result.to_dict() for file_result in self.file_results],
+            "timestamp": self.timestamp.isoformat(),
+        }
+        if self.meta:
+            result["meta"] = self.meta
+        if self.lineage is not None:
+            result["lineage"] = self.lineage
+        return result
+
+
+__all__ = [
+    "AnalysisIssueSeverity",
+    "AnalysisIssueType",
+    "AnalysisIssue",
+    "ProviderResult",
+    "FileAnalysisResult",
+    "AnalysisSummary",
+    "AnalysisReport",
+]
