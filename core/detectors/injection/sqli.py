@@ -114,7 +114,32 @@ class SQLiDetector(BaseDetector):
 
     # 时间盲注检测的延迟时间（秒）
     TIME_DELAY = 5
-    TIME_THRESHOLD = 4  # 判定阈值
+    TIME_THRESHOLD = 4  # 判定阈值（默认值，可被配置覆盖）
+
+    # 时间盲注对照请求判定默认值
+    # 延迟请求相对对照请求至少需要多出的绝对耗时（秒）
+    TIME_CONTROL_MARGIN = 2.0
+    # 延迟请求相对对照请求至少需要达到的耗时倍数
+    TIME_CONTROL_RATIO = 1.5
+
+    # 布尔盲注判定默认值
+    # 同一组真假 payload 的重复轮数（至少两轮）
+    BOOLEAN_ROUNDS = 2
+    # 真假条件响应长度差占基线长度的比例阈值
+    BOOLEAN_DIFF_RATIO = 0.1
+    # 真条件响应相对基线的漂移比例阈值，超过则该轮作废
+    BOOLEAN_BASELINE_DRIFT = 0.15
+
+    # 判定依据原因标签（写入 DetectionResult.extra["reason_label"]）
+    REASON_TIME_CONFIRMED = "time_delay_vs_control_confirmed"
+    REASON_TIME_TIMEOUT_CONFIRMED = "time_timeout_vs_control_confirmed"
+    REASON_TIME_CONTROL_SLOW = "time_control_also_slow_link_issue"
+    REASON_TIME_NO_SIGNIFICANT_DELTA = "time_delay_not_significant_vs_control"
+    REASON_TIME_CONTROL_UNAVAILABLE = "time_control_request_failed"
+    REASON_BOOL_CONSISTENT = "boolean_two_rounds_consistent_diff"
+    REASON_BOOL_DIRECTION_MISMATCH = "boolean_round_directions_inconsistent"
+    REASON_BOOL_UNSTABLE_PAGE = "boolean_round_voided_baseline_drift"
+    REASON_BOOL_INSUFFICIENT_ROUNDS = "boolean_insufficient_valid_rounds"
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """初始化检测器
@@ -123,6 +148,12 @@ class SQLiDetector(BaseDetector):
             config: 配置选项
                 - max_payloads: 最大 payload 数量
                 - time_delay: 时间盲注延迟时间
+                - time_threshold: 时间盲注耗时判定阈值（秒）
+                - time_control_margin: 延迟请求相对对照请求的最小显著耗时差（秒）
+                - time_control_ratio: 延迟请求相对对照请求的最小显著耗时倍数
+                - boolean_rounds: 布尔盲注每组真假 payload 的重复轮数（>=2）
+                - boolean_diff_ratio: 布尔盲注真假长度差比例阈值
+                - boolean_baseline_drift: 布尔盲注真条件相对基线的漂移阈值
                 - check_time_based: 是否检测时间盲注
                 - check_error_based: 是否检测错误型注入
                 - check_boolean_based: 是否检测布尔盲注
@@ -144,6 +175,29 @@ class SQLiDetector(BaseDetector):
         self.check_error_based = self.config.get("check_error_based", True)
         self.check_time_based = self.config.get("check_time_based", True)
         self.check_boolean_based = self.config.get("check_boolean_based", True)
+
+        # 时间盲注阈值：未配置时沿用类属性默认值
+        self.TIME_DELAY = self.config.get("time_delay", self.TIME_DELAY)
+        self.TIME_THRESHOLD = self.config.get("time_threshold", self.TIME_THRESHOLD)
+        self.time_control_margin = self.config.get(
+            "time_control_margin", self.TIME_CONTROL_MARGIN
+        )
+        self.time_control_ratio = self.config.get(
+            "time_control_ratio", self.TIME_CONTROL_RATIO
+        )
+
+        # 布尔盲注阈值：未配置时沿用类属性默认值
+        try:
+            configured_rounds = int(self.config.get("boolean_rounds", self.BOOLEAN_ROUNDS))
+            self.boolean_rounds = max(2, configured_rounds)
+        except (TypeError, ValueError):
+            self.boolean_rounds = self.BOOLEAN_ROUNDS
+        self.boolean_diff_ratio = self.config.get(
+            "boolean_diff_ratio", self.BOOLEAN_DIFF_RATIO
+        )
+        self.boolean_baseline_drift = self.config.get(
+            "boolean_baseline_drift", self.BOOLEAN_BASELINE_DRIFT
+        )
 
     def detect(self, url: str, **kwargs) -> List[DetectionResult]:
         """检测 SQL 注入漏洞
@@ -229,7 +283,7 @@ class SQLiDetector(BaseDetector):
                 # 时间盲注检测
                 if self.check_time_based and "SLEEP" in payload.upper():
                     time_result = self._check_time_based(
-                        url, params, param_name, payload, method, headers
+                        url, params, param_name, payload, original_value, method, headers
                     )
                     if time_result:
                         results.append(time_result)
@@ -324,22 +378,110 @@ class SQLiDetector(BaseDetector):
 
         return None
 
+    @staticmethod
+    def _build_control_payload(payload: str, original_value: str) -> str:
+        """构造无延迟对照 payload
+
+        与时间盲注 payload 保持相同的注入结构，仅移除/替换数据库侧的延迟原语
+        （SLEEP / pg_sleep / BENCHMARK / WAITFOR DELAY），使对照请求在语义上
+        等价但不会触发服务端等待。无法识别延迟原语时回退到参数原始值。
+
+        Args:
+            payload: 含延迟原语的时间盲注 payload
+            original_value: 被注入参数的原始取值
+
+        Returns:
+            不含延迟原语的对照值
+        """
+        control = payload
+        # BENCHMARK(N, expr) -> 0（N 支持嵌套括号）
+        control = re.sub(
+            r"BENCHMARK\s*\(\s*\d+\s*,[^()]*\([^()]*\)[^()]*\)",
+            "0",
+            control,
+            flags=re.IGNORECASE,
+        )
+        # WAITFOR DELAY '0:0:5' -> 整句移除（MSSQL 堆叠语句，保留其余部分）
+        control = re.sub(
+            r";?\s*WAITFOR\s+DELAY\s+'[^']*'", "", control, flags=re.IGNORECASE
+        )
+        # SLEEP(N) / pg_sleep(N) -> 0
+        control = re.sub(
+            r"(?:pg_)?sleep\s*\(\s*\d+(?:\.\d+)?\s*\)",
+            "0",
+            control,
+            flags=re.IGNORECASE,
+        )
+
+        # 仍残留其他延迟原语（如未覆盖的方言）时，回退到原始参数值
+        if re.search(r"(?:pg_)?sleep|waitfor\s+delay|benchmark", control, re.IGNORECASE):
+            return str(original_value)
+        return control
+
+    def _send_timed_request(
+        self,
+        url: str,
+        request_params: Dict[str, str],
+        method: str,
+        headers: Dict[str, str],
+    ) -> Tuple[Optional[Any], float, bool]:
+        """发送请求并计时
+
+        Args:
+            url: 目标 URL
+            request_params: 完整请求参数
+            method: HTTP 方法
+            headers: 请求头
+
+        Returns:
+            (响应对象或 None, 耗时秒, 是否抛出超时异常)
+        """
+        start = time.time()
+        try:
+            if method == "GET":
+                response = self.http_client.get(url, params=request_params, headers=headers)
+            else:
+                response = self.http_client.post(url, data=request_params, headers=headers)
+            return response, time.time() - start, False
+        except DetectorTimeoutError:
+            # 超时同样需要进入对照流程，不能仅凭异常判定漏洞
+            return None, time.time() - start, True
+
+    def _delay_significantly_slower(self, delay_elapsed: float, control_elapsed: float) -> bool:
+        """判断延迟请求是否显著慢于无延迟对照请求
+
+        需同时满足绝对耗时差与相对倍数两个阈值，避免对照请求本身有几十毫秒
+        抖动时仅凭倍数造成误判。阈值均来自配置。
+        """
+        delta = delay_elapsed - control_elapsed
+        ratio = delay_elapsed / max(control_elapsed, 1e-6)
+        return delta >= self.time_control_margin and ratio >= self.time_control_ratio
+
     def _check_time_based(
         self,
         url: str,
         params: Dict[str, str],
         param_name: str,
         payload: str,
+        original_value: str,
         method: str,
         headers: Dict[str, str],
     ) -> Optional[DetectionResult]:
-        """检测时间盲注
+        """检测时间盲注（带无延迟对照请求）
+
+        判定流程:
+            1. 发送含延迟原语的请求；耗时未超阈值则该 payload 无信号。
+            2. 首次超阈值（含直接抛超时异常）时，发送一次同参数、不含 SLEEP
+               的等价对照请求。
+            3. 对照请求同样慢 -> 判定为链路问题，放弃该 payload，不产出漏洞结论。
+            4. 仅当延迟请求显著慢于对照请求时才报告漏洞。
 
         Args:
             url: 目标 URL
             params: 参数字典
             param_name: 测试参数名
             payload: 时间盲注 payload
+            original_value: 被注入参数的原始取值，用于构造对照值
             method: HTTP 方法
             headers: 请求头
 
@@ -350,109 +492,132 @@ class SQLiDetector(BaseDetector):
         test_params[param_name] = payload
 
         try:
-            start_time = time.time()
+            response, delay_elapsed, delay_timed_out = self._send_timed_request(
+                url, test_params, method, headers
+            )
 
-            if method == "GET":
-                response = self.http_client.get(url, params=test_params, headers=headers)
-            else:
-                response = self.http_client.post(url, data=test_params, headers=headers)
+            # 首次请求未超阈值且未超时：无时间盲注信号
+            if not delay_timed_out and delay_elapsed < self.TIME_THRESHOLD:
+                return None
 
-            elapsed = time.time() - start_time
+            # 首次超阈值（或直接超时）：插入无延迟对照请求
+            control_value = self._build_control_payload(payload, original_value)
+            control_params = params.copy()
+            control_params[param_name] = control_value
 
-            # 如果响应时间超过阈值，进行双重验证以排除网络抖动
-            if elapsed >= self.TIME_THRESHOLD:
-                # 二次验证: 重新发送相同 payload, 两次都超时才确认
-                try:
-                    start2 = time.time()
-                    if method == "GET":
-                        self.http_client.get(url, params=test_params, headers=headers)
-                    else:
-                        self.http_client.post(url, data=test_params, headers=headers)
-                    elapsed2 = time.time() - start2
-                except Exception:
-                    elapsed2 = time.time() - start2
+            try:
+                (
+                    control_response,
+                    control_elapsed,
+                    control_timed_out,
+                ) = self._send_timed_request(url, control_params, method, headers)
+            except DetectorConnectionError as e:
+                logger.debug(
+                    "时间盲注对照请求连接失败（%s）%s: %s",
+                    self.REASON_TIME_CONTROL_UNAVAILABLE,
+                    url,
+                    e,
+                )
+                return None
+            except HTTPError as e:
+                logger.debug(
+                    "时间盲注对照请求 HTTP 错误（%s）%s: %s",
+                    self.REASON_TIME_CONTROL_UNAVAILABLE,
+                    url,
+                    e,
+                )
+                return None
+            except Exception as e:
+                logger.warning(
+                    "时间盲注对照请求未预期错误（%s）: %s: %s",
+                    self.REASON_TIME_CONTROL_UNAVAILABLE,
+                    type(e).__name__,
+                    e,
+                )
+                return None
 
-                if elapsed2 >= self.TIME_THRESHOLD:
-                    # 两次都超时 — 高置信度
-                    request_info = self._build_request_info(
-                        method=method,
-                        url=url,
-                        headers=headers,
-                        params=test_params if method == "GET" else None,
-                        data=test_params if method != "GET" else None,
-                    )
-                    response_info = self._build_response_info(response)
-                    return self._create_result(
-                        url=url,
-                        vulnerable=True,
-                        param=param_name,
-                        payload=payload,
-                        evidence=f"双重验证: 延迟 {elapsed:.2f}s + {elapsed2:.2f}s（阈值 {self.TIME_THRESHOLD}s）",
-                        confidence=0.90,
-                        verified=True,
-                        request=request_info,
-                        response=response_info,
-                        remediation="使用参数化查询（Prepared Statements）或 ORM 框架",
-                        references=["https://owasp.org/www-community/attacks/Blind_SQL_Injection"],
-                        extra={
-                            "injection_type": "time-based",
-                            "delay": elapsed,
-                            "delay2": elapsed2,
-                        },
-                    )
-                else:
-                    # 只有一次超时 — 低置信度, 可能是网络抖动
-                    request_info = self._build_request_info(
-                        method=method,
-                        url=url,
-                        headers=headers,
-                        params=test_params if method == "GET" else None,
-                        data=test_params if method != "GET" else None,
-                    )
-                    response_info = self._build_response_info(response)
-                    return self._create_result(
-                        url=url,
-                        vulnerable=True,
-                        param=param_name,
-                        payload=payload,
-                        evidence=f"单次延迟 {elapsed:.2f}s, 二次验证 {elapsed2:.2f}s (未超阈值)",
-                        confidence=0.60,
-                        verified=False,
-                        request=request_info,
-                        response=response_info,
-                        remediation="使用参数化查询（Prepared Statements）或 ORM 框架",
-                        references=["https://owasp.org/www-community/attacks/Blind_SQL_Injection"],
-                        extra={
-                            "injection_type": "time-based",
-                            "delay": elapsed,
-                            "delay2": elapsed2,
-                        },
-                    )
-        except DetectorTimeoutError as e:
-            # 超时可能是时间盲注成功的信号，需要进一步验证
-            elapsed = time.time() - start_time
-            if elapsed >= self.TIME_THRESHOLD:
-                logger.info("时间盲注检测: 请求超时可能表明存在漏洞 %s", url)
-                request_info = self._build_request_info(
+            evidence_base = {
+                "injection_type": "time-based",
+                "payload": payload,
+                "control_payload": control_value,
+                "delay_elapsed": round(delay_elapsed, 4),
+                "control_elapsed": round(control_elapsed, 4),
+                "delay_timed_out": delay_timed_out,
+                "control_timed_out": control_timed_out,
+                "time_threshold": self.TIME_THRESHOLD,
+                "control_margin": self.time_control_margin,
+                "control_ratio": self.time_control_ratio,
+            }
+
+            def _request_info() -> Any:
+                return self._build_request_info(
                     method=method,
                     url=url,
                     headers=headers,
                     params=test_params if method == "GET" else None,
                     data=test_params if method != "GET" else None,
                 )
-                return self._create_result(
-                    url=url,
-                    vulnerable=True,
-                    param=param_name,
-                    payload=payload,
-                    evidence=f"请求超时（耗时 {elapsed:.2f} 秒），可能存在时间盲注",
-                    confidence=0.75,  # 置信度稍低，因为可能是网络问题
-                    verified=False,
-                    request=request_info,
-                    remediation="使用参数化查询（Prepared Statements）或 ORM 框架",
-                    extra={"injection_type": "time-based", "delay": elapsed, "timeout": True},
+
+            # 对照请求同样慢（超阈值或同样超时）：链路问题，放弃该 payload
+            if control_timed_out or control_elapsed >= self.TIME_THRESHOLD:
+                logger.info(
+                    "时间盲注: 对照请求同样耗时 %.2fs（延迟请求 %.2fs），"
+                    "判定为链路问题（%s），放弃 payload %s",
+                    control_elapsed,
+                    delay_elapsed,
+                    self.REASON_TIME_CONTROL_SLOW,
+                    payload,
                 )
-            logger.debug("时间盲注检测超时 %s: %s", url, e)
+                return None
+
+            # 延迟请求未显著慢于对照请求：不满足时间盲注特征
+            if not self._delay_significantly_slower(delay_elapsed, control_elapsed):
+                logger.info(
+                    "时间盲注: 延迟请求 %.2fs 未显著慢于对照请求 %.2fs（%s），"
+                    "放弃 payload %s",
+                    delay_elapsed,
+                    control_elapsed,
+                    self.REASON_TIME_NO_SIGNIFICANT_DELTA,
+                    payload,
+                )
+                return None
+
+            # 延迟请求显著慢于对照请求：判定存在时间盲注
+            if delay_timed_out:
+                reason_label = self.REASON_TIME_TIMEOUT_CONFIRMED
+                confidence = 0.85
+                verified = False
+                evidence = (
+                    f"延迟请求超时（耗时 {delay_elapsed:.2f}s），"
+                    f"无延迟对照请求仅 {control_elapsed:.2f}s，"
+                    f"显著慢于对照（阈值 {self.TIME_THRESHOLD}s）"
+                )
+            else:
+                reason_label = self.REASON_TIME_CONFIRMED
+                confidence = 0.90
+                verified = True
+                evidence = (
+                    f"延迟请求 {delay_elapsed:.2f}s 显著慢于无延迟对照请求 "
+                    f"{control_elapsed:.2f}s（阈值 {self.TIME_THRESHOLD}s，"
+                    f"最小耗时差 {self.time_control_margin}s，"
+                    f"最小倍数 {self.time_control_ratio}）"
+                )
+
+            response_info = self._build_response_info(response)
+            return self._create_result(
+                url=url,
+                vulnerable=True,
+                param=param_name,
+                payload=payload,
+                evidence=evidence,
+                confidence=confidence,
+                verified=verified,
+                request=_request_info(),
+                response=response_info,
+                remediation="使用参数化查询（Prepared Statements）或 ORM 框架",
+                references=["https://owasp.org/www-community/attacks/Blind_SQL_Injection"],
+                extra={**evidence_base, "reason_label": reason_label},
+            )
         except DetectorConnectionError as e:
             # 连接失败 - 目标可能不可达
             logger.debug("时间盲注检测连接失败 %s: %s", url, e)
@@ -466,6 +631,87 @@ class SQLiDetector(BaseDetector):
 
         return None
 
+    def _run_boolean_round(
+        self,
+        url: str,
+        params: Dict[str, str],
+        param_name: str,
+        true_payload: str,
+        false_payload: str,
+        baseline_length: int,
+        method: str,
+        headers: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """执行一轮布尔盲注真假条件对比
+
+        Args:
+            url: 目标 URL
+            params: 参数字典
+            param_name: 测试参数名
+            true_payload: 真条件 payload
+            false_payload: 假条件 payload
+            baseline_length: 基线响应长度
+            method: HTTP 方法
+            headers: 请求头
+
+        Returns:
+            本轮观测数据，包含:
+                - status: ok / void_baseline_drift / void_no_signal / error
+                - true_len / false_len: 真假条件响应长度
+                - diff: true_len - false_len
+                - diff_ratio: 长度差占基线比例
+                - baseline_drift: 真条件相对基线的漂移比例
+                - error: 请求异常信息（status 为 error 时）
+        """
+        true_params = params.copy()
+        true_params[param_name] = str(params.get(param_name, "")) + true_payload
+        false_params = params.copy()
+        false_params[param_name] = str(params.get(param_name, "")) + false_payload
+
+        try:
+            if method == "GET":
+                true_response = self.http_client.get(url, params=true_params, headers=headers)
+                false_response = self.http_client.get(url, params=false_params, headers=headers)
+            else:
+                true_response = self.http_client.post(url, data=true_params, headers=headers)
+                false_response = self.http_client.post(url, data=false_params, headers=headers)
+
+            true_len = len(true_response.text)
+            false_len = len(false_response.text)
+        except (DetectorTimeoutError, DetectorConnectionError, HTTPError) as e:
+            return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+        except (AttributeError, TypeError) as e:
+            # 响应对象属性访问错误（如 response.text 不存在）
+            return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+        diff = true_len - false_len
+        diff_ratio = abs(diff) / max(1, baseline_length)
+        baseline_drift = abs(true_len - baseline_length) / max(1, baseline_length)
+
+        round_info: Dict[str, Any] = {
+            "true_len": true_len,
+            "false_len": false_len,
+            "diff": diff,
+            "diff_ratio": round(diff_ratio, 4),
+            "baseline_drift": round(baseline_drift, 4),
+            "true_params": true_params,
+            "true_response": true_response,
+        }
+
+        # 真条件与基线漂移过大：页面本身不稳定，本轮作废
+        if baseline_drift > self.boolean_baseline_drift:
+            round_info["status"] = "void_baseline_drift"
+            round_info["reason"] = self.REASON_BOOL_UNSTABLE_PAGE
+            return round_info
+
+        # 真假长度差不显著：该组 payload 在本轮没有可区分信号，本轮作废
+        if diff_ratio <= self.boolean_diff_ratio:
+            round_info["status"] = "void_no_signal"
+            return round_info
+
+        round_info["status"] = "ok"
+        return round_info
+
     def _check_boolean_based(
         self,
         url: str,
@@ -475,7 +721,14 @@ class SQLiDetector(BaseDetector):
         method: str,
         headers: Dict[str, str],
     ) -> Optional[DetectionResult]:
-        """检测布尔盲注
+        """检测布尔盲注（多轮一致性验证）
+
+        判定流程:
+            1. 对同一组真假 payload 重复 boolean_rounds 轮（至少两轮）。
+            2. 某轮真条件与基线漂移超过阈值（页面本身不稳定）-> 该轮作废。
+            3. 某轮真假长度差不超过阈值（无可区分信号）-> 该轮作废。
+            4. 至少两轮有效且真假长度差方向一致 -> 判为可疑。
+            5. 有效轮方向不一致 -> 放弃该组 payload，不产出漏洞结论。
 
         Args:
             url: 目标 URL
@@ -507,68 +760,91 @@ class SQLiDetector(BaseDetector):
         baseline_length = len(baseline.text) if baseline else 0
 
         for true_payload, false_payload in zip(true_payloads, false_payloads):
+            rounds: List[Dict[str, Any]] = []
             try:
-                # 测试真条件
-                true_params = params.copy()
-                true_params[param_name] = str(params.get(param_name, "")) + true_payload
-
-                if method == "GET":
-                    true_response = self.http_client.get(url, params=true_params, headers=headers)
-                else:
-                    true_response = self.http_client.post(url, data=true_params, headers=headers)
-
-                # 测试假条件
-                false_params = params.copy()
-                false_params[param_name] = str(params.get(param_name, "")) + false_payload
-
-                if method == "GET":
-                    false_response = self.http_client.get(url, params=false_params, headers=headers)
-                else:
-                    false_response = self.http_client.post(url, data=false_params, headers=headers)
-
-                # 比较响应差异
-                true_len = len(true_response.text)
-                false_len = len(false_response.text)
-
-                # 如果真假条件响应明显不同，可能存在布尔盲注
-                # 使用百分比阈值而非绝对字节数, 避免动态页面误报和小响应漏报
-                diff_ratio = abs(true_len - false_len) / max(1, baseline_length)
-                baseline_drift = abs(true_len - baseline_length) / max(1, baseline_length)
-                if diff_ratio > 0.1 and baseline_drift < 0.15:
-                    request_info = self._build_request_info(
-                        method=method,
-                        url=url,
-                        headers=headers,
-                        params=true_params if method == "GET" else None,
-                        data=true_params if method != "GET" else None,
+                for round_index in range(self.boolean_rounds):
+                    round_info = self._run_boolean_round(
+                        url,
+                        params,
+                        param_name,
+                        true_payload,
+                        false_payload,
+                        baseline_length,
+                        method,
+                        headers,
                     )
-                    response_info = self._build_response_info(true_response)
-                    return self._create_result(
-                        url=url,
-                        vulnerable=True,
-                        param=param_name,
-                        payload=f"TRUE: {true_payload}, FALSE: {false_payload}",
-                        evidence=f"真条件响应长度: {true_len}, 假条件响应长度: {false_len}",
-                        confidence=0.75,
-                        verified=False,
-                        request=request_info,
-                        response=response_info,
-                        remediation="使用参数化查询（Prepared Statements）或 ORM 框架",
-                        extra={"injection_type": "boolean-based"},
-                    )
+                    round_info["round"] = round_index + 1
+                    rounds.append(round_info)
 
-            except DetectorTimeoutError as e:
-                # 请求超时
-                logger.debug("布尔盲注检测超时 %s: %s", url, e)
-            except DetectorConnectionError as e:
-                # 连接失败
-                logger.debug("布尔盲注检测连接失败 %s: %s", url, e)
-            except HTTPError as e:
-                # HTTP 错误
-                logger.debug("布尔盲注检测 HTTP 错误 %s: %s", url, e)
-            except (AttributeError, TypeError) as e:
-                # 响应对象属性访问错误
-                logger.debug("布尔盲注检测响应解析失败: %s", e)
+                valid_rounds = [r for r in rounds if r.get("status") == "ok"]
+                voided_rounds = [r for r in rounds if r.get("status") != "ok"]
+
+                # 至少两轮有效
+                if len(valid_rounds) < 2:
+                    logger.info(
+                        "布尔盲注: 有效轮数 %d 不足两轮（%s），放弃 payload 组 %s",
+                        len(valid_rounds),
+                        self.REASON_BOOL_INSUFFICIENT_ROUNDS,
+                        true_payload,
+                    )
+                    continue
+
+                # 两轮的真假长度差方向必须一致
+                directions = {1 if r["diff"] > 0 else -1 for r in valid_rounds}
+                if len(directions) != 1:
+                    logger.info(
+                        "布尔盲注: 各轮真假长度差方向不一致（%s），放弃 payload 组 %s",
+                        self.REASON_BOOL_DIRECTION_MISMATCH,
+                        true_payload,
+                    )
+                    continue
+
+                # 两轮方向一致：判为可疑
+                direction_label = "true_longer" if directions.pop() > 0 else "true_shorter"
+                round_diffs = [r["diff"] for r in valid_rounds]
+                last_valid = valid_rounds[-1]
+                true_params = last_valid.get("true_params", params)
+                request_info = self._build_request_info(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    params=true_params if method == "GET" else None,
+                    data=true_params if method != "GET" else None,
+                )
+                response_info = self._build_response_info(last_valid.get("true_response"))
+                # extra 中的轮次数据只保留可序列化的标量字段
+                rounds_evidence = [
+                    {k: v for k, v in r.items() if k not in ("true_params", "true_response")}
+                    for r in rounds
+                ]
+                return self._create_result(
+                    url=url,
+                    vulnerable=True,
+                    param=param_name,
+                    payload=f"TRUE: {true_payload}, FALSE: {false_payload}",
+                    evidence=(
+                        f"{len(valid_rounds)} 轮真假长度差方向一致（{direction_label}）: "
+                        f"各轮差值 {round_diffs}"
+                    ),
+                    confidence=0.75,
+                    verified=False,
+                    request=request_info,
+                    response=response_info,
+                    remediation="使用参数化查询（Prepared Statements）或 ORM 框架",
+                    extra={
+                        "injection_type": "boolean-based",
+                        "reason_label": self.REASON_BOOL_CONSISTENT,
+                        "rounds": rounds_evidence,
+                        "valid_rounds": len(valid_rounds),
+                        "voided_rounds": len(voided_rounds),
+                        "direction": direction_label,
+                        "round_diffs": round_diffs,
+                        "baseline_length": baseline_length,
+                        "diff_ratio_threshold": self.boolean_diff_ratio,
+                        "baseline_drift_threshold": self.boolean_baseline_drift,
+                    },
+                )
+
             except Exception as e:
                 # 捕获其他未预期异常
                 # 注意：这里使用宽泛捕获是为了单个 payload 测试失败不影响整体检测
