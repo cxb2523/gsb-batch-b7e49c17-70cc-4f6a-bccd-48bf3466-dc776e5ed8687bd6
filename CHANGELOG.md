@@ -1,0 +1,308 @@
+# Changelog
+
+All notable changes to GEO/AEO Tracker are documented here.
+
+---
+
+## [CLI 1.9.1] - 2026-11-11
+
+- npm page: badges for version, Node, zero dependencies, AI engines, agent readiness, license and GitHub stars.
+- GitHub README links to the CLI on npm.
+
+---
+
+## [1.9.0] - 2026-11-11
+
+### 🤖 CLI built for AI agents
+
+- **`help --json`** describes the whole CLI in one JSON document: every command with when to use it, flags, defaults, cost, duration, the JSON output fields, exit codes and environment. `help <command>` and `<command> --help` give the same for one command as text.
+- **JSON errors.** With `--json`, stdout is always one JSON document, errors included: `{"error":{"type","message","exitCode"}}`. Progress stays on stderr.
+- **`skill` command and Agent Skill.** `npx -y geo-aeo-tracker skill --install` writes `SKILL.md` to `~/.claude/skills/geo-aeo-tracker/`, so Claude Code reaches for the CLI when you ask about AI visibility. `--dir` writes it for other agents.
+- **`llms.txt` in the npm package** with the rules agents should follow (start free, one paid prompt first, never ask for the key in chat, how to read outages).
+- **One-prompt setup** in the README and on the npm page: paste one prompt into Claude Code, Codex or Cursor and the agent installs the skill, learns the commands, audits the site and runs a check.
+- The help text, `help --json`, flag parsing and the per-command flag check now come from one spec (`cli/src/spec.ts`), so they cannot drift.
+- The demo site's `/llms.txt` lists the CLI, and the `brightdata-platforms` route reads "4-platform".
+
+---
+
+## [1.8.0] - 2026-11-11
+
+### ⌨️ New: CLI on npm
+
+- **`npx geo-aeo-tracker`** runs the tracker from a terminal with your own Bright Data key, no deploy needed. `check` scores your brand in every AI engine, `audit` runs the GEO/AEO page audit (free), `serp` gives Google results and your rank, and `engines` lists engines and outages.
+- `--json` on every command. `check` and `audit` take `--min-score <n>` and exit 3 below it, for CI. Reads `.env.local` and `.env` from the current folder.
+- One bundled file with no runtime dependencies. Source in `cli/`; the audit, scoring and engine code is shared with the dashboard and the MCP server (`lib/server/audit.ts`, `lib/server/visibility.ts`).
+
+### 🐛 Fixed: Google rank tracking
+
+- **Your rank was missed on most queries.** Google now wraps result links in `google.com/goto` redirects, so every result looked like google.com and `targetRank` came back empty. The real site is now read from Google's display link. This fixes rank in the dashboard, Bulk SRO, Rank Signal, the MCP server and the CLI.
+- **AEO audit: sitemaps were missed on many sites.** The check only accepted a plain `<urlset>` at `/sitemap.xml`, so a sitemap index failed, and so did a sitemap declared only in robots.txt. It now accepts both and reads up to two `Sitemap:` lines from robots.txt. brightdata.com goes from 75 to 80.
+- The README banner and the in-app docs still listed Copilot and 5 engines; both now show the 4 engines.
+- **The SERP retry now works.** After a failed query Bright Data answers with a text body asking to wait 15 seconds, so the immediate retry from v1.7.0 always failed too. `fetchSerp` now retries once after 16 seconds, for every caller.
+
+---
+
+## [1.7.0] - 2026-11-10
+
+### 🔌 New: MCP server
+
+- **Your deploy is now a remote MCP server** at `/api/mcp` (Streamable HTTP, stateless, so it runs the same on one Node process or on Vercel). Four tools: `list_engines`, `check_visibility` (one prompt to every AI engine, scored like the dashboard: visibility 0 to 100, sentiment, brand and competitor mentions, cited sources, whether your site is cited), `google_serp` (organic results and your rank) and `audit_page` (the dashboard's AEO audit).
+- **Off until you set `MCP_TOKEN`.** Clients send it as `Authorization: Bearer <token>`; without the env var the route answers 503, with a wrong token 401. Demo deploys answer 403 like every API route. Rate limit 30 per minute per IP.
+- **One slow engine no longer holds up the rest.** Each engine gets 240 seconds (`MCP_ENGINE_TIMEOUT_MS`), so a stuck Bright Data snapshot comes back as that engine's error while the others return inside the route's 300-second limit. Clients that send a progress token get an update as each engine finishes.
+- `google_serp` retries once when Bright Data answers with a body that is not parsed JSON.
+
+### 🤖 Engines: matched to what Bright Data runs today
+
+- **Copilot removed.** Bright Data's scraper catalog no longer lists a Copilot scraper (dataset `gd_m7di5jy6s9geokz8w` is gone). The tracker now runs 4 engines: ChatGPT, Perplexity, Gemini and Google AI Mode. Runs saved with Copilot still show in history.
+- **Perplexity outage noted.** Bright Data's release notes list the Perplexity scraper as temporarily unavailable since 10 November 2026. It stays in the app and the README says so.
+- Grok stays out: Bright Data has listed its Grok scraper as unavailable since 14 June 2026.
+- `BRIGHT_DATA_DATASET_COPILOT` is gone from `.env.example`.
+
+### 🔧 Other
+
+- **AEO audit: the BLUF check no longer passes almost every page.** It passed at 50%, and any page with more than 100 characters of opening text scored 50%, so it passed even when its own detail said there was no direct answer. It now passes only when the opening text uses a direct-answer phrase, and shows that phrase as its value. Audit scores for pages without one drop by one check.
+- `zod` and transitive dependencies updated by `npm audit fix`; `npm audit --omit=dev` reports 0 vulnerabilities.
+
+---
+
+## [1.6.0] — 2026-10-19
+
+### 🔒 Security: public deploys can no longer run up your API bill
+
+- **Demo deploys answer 403 on every API route.** With `NEXT_PUBLIC_DEMO_ONLY=true`, `proxy.ts` now blocks all `/api/*` requests before any route runs. Before, only Rank Signal checked the flag, so a visitor could call scrape, SERP, unlocker and LLM routes and bill the deployer's keys.
+- **`/api/analyze` is no longer an open LLM proxy.** It ignores a client `model` unless it matches `OPENROUTER_MODEL` or the default, caps prompts at 20,000 characters and `maxTokens` at 2000, and keys its cache on a hash.
+- **SSRF guard rewritten** on `net.BlockList`. IPv4-mapped IPv6 (`[::ffff:7f00:1]`, `[::ffff:a9fe:a9fe]`), NAT64, 6to4 and site-local addresses were getting through. Every page scrape now passes the guard, one URL at a time.
+- **Rate limits read a client IP that is harder to spoof:** `x-vercel-forwarded-for`, then `x-real-ip`, then the last `x-forwarded-for` hop.
+- **Deadlines everywhere.** `maxDuration` on the long routes, timeouts on every upstream call, a 2 MB cap on audited pages, input length caps on every route, and upstream error bodies stay in server logs.
+- Next.js 16.4.2. `npm audit --omit=dev` reports 0 vulnerabilities.
+
+### 🐛 Fixes
+
+- **Saves are never lost to cloud sync.** Workspace state is written to the browser first; a failed cloud sync shows a notice instead of dropping the save.
+- **Bright Data error records no longer count as answers.** An error record used to echo the prompt back, which scored your brand as visible.
+- **Batch runs finish.** Jobs run 4 at a time and wait out a `429` instead of losing most of a 50-job batch to the rate limit.
+- **Whole-word scoring.** "Arc" no longer matches "search", "bad" no longer matches "badge", and overlapping aliases count once. Weights are unchanged, so some scores shift.
+- **SRO tab:** Analyze is off in the demo, and the Gemini Grounding stage no longer makes a paid call it threw away. Grounding runs through `/api/bulk-sro`.
+- **Rank Signal:** a stream that ends early saves its partial trials, failed SERP top-ups are cached for 10 minutes, and dated-passage detection no longer matches words like "market 2024".
+- New workspaces keep their brand name. The demo banner says changes are not saved.
+- Mobile layouts fixed on Documentation, Citations, Citation Opportunities and Automation. Raw markdown no longer shows in Responses.
+
+### 🤖 New: agent readiness
+
+- `AGENTS.md` (setup, env vars, routes, costs, conventions) for Claude Code, Codex, Cursor and Copilot, with `CLAUDE.md` and `.github/copilot-instructions.md` pointing to it.
+- Demo deploys serve `robots.txt` with AI-bot rules and `Content-Signal`, `sitemap.xml`, `llms.txt`, `llms-full.txt`, markdown on `Accept: text/markdown`, and `Link` headers. Private deploys get `Disallow: /` and none of these files.
+- README leads with what the tool is, compares it with Semrush and AthenaHQ, and answers common questions.
+
+### 🧪 New: Rank Signal (paired A/B feature tests)
+
+- **Which text features get a passage picked.** A new Rank Signal card in the SRO tab runs paired A/B trials on passages from your page and the top 3 competitors, topped up from the rest of the SERP top 10 when the pool is under 40 passages (up to 60): two versions that differ in one feature (a number, a named source, a freshness clause, bullets, bold query terms, …), and a judge model picks the one it would rather cite. 15 starter signals, 4 of them built in code with no rewriter call. Method after DEJAN AI's Rank Signal (dejan.ai/optimizer-sample).
+- **Honest verdicts.** Wins are scored with a Jeffreys posterior and a 95% interval, read only at 20, 30 and 40 trials (about 8% false verdicts under no effect, versus 15% when checked every trial). Weak data says "no clear effect (n=40)" or "inconclusive (reason)", never "no effect". An S00 placebo (one sentence paraphrased, same facts and length) is always shown as the calibration line for edit bias.
+- **Spend guards.** Per-run cost cap in the UI (default $5), a server clamp, an in-memory hourly cap (`RANK_SIGNAL_MAX_USD_PER_HOUR`, default $10), a model allowlist (`RANK_SIGNAL_ALLOWED_MODELS`) and 6 requests per minute per IP. Stopping a run or closing the tab aborts in-flight model calls.
+- **Persistence.** Results are stored per trial (not per verdict) and survive reloads; a "This run / All runs" toggle adds a pooled, descriptive view across runs. The demo shows DEJAN AI's published sample, relabelled D01-D17.
+- New endpoint `POST /api/rank-signal` (SSE). `fetchWithTimeout` now honours a caller's abort signal alongside its timeout.
+- `npm test` runs the new unit and integration tests (`node:test` via `tsx`), including all 17 of DEJAN AI's published rows reproduced at 3 decimals.
+
+---
+
+## [1.5.1] — 2026-10-09
+
+### 🐛 Fix: AEO Audit's AI crawler check now reads robots.txt correctly
+
+- The old check used one regex per bot and got common files wrong: an `Allow: /` for GPTBot followed by any `Disallow: /something` in another group reported GPTBot as blocked, a site-wide `User-agent: *` / `Disallow: /` reported every bot as allowed, and a missing robots.txt failed the check even though it means "crawl everything".
+- Replaced with an RFC 9309 parser (`lib/server/robots.ts`): per-agent groups with `*` fallback, longest match with Allow winning ties, `*` and `$` wildcards. It checks the audited page's own path, not just `/`.
+- Crawlers are split by what blocking them costs. The check fails only when an **answer-engine** crawler is blocked (OAI-SearchBot, ChatGPT-User, PerplexityBot, Perplexity-User, Claude-SearchBot, Claude-User, Googlebot, Google-Extended, Bingbot). Training-only crawlers (GPTBot, ClaudeBot, Applebot-Extended, Meta-ExternalAgent, CCBot, Bytespider) are listed but don't fail it, since opting out of training doesn't remove you from AI answers. Dropped the retired `anthropic-ai` token.
+- An unreachable robots.txt (5xx / network error) is now reported as such instead of guessed at.
+- Added `npm test` with unit tests for the parser (Node's built-in test runner, no new dependencies).
+
+### 📝 Engine count cleanup after the Grok removal
+
+- README, in-app docs, banner and SRO demo copy said "6 AI models"; they now say 5. The docs no longer describe the Google AI engine as "AI Overview / SGE" (it scrapes AI Mode).
+- `npm run test:scraper` dropped Grok and now falls back to the public dataset IDs, so it runs with just `BRIGHT_DATA_KEY` like the app does.
+
+### 🧹 Maintenance
+
+- `npm run lint` is back to 0 warnings: removed unused imports and made `demoMode` an explicit dependency of the workspace-loading and scheduler effects (no behaviour change; it never changes after mount).
+
+---
+
+## [1.5.0] — 2026-08-12
+
+### ⚙️ Every environment variable is now optional
+
+- **Zero-config deploy.** The Vercel deploy button no longer asks for a single key. A fresh deploy builds, boots, and lands on a working dashboard running the sample dataset; add `BRIGHT_DATA_KEY` afterwards to switch it to live data. Verified by building and booting with an empty environment.
+- **Dataset IDs ship with the app.** `BRIGHT_DATA_DATASET_*` used to be required for the main tracking path — without them every engine failed with "not configured", even though the SRO path already had defaults. All five engines now carry Bright Data's public dataset ID, with the env vars kept as an override for custom or private datasets.
+- **Zone names default sensibly.** `BRIGHT_DATA_SERP_ZONE` fell back to `serp_n8n`, a zone name that only existed on one account. It now falls back to `serp_api1`, the name Bright Data's own docs use.
+- **Missing key is a state, not an error.** With no `BRIGHT_DATA_KEY` the dashboard renders the sample dataset behind a banner explaining what to add, instead of a live dashboard whose every request fails.
+
+### 🐛 Fix: Gemini and Copilot no longer time out
+
+- The scrape client aborted at exactly 60s, which is also when Bright Data's synchronous endpoint gives up and hands back a `snapshot_id` to poll. The two slowest engines lost that handoff and failed while faster ones passed. The client now waits 90s and follows the handoff whether it arrives as a `202` or as a `200` whose body is a bare `{snapshot_id}`.
+
+### 🗑️ Removed: Grok
+
+- Grok is gone from the engine list, types, API schema, colours, and demo data. Bright Data's Grok scraper accepts a trigger and then never completes — measured live at over 6 minutes still running while every other engine finished in 15-90 seconds. Leaving it in meant a guaranteed stall on every full run.
+
+### ✅ Verified live
+
+All five remaining engines were run end to end through `/api/scrape` with **no dataset env vars set**, confirming the defaults work: ChatGPT (2,194 chars / 47 sources), Perplexity (445 / 10), Gemini (2,656 / 0 — Gemini returns answers without citations), Copilot (2,604 / 5), Google AI Mode (3,358 / 28). Geo targeting re-confirmed: the same prompt at `US` vs `GB` returns 911 vs 999/112.
+
+---
+
+## [1.4.1] — 2026-07-22
+
+### 🐛 Fix: geo-scoped tracking now actually targets the country
+
+- The Region selector was sending the country as a `geolocation` input field, which Bright Data's AI scrapers silently ignore, so every country returned the same (default) answer. Now it sends the documented `country` field with the uppercase ISO code, which the scrapers honor. Verified live: the same prompt run at `US` vs `GB` returns market-specific answers (US → 911, Verizon/AT&T/T-Mobile; GB → 999/112, EE/Vodafone/Three/O2).
+- Note: available countries vary by engine (Gemini excludes European countries, Grok is currently unavailable as a Bright Data scraper). An unsupported country is skipped for that engine while the others still run.
+
+---
+
+## [1.4.0] — 2026-07-22
+
+### 🌍 New: Geo-scoped visibility tracking
+
+- **Track AI visibility by country.** A new **Region** selector in the header runs your prompts through Bright Data from a chosen country (2-letter geolocation), so you can see how ChatGPT, Perplexity, Gemini, Copilot, Google AI, and Grok answer differently by market.
+- **"Visibility by country"** panel in Visibility Analytics — average visibility per country, highest first.
+- Each run is tagged with the country it was executed in, and the country is included in the runs CSV export.
+- 13 countries out of the box (US, GB, CA, AU, DE, FR, ES, IT, NL, BR, IN, JP, MX).
+
+> Note: geo scoping currently applies to the core multi-engine tracking path (`/api/scrape`). The SRO deep-analysis pipeline still runs US-based; per-country SRO is a planned follow-up.
+
+---
+
+## [1.3.2] — 2026-07-22
+
+### 📝 Docs / Licensing
+
+- **Added an MIT `LICENSE`.** The repo was previously unlicensed (all rights reserved by default), which blocked forking and self-hosting despite the open-source intent. (#9)
+- **Added a committed `.env.example`** with every variable documented inline, so setup is copy-paste (`cp .env.example .env`). (#8)
+- **README setup rewrite:** what each variable does, `BRIGHT_DATA_DATASET_GROK` marked optional (Bright Data does not always list a public Grok scraper), why `GEMINI_API_KEY` is needed alongside OpenRouter (it powers the Google Search grounding stage OpenRouter can't do), and how to set the SERP + Web Unlocker zones. (#8)
+- `.gitignore` now allows `.env.example` while keeping real `.env` files ignored.
+
+### 🐛 Fixes
+
+- Clearer, actionable error when an engine's dataset ID is unset: it names the engine as optional and tells you to set the env var or deselect it, instead of a generic missing-id throw.
+
+---
+
+## [1.3.1] — 2026-06-20
+
+### 🤖 Default model → Gemini 3.5 Flash
+
+- Switched the default LLM to **`gemini-3.5-flash`** everywhere (verified live on both OpenRouter and the Google Gemini API): the OpenRouter routes (`/api/analyze`, `/api/sro-analyze`, `/api/site-context`, Competitor Battlecards) now default to `google/gemini-3.5-flash`, and the SRO **Gemini Grounding** stage (`lib/server/gemini-grounding.ts`) uses `gemini-3.5-flash`. Faster and stronger at structured output than the previous mix (`kimi-k2.5` / `gemini-2.5-flash`). Still overridable via `OPENROUTER_MODEL`.
+
+---
+
+## [1.3.0] — 2026-06-20
+
+A security, reliability, and UX hardening release, plus fixes for two features
+that were broken in production (caught by an end-to-end live QA pass).
+
+### 🔒 Security
+
+- **Authenticated the cloud sync API.** `/api/state` now requires a shared secret (`STATE_SYNC_SECRET`, entered once in **Project Settings → Cloud Sync** as a passphrase). Before this, a public deployment with Supabase enabled exposed the entire KV store to anonymous read / write / delete. ⚠️ **Breaking for cloud-sync users only:** set `STATE_SYNC_SECRET` and the passphrase, or sync requests are rejected (local-first mode is unaffected).
+- **SSRF protection** on `/api/audit` (`lib/server/ssrf.ts`) — rejects internal/reserved targets (cloud metadata, localhost, private ranges) and re-validates every redirect hop.
+- **Rate limiting** on all `/api/*` routes (`proxy.ts`) to curb API-cost abuse.
+- **Fixed a data-loss race** where the initial empty state could overwrite stored data during load.
+- **Dependencies:** Next.js 16.1.6 → 16.2.9; cleared the protobufjs RCE and related advisories.
+
+### ⚡ Reliability
+
+- Hard timeouts on every external call (`lib/server/http.ts`).
+- `/api/bulk-sro` stops the SSE pipeline on client disconnect (no more burning API credits after a tab close).
+- Debounced state saves, bounded in-memory caches, NDJSON parse hardening, tightened input validation, and upstream error bodies are no longer leaked to clients.
+
+### 🎨 Design
+
+- **Overview-first dashboard** — lands on a Visibility Analytics overview instead of the prompt table.
+- New **"Visibility by AI engine"** per-model bars.
+- KPI strip + Top Movers scoped to the overview (no longer repeated on every tab); slimmer demo banner; unified color tokens (fixes SRO colors that broke in light mode).
+
+### 🐛 Fixes (found in live QA)
+
+- **SRO Analysis + Site Context were broken in production:** the OpenRouter model `google/gemini-2.0-flash-001` was retired (404 "No endpoints found"). Switched to `google/gemini-2.5-flash` (overridable via `OPENROUTER_MODEL`).
+- **Competitor Battlecards timed out:** the single combined request exceeded the edge/serverless limits. Split into per-competitor parallel requests on the Node runtime, with a reliable structured-output model via a new optional `model` param on `/api/analyze`.
+
+### 🧪 Demo
+
+- Refreshed sample data so the demo exercises every feature: populated Citation Opportunities, a full sentiment mix, an 8-point rising visibility trend, and a seeded SRO Analysis result.
+- Reframed the demo to a neutral example brand (a fictional meal-kit service) and cleared the default competitor list.
+
+### 📝 Docs / Config
+
+- Documented new env vars: `BRIGHT_DATA_SERP_ZONE`, `BRIGHT_DATA_UNLOCKER_ZONE`, `STATE_SYNC_SECRET`, and the optional `OPENROUTER_MODEL`.
+- Fixed stale repo URLs and the live-demo link.
+
+---
+
+## [1.2.0] — 2026-04-17
+
+### ✨ New: Optional Supabase cloud persistence
+
+Local-first storage (IndexedDB) remains the default. When you supply three env vars, all app state is automatically synced to your own free Supabase project — across devices, deploys, and browser clears.
+
+**What changed**
+
+- **`app/api/state/route.ts`** — new `GET / PUT / DELETE` route that proxies reads and writes to Supabase using the `service_role` key server-side. The client never calls Supabase directly. Returns `501` gracefully when cloud is not configured.
+- **`lib/server/supabase.ts`** — `getServerSupabase()` singleton; reads `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`.
+- **`lib/server/kv-store.ts`** — `kvGet` / `kvSet` / `kvDelete` helpers used by the route.
+- **`lib/client/cloud-mode.ts`** — `isCloudAvailable()` (build-time env flag) and `isCloudEnabledByUser()` (per-browser localStorage toggle, defaults to `true` when cloud is available).
+- **`lib/client/sovereign-store.ts`** — rewired to branch on `isCloudActive()`. IDB becomes a local cache when cloud is active; IDB is the authoritative fallback if the cloud route fails. Public API (`loadSovereignValue` / `saveSovereignValue` / `clearSovereignStore`) is unchanged — all existing callers work without modification.
+- **`components/dashboard/tabs/project-settings-tab.tsx`** — new **Cloud Sync** card in Project Settings. Shows setup instructions when cloud is not configured; shows an enable/disable toggle when it is.
+- **`supabase/migrations/001_kv_store.sql`** — single-table `kv_store` schema (`key TEXT PK, value JSONB, created_at, updated_at`) with an `updated_at` trigger. Paste and run in your Supabase SQL editor to set up.
+- **`package.json`** — added `@supabase/supabase-js ^2.103.3`.
+- **`README.md`** — new "☁️ Optional: Cloud persistence with Supabase" section with 5-step setup guide; architecture tree updated; API routes table updated; Cloud Sync added to nav.
+
+**Env vars needed (all optional)**
+
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key   # server-side only, never exposed to client
+NEXT_PUBLIC_CLOUD_STORAGE_ENABLED=true
+```
+
+**What is NOT synced (intentionally local)**
+
+- Theme preference
+- Workspace list / active workspace
+- The `sovereign-cloud-sync` toggle state itself
+
+---
+
+## [1.1.0] — 2026-03-22
+
+### ✨ Features
+
+- **Prompt tags** — inline tag editing on prompts; filter bar to narrow prompt list by tag
+- **Delete individual responses** — confirmation dialog guards accidental deletes
+- **Multiple website URLs** — chip-based input supporting multiple URLs per brand
+- **Structured competitors** — `Competitor` type with name, aliases, and websites fields
+
+### 🐛 Fixes
+
+- Increase Bright Data scraper timeout with exponential backoff to reduce timeout failures (#3)
+- Backward-compatible data migrations for all new data types
+
+---
+
+## [1.0.0] — 2026-03-13
+
+### ✨ Features
+
+- **SRO Analysis** — full 6-stage pipeline: Gemini Grounding → Cross-Platform Citations → SERP → Page Scraping → Site Context → LLM Analysis. Produces SRO Score (0–100) with prioritized recommendations.
+- **Parallel batch runs** — all prompt × model combos execute simultaneously via `Promise.allSettled()`
+- **Mobile-responsive** — collapsible sidebar (hamburger at `md:` breakpoint), backdrop overlay, responsive KPI grid and model toolbar
+
+### 🆕 New API routes
+
+`/api/sro-analyze`, `/api/bulk-sro` (SSE), `/api/serp`, `/api/site-context`, `/api/unlocker`, `/api/brightdata-platforms`
+
+### 🐛 Fix
+
+- Grok badge invisible in light mode (#1)
+
+---
+
+## [0.1.0] — 2026-02-14
+
+Initial release — 12-tab dashboard, 6 AI model tracking, local-first storage, demo mode, Bright Data + OpenRouter integration.
