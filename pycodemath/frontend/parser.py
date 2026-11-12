@@ -1,0 +1,783 @@
+"""Parser — natural math notation → IR.
+
+A thin layer over ``sympy.parsing``. Accepts standard mathematical
+notation (``sin(x)*x + 2^3``) and returns an ``Expr`` from the IR core.
+Guarantees round-trip: ``parse(str(parse(s))) == parse(s)``.
+"""
+
+from __future__ import annotations
+
+import keyword
+import math
+import re
+import sys
+import token as _token
+from contextlib import contextmanager
+from contextvars import ContextVar
+from tokenize import TokenError
+from typing import Iterator
+
+import sympy as sp
+from sympy import SympifyError
+from sympy.parsing.sympy_parser import (
+    _token_splittable,
+    convert_xor,
+    function_exponentiation,
+    implicit_application,
+    implicit_multiplication,
+    parse_expr,
+    split_symbols_custom,
+    standard_transformations,
+)
+
+from ..core.errors import ParseError
+from ..core.ir import Expr
+
+# Tokens that make no sense in math notation but open up an eval surface:
+# STRING/f-string (a string result would land in sympify with the FULL namespace) and
+# OP "." = attribute access (x.__class__ etc.; fractions like 1.5 are NUMBER,
+# so a decimal point does not fall in here).
+_DENIED_TOKEN_TYPES = frozenset(
+    t
+    for t in (
+        _token.STRING,
+        getattr(_token, "FSTRING_START", None),  # Python 3.12+
+    )
+    if t is not None
+)
+
+
+def _deny_unsafe_tokens(tokens, local_dict, global_dict):
+    """Guard transformation: rejects tokens outside math notation."""
+    for tok_type, tok_val in tokens:
+        if tok_type in _DENIED_TOKEN_TYPES:
+            raise ParseError(
+                f"text literals are not a mathematical expression: {tok_val!r}"
+            )
+        if tok_type == _token.OP and tok_val == ".":
+            raise ParseError(
+                "attribute access (dot) is not mathematical notation"
+            )
+    return tokens
+
+
+# --- strict mode (K1: "never guesses") ---------------------------------------
+# A multi-letter name off the whitelist used to be split into a product of
+# letters (``speed`` -> s*p*e**2*d), the price of ``2xy`` notation. It was the
+# ONE mechanism behind every silent wrong answer of the 30.10 probes:
+# ``diff speed*time dtime`` came back ``0`` with exit code 0, and
+# ``verify mass*c^2 == m*a*s*s*c^2`` came back VERIFIED. Strict mode (the
+# default everywhere: Python API, verifier, MCP, CLI) reads such a name as ONE
+# variable, the way code and every CAS read it. ``implicit on`` in the REPL
+# (``--implicit`` in one-shot, ``parse_mode(strict=False)`` in Python) brings
+# the old splitting back for hand-typed ``2xy``. Either way the REPL refuses a
+# command whose variable is visible in one reading and absent in the other
+# (``diff xy dx``), so neither reading can turn into a silent zero.
+_STRICT: ContextVar[bool] = ContextVar("pycodemath_parse_strict", default=True)
+
+
+def is_strict() -> bool:
+    """Is the parser in strict mode (multi-letter names stay one variable)?"""
+    return _STRICT.get()
+
+
+def set_strict(strict: bool) -> None:
+    """Set the parsing mode for the current context (the REPL session setting)."""
+    _STRICT.set(bool(strict))
+
+
+@contextmanager
+def parse_mode(*, strict: bool) -> Iterator[None]:
+    """Parse in strict (``True``) or implicit-splitting (``False``) mode inside the block."""
+    token = _STRICT.set(bool(strict))
+    try:
+        yield
+    finally:
+        _STRICT.reset(token)
+
+
+# letters+trailing digits (v0, x1, q2, R1, t12) stay ONE symbol in both modes.
+# Default split_symbols would break "q1" into Symbol('q') * <the digit '1'> — and the
+# digit half is built via a bare ``Number(...)`` call the whitelist's
+# global_dict does not define (only Symbol/Function/Integer/Float/Rational
+# are), so this crashed with a leaked ``NameError: name 'Number' is not
+# defined`` for EVERY variable name in this extremely common physics/
+# engineering convention. (Plain sympy without the whitelist does not crash
+# here, but is worse: it silently drops the digit — "q1" reads as "q", "q2"
+# as "2*q", so "q1*q2" becomes "2*q**2".) With implicit multiplication on,
+# pure-letter names still split (xy -> x*y); a multi-letter name CALLED
+# (foo(x)) is refused before this: _refuse_unknown_calls.
+_LETTER_DIGIT_SUFFIX = re.compile(r"[A-Za-z]+\d+")
+
+
+def _splittable(symbol: str) -> bool:
+    if _STRICT.get() or not _token_splittable(symbol):
+        return False
+    return not _LETTER_DIGIT_SUFFIX.fullmatch(symbol)
+
+
+_implicit_multiplication_application = (
+    split_symbols_custom(_splittable),
+    implicit_multiplication,
+    implicit_application,
+    function_exponentiation,
+)
+
+
+def _is_unknown_call_name(name: str, local_dict, global_dict) -> bool:
+    """Is ``name(`` a call of a function the parser does not know?
+
+    Multi-letter names only: ``x(x+1)`` and ``f(x)`` stay products (documented,
+    and the common way to write one), as do subscripted symbols (``x1(t+1)``,
+    ``x_1(a+b)``). A subscripted known function (``log_2(8)``) IS a call.
+    """
+    if name in local_dict or name in global_dict or keyword.iskeyword(name):
+        return False
+    if name.isalpha():
+        return len(name) > 1
+    head = name.split("_", 1)[0]
+    return head != name and head in _FUNCTION_NAMES
+
+
+def _refuse_unknown_calls(tokens, local_dict, global_dict):
+    """``name(`` for a name off the whitelist is a ``ParseError``, not a product.
+
+    Before this, ``zeta(2)`` read as ``2*zeta`` (a Greek letter is never split)
+    and ``foo(x)`` as ``f*o**2*x``, so ``check_equal("zeta(2)", "pi^2/6")`` was
+    REFUTED at zeta = 0 — a false proof of falsity (V4 finding). The call is
+    refused on the RAW tokens, before ``split_symbols`` takes the name apart;
+    ``besselj(0, x)`` is now refused here too, without SymPy's
+    ``SymPyDeprecationWarning`` from multiplying a tuple.
+    """
+    for i, ((tok_type, tok_val), (next_type, next_val)) in enumerate(
+        zip(tokens, tokens[1:])
+    ):
+        if tok_type != _token.NAME or next_type != _token.OP or next_val != "(":
+            continue
+        if _is_unknown_call_name(tok_val, local_dict, global_dict) or (
+            # ``N(pi, 50)``, ``f(x, y)``: a single letter before a parenthesised
+            # LIST cannot be a product — it multiplied a tuple, leaked a
+            # SymPyDeprecationWarning to stderr and failed with "can't multiply
+            # sequence" (K1, probe 41).
+            len(tok_val) == 1
+            and tok_val not in local_dict
+            and tok_val not in global_dict
+            and _has_top_level_comma(tokens, i + 1)
+        ):
+            command = _COMMAND_FOR_CALL.get(tok_val)
+            if command is not None:
+                # ``sum(k^3, (k, 0, n))`` is a SymPy/Python spelling of something
+                # the grammar has a COMMAND for; "write sum*(...)" pointed at a
+                # product nobody meant (0.5.1, from a hands-on session).
+                raise ParseError(
+                    f"{tok_val}(...) is not part of an expression here — "
+                    f"use the command: {command}"
+                )
+            raise ParseError(
+                f"unknown function {tok_val!r} — write {tok_val}*(...) "
+                "if a product is meant"
+            )
+    return tokens
+
+
+#: Calls written the SymPy/Python way that the CLI answers with a command instead.
+_SUM_COMMAND = "sum <expr> for <k> from <lo> to <hi>"
+_INTEGRATE_COMMAND = ("integrate <expr> dx from <a> to <b> "
+                      "(or integrate <expr> dx for an antiderivative)")
+_COMMAND_FOR_CALL = {
+    "sum": _SUM_COMMAND, "Sum": _SUM_COMMAND, "summation": _SUM_COMMAND,
+    "integrate": _INTEGRATE_COMMAND, "Integral": _INTEGRATE_COMMAND,
+    "integral": _INTEGRATE_COMMAND,
+}
+
+
+def _has_top_level_comma(tokens, open_at: int) -> bool:
+    """Does the bracket group opened at ``tokens[open_at]`` hold a comma at depth 1?"""
+    depth = 0
+    for tok_type, tok_val in tokens[open_at:]:
+        if tok_type != _token.OP:
+            continue
+        if tok_val in "([":
+            depth += 1
+        elif tok_val in ")]":
+            depth -= 1
+            if depth == 0:
+                return False
+        elif tok_val == "," and depth == 1:
+            return True
+    return False
+
+
+def _is_word(name: str, local_dict, global_dict) -> bool:
+    """A multi-letter, purely alphabetic name the parser does not know."""
+    return (
+        len(name) > 1
+        and name.isalpha()
+        and name not in local_dict
+        and name not in global_dict
+        and not keyword.iskeyword(name)
+    )
+
+
+def _refuse_juxtaposed_words(tokens, local_dict, global_dict):
+    """Two terms side by side with an unknown WORD among them is a ``ParseError``.
+
+    On the raw tokens two adjacent NAMEs (or a NAME then a NUMBER) were written
+    with a space between them — the tokenizer would have merged them otherwise.
+    With an unknown word on either side that is not notation, it is prose or a
+    command the grammar does not have: ``factor 2^64+1`` read as
+    ``factor*2^64 + 1``, ``5 km/h to m/s`` as ``5*km*to*m/(h*s)``, ``latex x^2/2``
+    as ``latex*x**3/2`` — answers with exit code 0 (K1, the 30.10 probes). A
+    known function keeps its implicit application (``sin x``), single letters
+    keep juxtaposition (``x y``). Checked in both parsing modes.
+    """
+    for (a_type, a_val), (b_type, b_val) in zip(tokens, tokens[1:]):
+        if a_type != _token.NAME or b_type not in (_token.NAME, _token.NUMBER):
+            continue
+        if _is_word(a_val, local_dict, global_dict) or (
+            b_type == _token.NAME and _is_word(b_val, local_dict, global_dict)
+        ):
+            raise ParseError(
+                f"'{a_val} {b_val}': two terms side by side with a word that is "
+                f"not a known function — write {a_val}*{b_val} if a product is "
+                f"meant (or type 'help' for the commands)"
+            )
+    return tokens
+
+
+def _refuse_bare_function_names(tokens, local_dict, global_dict):
+    """A whitelisted function name with no argument is a ``ParseError``.
+
+    Runs LAST, after ``implicit_application`` has turned ``sin x`` into
+    ``sin(x)`` and ``function_exponentiation`` ``sin^2 x`` into ``sin(x)**2``: a
+    function name not followed by ``(`` here has no argument. Before this, ``sin``
+    evaluated to the function CLASS, and the cost guard iterating its ``args``
+    (a ``property``) leaked a raw ``TypeError`` (V5 finding: ``sin``, ``log``,
+    ``Abs``, ``(sqrt)``); ``2*cos`` was a refusal quoting SymPy. The constructors
+    the token transforms emit (``Symbol``, ``Integer``, ...) typed bare leaked the
+    same way and are refused alike; the transforms' own always carry ``(``.
+    """
+    for i, (tok_type, tok_val) in enumerate(tokens):
+        if tok_type == _token.NAME and tok_val in _CALLABLE_NAMES:
+            following = tokens[i + 1] if i + 1 < len(tokens) else (None, None)
+            if tuple(following) != (_token.OP, "("):
+                hint = f" — write {tok_val}(x)" if tok_val in _FUNCTION_NAMES else ""
+                raise ParseError(f"function name without arguments: {tok_val!r}{hint}")
+    return tokens
+
+
+# Token guard BEFORE everything, then ^ as exponentiation + implicit
+# multiplication (2x -> 2*x), as in math notation. Unknown calls are refused on
+# the raw tokens (before the names are split), bare function names at the end.
+_TRANSFORMS = (
+    (_deny_unsafe_tokens, _refuse_unknown_calls, _refuse_juxtaposed_words)
+    + standard_transformations
+    + (convert_xor,)
+    + _implicit_multiplication_application
+    + (_refuse_bare_function_names,)
+)
+
+# Matrix-literal transforms: the SAME token guard + whitelist namespace (so the
+# security boundary is identical — attribute access and text literals are
+# rejected, no builtin is reachable), but WITHOUT implicit multiplication or
+# ``^``-as-power. A matrix entry is a plain literal (as under the previous bare
+# ``sympify``): multi-letter names stay one symbol (``np`` is Symbol('np'), not
+# ``n*p``) and ``^`` keeps its Python meaning — parse semantics are unchanged,
+# only the eval surface is closed.
+_MATRIX_TRANSFORMS = (_deny_unsafe_tokens,) + standard_transformations
+
+# Parser whitelist: the ONLY names that resolve to SymPy objects.
+# Everything off the list becomes a Symbol/undefined function (auto_symbol),
+# so __import__/eval/open are not reachable at all from the input text.
+_ALLOWED_FUNCTIONS = (
+    # trigonometry + inverses
+    "sin", "cos", "tan", "cot", "sec", "csc",
+    "asin", "acos", "atan", "acot", "asec", "acsc", "atan2",
+    # hyperbolic + inverses
+    "sinh", "cosh", "tanh", "coth", "sech", "csch",
+    "asinh", "acosh", "atanh", "acoth",
+    # exponential / power
+    "exp", "log", "sqrt", "cbrt", "root",
+    # piecewise / discrete
+    "Abs", "sign", "floor", "ceiling",
+    "Min", "Max", "gamma", "factorial", "binomial",
+)
+_LOCAL_DICT: dict[str, object] = {
+    name: getattr(sp, name) for name in _ALLOWED_FUNCTIONS
+}
+_LOCAL_DICT.update(
+    {
+        # aliases for common notation (previously captured by Python builtins)
+        "ln": sp.log,
+        "abs": sp.Abs,
+        "min": sp.Min,
+        "max": sp.Max,
+        # constants
+        "pi": sp.pi,
+        "E": sp.E,
+        "I": sp.I,
+        "oo": sp.oo,
+    }
+)
+
+#: Every name that resolves to a FUNCTION (not a constant): whitelist + aliases.
+_FUNCTION_NAMES = frozenset(_ALLOWED_FUNCTIONS) | {"ln", "abs", "min", "max"}
+#: Every name the parser resolves (functions, aliases, constants) — public for
+#: the REPL's unknown-command check.
+KNOWN_NAMES = frozenset(_LOCAL_DICT)
+
+# global_dict passed EXPLICITLY: without it parse_expr does `from sympy import *`
+# and adds Python builtins (including __import__). Here only the constructors
+# that the token transformations emit (auto_symbol/auto_number/…), plus
+# an empty __builtins__ so eval does not get the real builtins.
+_GLOBAL_DICT: dict[str, object] = {
+    "Symbol": sp.Symbol,
+    "Function": sp.Function,
+    "Integer": sp.Integer,
+    "Float": sp.Float,
+    "Rational": sp.Rational,
+    "__builtins__": {},
+}
+#: Names that are only meaningful when called: the functions + the constructors.
+_CALLABLE_NAMES = _FUNCTION_NAMES | {n for n in _GLOBAL_DICT if not n.startswith("_")}
+
+# --- Evaluation cost guard (DoS) -------------------------------------
+# The math whitelist allows exponentiation and factorial/gamma/binomial — and on
+# CONCRETE numbers these can build a gigantic int: ``9**9**9`` is
+# ~1.2 billion bits, ``factorial(10**8)`` likewise. This is reachable directly from the
+# MCP server (``math_eval``), so a single line would hang/OOM the host. SymPy
+# computes such things eagerly under ``evaluate=True`` — that is why we FIRST
+# parse the same syntax WITHOUT evaluation and with "blind" functions (so the
+# guard itself computes nothing), then estimate the cost and refuse in advance.
+
+#: Upper bit limit for a CONCRETE integer produced by evaluation.
+#: ~200k bits ≈ 60k digits — generous for real math, yet cuts off DoS.
+_MAX_RESULT_BITS = 200_000
+#: An exponent/argument with more bits than this WILL surely blow up the result.
+_SAFE_EXPONENT_BITS = 64
+#: The largest factorial/gamma/binomial argument (n! grows ~n·log2(n)).
+_MAX_FACTORIAL_ARG = 10_000
+#: Functions whose CONCRETE integer argument alone blows up the result.
+_COST_FUNCS = frozenset({"factorial", "gamma", "binomial"})
+_LN2 = math.log(2)
+
+# Python 3.11+ refuses to print an int over 4300 digits (a guard against
+# quadratic str<->int conversion), so ``2^20000`` — well inside the result cap
+# above — came back as a raw ``ValueError: Exceeds the limit (4300 digits)``
+# (K1). Raised (never lowered, never disabled) to the largest number the cost
+# guard lets through: about 0.302 decimal digits per bit, plus margin.
+_MAX_RESULT_DIGITS = int(_MAX_RESULT_BITS * math.log10(2)) + 100
+if hasattr(sys, "get_int_max_str_digits"):
+    _limit = sys.get_int_max_str_digits()
+    if 0 < _limit < _MAX_RESULT_DIGITS:
+        sys.set_int_max_str_digits(_MAX_RESULT_DIGITS)
+
+
+class _CostExceeded(Exception):
+    """Internal signal: evaluation would build a number that is too large."""
+
+
+def _int_value_bounded(node: sp.Basic) -> int | None:
+    """Exact integer value of a node built EXCLUSIVELY from numbers (powers,
+    products, sums, factorial/gamma/binomial), or ``None`` when the node contains
+    symbols/floats/other functions. Raises ``_CostExceeded`` BEFORE computing anything
+    whose bit count would exceed ``_MAX_RESULT_BITS`` — never materializes
+    a huge int.
+    """
+    if node.is_Integer:
+        return int(node)
+    if isinstance(node, sp.Pow):
+        base = _int_value_bounded(node.base)
+        exp = _int_value_bounded(node.exp)
+        if exp is not None and (base is None or exp < 0):
+            # A fraction, not a "big int" — but built exactly all the same:
+            # ``2^-10000000000`` and ``(1/2)^10000000000`` hung in ``parse`` (V9
+            # measurement; the exact spelling of ``2^-1e10`` since V8).
+            size = _log2_size(node.base)
+            if size is not None and size * abs(exp) > _MAX_RESULT_BITS:
+                raise _CostExceeded(f"power {node} exceeds {_MAX_RESULT_BITS} bits")
+            return None
+        if base is None or exp is None:
+            return None  # symbolic — not a "big int"
+        if abs(base) <= 1:
+            return base**exp  # 0/1/-1 to any power: negligible cost
+        # estimate the RESULT bits before computing base**exp
+        if exp > _MAX_RESULT_BITS or exp * abs(base).bit_length() > _MAX_RESULT_BITS:
+            raise _CostExceeded(f"power {node} exceeds {_MAX_RESULT_BITS} bits")
+        return base**exp
+    if isinstance(node, sp.Mul):
+        prod, bits = 1, 0
+        for arg in node.args:
+            val = _int_value_bounded(arg)
+            if val is None:
+                return None
+            bits += abs(val).bit_length() or 1
+            if bits > _MAX_RESULT_BITS:
+                raise _CostExceeded(f"product {node} exceeds {_MAX_RESULT_BITS} bits")
+            prod *= val
+        return prod
+    if isinstance(node, sp.Add):
+        total, bits = 0, 0
+        for arg in node.args:
+            val = _int_value_bounded(arg)
+            if val is None:
+                return None
+            bits = max(bits, abs(val).bit_length())
+            if bits > _MAX_RESULT_BITS:
+                raise _CostExceeded(f"sum {node} exceeds {_MAX_RESULT_BITS} bits")
+            total += val
+        return total
+    if isinstance(node, sp.Function):
+        name = type(node).__name__
+        if name in ("factorial", "gamma") and len(node.args) == 1:
+            arg = _int_value_bounded(node.args[0])
+            if arg is None:
+                return None
+            n = arg - 1 if name == "gamma" else arg  # gamma(n) = (n-1)!
+            if n < 0:
+                return None
+            if n > _MAX_FACTORIAL_ARG:
+                raise _CostExceeded(f"{name}({arg}) — argument > {_MAX_FACTORIAL_ARG}")
+            return math.factorial(n)
+        if name == "binomial" and len(node.args) == 2:
+            top = _int_value_bounded(node.args[0])
+            bottom = _int_value_bounded(node.args[1])
+            if top is None or bottom is None:
+                return None
+            if abs(top) > _MAX_FACTORIAL_ARG:
+                raise _CostExceeded(f"binomial({top}, …) — argument > {_MAX_FACTORIAL_ARG}")
+            return math.comb(top, bottom) if 0 <= bottom <= top else None
+    return None  # Symbol/Float/non-integer Rational/other function → not a "big int"
+
+
+def _log2_size(node: sp.Basic) -> float | None:
+    """Upper bound on log2 of the larger of numerator and denominator of a node
+    built EXCLUSIVELY from numbers with ``+``, ``*`` and integer powers, or
+    ``None`` otherwise. Computes no power: only sizes (``_int_value_bounded``
+    evaluates the exponents, raising as usual)."""
+    if node.is_Integer:
+        return math.log2(abs(int(node))) if node != 0 else 0.0
+    if node.is_Rational:
+        return math.log2(max(abs(int(node.p)), int(node.q)))  # type: ignore[attr-defined]
+    if isinstance(node, sp.Pow):
+        exp = _int_value_bounded(node.exp)
+        size = _log2_size(node.base)
+        if size is None:
+            return None
+        if exp is not None:
+            return size * abs(exp)
+        q = _small_rational(node.exp)  # 2^(1/3): a root, smaller than its base
+        return None if q is None else size * abs(float(q))
+    if isinstance(node, sp.Function) and node.args:
+        # Under the guard's dummy functions a root is a call, not a Pow:
+        # sqrt(2)^10^20 is 2^(5*10^19) once SymPy evaluates it — the hang of
+        # the 30.10 probes (K1). The radicand's size divided by the index.
+        name = type(node).__name__
+        index: "int | None" = {"sqrt": 2, "cbrt": 3}.get(name)
+        if name == "root" and len(node.args) == 2:
+            q = _small_rational(node.args[1])
+            index = int(q) if q is not None and q.is_Integer and q > 0 else None
+        if index is None or (name != "root" and len(node.args) != 1):
+            return None
+        size = _log2_size(node.args[0])
+        return None if size is None else size / index
+    if isinstance(node, (sp.Mul, sp.Add)):
+        sizes = [_log2_size(arg) for arg in node.args]
+        if any(sz is None for sz in sizes):
+            return None
+        return sum(sizes) + (1 if isinstance(node, sp.Add) else 0)  # type: ignore[arg-type]
+    return None
+
+
+#: Bit cap on the numerator/denominator of an exponent read exactly by the guard.
+_SMALL_RATIONAL_BITS = 256
+
+
+def _small_rational(node: sp.Basic) -> "sp.Rational | None":
+    """Exact value of a SMALL rational built from numbers (``1/3`` arrives from the
+    unevaluated parse as ``Mul(1, Pow(3, -1))``), or ``None``. Never computes a
+    large number: an operand over ``_SMALL_RATIONAL_BITS`` bits gives ``None``."""
+    if node.is_Rational:
+        q = sp.Rational(node)
+    elif isinstance(node, sp.Pow):
+        base = _small_rational(node.base)
+        exp = _int_value_bounded(node.exp)
+        if base is None or exp is None or abs(exp) > 64 or (base == 0 and exp < 0):
+            return None
+        q = base**exp
+    elif isinstance(node, (sp.Mul, sp.Add)):
+        parts = [_small_rational(arg) for arg in node.args]
+        if any(p is None for p in parts):
+            return None
+        q = sp.Integer(1) if isinstance(node, sp.Mul) else sp.Integer(0)
+        for p in parts:
+            q = q * p if isinstance(node, sp.Mul) else q + p  # type: ignore[operator]
+            if max(abs(q.p), q.q).bit_length() > _SMALL_RATIONAL_BITS:  # type: ignore[attr-defined]
+                return None
+    else:
+        return None
+    if max(abs(q.p), q.q).bit_length() > _SMALL_RATIONAL_BITS:  # type: ignore[attr-defined]
+        return None
+    return q
+
+
+def _check_cost(node: "sp.Basic | list | tuple") -> None:
+    """Walk the tree and reject any CONCRETE subexpression whose evaluation
+    would build a number that is too large. ``_int_value_bounded`` closes over the whole
+    subgraph built from numbers (raising ``_CostExceeded``); for subgraphs with symbols
+    we descend deeper to catch a dangerous nested fragment (e.g. in ``sin(9**9**9)``).
+
+    Matrix literals parse (under ``evaluate=False``) to nested Python lists, so the
+    walk also descends into ``list``/``tuple`` containers — a matrix entry gets the
+    same DoS guard as a scalar (e.g. ``[[9**9**9]]`` is refused before evaluation).
+    """
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            _check_cost(item)
+        return
+    if not isinstance(node, sp.Basic):
+        # A class, not an expression (``Integer`` or ``Symbol`` typed bare
+        # evaluates to the constructor): iterating its ``args`` property was a
+        # raw TypeError. It computes nothing; the real parse refuses it.
+        return
+    if _int_value_bounded(node) is not None:
+        return
+    for arg in node.args:
+        _check_cost(arg)
+
+
+# The guard parses the SAME syntax but without evaluation and with dummy functions
+# (computes nothing). Constants become plain symbols (their value does not affect
+# the cost). The Pow/Mul/Add constructors are needed because ``evaluate=False`` emits
+# explicit constructor calls.
+_GUARD_LOCAL_DICT: dict[str, object] = {name: sp.Function(name) for name in _FUNCTION_NAMES}
+_GUARD_LOCAL_DICT.update({c: sp.Symbol(c) for c in ("pi", "E", "I", "oo")})
+_GUARD_GLOBAL_DICT: dict[str, object] = {
+    **_GLOBAL_DICT,
+    "Pow": sp.Pow,
+    "Mul": sp.Mul,
+    "Add": sp.Add,
+}
+
+
+def _guard_cost(source: str) -> None:
+    """Refuse when evaluating ``source`` would build a gigantic number.
+
+    Parses without evaluation and with dummy functions, so the guard itself
+    computes nothing; the real (costly) ``parse_expr`` runs only after this check.
+    Structurally invalid input we let through — the real parse will report it.
+    """
+    try:
+        tree = parse_expr(
+            source,
+            local_dict=dict(_GUARD_LOCAL_DICT),
+            global_dict=dict(_GUARD_GLOBAL_DICT),
+            transformations=_TRANSFORMS,
+            evaluate=False,
+        )
+    except Exception:  # noqa: BLE001 — syntax/name error: the real parse handles it
+        return
+    _check_cost(tree)
+
+
+_CLOSE_OF = {")": "(", "]": "["}
+
+
+def _refuse_stray_close(source: str, what: str) -> None:
+    """A closing bracket with nothing open, or closing the other kind, is a
+    ``ParseError`` here, not in SymPy.
+
+    SymPy's implicit-multiplication pass groups parentheses on a stack and pops an
+    empty one on a stray ``)``: a raw ``IndexError`` on Python 3.12 (V3 finding 2,
+    ``parse(")")``, ``"x)"``, ``"))"``), while the 3.11 tokenizer happens to refuse
+    the same text first with a ``TokenError``. A ``)`` closing a ``[`` (``"5[x)"``)
+    reached the same pop — counting depth alone let it through (V9: 90 of 21124
+    corpus texts, none in V5's fuzz alphabet, which has no ``[``). Checked here so
+    both versions give the same refusal, without catching ``IndexError`` around
+    the whole parse — that would also swallow a genuine one from deeper in SymPy.
+    Text literals are rejected at the token level, so no bracket here can sit
+    inside a string.
+    """
+    open_ = []
+    for ch in source:
+        if ch in "([":
+            open_.append(ch)
+        elif ch in _CLOSE_OF:
+            if not open_:
+                raise ParseError(f"cannot understand {what} {source!r}: '{ch}' closes nothing")
+            if open_.pop() != _CLOSE_OF[ch]:
+                raise ParseError(
+                    f"cannot understand {what} {source!r}: '{ch}' closes a "
+                    f"'{'[' if ch == ')' else '('}'"
+                )
+
+
+#: ``=`` or ``==`` that is not part of ``<=``, ``>=``, ``!=`` or ``===``.
+_EQUALS = re.compile(r"(?<![<>!=])==?(?!=)")
+
+
+def equation_as_zero(text: str) -> str:
+    """``a = b`` / ``a == b`` -> ``(a) - (b)``, so ``solve`` can take an equation.
+
+    Anything else (no equals sign, or more than one) comes back unchanged, and
+    ``parse`` then refuses it with the message below.
+    """
+    parts = _EQUALS.split(text)
+    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        return text
+    return f"({parts[0].strip()}) - ({parts[1].strip()})"
+
+
+def _refuse_equation(source: str) -> None:
+    """An ``=`` / ``==`` inside an expression is a ``ParseError`` with directions.
+
+    ``a = b`` used to fail as "invalid syntax", and ``a == b`` was worse: Python's
+    ``==`` compared the two TREES and the line answered ``False`` — so
+    ``solve x^2-5*x+6 == 0 for x`` printed "(no solutions)" (0.5.1, live test).
+    """
+    if _EQUALS.search(source):
+        raise ParseError(
+            f"cannot understand expression {source!r}: '=' makes an equation, not an "
+            f"expression — solve it (solve <lhs> = <rhs> for <x>) or check an "
+            f"identity (verify <a> == <b>)"
+        )
+
+
+_PURE_LETTERS = re.compile(r"[A-Za-z]{2,}")
+
+
+def _refuse_letters_beside_their_product(sy: sp.Basic, source: str) -> None:
+    """Strict mode: ``2ab`` beside ``a`` and ``b`` is ambiguous — refuse, do not guess.
+
+    Strict mode reads ``ab`` as ONE variable (K1), which is right for ``speed`` and
+    wrong for the textbook ``(a+b)^2 == a^2 + 2ab + b^2`` — that came back REFUTED
+    "at a = 0, ab = 2, b = 1/2" (0.5.1, live test). When every letter of a
+    multi-letter name is ALSO a variable of the same expression, the two readings
+    really do compete, so the parser asks instead of picking one. Greek names
+    (``alpha``, ``theta``) are names, never products.
+    """
+    # A list literal ([[1, 2]]) is not an expression: Expr() refuses it as a domain error.
+    if not _STRICT.get() or not isinstance(sy, sp.Basic):
+        return
+    from sympy.core.alphabets import greeks
+
+    names = {s.name for s in sy.free_symbols}
+    for name in sorted(names):
+        if (
+            _PURE_LETTERS.fullmatch(name)
+            and name.lower() not in greeks
+            and all(ch in names for ch in name)
+        ):
+            product = "*".join(name)
+            raise ParseError(
+                f"cannot understand expression {source!r}: is {name!r} one variable or "
+                f"the product {product}? {', '.join(sorted(set(name)))} are variables "
+                f"here too — write {product} for the product, or rename the variable"
+            )
+
+
+def parse(source: str) -> Expr:
+    """Parse mathematical text into IR.
+
+    A syntax error yields a readable ``PycodemathError`` (not a raw
+    ``SympifyError``/``SyntaxError``) — the REPL shows a concise message.
+
+    Security note: the parser resolves ONLY the explicit whitelist of math
+    functions and constants (``_LOCAL_DICT``); unknown names become
+    symbols, not Python code — ``__import__``/``eval``/``open`` are not
+    resolvable, text literals and attribute access are rejected
+    at the token level. Honest boundary: this raises the bar (no
+    builtin is reachable from text), but evaluation still runs
+    through SymPy in this process — this is not a whole-process sandbox.
+
+    Unknown names: single-letter ``f(x)`` reads as multiplication ``f*x``, a
+    multi-letter ``xy`` breaks up into a product of letters (``split_symbols``
+    from ``implicit_multiplication_application`` — the price of ``2x`` notation);
+    names with ``_`` (e.g. ``x_1``) or a trailing digit run (e.g. ``x1``, ``v0``,
+    ``R1`` — the other common way to write a subscript) stay a single symbol.
+    A multi-letter name CALLED — ``zeta(2)``, ``foo(x)``, ``log_2(8)`` — is a
+    ``ParseError`` "unknown function": read as a product it made ``zeta(2)`` equal
+    ``2*zeta``, a claim a verifier then refuted at zeta = 0. A whitelisted
+    function name with no argument (``sin``, ``2*cos``) is a ``ParseError`` too.
+    None of these paths calls Python code.
+    Building ``Expr`` is in the same ``try`` because ``sympify`` in
+    ``Expr.__init__`` can also raise ``SympifyError`` on the parser's output.
+
+    Evaluation cost is bounded: expressions that would build a huge
+    number (``9**9**9``, ``factorial(10**8)``) are rejected BEFORE SymPy
+    computes them — otherwise a single line (reachable directly from the MCP server) could
+    hang or OOM the process.
+    """
+    _refuse_stray_close(source, "expression")
+    _refuse_equation(source)
+    try:
+        _guard_cost(source)
+    except _CostExceeded as exc:
+        raise ParseError(
+            f"expression {source!r} is too costly to compute "
+            f"({exc}) — the result would exceed the safe size"
+        ) from exc
+    try:
+        sy = parse_expr(
+            source,
+            local_dict=dict(_LOCAL_DICT),
+            global_dict=dict(_GLOBAL_DICT),
+            transformations=_TRANSFORMS,
+            evaluate=True,
+        )
+        _refuse_letters_beside_their_product(sy, source)
+        return Expr(sy)
+    # NameError: notation emitting a name outside _GLOBAL_DICT (e.g. lambda);
+    # AttributeError: attribute access (x.y) — both are a refusal, not a crash.
+    except (
+        SympifyError,
+        SyntaxError,
+        TokenError,
+        TypeError,
+        ValueError,
+        NameError,
+        AttributeError,
+    ) as exc:
+        raise ParseError(f"cannot understand expression {source!r}: {exc}") from exc
+
+
+def parse_matrix(source: str) -> sp.MatrixBase:
+    """Parse a matrix/vector literal (``[[1,2],[3,4]]`` / ``[1,2,3]``) into a SymPy matrix.
+
+    Matrix entries are ordinary math expressions, so this text must go through
+    the SAME whitelist as scalar :func:`parse`: bare ``sympify`` here would be a
+    second eval surface with the full namespace and attribute access
+    (``().__class__.__bases__`` reaches ``object`` — the classic sympify gadget
+    chain). We reuse the token guard + whitelisted namespace + cost guard, then
+    hand the resulting nested list to ``sympy.Matrix``. Legitimate literals are
+    unaffected; only the eval surface is closed.
+    """
+    _refuse_stray_close(source, "matrix")
+    try:
+        _guard_cost(source)
+    except _CostExceeded as exc:
+        raise ParseError(
+            f"matrix {source!r} is too costly to compute "
+            f"({exc}) — the result would exceed the safe size"
+        ) from exc
+    try:
+        obj = parse_expr(
+            source,
+            local_dict=dict(_LOCAL_DICT),
+            global_dict=dict(_GLOBAL_DICT),
+            transformations=_MATRIX_TRANSFORMS,
+            evaluate=True,
+        )
+        return sp.Matrix(obj)
+    # Same refusal set as scalar parse; the token guard's PycodemathError
+    # (attribute access, text literals) propagates through unchanged.
+    except (
+        SympifyError,
+        SyntaxError,
+        TokenError,
+        TypeError,
+        ValueError,
+        NameError,
+        AttributeError,
+    ) as exc:
+        raise ParseError(f"cannot parse matrix {source!r}: {exc}") from exc
