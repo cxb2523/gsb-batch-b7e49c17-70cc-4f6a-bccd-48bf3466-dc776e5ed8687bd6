@@ -141,6 +141,16 @@ class Stream(Based):
     ROLLOVER = 8589934591  # 95443.717678
     ROLLOVER9K = 95443.717678
     SCTE35_PES_START = b"\x00\x00\x01\xfc"
+    # section reassembly status returned by _section_incomplete
+    # False  -> complete section, ready to parse
+    # INCOMPLETE -> valid header, more payload packets are needed
+    # BAD_LENGTH  -> section_length field is not a legal SCTE-35 section
+    INCOMPLETE = "incomplete"
+    BAD_LENGTH = "bad_length"
+    # smallest legal SCTE-35 section_length:
+    # 11 fixed header bytes + Splice Null (1 byte type) +
+    # 2 descriptor loop length bytes + 4 CRC bytes = 18
+    MIN_SCTE35_SECLEN = 18
 
     def __init__(self, tsdata, show_null=True, headers={}):
         """
@@ -621,13 +631,33 @@ class Stream(Based):
         self.maps.last[pid] = pay
         return last == pay
 
-    def _section_incomplete(self, pay, pid, seclen):
-        # + 3 for the bytes before section starts
-        if len(pay) > (seclen + 3):
-            return False
-        if (seclen + 3) > len(pay):
-            self.maps.partial[pid] = pay
-            return True
+    def _drop_partial(self, pid):
+        """
+        _drop_partial discards any cached, partially reassembled
+        section for pid so a corrupt fragment can not pollute
+        later messages on the same pid.
+        """
+        return self.maps.partial.pop(pid, None)
+
+    def _section_incomplete(self, pay, pid, seclen, min_seclen=None):
+        """
+        _section_incomplete checks the reassembled payload pay
+        against its section_length field (seclen).
+
+        It is side-effect free; the caller decides whether to
+        cache the fragment or to clear the pid's cache.
+
+        returns:
+            Stream.INCOMPLETE  - header is legal but more data is needed
+            Stream.BAD_LENGTH  - section_length is below min_seclen
+            False              - a full section is available for parsing
+        """
+        # + 3 for the bytes before section_length value counts
+        full_len = seclen + 3
+        if min_seclen is not None and seclen < min_seclen:
+            return self.BAD_LENGTH
+        if len(pay) < full_len:
+            return self.INCOMPLETE
         return False
 
     def _parse_cue(self, pay, pid):
@@ -675,6 +705,48 @@ class Stream(Based):
             return False
         return self._chk_maybe_pid(pay, pid)
 
+    def _reassemble_partial(self, pay, pid, seclen, pusi):
+        """
+        _reassemble_partial continues a section already cached
+        for pid. The new pay is only accepted as a continuation
+        when it is a real continuation packet (payload_unit_start
+        indicator clear). The old fragment and pay are concatenated
+        in arrival order, and the result must be exactly
+        section_length + 3 bytes long before it is parsed.
+        Anything else drops the cached fragment and returns None.
+        """
+        if pusi:
+            self._drop_partial(pid)
+            return None
+        section = self._drop_partial(pid) + pay
+        if len(section) != seclen + 3:
+            return None
+        return section
+
+    def _reassemble_scte35(self, pkt, pid):
+        """
+        _reassemble_scte35 rebuilds an SCTE-35 splice_info_section
+        from one or more TS packets on pid, in arrival order.
+
+        Returns the reassembled section payload, None when the
+        stream is corrupt or more data is needed, or False when
+        the pid does not carry SCTE-35.
+        """
+        pusi = self._pusi_flag(pkt[1])
+        pay = self._strip_scte35_pes(pkt)
+        if not pay:
+            return False
+        if pid in self.maps.partial:
+            if pusi:
+                # a new section starts while an old fragment is
+                # cached: the old fragment is corrupt, drop it.
+                self._drop_partial(pid)
+                return None
+            partial = self.maps.partial[pid]
+            seclen = self._parse_length(partial[1], partial[2])
+            return self._reassemble_partial(pay, pid, seclen, pusi)
+        return self._chk_maybe_pid(pay, pid)
+
     def _parse_id3_payload(self, pkt, pid):
         pay = self._parse_payload(pkt)  # strip off mpegts headers .
         whole = self._chk_partial(pay, pid, b"ID3")  # check for multi-packet payload
@@ -699,11 +771,22 @@ class Stream(Based):
         if pid in self.pids.id3:
             pay = self._parse_id3_payload(pkt, pid)
         else:
-            pay = self._mk_scte35_payload(pkt, pid)
+            pay = self._reassemble_scte35(pkt, pid)
         if not pay:
             return False
         seclen = self._parse_length(pay[1], pay[2])
-        if self._section_incomplete(pay, pid, seclen):
+        section = self._section_incomplete(
+            pay, pid, seclen, min_seclen=self.MIN_SCTE35_SECLEN
+        )
+        if section == self.INCOMPLETE:
+            # valid header but the section is not whole yet:
+            # cache the fragment and wait for the next packet.
+            self.maps.partial[pid] = pay
+            return False
+        if section == self.BAD_LENGTH:
+            # illegal section_length or reassembled overflow:
+            # never hand corrupt data to Cue, clear the pid cache.
+            self._drop_partial(pid)
             return False
         pay = pay[: seclen + 3]
         cue = self._parse_cue(pay, pid)
@@ -723,7 +806,12 @@ class Stream(Based):
         """
         pay3 = self._chk_partial(pay, self.pids.PAT_PID, b"")
         seclen = self._parse_length(pay3[2], pay3[3])
-        if self._section_incomplete(pay3, self.pids.PAT_PID, seclen):
+        section = self._section_incomplete(pay3, self.pids.PAT_PID, seclen)
+        if section == self.INCOMPLETE:
+            self.maps.partial[self.pids.PAT_PID] = pay3
+            return False
+        if section == self.BAD_LENGTH:
+            self._drop_partial(self.pids.PAT_PID)
             return False
         seclen -= 5  # pay bytes 4,5,6,7,8
         idx = 9
@@ -742,9 +830,13 @@ class Stream(Based):
         pay = self._chk_partial(pay, pid, self.PMT_TID)
         if pay:
             seclen = self._parse_length(pay[1], pay[2])
-            if not self._section_incomplete(pay, pid, seclen):
-                if not self._same_as_last(pay, pid):
-                    return pay
+            section = self._section_incomplete(pay, pid, seclen)
+            if section == self.INCOMPLETE:
+                self.maps.partial[pid] = pay
+            elif section == self.BAD_LENGTH:
+                self._drop_partial(pid)
+            elif not self._same_as_last(pay, pid):
+                return pay
         return False
 
     def _parse_pmt(self, pay, pid):
@@ -755,7 +847,12 @@ class Stream(Based):
         if not pay:
             return False
         seclen = self._parse_length(pay[1], pay[2])
-        if self._section_incomplete(pay, pid, seclen):
+        section = self._section_incomplete(pay, pid, seclen)
+        if section == self.INCOMPLETE:
+            self.maps.partial[pid] = pay
+            return False
+        if section == self.BAD_LENGTH:
+            self._drop_partial(pid)
             return False
         if self._same_as_last(pay, pid):
             return False

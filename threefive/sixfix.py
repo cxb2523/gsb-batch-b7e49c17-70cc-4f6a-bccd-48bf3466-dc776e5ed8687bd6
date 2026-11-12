@@ -190,7 +190,12 @@ class SixFix(Stream):
             return False
         pmt = self.mk_pmt(pay)
         seclen = self._parse_length(pay[1], pay[2])
-        if self._section_incomplete(pay, pid, seclen):
+        section = self._section_incomplete(pay, pid, seclen)
+        if section == self.INCOMPLETE:
+            self.maps.partial[pid] = pay
+            return False
+        if section == self.BAD_LENGTH:
+            self._drop_partial(pid)
             return False
         program_number = self._parse_program(pay[3], pay[4])
         if not program_number:
