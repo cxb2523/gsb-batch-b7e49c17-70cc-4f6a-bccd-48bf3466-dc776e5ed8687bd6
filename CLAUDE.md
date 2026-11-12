@@ -176,6 +176,7 @@ Each plugin implements:
 | `test_onboarding_tools.py` | MCP tools: index_status, get_repository_map, resolve_symbol, search_graph |
 | `test_change_impact.py` | Change impact — symbol-based, git-diff-based, transitive callers, risk classification |
 | `test_dataflow.py` | Dataflow engine — variable tracking, dependency edges, taint sources/sinks, cross-function taint |
+| `test_dataflow_cross_function.py` | Cross-function taint by call-site argument→parameter binding (multi-file, sanitizer, multi-arg, depth) |
 | `test_dataflow_tools.py` | MCP tool: analyze_dataflow (flow, taint, cross_taint modes) |
 | `test_git_analysis.py` | Git blame, churn, change coupling — analysis functions + `git_history` MCP tool |
 | `test_doc_suggestions.py` | Auto-documentation suggestions — undocumented function detection + context assembly |

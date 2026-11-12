@@ -170,6 +170,7 @@ Each plugin implements:
 | `test_onboarding_tools.py` | `index_status`, `get_repository_map`, `resolve_symbol`, `search_graph` MCP tools |
 | `test_change_impact.py` | Change impact analysis — symbol-based, git-diff-based, transitive |
 | `test_dataflow.py` | Dataflow engine — variable tracing, taint paths |
+| `test_dataflow_cross_function.py` | Cross-function taint — argument→parameter binding, sanitizers, depth limits |
 | `test_dataflow_tools.py` | MCP tool: `analyze_dataflow` (flow, taint, cross_taint modes) |
 
 Fixtures in `conftest.py`: `sample_repo` (Python-only), `rich_py_repo` (decorators/dataclasses), `multi_lang_repo` (5 languages).

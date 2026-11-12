@@ -480,8 +480,30 @@ Returns:
 ```
 Agent: analyze_dataflow("app.py", "handle_request", mode="cross_taint", depth=3)
 
-Returns taint paths that follow data across function calls, up to the specified depth.
+Returns:
+{
+  "entry": "app.py::handle_request",
+  "paths": [
+    {
+      "verdict": "UNSAFE",
+      "chain": ["handle_request() → build_query(user_input)", "data", "query", "db.execute(query)"],
+      "functions": ["app.py::handle_request", "db.py::build_query"],
+      "sanitizer": null,
+      "risk": "SQL injection"
+    }
+  ],
+  "depth_reached": 1
+}
 ```
+
+Taint is bound by **call-site position**, not by name coincidence: the actual
+argument that is tainted is mapped onto the callee's formal parameter of the
+same position (or the keyword name for `name=value` calls), so renamed
+parameters, multi-argument calls and chained passing all work. Each
+cross-function hop appears in `chain` as `caller() → callee(args)`,
+`functions` lists every `file::function` the path traversed, and
+`depth_reached` is the deepest hop reached (`depth=0` stops at the entry
+function).
 
 **Why it matters:** One tool covers all dataflow needs. `flow` mode traces variable dependencies. `taint` mode flags unsanitized paths from untrusted sources to dangerous sinks. `cross_taint` mode follows taint across function boundaries. Knows about common sanitizers (html.escape, parameterize, int/float casting) and gives SAFE/UNSAFE verdicts.
 
