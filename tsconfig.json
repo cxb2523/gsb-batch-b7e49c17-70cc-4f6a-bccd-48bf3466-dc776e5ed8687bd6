@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "moduleResolution": "Bundler",
+    "module": "ESNext",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "lib": ["esnext"],
+    "types": ["node", "jsdom", "vite/client", "vitest/importMeta"],
+    "paths": {
+      "@any-reader/rule-utils": ["./packages/rule-utils/src/index.ts"],
+      "@any-reader/core": ["./packages/core/src/index.ts"],
+      "@any-reader/epub": ["./packages/epub/src/index.ts"],
+      "@any-reader/shared": ["./packages/shared/src/index.ts"]
+    }
+  },
+  "exclude": ["**/dist/**", "**/node_modules/**", "**/public/**"],
+  "ts-node": {
+    "esm": true,
+    "transpileOnly": true,
+    "experimentalSpecifierResolution": "node",
+    "require": ["tsconfig-paths/register"]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "folders": [
+    {
+      "name": "root",
+      "path": "."
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/vscode"
+    },
+    {
+      "path": "./packages/web"
+    },
+    {
+      "path": "./packages/server"
+    },
+    {
+      "path": "./packages/shared"
+    },
+    {
+      "path": "./docs"
+    }
+  ]
+}

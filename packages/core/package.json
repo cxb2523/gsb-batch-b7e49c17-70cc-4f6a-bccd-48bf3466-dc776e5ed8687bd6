@@ -1,0 +1,55 @@
+{
+  "name": "@any-reader/core",
+  "type": "module",
+  "version": "1.11.12",
+  "description": "",
+  "author": "aooiuu <aooiu@qq.com>",
+  "license": "GPL3",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aooiuu/any-reader"
+  },
+  "keywords": [],
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs"
+    },
+    "./browser": {
+      "require": "./dist/browser/index.cjs",
+      "import": "./dist/browser/index.mjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "start": "tsx src/start.ts",
+    "build": "unbuild",
+    "stub": "unbuild --stub"
+  },
+  "dependencies": {
+    "@any-reader/rule-utils": "workspace:^",
+    "@xmldom/xmldom": "^0.9.3",
+    "axios": "^1.7.7",
+    "chardet": "^2.0.0",
+    "cheerio": "1.0.0",
+    "content-type": "^1.0.5",
+    "crypto-js": "^4.2.0",
+    "iconv-lite": "^0.6.3",
+    "jsonpath-plus": "^9.0.0",
+    "lodash-es": "^4.17.21",
+    "puppeteer": "^23.5.3",
+    "urlencode": "^2.0.0",
+    "xpath.js": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/content-type": "^1.1.8",
+    "@types/crypto-js": "^4.2.2",
+    "@types/xmldom": "^0.1.34",
+    "eslint": "^8.57.1",
+    "typescript": "^5.8.2"
+  }
+}

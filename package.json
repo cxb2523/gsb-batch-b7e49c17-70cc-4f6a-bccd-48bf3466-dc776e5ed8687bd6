@@ -1,0 +1,113 @@
+{
+  "name": "any-reader",
+  "type": "module",
+  "version": "1.11.12",
+  "private": true,
+  "packageManager": "pnpm@9.4.0",
+  "description": "",
+  "author": "aooiuu <aooiu@qq.com>",
+  "license": "GPL3",
+  "homepage": "https://github.com/aooiuu/any-reader#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aooiuu/any-reader"
+  },
+  "bugs": {
+    "url": "https://github.com/aooiuu/any-reader/issues"
+  },
+  "keywords": [],
+  "sideEffects": false,
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "index.d.ts",
+  "files": [
+    "dist",
+    "*.d.ts"
+  ],
+  "scripts": {
+    "start": "tsx index.ts",
+    "release": "bumpp -r --no-push",
+    "clean": "rimraf packages/*/dist --glob",
+    "clean:npm": "rimraf packages/*/node_modules --glob && rimraf node_modules",
+    "run:core": "pnpm --filter=@any-reader/core start",
+    "run:legado": "pnpm --filter=@any-reader/legado start",
+    "rule-utils:build": "pnpm --filter=@any-reader/rule-utils build",
+    "core:build": "pnpm --filter=@any-reader/core build",
+    "shared:build": "pnpm --filter=@any-reader/shared build",
+    "epub:build": "pnpm --filter=@any-reader/epub build",
+    "build:web": "pnpm --filter=@any-reader/web build",
+    "build:web-w": "pnpm --filter=@any-reader/web build:w",
+    "docs": "pnpm --filter docs docs:dev",
+    "build:docs": "pnpm --filter docs docs:build",
+    "test": "vitest",
+    "prepare": "husky install",
+    "web:server": "pnpm --filter=@any-reader/web dev",
+    "web:build-b": "pnpm --filter=@any-reader/web build:b",
+    "web:dev": "npm-run-all --parallel web:server server",
+    "electron:server": "pnpm --filter=@any-reader/web electron:dev",
+    "electron:build": "pnpm --filter=@any-reader/web electron:build",
+    "vscode:server": "pnpm --filter=@any-reader/web vscode:dev",
+    "vscode:compile": "pnpm --filter=@any-reader/vscode dev",
+    "vscode:dev": "npm-run-all --parallel build:web-w vscode:compile",
+    "vscode:web": "npm-run-all --parallel vscode:server server",
+    "vscode:build-tpl": "pnpm --filter=@any-reader/web vscode:build",
+    "vscode:build-vsx": "pnpm --filter=@any-reader/vscode build",
+    "vscode:build": "npm-run-all vscode:build-tpl vscode:build-vsx",
+    "server": "pnpm --filter=@any-reader/server dev",
+    "server:build": "pnpm --filter=@any-reader/server build",
+    "cli:build-tpl": "pnpm --filter=@any-reader/web cli:build",
+    "cli:build-js": "pnpm --filter=@any-reader/cli build",
+    "cli:build": "npm-run-all cli:build-tpl cli:build-js",
+    "utools:build": "pnpm --filter=@any-reader/web utools:build && pnpm --filter=@any-reader/utools build",
+    "rubick:build": "pnpm --filter=@any-reader/rubick build",
+    "build": "npm-run-all rule-utils:build core:build epub:build shared:build server:build cli:build",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --cache"
+  },
+  "dependencies": {
+    "@codemirror/lang-javascript": "^6.2.2",
+    "@codemirror/lang-json": "^6.0.1",
+    "@unocss/reset": "^0.63.4",
+    "@vueuse/core": "^11.1.0",
+    "codemirror": "^6.0.1",
+    "sql.js": "^1.11.0",
+    "sqlite3": "5.1.6"
+  },
+  "optionalDependencies": {
+    "bufferutil": "^4.0.8",
+    "utf-8-validate": "^6.0.4"
+  },
+  "devDependencies": {
+    "@eslint/compat": "^1.1.1",
+    "@rushstack/eslint-patch": "^1.10.4",
+    "@types/node": "^20.16.5",
+    "@types/uuid": "^10.0.0",
+    "@unocss/eslint-config": "^0.63.4",
+    "@vitest/browser": "^2.1.2",
+    "@vue/eslint-config-prettier": "^8.0.0",
+    "@vue/eslint-config-typescript": "^13.0.0",
+    "bumpp": "^9.7.1",
+    "cross-env": "^7.0.3",
+    "eslint": "^8.57.1",
+    "eslint-plugin-vue": "^9.29.0",
+    "husky": "^8.0.3",
+    "lint-staged": "15.2.10",
+    "npm-run-all2": "^6.2.3",
+    "playwright": "^1.48.0",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.1",
+    "unbuild": "^2.0.0",
+    "unocss": "^0.63.4",
+    "vite-tsconfig-paths": "^5.0.1",
+    "vitest": "^2.1.2"
+  },
+  "lint-staged": {
+    "*.{vue,js,ts}": "eslint --fix"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "vue-codemirror@6.1.1": "patches/vue-codemirror@6.1.1.patch"
+    }
+  }
+}

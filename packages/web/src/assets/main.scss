@@ -1,0 +1,61 @@
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+}
+
+*,
+::before,
+::after {
+  box-sizing: border-box; /* 1 */
+  background-repeat: no-repeat; /* 2 */
+}
+
+:root {
+  --foreground: var(--vscode-foreground);
+  --textLink-foreground: var(--vscode-textLink-foreground);
+  --sideBar-background: var(--vscode-sideBar-background);
+  --toolbar-hoverBackground: var(--vscode-toolbar-hoverBackground);
+  --list-hoverBackground: var(--vscode-list-hoverBackground);
+}
+
+:root {
+  --color-bg-1: var(--vscode-editor-background);
+  --color-bg-2: var(--vscode-editor-background);
+  --color-bg-3: var(--vscode-editor-background);
+
+  --color-text-1: var(--vscode-editor-foreground);
+  --color-text-2: var(--vscode-editor-foreground);
+  --color-text-3: var(--vscode-editor-foreground);
+}
+
+@media (max-width: 640px) {
+  ::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.ar-scrollbar-none {
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+input[type='color'] {
+  border: none;
+  padding: 0;
+  border-radius: 2px;
+}
+
+input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+  margin: 0;
+}
+
+input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}

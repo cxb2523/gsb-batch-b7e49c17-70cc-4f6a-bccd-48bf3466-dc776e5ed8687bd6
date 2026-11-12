@@ -1,0 +1,27 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base", "schedule:weekly", "group:allNonMajor"],
+  "labels": ["dependencies"],
+  // https://docs.renovatebot.com/configuration-options/#basebranches
+  "baseBranches": ["dev"],
+  "rangeStrategy": "bump",
+
+  "packageRules": [
+    {
+      "matchDepTypes": ["peerDependencies", "packageManager", "engines"],
+      "enabled": false
+    }
+  ],
+
+  "ignoreDeps": [
+    "esbuild",
+    "rollup",
+    "node",
+    "typescript",
+    "electron",
+    "vscode",
+
+    // https://github.com/TryGhost/node-sqlite3/issues/1748
+    "sqlite3"
+  ]
+}

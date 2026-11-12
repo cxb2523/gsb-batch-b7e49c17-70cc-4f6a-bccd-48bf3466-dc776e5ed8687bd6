@@ -1,0 +1,9 @@
+node_modules
+*.d.ts
+
+# https://github.com/eslint/eslint/issues/10341
+!.vitepress
+**/.vitepress/cache
+**/.vitepress/dist
+
+/dist

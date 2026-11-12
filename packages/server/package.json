@@ -1,0 +1,50 @@
+{
+  "name": "@any-reader/server",
+  "type": "module",
+  "version": "1.11.12",
+  "description": "",
+  "author": "aooiuu <aooiu@qq.com>",
+  "license": "GPL3",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aooiuu/any-reader"
+  },
+  "keywords": [],
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "unbuild",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node --experimental-specifier-resolution=node --loader ./loader.mjs src/run.ts"
+  },
+  "dependencies": {
+    "@any-reader/core": "workspace:^",
+    "@any-reader/shared": "workspace:^",
+    "@koa/bodyparser": "^5.1.1",
+    "@koa/cors": "^5.0.0",
+    "bcryptjs": "^2.4.3",
+    "koa": "^2.15.3",
+    "koa-bodyparser": "^4.4.1",
+    "koa-router": "^12.0.1",
+    "koa-session": "^6.4.0",
+    "koa-static": "^5.0.0",
+    "sql.js": "^1.11.0",
+    "sqlite3": "5.1.6"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/koa-router": "^7.4.8",
+    "@types/koa-session": "^6.4.5",
+    "@types/koa-static": "^4.0.4",
+    "@types/koa__cors": "^5.0.0"
+  }
+}

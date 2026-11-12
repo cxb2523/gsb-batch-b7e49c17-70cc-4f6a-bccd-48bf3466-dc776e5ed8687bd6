@@ -1,0 +1,34 @@
+{
+  "name": "@any-reader/utools",
+  "version": "1.11.12",
+  "private": true,
+  "description": "",
+  "author": "aooiuu <aooiu@qq.com>",
+  "license": "GPL3",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aooiuu/any-reader"
+  },
+  "keywords": [],
+  "files": [
+    "dist",
+    "public"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "stub": "unbuild --stub"
+  },
+  "devDependencies": {
+    "@any-reader/shared": "workspace:^",
+    "@rollup/plugin-alias": "^5.1.0",
+    "@rollup/plugin-commonjs": "^26.0.1",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@types/lodash-es": "^4.17.12",
+    "fs-extra": "^11.2.0",
+    "rollup": "^4.21.2",
+    "rollup-plugin-dts": "^6.1.1",
+    "rollup-plugin-esbuild": "^6.1.1",
+    "typescript": "^5.8.2"
+  }
+}

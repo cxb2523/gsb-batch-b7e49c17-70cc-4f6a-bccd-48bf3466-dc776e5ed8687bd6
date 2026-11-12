@@ -1,0 +1,92 @@
+name: Pre Release
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Check out git repository
+        uses: actions/checkout@v4.1.7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9.4.0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - id: pkgversion
+        uses: ashley-taylor/read-json-property-action@v1.2
+        with:
+          path: ./package.json
+          property: version
+
+      - id: short_sha
+        run: echo "::set-output name=value::$(git rev-parse --short HEAD)"
+
+      - name: fix pnpm.cjs
+        if: matrix.os == 'windows-latest'
+        run: sed -i 's/\/usr\/bin\/env node/node/g' C:/Users/runneradmin/setup-pnpm/node_modules/.pnpm/pnpm@9.4.0/node_modules/pnpm/bin/pnpm.cjs
+        shell: bash
+
+      - run: pnpm install
+      - run: pnpm run build
+
+      - run: pnpm run vscode:build
+      # https://github.com/HaaLeo/publish-vscode-extension
+      - name: build vscode vsx
+        if: matrix.os == 'windows-latest'
+        uses: HaaLeo/publish-vscode-extension@v1.6.2
+        id: publishVSX
+        with:
+          packagePath: ./packages/vscode
+          pat: ${{ secrets.VSCODE_TOKEN }}
+          # 不发布
+          dryRun: true
+          skipDuplicate: true
+          registryUrl: https://marketplace.visualstudio.com
+          dependencies: false
+          yarn: false
+
+      - name: Build Electron App
+        run: pnpm electron:build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # https://github.com/softprops/action-gh-release
+      - name: release
+        uses: softprops/action-gh-release@v2.0.8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.pkgversion.outputs.value }}-alpha.${{ steps.short_sha.outputs.value }}
+          name: v${{ steps.pkgversion.outputs.value }}-alpha.${{ steps.short_sha.outputs.value }}
+          prerelease: true
+          draft: true
+          files: |
+            packages/web/dist/electron/latest*.yml
+            packages/web/dist/electron/*.AppImage
+            packages/web/dist/electron/*.deb
+            packages/web/dist/electron/*.dmg
+            packages/web/dist/electron/*.exe
+            packages/web/dist/electron/*.rpm
+            packages/web/dist/electron/*.zip
+            packages/vscode/*.vsix

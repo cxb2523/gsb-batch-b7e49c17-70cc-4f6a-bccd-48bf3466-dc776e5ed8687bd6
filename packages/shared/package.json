@@ -1,0 +1,54 @@
+{
+  "name": "@any-reader/shared",
+  "type": "module",
+  "version": "1.11.12",
+  "description": "",
+  "author": "aooiuu <aooiu@qq.com>",
+  "license": "GPL3",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aooiuu/any-reader"
+  },
+  "keywords": [],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "unbuild",
+    "stub": "unbuild --stub"
+  },
+  "dependencies": {
+    "@any-reader/core": "workspace:^",
+    "@any-reader/epub": "workspace:^",
+    "@any-reader/rule-utils": "workspace:^",
+    "axios": "^1.7.7",
+    "blueimp-md5": "^2.19.0",
+    "chardet": "^2.0.0",
+    "explorer-opener": "^1.0.1",
+    "fs-extra": "^11.2.0",
+    "iconv-lite": "^0.6.3",
+    "lodash-es": "^4.17.21",
+    "log4js": "^6.9.1",
+    "lowdb": "^7.0.1",
+    "sql.js": "^1.11.0",
+    "sqlite3": "5.1.6",
+    "typeorm": "^0.3.20",
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "^4.17.12",
+    "@types/ws": "^8.5.12",
+    "reflect-metadata": "^0.2.2",
+    "typescript": "^5.8.2"
+  }
+}
