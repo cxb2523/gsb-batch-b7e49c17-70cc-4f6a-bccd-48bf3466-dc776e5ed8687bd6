@@ -6,6 +6,7 @@
  */
 import { create } from 'zustand';
 import { SAMPLE_SECONDS, type DataSource } from './data/source';
+import { diffEvents as diffActivity, seedEvents as seedActivity } from './data/activity';
 import {
   isActiveDeploy,
   type Alert,
@@ -18,26 +19,11 @@ import {
   type World,
   type WorldPatch,
 } from './data/types';
-import { duration } from './format';
 import { computeLayout, structureKey, type Layout } from './layout';
 
-export type MenuTab = 'activity' | 'deploys' | 'alerts' | 'services' | 'projects';
-export type CameraCommand = { kind: 'zoomIn' | 'zoomOut' | 'reset' | 'pan'; n: number; dx?: number; dz?: number };
-export type Focus = { kind: 'service' | 'project'; id: string; n: number };
-export type Tone = 'ok' | 'info' | 'warn' | 'crit' | 'muted';
-
-export type EventKind = 'deploy-start' | 'deploy-ok' | 'deploy-fail' | 'down' | 'up' | 'stopped' | 'started' | 'new-node' | 'cpu';
-
-/** One line in the live activity feed, derived from what changed between two patches. */
-export interface ActivityEvent {
-  id: string;
-  kind: EventKind;
-  at: number;
-  tone: Tone;
-  text: string;
-  detail?: string;
-  serviceId?: string;
-}
+// Re-exported so existing components keep importing the feed types from the store.
+export type { ActivityEvent, CameraCommand, EventKind, Focus, MenuTab, Tone } from './store-activity-types';
+import type { ActivityEvent, CameraCommand, Focus, MenuTab } from './store-activity-types';
 
 /** Cluster totals over time, one sample per metric tick (KPI sparklines). */
 export interface Trends {
@@ -61,7 +47,6 @@ interface WorldSlice {
 const RETRY_MS = 5000;
 const MAX_EVENTS = 80;
 const TREND_LEN = 40;
-const CPU_SPIKE = 0.85;
 const RECENT_CART_MS = 2 * 60_000;
 
 export interface State extends WorldSlice {
@@ -121,6 +106,8 @@ export interface State extends WorldSlice {
 
 let source: DataSource | null = null;
 let eventSeq = 0;
+/** Monotonic event-id factory shared by the initial seed and every patch (see data/activity). */
+const nextEventSeq = () => ++eventSeq;
 const spiking = new Map<string, number>();
 
 const byId = <T extends { id: string }>(xs: T[]): Rec<T> => Object.fromEntries(xs.map((x) => [x.id, x]));
@@ -233,7 +220,7 @@ export const useStore = create<State>()((set, get) => ({
             ...slice,
             ...withLayout({ layoutKey: '', layout: null }, slice),
             carts: world.deployments.filter(isActiveDeploy).map((d) => d.id),
-            events: seedEvents(slice),
+            events: seedActivity(slice.services, slice.deployments, nextEventSeq),
             trends: sampleTrends({ at: [], cpu: [], mem: [], net: [] }, slice.services, 0),
             loadError: null,
             ready: true,
@@ -353,7 +340,7 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
   if (s.selectedProjectId && !(s.selectedProjectId in slice.projects)) out.selectedProjectId = null;
   if (s.hoveredId && !(s.hoveredId in slice.services)) out.hoveredId = null;
 
-  const events = diffEvents(s, slice, p);
+  const events = diffActivity({ prev: s, next: slice }, p, now, spiking, nextEventSeq);
   if (events.length) out.events = [...events, ...s.events].slice(0, MAX_EVENTS);
   if (p.services?.length) out.trends = sampleTrends(s.trends, slice.services, SAMPLE_SECONDS);
   return out;
@@ -361,76 +348,7 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
 
 // ---- activity feed + trends -----------------------------------------------------------
 
-const ev = (e: Omit<ActivityEvent, 'id'>): ActivityEvent => ({ ...e, id: `ev-${++eventSeq}` });
-const firstLine = (s?: string) => s?.split('\n')[0];
-
-/** Turn "what changed" into human sentences. Removed items are ignored on purpose. */
-function diffEvents(s: State, next: WorldSlice, p: WorldPatch): ActivityEvent[] {
-  const now = Date.now();
-  const out: ActivityEvent[] = [];
-  const name = (id: string) => next.services[id]?.name ?? s.services[id]?.name ?? 'node';
-  const where = (id: string) => next.projects[next.services[id]?.projectId ?? '']?.name;
-
-  for (const d of p.deployments ?? []) {
-    const prev = s.deployments[d.id];
-    const who = name(d.serviceId);
-    const done = d.status === 'success' || d.status === 'failed';
-    if (!prev && isActiveDeploy(d)) {
-      out.push(ev({ kind: 'deploy-start', at: now, tone: 'info', text: `${who} deploy started`, detail: firstLine(d.commit?.message) ?? where(d.serviceId), serviceId: d.serviceId }));
-    } else if (done && (prev ? prev.status !== d.status : now - (d.finishedAt ?? d.createdAt) < RECENT_CART_MS)) {
-      // Also reports deploys we only ever saw finished (they were faster than a poll).
-      const took = d.finishedAt && (d.startedAt ?? d.createdAt) ? duration(d.finishedAt - (d.startedAt ?? d.createdAt)) : undefined;
-      out.push(
-        d.status === 'success'
-          ? ev({ kind: 'deploy-ok', at: now, tone: 'ok', text: `${who} deployed`, detail: took ? `in ${took}` : undefined, serviceId: d.serviceId })
-          : ev({ kind: 'deploy-fail', at: now, tone: 'crit', text: `${who} deploy failed`, detail: d.log.at(-1), serviceId: d.serviceId }),
-      );
-    }
-  }
-
-  for (const svc of p.services ?? []) {
-    const prev = s.services[svc.id];
-    if (!prev) {
-      // Container nodes (`<service>::<container>`) appear once stats arrive; not news.
-      if (!svc.id.includes('::')) out.push(ev({ kind: 'new-node', at: now, tone: 'info', text: `New node ${svc.name}`, detail: where(svc.id), serviceId: svc.id }));
-      continue;
-    }
-    if (prev.status !== svc.status) {
-      const t =
-        svc.status === 'error'
-          ? { kind: 'down' as const, tone: 'crit' as const, text: `${svc.name} is down` }
-          : prev.status === 'error' && svc.status === 'running'
-            ? { kind: 'up' as const, tone: 'ok' as const, text: `${svc.name} recovered` }
-            : svc.status === 'idle'
-              ? { kind: 'stopped' as const, tone: 'muted' as const, text: `${svc.name} stopped` }
-              : prev.status === 'idle' && svc.status === 'running'
-                ? { kind: 'started' as const, tone: 'ok' as const, text: `${svc.name} started` }
-                : null;
-      if (t) out.push(ev({ at: now, ...t, detail: where(svc.id), serviceId: svc.id }));
-    }
-    // CPU spikes: once per crossing, at most once a minute per node.
-    if (svc.cpu >= CPU_SPIKE && prev.cpu < CPU_SPIKE && now - (spiking.get(svc.id) ?? 0) > 60_000) {
-      spiking.set(svc.id, now);
-      out.push(ev({ kind: 'cpu', at: now, tone: 'warn', text: `${svc.name} CPU ${Math.round(svc.cpu * 100)}%`, detail: where(svc.id), serviceId: svc.id }));
-    }
-  }
-  return out;
-}
-
-/** Start the feed with recent history so it isn't empty on load. */
-function seedEvents(w: WorldSlice): ActivityEvent[] {
-  return Object.values(w.deployments)
-    .filter((d) => !isActiveDeploy(d))
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 12)
-    .map((d) => {
-      const who = w.services[d.serviceId]?.name ?? 'node';
-      const at = d.finishedAt ?? d.createdAt;
-      return d.status === 'success'
-        ? ev({ kind: 'deploy-ok', at, tone: 'ok', text: `${who} deployed`, detail: firstLine(d.commit?.message), serviceId: d.serviceId })
-        : ev({ kind: 'deploy-fail', at, tone: 'crit', text: `${who} deploy failed`, detail: d.log.at(-1) ?? firstLine(d.commit?.message), serviceId: d.serviceId });
-    });
-}
+/** Cluster totals over time, one sample per metric tick (KPI sparklines). */
 
 function sampleTrends(t: Trends, services: Rec<Service>, sampleSeconds: number): Trends {
   const now = Date.now();

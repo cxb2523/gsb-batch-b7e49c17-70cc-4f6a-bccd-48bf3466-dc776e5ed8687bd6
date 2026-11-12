@@ -35,6 +35,7 @@ import {
   type Structure,
   type Transport,
 } from './api';
+import { ContainerPresence, containerKey, containerNodeId, isContainerNodeId } from './presence';
 
 const HIST = 30;
 const KEEP_DEPLOYS = 80;
@@ -61,12 +62,6 @@ const milli = (v: number) => Math.round(v * 1000) / 1000;
 const NET_WINDOW_MS = 5 * 60_000;
 
 type NetSample = { at: number; rx: number; tx: number };
-
-/** Id of the node for one container of a service; see `compose()`. */
-export const containerNodeId = (serviceId: string, key: string) => `${serviceId}::${key}`;
-
-/** Swarm tasks are named `app.1.<task id>`; drop the task id so the node survives redeploys. */
-const containerKey = (name: string) => name.replace(/^(.+\.\d+)\.[a-z0-9]{10,}$/, '$1');
 
 /** Main containers first (they take the service id, so deploy carts go there), helpers last. */
 const MAIN = /(^|[-_.])(web|app|api|server|frontend)([-_.]|$)/i;
@@ -109,8 +104,11 @@ export class Collector {
   private deploys: MappedDeploy[] = [];
   private details = new Map<string, Details>();
   private metrics = new Map<string, Metric>();
-  /** Container keys per service id (main container first, then by name, so node order is stable). */
-  private containerKeys = new Map<string, string[]>();
+  /**
+   * Per-service container presence with grace-period bookkeeping: a key missing from one or two
+   * `docker ps` samples keeps its node, metrics and position instead of being reborn as a new id.
+   */
+  private presence = new ContainerPresence();
   /** Compose stacks' containers by service id, from Dokploy's label match. */
   private composeContainers = new Map<string, ComposeContainer[]>();
   private netHistory = new Map<string, NetSample[]>();
@@ -232,13 +230,31 @@ export class Collector {
 
   private async refreshContainers() {
     const stacks = (this.structure?.services ?? []).filter((s) => s.kind === 'compose' && s.appName);
+    this.presence.prune(new Set(this.structure?.services.map((s) => s.id) ?? []));
     // One call per stack: stop at the first failure (e.g. a proxy answering 404 while 3Dokploy
     // itself redeploys), so a burst of errors can't get the viewer banned by fail2ban/CrowdSec.
+    // A failed/skipped sample is simply not folded into presence: nodes keep their previous
+    // state rather than being marked absent because the listing call failed.
     let failed = false;
     await mapLimit(stacks, 2, async (svc) => {
       if (failed) return;
       try {
-        this.composeContainers.set(svc.id, await fetchComposeContainers(this.t, svc.appName!));
+        const containers = await fetchComposeContainers(this.t, svc.appName!);
+        this.composeContainers.set(svc.id, containers);
+        // Role-sorted on the first sample (main container takes the service id); later keys are
+        // appended by the tracker so an existing key never shifts position.
+        const keys = containers.map((c) => containerKey(c.name)).sort(byRole);
+        const evicted = this.presence.for(svc.id).observe(keys);
+        // The grace window ran out: the node is really gone, release its retained metrics and
+        // network history. The main container's node id equals the service id (aggregate metric),
+        // which must survive as long as the service does — never delete that one here.
+        for (const key of evicted) {
+          const id = containerNodeId(svc.id, key);
+          if (isContainerNodeId(id)) {
+            this.metrics.delete(id);
+            this.netHistory.delete(id);
+          }
+        }
       } catch (e) {
         failed = true;
         this.warn('containers', e);
@@ -257,13 +273,26 @@ export class Collector {
     const now = Date.now();
     for (const svc of this.structure.services) {
       if (!svc.appName) continue;
+      const tracked = this.presence.get(svc.id);
       const listed = this.composeContainers.get(svc.id);
       const names = new Set(listed?.map((c) => c.name));
       const own = stats.filter((c) => names.has(c.name) || belongsTo(c.name, svc.appName!));
-      this.measure(svc.id, own, now);
-      const keys = (listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))]).sort(byRole);
-      this.containerKeys.set(svc.id, keys);
-      for (const key of keys) this.measure(containerNodeId(svc.id, key), own.filter((c) => containerKey(c.name) === key), now);
+      // The service-level metric mirrors all its containers. When this sample lists nothing for
+      // the service (a blank `docker ps`, a failed container-list call) keep the last values
+      // instead of zeroing history.
+      if (own.length) this.measure(svc.id, own, now);
+      // Keys come from the presence tracker once a container list has been fetched. Before that
+      // ever happens (or when the listing endpoint keeps failing) fall back to what stats show.
+      const keys = tracked
+        ? tracked.keys()
+        : [...new Set(own.map((c) => containerKey(c.name)))].sort(byRole);
+      for (const key of keys) {
+        const containers = own.filter((c) => containerKey(c.name) === key);
+        // No stats for the key in this sample: the container is temporarily absent (or hidden by
+        // a partial `docker ps`). Leave its metric, CPU history and network rate untouched.
+        if (!containers.length) continue;
+        this.measure(containerNodeId(svc.id, key), containers, now);
+      }
     }
   }
 
@@ -351,20 +380,39 @@ export class Collector {
         containers: m?.containers,
         lastDeploy: lastDeploy.get(svc.id) ?? null,
       };
-      const keys = this.containerKeys.get(svc.id) ?? [];
+      const tracked = this.presence.get(svc.id);
+      const keys = tracked?.keys() ?? [];
+      // Keyed by the *normalized* key, so Swarm task names (`app.1.<task id>`) match after
+      // the task id is stripped; absent keys simply have no entry here.
+      const listed = new Map((this.composeContainers.get(svc.id) ?? []).map((c) => [containerKey(c.name), c]));
+      const absent = new Set(tracked?.absentKeys() ?? []);
+      // A compose service with a single container stays a plain service node (no split), but it
+      // still goes idle while its one container is inside the grace window instead of keeping a
+      // stale "running" state. Services with no container tracking at all are left untouched.
+      if (keys.length === 1 && absent.has(keys[0]!)) {
+        return [{ ...node, status: node.status === 'error' ? 'error' : 'idle', description: `${node.description ?? svc.name} (reconnecting)` }];
+      }
       if (keys.length < 2) return [node];
-      const listed = new Map(this.composeContainers.get(svc.id)?.map((c) => [c.name, c]));
       return keys.map((key, i) => {
         const cm = this.metrics.get(containerNodeId(svc.id, key));
         const c = listed.get(key);
         return {
           ...node,
-          // A failed deploy leaves the old containers running: the first node (it keeps the service id,
-          // deploys and alerts hang off it) keeps Dokploy's error.
-          status: c ? (i === 0 && node.status === 'error' ? 'error' : containerStatus(c, node.status)) : node.status,
+          // The first node keeps the service id, so deploy carts and alerts stay attached to it
+          // even when its container is momentarily absent. A failed deploy leaves the old
+          // containers running, so the main node also keeps Dokploy's error while the service
+          // errors. An absent node goes idle (or inherits the service's error); a present one
+          // takes its container's own state.
+          status: c
+            ? i === 0 && node.status === 'error'
+              ? 'error'
+              : containerStatus(c, node.status)
+            : node.status === 'error'
+              ? 'error'
+              : 'idle',
           id: i === 0 ? svc.id : containerNodeId(svc.id, key),
           name: containerLabel(key, svc.appName ?? ''),
-          description: `${svc.name} · container ${key}`,
+          description: absent.has(key) ? `${svc.name} · container ${key} (reconnecting)` : `${svc.name} · container ${key}`,
           domain: i === 0 ? node.domain : undefined,
           replicas: 1,
           memLimitMb: cm?.memLimitMb || node.memLimitMb,
@@ -372,6 +420,7 @@ export class Collector {
           memMb: cm?.memMb ?? 0,
           cpuHist: cm?.hist ?? [],
           net: cm ? { rxBps: cm.rxBps, txBps: cm.txBps } : undefined,
+          // No sample this round: show the last known container count instead of a misleading 0.
           containers: cm?.containers,
         };
       });
