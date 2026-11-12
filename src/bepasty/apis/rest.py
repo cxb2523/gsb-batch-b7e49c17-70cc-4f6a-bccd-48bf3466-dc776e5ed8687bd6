@@ -37,8 +37,11 @@ def rest_errorhandler(func):
         except HTTPException as exc:
             return error_message(exc.description, exc.code)
         except Exception:
-            if current_app.propagate_exceptions:
-                # if testing/debug mode, re-raise
+            # if testing/debug mode, re-raise (same logic as Flask)
+            propagate = current_app.config.get('PROPAGATE_EXCEPTIONS')
+            if propagate is None:
+                propagate = current_app.testing or current_app.debug
+            if propagate:
                 raise
             exc = InternalServerError()
             return error_message(exc.description, exc.code)
@@ -58,7 +61,7 @@ class RestBase(MethodView):
 
 
 class ItemUploadView(RestBase):
-    def update_item(self, item, name):
+    def update_item(self, item, name, new_item):
         # Check the actual size of the file on the server against limit
         # Either 0 if new file or n bytes of already uploaded file
         Upload.filter_size(item.data.size)
@@ -69,6 +72,18 @@ class ItemUploadView(RestBase):
 
         # Get Content-Range and check if Range is consistent with server state
         file_range = ContentRange.from_request()
+
+        # The declared total size must not exceed the permitted size
+        Upload.filter_size(file_range.complete)
+
+        if new_item:
+            # Remember the total size declared by the first chunk, so that
+            # continued chunks can be checked for consistency with it.
+            item.meta[SIZE] = file_range.complete
+        elif file_range.complete != item.meta[SIZE]:
+            raise Conflict(description='Content-Range total size inconsistent. '
+                                       'Total size declared by first chunk: %d' % item.meta[SIZE])
+
         if not item.data.size == file_range.begin:
             raise Conflict(description='Content-Range inconsistent. Last byte on Server: %d' % item.data.size)
 
@@ -145,45 +160,49 @@ class ItemUploadView(RestBase):
         # Check the file size from Request
         Upload.filter_size(file_size)
 
-        # Check if Transaction-ID is available for continued upload
-        if not request.headers.get(TRANSACTION_ID):
-            # Create ItemName and empty file in Storage
-            name = ItemName.create(current_app.storage)
-            item = current_app.storage.create(name, 0)
-
-            # set max lifetime
-            maxtime = get_maxlife(request.headers, underscore=False)
-            maxlife_timestamp = int(time.time()) + maxtime if maxtime > 0 else maxtime
-            # Fill meta with data from Request
-            Upload.meta_new(item, 0, file_name, file_type,
-                            'application/octet-stream',
-                            name, maxlife_stamp=maxlife_timestamp)
-            new_item = True
-        else:
-            # Get file name from Transaction-ID and open from Storage
-            trans_id_s = request.headers.get(TRANSACTION_ID)
-            trans_id_b = trans_id_s if isinstance(trans_id_s, bytes) else trans_id_s.encode()
-            try:
-                name_b = base64.b64decode(trans_id_b)
-            except (base64.binascii.Error, TypeError):
-                raise BadRequest(description=f'Could not decode {TRANSACTION_ID}')
-            name = name_b if isinstance(name_b, str) else name_b.decode()
-            try:
-                item = current_app.storage.openwrite(name)
-            except OSError as e:
-                if e.errno == errno.ENOENT:
-                    raise BadRequest(description='Could not find storage item for transaction id')
-                raise
-            new_item = False
-
+        name = None
+        item = None
         response = None
+        # Check if Transaction-ID is available for continued upload
+        new_item = not request.headers.get(TRANSACTION_ID)
         try:
-            response = self.update_item(item, name)
+            if new_item:
+                # Create ItemName and empty file in Storage
+                name = ItemName.create(current_app.storage)
+                item = current_app.storage.create(name, 0)
+
+                # set max lifetime
+                maxtime = get_maxlife(request.headers, underscore=False)
+                maxlife_timestamp = int(time.time()) + maxtime if maxtime > 0 else maxtime
+                # Fill meta with data from Request
+                Upload.meta_new(item, 0, file_name, file_type,
+                                'application/octet-stream',
+                                name, maxlife_stamp=maxlife_timestamp)
+            else:
+                # Get file name from Transaction-ID and open from Storage
+                trans_id_s = request.headers.get(TRANSACTION_ID)
+                trans_id_b = trans_id_s if isinstance(trans_id_s, bytes) else trans_id_s.encode()
+                try:
+                    name_b = base64.b64decode(trans_id_b)
+                except (base64.binascii.Error, TypeError):
+                    raise BadRequest(description=f'Could not decode {TRANSACTION_ID}')
+                name = name_b if isinstance(name_b, str) else name_b.decode()
+                try:
+                    item = current_app.storage.openwrite(name)
+                except OSError as e:
+                    if e.errno == errno.ENOENT:
+                        raise BadRequest(description='Could not find storage item for transaction id')
+                    raise
+
+            response = self.update_item(item, name, new_item)
             return response
         finally:
-            # If error response or exception on a new item path, remove item
-            if new_item and not isinstance(response, Response):
-                current_app.storage.remove(name)
+            # If error response or exception, close the item. If it was newly
+            # created, also remove it again, so no garbage files remain.
+            if not isinstance(response, Response) and item is not None:
+                item.close()
+                if new_item:
+                    current_app.storage.remove(name)
 
     @rest_errorhandler
     def get(self):
@@ -213,8 +232,10 @@ class ItemDetailView(DownloadView, RestBase):
         raise Conflict(description=error)
 
     def response(self, item, name):
+        meta = filter_internal(item.meta)
+        item.close()
         return jsonify({'uri': url_for('bepasty_apis.items_detail', name=name),
-                        'file-meta': filter_internal(item.meta)})
+                        'file-meta': meta})
 
     @rest_errorhandler
     def get(self, name):

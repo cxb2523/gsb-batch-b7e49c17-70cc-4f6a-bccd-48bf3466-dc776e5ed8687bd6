@@ -6,6 +6,13 @@ Release 1.3.0 (not released yet)
 
 Fixes:
 
+- REST api: harden chunked upload validation - reject Content-Range end >=
+  declared total size (400), reject a total size inconsistent with the first
+  chunk (409) and reject chunk begin != stored size (409) without modifying
+  stored data
+- REST api: remove the newly created storage item if the first chunk of an
+  upload fails, so no garbage .data/.meta files remain
+- close items before deleting expired files (fixes deletion on Windows)
 - ...
 
 New features:

@@ -95,10 +95,12 @@ class ContentRange(collections.namedtuple('ContentRange', ('begin', 'end', 'comp
         except ValueError:
             raise BadRequest(description='Content-Range header has an invalid length')
 
-        if range_begin <= range_end < range_complete:
-            return ContentRange(range_begin, range_end, range_complete)
+        if range_begin > range_end:
+            raise BadRequest(description='Content-Range header has an invalid range')
+        if range_end >= range_complete:
+            raise BadRequest(description='Content-Range end must be smaller than the total size')
 
-        raise BadRequest
+        return ContentRange(range_begin, range_end, range_complete)
 
     @classmethod
     def from_request(cls):

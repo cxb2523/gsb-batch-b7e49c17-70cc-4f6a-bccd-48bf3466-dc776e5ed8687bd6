@@ -618,6 +618,205 @@ def test_upload_transaction_id(client_fixture):
         check_err_response(response, 400)
 
 
+def test_upload_chunked_success(client_fixture):
+    """A normal two-chunk upload must succeed and deliver consistent data."""
+    app, client, faketime = client_fixture
+
+    faketime.set_time(100)
+
+    filename = 'test.py'
+    ftype = 'text/x-python'
+
+    sep = 10
+    total = len(UPLOAD_DATA)
+
+    # upload first chunk
+    data = UPLOAD_DATA[:sep]
+    range_str = f'bytes 0-{sep - 1}/{total}'
+    with _upload(client, data, token='full', filename=filename,
+                 ftype=ftype, range_str=range_str) as response:
+        check_upload_response(response, 200)
+        trans_id = response.headers[TRANSACTION_ID]
+
+    # upload second (final) chunk
+    data = UPLOAD_DATA[sep:]
+    range_str = f'bytes {sep}-{total - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        uri = check_upload_response(response, 201)
+    item_id = os.path.basename(uri)
+
+    # the background hash computation must be finished by now (_upload waits)
+    meta = make_meta(UPLOAD_DATA, filename=filename, ftype=ftype, uri=uri)
+    url = RestUrl(item_id)
+
+    # detail metadata must be consistent with the uploaded file
+    with client.get(url.detail, headers=add_auth('user', 'full')) as response:
+        check_json_response(response, meta)
+        assert response.json['file-meta'][HASH] == hashlib.sha256(UPLOAD_DATA).hexdigest()
+
+    # downloaded bytes must be identical to the uploaded data
+    with client.get(url.download, headers=add_auth('user', 'full')) as response:
+        check_data_response(response, meta, UPLOAD_DATA)
+
+
+def test_upload_chunked_range_end_overflow(client_fixture):
+    """Content-Range end must be smaller than the declared total size (400)."""
+    app, client, _ = client_fixture
+
+    sep = 10
+    total = len(UPLOAD_DATA)
+
+    # first chunk with end == total (end overflow)
+    data = UPLOAD_DATA[:sep]
+    range_str = f'bytes 0-{total}/{total}'
+    with _upload(client, data, token='full', range_str=range_str) as response:
+        check_err_response(response, 400)
+    # failed first chunk must not leave garbage files
+    assert len(os.listdir(app.config['STORAGE_FILESYSTEM_DIRECTORY'])) == 0
+
+    # valid first chunk
+    range_str = f'bytes 0-{sep - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str) as response:
+        check_upload_response(response, 200)
+        trans_id = response.headers[TRANSACTION_ID]
+
+    # continued chunk with end == total (end overflow)
+    data = UPLOAD_DATA[sep:]
+    range_str = f'bytes {sep}-{total}/{total}'
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        check_err_response(response, 400)
+
+    # the failed chunk must not have modified the stored data:
+    # uploading the correct final chunk must still succeed
+    range_str = f'bytes {sep}-{total - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        uri = check_upload_response(response, 201)
+    item_id = os.path.basename(uri)
+    with client.get(RestUrl(item_id).download,
+                    headers=add_auth('user', 'full')) as response:
+        assert response.data == UPLOAD_DATA
+
+
+def test_upload_chunked_total_mismatch(client_fixture):
+    """The declared total size must match the first chunk's declaration (409)."""
+    app, client, _ = client_fixture
+
+    sep = 10
+    total = len(UPLOAD_DATA)
+
+    # valid first chunk
+    data = UPLOAD_DATA[:sep]
+    range_str = f'bytes 0-{sep - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str) as response:
+        check_upload_response(response, 200)
+        trans_id = response.headers[TRANSACTION_ID]
+
+    # continued chunk declaring a different total size
+    data = UPLOAD_DATA[sep:]
+    range_str = f'bytes {sep}-{total}/{total + 1}'
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        check_err_response(response, 409)
+
+    # the failed chunk must not have modified the stored data:
+    # uploading the correct final chunk must still succeed
+    range_str = f'bytes {sep}-{total - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        uri = check_upload_response(response, 201)
+    item_id = os.path.basename(uri)
+    with client.get(RestUrl(item_id).download,
+                    headers=add_auth('user', 'full')) as response:
+        assert response.data == UPLOAD_DATA
+
+
+def test_upload_chunked_begin_mismatch(client_fixture):
+    """A continued chunk must start at the size stored on the server (409)."""
+    app, client, _ = client_fixture
+
+    sep = 10
+    total = len(UPLOAD_DATA)
+
+    # valid first chunk
+    data = UPLOAD_DATA[:sep]
+    range_str = f'bytes 0-{sep - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str) as response:
+        check_upload_response(response, 200)
+        trans_id = response.headers[TRANSACTION_ID]
+
+    # continued chunk with wrong begin (off by one)
+    data = UPLOAD_DATA[sep + 1:]
+    range_str = f'bytes {sep + 1}-{total - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        check_err_response(response, 409)
+
+    # the failed chunk must not have modified the stored data:
+    # uploading the correct final chunk must still succeed
+    data = UPLOAD_DATA[sep:]
+    range_str = f'bytes {sep}-{total - 1}/{total}'
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        uri = check_upload_response(response, 201)
+    item_id = os.path.basename(uri)
+    with client.get(RestUrl(item_id).download,
+                    headers=add_auth('user', 'full')) as response:
+        assert response.data == UPLOAD_DATA
+
+
+def test_upload_chunked_invalid_transaction_id(client_fixture):
+    """Undecodable or unknown Transaction-IDs must give 400 and no garbage."""
+    app, client, _ = client_fixture
+
+    sep = 10
+    total = len(UPLOAD_DATA)
+    data = UPLOAD_DATA[sep:]
+    range_str = f'bytes {sep}-{total - 1}/{total}'
+
+    # Transaction-ID that can not be decoded
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id='invalid') as response:
+        check_err_response(response, 400)
+
+    # Transaction-ID that decodes to a nonexistent item
+    trans_id = base64.b64encode(b'doesnotexist').decode()
+    with _upload(client, data, token='full', range_str=range_str,
+                 trans_id=trans_id) as response:
+        check_err_response(response, 400)
+
+    # no garbage files must remain
+    assert len(os.listdir(app.config['STORAGE_FILESYSTEM_DIRECTORY'])) == 0
+
+
+def test_upload_first_chunk_failure_cleanup(client_fixture):
+    """A failed first chunk must not leave .data/.meta files behind."""
+    app, client, _ = client_fixture
+
+    storage_dir = app.config['STORAGE_FILESYSTEM_DIRECTORY']
+    total = len(UPLOAD_DATA)
+
+    # missing Content-Range
+    with _upload(client, UPLOAD_DATA, token='full', set_range=False) as response:
+        check_err_response(response, 400)
+    assert len(os.listdir(storage_dir)) == 0
+
+    # invalid base64 encoded body
+    range_str = f'bytes 0-{total - 1}/{total}'
+    with _upload(client, UPLOAD_DATA, token='full', range_str=range_str,
+                 encode=False) as response:
+        check_err_response(response, 400)
+    assert len(os.listdir(storage_dir)) == 0
+
+    # invalid maxlife headers
+    with _upload(client, UPLOAD_DATA, token='full',
+                 lifetime=['foo', 'MINUTES']) as response:
+        check_err_response(response, 400)
+    assert len(os.listdir(storage_dir)) == 0
+
+
 def test_upload_too_big(client_fixture):
     app, client, _ = client_fixture
 

@@ -60,6 +60,9 @@ def delete_if_lifetime_over(item, name):
     :return: True if the file was deleted, otherwise False
     """
     if 0 < item.meta[TIMESTAMP_MAX_LIFE] < time.time():
+        # Close the item first, so the files can also be removed on
+        # platforms that do not allow deleting open files (e.g. Windows).
+        item.close()
         try:
             current_app.storage.remove(name)
         except OSError:
