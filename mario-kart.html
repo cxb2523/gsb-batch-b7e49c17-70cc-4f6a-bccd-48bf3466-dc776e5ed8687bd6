@@ -190,6 +190,7 @@ var TRACKS = [
 
 var ICONS = {banana:'🍌', green:'🟢', red:'🔴', mushroom:'🍄', star:'⭐'};
 var LAPS = 3, TAU = Math.PI * 2;
+var START_ZONE_U = 0.1; // proximidade (em progresso) considerada zona da linha de partida
 var selChar = CHARACTERS[0], selTrack = TRACKS[0];
 
 function $(i){ return document.getElementById(i); }
@@ -728,6 +729,41 @@ function createKartMesh(charData){
 /* ===== CLASSE DE FÍSICA DO KART COM DESLIZE NAS MURETAS ===== */
 var karts = [], playerKart = null, raceTime = 0, gameState = 'MENU', frame = 0;
 
+// Corrige contato com a mureta: puxa o kart de volta à borda segura e mantém
+// o componente de deslize tangencial à pista, independente de para onde o
+// kart esteja apontando. Retorna true se houve correção.
+function resolveWallContact(kart, nextPos, heading, trackPt, wallNormal, trackTan, maxSafeDist){
+  // Sempre reposiciona na borda segura em torno do centro da pista,
+  // mesmo com o nariz do kart virado para fora
+  var clamped = trackPt.clone().addScaledVector(wallNormal, maxSafeDist);
+  nextPos.x = clamped.x;
+  nextPos.z = clamped.z;
+
+  // Tangente mais favorável conforme o sentido do movimento do kart
+  var dotTan = heading.dot(trackTan);
+  var signTan = dotTan >= 0 ? 1 : -1;
+  var slideTan = trackTan.clone().multiplyScalar(signTan);
+
+  // Conserva o componente tangencial da velocidade: desliza ao longo da mureta
+  // em vez de zerar a velocidade ou prender o kart na parede
+  var tangentSpeed = kart.speed * dotTan;
+  nextPos.addScaledVector(slideTan, tangentSpeed);
+
+  // Alinha suavemente o ângulo do kart com a curva da mureta
+  var targetTangentAngle = Math.atan2(slideTan.x, slideTan.z);
+  var angleDiff = targetTangentAngle - kart.angle;
+  while(angleDiff > Math.PI) angleDiff -= TAU;
+  while(angleDiff < -Math.PI) angleDiff += TAU;
+  kart.angle += angleDiff * 0.14;
+
+  // Redução leve de velocidade e ritmo do som de colisão mantidos
+  kart.speed *= 0.992;
+  if(kart.isPlayer && Math.abs(kart.speed) > 0.4 && frame % 16 === 0){
+    sndCrash();
+  }
+  return true;
+}
+
 function Kart3D(charData, isPlayer, gridPos){
   this.char = charData;
   this.isPlayer = isPlayer;
@@ -750,6 +786,7 @@ function Kart3D(charData, isPlayer, gridPos){
   this.pitchVel = 0; this.rollVel = 0;
 
   this.lap = 1;
+  this.lapGateArmed = false; // precisa sair da zona da partida antes de poder contar nova volta
   this.coins = 0;
   this.item = null;
   this.driftCharge = 0;
@@ -822,8 +859,8 @@ Kart3D.prototype.update = function(){
   this.speed = Math.max(-curCap*0.4, Math.min(curCap, this.speed));
 
   // MOVIMENTO COM DESLIZE LIVRE NAS MURETAS (ZERO ENROSCAMENTO)
-  var dir = new THREE.Vector3(Math.sin(this.angle), 0, Math.cos(this.angle));
-  var nextPos = this.mesh.position.clone().add(dir.multiplyScalar(this.speed));
+  var heading = new THREE.Vector3(Math.sin(this.angle), 0, Math.cos(this.angle));
+  var nextPos = this.mesh.position.clone().add(heading.clone().multiplyScalar(this.speed));
 
   var trackPt = trackCurve.getPointAt(this.progressU); trackPt.y = 0;
   var trackTan = trackCurve.getTangentAt(this.progressU).normalize(); trackTan.y = 0;
@@ -835,31 +872,10 @@ Kart3D.prototype.update = function(){
 
   if(distFromCenter > maxSafeDist){
     var wallNormal = toKart.clone().normalize();
-    
-    // Reposiciona na borda sem prender
-    nextPos.copy(trackPt.clone().add(wallNormal.clone().multiplyScalar(maxSafeDist)));
 
-    // Se estiver a andar na direção da parede, desliza e alinha com a tangente da pista
-    var dotNormal = dir.dot(wallNormal);
-    if(dotNormal > 0){
-      // Calcula direção tangente da pista mais favorável
-      var dotTan = dir.dot(trackTan);
-      var signTan = dotTan >= 0 ? 1 : -1;
-      var targetTangentAngle = Math.atan2(trackTan.x * signTan, trackTan.z * signTan);
-
-      // Redireciona suavemente o ângulo do kart para acompanhar a curva da mureta
-      var angleDiff = targetTangentAngle - this.angle;
-      while(angleDiff > Math.PI) angleDiff -= TAU;
-      while(angleDiff < -Math.PI) angleDiff += TAU;
-      this.angle += angleDiff * 0.14;
-
-      // Deslize com conservação de impulso (sem parar bruscamente)
-      this.speed *= 0.992;
-      
-      if(this.isPlayer && Math.abs(this.speed) > 0.4 && frame % 16 === 0){
-        sndCrash();
-      }
-    }
+    // Reposiciona na borda segura e preserva o componente de velocidade
+    // tangencial à mureta, qualquer que seja a orientação do kart
+    resolveWallContact(this, nextPos, heading, trackPt, wallNormal, trackTan, maxSafeDist);
   }
 
   this.mesh.position.x = nextPos.x;
@@ -921,15 +937,30 @@ Kart3D.prototype.updateInteractiveElements = function(){
     }
   }, this);
 
-  if(closestU < 0.1 && this.progressU > 0.9 && !this.finished){
-    this.lap++;
-    if(this.lap > LAPS){
-      this.finished = true; this.fTime = raceTime;
-      if(this.isPlayer) onPlayerFinish();
-    }
-  }
+  processLapGate(this, closestU, this.progressU);
   this.progressU = closestU;
 };
+
+// Decide a contagem de voltas por cruzamento da linha de partida.
+// O kart só pode contar uma nova volta depois de ter SAÍDO da zona da
+// partida (lapGateArmed), e apenas uma vez por cruzamento; voltas além de
+// LAPS nunca mais são acumuladas.
+function processLapGate(kart, closestU, prevU){
+  var inStartZone = closestU < START_ZONE_U;
+  if(!inStartZone){
+    // Marca que o kart deixou a zona da partida; próximo retorno pode contar
+    kart.lapGateArmed = true;
+  } else if(kart.lapGateArmed && !kart.finished && kart.lap <= LAPS && prevU > 0.9){
+    // Cruzamento real na direção correta, contado uma única vez
+    kart.lapGateArmed = false;
+    kart.lap++;
+    if(kart.lap > LAPS){
+      kart.finished = true;
+      kart.fTime = raceTime;
+      if(kart.isPlayer) onPlayerFinish();
+    }
+  }
+}
 
 Kart3D.prototype.getAIControls = function(){
   var nextU = (this.progressU + 0.03) % 1;
