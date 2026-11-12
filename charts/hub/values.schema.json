@@ -25,6 +25,10 @@
     "imageVerification": {
       "type": "object",
       "additionalProperties": false,
+      "required": [
+        "enabled",
+        "validationFailureAction"
+      ],
       "description": "Kyverno policies (templates/kyverno/) requiring UUG.AI images to be signed by UUG.AI. Created only when the cluster serves kyverno.io/v1.",
       "properties": {
         "enabled": {
@@ -33,17 +37,22 @@
         },
         "validationFailureAction": {
           "type": "string",
+          "minLength": 1,
           "enum": [
             "Audit",
             "Enforce"
           ],
-          "description": "Audit reports unsigned images but lets them run; Enforce rejects them."
+          "description": "Audit reports unsigned images but lets them run; Enforce rejects them. Only Audit or Enforce are allowed; any other value fails at helm template/lint."
         }
       }
     },
     "imageHardening": {
       "type": "object",
       "additionalProperties": false,
+      "required": [
+        "enabled",
+        "validationFailureAction"
+      ],
       "description": "Kyverno policies (templates/kyverno/*-hardened-images.yaml) requiring images to come from a hardened UUG.AI release (signed image-hardening attestation). Created only when the cluster serves kyverno.io/v1.",
       "properties": {
         "enabled": {
@@ -52,11 +61,12 @@
         },
         "validationFailureAction": {
           "type": "string",
+          "minLength": 1,
           "enum": [
             "Audit",
             "Enforce"
           ],
-          "description": "Audit reports images without a hardened release but lets them run; Enforce rejects them."
+          "description": "Audit reports images without a hardened release but lets them run; Enforce rejects them. Only Audit or Enforce are allowed; any other value fails at helm template/lint."
         }
       }
     },
