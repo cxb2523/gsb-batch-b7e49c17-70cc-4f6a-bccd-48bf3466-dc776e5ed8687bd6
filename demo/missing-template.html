@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>演示 2/5：模板缺失</title>
+<style>
+  body{font:15px/1.7 system-ui,sans-serif;margin:2em auto;max-width:760px;padding:0 1em}
+  .demo-note{background:#fef9c3;border:1px solid #eab308;padding:.8em 1em;border-radius:6px}
+  .verdict{position:fixed;bottom:0;left:0;right:0;padding:10px 16px;font:14px/1.5 ui-monospace,Consolas,monospace;color:#fff}
+  .verdict.pass{background:#166534} .verdict.fail{background:#b91c1c}
+  template{display:none}
+</style></head>
+<body>
+<div class="demo-note"><strong>演示 2/5：模板缺失</strong><br>密文模板应有 3 片，实际只放了 2 片。预期：页面上方红色错误区域提示「模板缺失」，本说明文字保留（页面不白屏）。</div>
+<template id="_ct0">WA0ZAkFVWRFIUVUMDxAMGQNIVYPFudeViNXE4oTNtYTZ48WPqde9+4Pl/8jh+kUCRFhGXwFbURxZEgkcE1gASVALCQIdF0hUTxsFAgZOWEoeG1QHAEcRXVRGUkQLDAJIVkcdSF1eEBMHCgMbSAURRA9fWhANWEoFCkwPW0VPX1VLDVgNXFHL1/G</template>
+<template id="_ct1">eiYrXkrSNx/WAkfGNxrXVv63V7PWI5bJXShEcDg1CDYLIzom77ID/qNWfi9bT14XQtY7r5sKMq9SbxYPw0Mvg2Z+jldKysiYEHgobX0WRipPWkrKH5eyGrfuA1LrYu7DW2OeL57uI5fh4ZHcfC0SNyszKy+ScqJjYsZuC7f2Kp/SG+a8MHkINWB</template>
+<script>function gkFrRY(){return Math.max(85,15);}
+/* lazy init — hardened bootstrap:
+   任一阶段失败都会汇总到页面上方一处可见的错误区域，不再整页空白；
+   外部脚本仅放行同源地址或白名单前缀，javascript: 一律禁止。 */
+(function(){
+'use strict';
+
+/* ---- 配置 ---- */
+var TEMPLATE_PREFIX='_ct';
+var TEMPLATE_COUNT=3;
+var KEY_B64='ZGVtby1rZXktMDEyMw==';
+/* 可信外部脚本地址前缀（同源地址始终放行，无需在此列出） */
+var ALLOWED_SCRIPT_SRC_PREFIXES=[];
+
+/* ---- 可见错误区域：所有失败都收敛到这里 ---- */
+function showError(stage,message){
+  var box=document.getElementById('_bootError');
+  if(!box){
+    box=document.createElement('div');
+    box.id='_bootError';
+    box.style.cssText='display:block;position:fixed;top:0;left:0;right:0;z-index:99999;'+
+      'background:#7f1d1d;color:#fff;padding:12px 16px;'+
+      'font:14px/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap;';
+    (document.body||document.documentElement).appendChild(box);
+  }
+  box.style.display='block';
+  var line=document.createElement('div');
+  line.textContent='['+stage+'] '+message;
+  box.appendChild(line);
+}
+
+/* ---- 外部脚本地址校验：同源 或 白名单前缀；javascript: 一律禁止 ---- */
+function isScriptSrcAllowed(src){
+  if(/^\s*javascript\s*:/i.test(src)) return false;
+  var url;
+  try{ url=new URL(src,window.location.href); }
+  catch(e){ return false; }
+  /* 同源（含 file:// 下的相对地址，origin 与 protocol 需同时一致，
+     以排除 javascript:/data: 等伪协议） */
+  if(url.origin===window.location.origin&&url.protocol===window.location.protocol) return true;
+  for(var i=0;i<ALLOWED_SCRIPT_SRC_PREFIXES.length;i++){
+    if(src.indexOf(ALLOWED_SCRIPT_SRC_PREFIXES[i])===0) return true;
+  }
+  return false;
+}
+
+try{
+  /* 1. 密钥：为空或长度为零直接判定为配置错误，不进入解码循环 */
+  var key=atob(KEY_B64);
+  if(!key||key.length===0){
+    showError('配置错误','解密密钥为空或长度为零，已中止启动。');
+    return;
+  }
+
+  /* 2. 收集密文模板 */
+  var parts=[];
+  for(var i=0;i<TEMPLATE_COUNT;i++){
+    var el=document.getElementById(TEMPLATE_PREFIX+i);
+    if(!el){
+      showError('模板缺失','未找到密文模板 #'+TEMPLATE_PREFIX+i+'（第 '+i+' 片），已中止启动。');
+      return;
+    }
+    parts.push(el.innerHTML);
+  }
+  var joined=parts.join('').replace(/\s+/g,'');
+
+  /* 3. Base64 解码 */
+  var decoded;
+  try{
+    decoded=atob(joined);
+  }catch(e){
+    showError('Base64 非法','密文不是合法的 Base64（可能被截断或篡改）：'+(e&&e.message?e.message:e));
+    return;
+  }
+  if(decoded.length===0){
+    showError('Base64 非法','密文解码结果为空（内容可能被截断），已中止启动。');
+    return;
+  }
+
+  /* 4. 逐字节异或 */
+  var bytes=new Uint8Array(decoded.length);
+  for(var j=0;j<decoded.length;j++){
+    bytes[j]=decoded.charCodeAt(j)^key.charCodeAt(j%key.length);
+  }
+
+  /* 5. UTF-8 解码（fatal 模式，坏字节序列会抛出并被捕获） */
+  var html;
+  try{
+    html=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+  }catch(e){
+    showError('UTF-8 解码失败','还原出的字节流不是合法 UTF-8：'+(e&&e.message?e.message:e));
+    return;
+  }
+
+  /* Set page title */
+  var _t=/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  if(_t) document.title=_t[1];
+
+  /* Extract head and body */
+  var headM=/<head[^>]*>([\s\S]*?)<\/head>/i.exec(html);
+  var bodyM=/<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+  var headHtml=headM?headM[1]:'';
+  var bodyHtml=bodyM?bodyM[1]:html;
+
+  /* Copy allowed head elements: 仅 STYLE / META / LINK / BASE */
+  if(headHtml){
+    var tmp=document.createElement('div');
+    tmp.innerHTML=headHtml.replace(/<title[^>]*>[\s\S]*?<\/title>/i,'');
+    while(tmp.firstChild){
+      var node=tmp.firstChild;
+      var tag=(node.tagName||'').toUpperCase();
+      if(tag==='STYLE'||tag==='META'||tag==='LINK'||tag==='BASE'){
+        document.head.appendChild(node);
+      }else{
+        tmp.removeChild(node);
+      }
+    }
+  }
+
+  /* Extract scripts from body */
+  var scripts=[];
+  bodyHtml=bodyHtml.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi,function(_m,attrs,code){
+    var s=/src\s*=\s*["']([^"']+)["']/i.exec(attrs);
+    if(s){scripts.push([1,s[1]]);}
+    else if(code.replace(/\s+/g,'')){scripts.push([0,code]);}
+    return '';
+  });
+
+  /* Insert body */
+  document.body.innerHTML=bodyHtml;
+
+  /* Re-run scripts via <script> tag (global scope)。
+     内联脚本照常执行；外部脚本仅放行同源或白名单地址，其余跳过并记录。 */
+  for(var k=0;k<scripts.length;k++){
+    var item=scripts[k];
+    if(item[0]===1){
+      if(!isScriptSrcAllowed(item[1])){
+        showError('脚本拦截','已拦截不可信的外部脚本地址：'+item[1]);
+        continue;
+      }
+      var ext=document.createElement('script');
+      ext.src=item[1];
+      document.body.appendChild(ext);
+    }else{
+      var inl=document.createElement('script');
+      inl.textContent=item[1];
+      document.body.appendChild(inl);
+    }
+  }
+}catch(err){
+  /* 兜底：任何未预期异常都不得冒泡成空白页 */
+  showError('未知错误',String(err&&err.message?err.message:err));
+}
+})();</script>
+<script>(function(){
+  function verdict(ok,msg){
+    var d=document.createElement('div');
+    d.className='verdict '+(ok?'pass':'fail');
+    d.textContent=(ok?'验证通过 ✔ ':'验证失败 �“ ')+msg;
+    (document.body||document.documentElement).appendChild(d);
+  }
+  function errText(){
+    var b=document.getElementById('_bootError');
+    return b?b.textContent:'';
+  }
+
+  var t=errText();
+  var ok=t.indexOf('模板缺失')!==-1 && document.querySelector('.demo-note')!==null;
+  verdict(ok,'错误区域'+(t?'已显示：'+t:'未出现')+'；页面未白屏');
+
+})();</script>
+</body></html>

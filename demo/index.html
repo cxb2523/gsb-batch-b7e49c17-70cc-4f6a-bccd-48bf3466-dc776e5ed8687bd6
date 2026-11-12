@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>启动流程演示样例</title>
+<style>body{font:15px/1.8 system-ui,sans-serif;margin:2em auto;max-width:760px;padding:0 1em}
+li{margin:.4em 0}</style></head>
+<body>
+<h1>启动流程演示样例</h1>
+<p>直接点击下列链接在浏览器中打开（支持 file:// 协议），每页底部会显示绿色「验证通过」或红色「验证失败」。</p>
+<ul>
+  <li><a href="ok.html">演示 1：正常密文</a> —— 标题与正文被还原，内联脚本执行</li>
+  <li><a href="missing-template.html">演示 2：模板缺失</a> —— 错误提示出现，页面不白屏</li>
+  <li><a href="bad-base64.html">演示 3：Base64 非法</a> —— 错误提示出现，页面不白屏</li>
+  <li><a href="empty-key.html">演示 4：空密钥</a> —— 判定为配置错误，不进入解码循环</li>
+  <li><a href="cross-origin-script.html">演示 5：跨域脚本</a> —— 被拦截并记录，外部脚本未插入</li>
+</ul>
+<p>正式页面 <a href="../index.html">index.html</a> 使用同一套加固后的启动逻辑。</p>
+</body></html>
