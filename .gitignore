@@ -1,0 +1,13 @@
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.mp4
+!videos/.gitkeep
+
+# X / Twitter secrets
+scripts/x-mcp.env
+.env
+*.pem
+
