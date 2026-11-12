@@ -6,7 +6,7 @@
         "dataset": {
             "type": "string",
             "title": "Dataset",
-            "description": "Default dataset with one record per scanned phone number. Numbers that could not be scanned are listed in the run's status message and OUTPUT record, not charged.",
+            "description": "Default dataset with one record per scanned phone number. Each record carries scanner_status (per-source succeeded/no_result/disabled/skipped_missing_credentials) and missing_fields plus missing_reason when a field could not be filled. Numbers that could not be scanned are listed in the run's status message (counts plus up to three reasons) and in full in the OUTPUT record, not charged.",
             "template": "{{links.publicRunUrl}}/dataset"
         },
         "log": {

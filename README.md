@@ -64,20 +64,59 @@ Each dataset record:
 
 ```json
 {
-  "input": "+919876543210",
-  "e164": "+919876543210",
+  "target": "+919876543210",
+  "status": "ok",
   "country": "IN",
-  "country_name": "India",
+  "e164": "+919876543210",
+  "local_format": "098765 43210",
+  "international": "919876543210",
   "carrier": "Reliance Jio",
-  "is_valid": true,
-  "is_possible": true,
-  "footprint_urls": [
-    "https://www.google.com/search?q=%2B919876543210",
-    "https://truecaller.com/...",
-    "..."
-  ]
+  "line_type": "mobile",
+  "valid": true,
+  "googlesearch_url_count": 12,
+  "scanners_succeeded": 3,
+  "missing_fields": [],
+  "missing_reason": null,
+  "scanner_status": {
+    "local": "succeeded",
+    "googlesearch": "succeeded",
+    "numverify": "skipped_missing_credentials",
+    "ovh": "no_result",
+    "googlecse": "succeeded"
+  },
+  "scanner_errors": {}
 }
 ```
+
+`scanner_status` says, per source, whether it `succeeded`, took part but returned `no_result`, was
+`disabled` via `disableScanners`, `skipped_missing_credentials` because no numverify key (or
+Google CSE key/CX pair) was supplied, or `skipped_unsupported_country` (OVH only serves +33, +32,
++44, +34 and +41). A source that never took part is therefore never confused with one that ran and
+had nothing to report; `scanner_errors` carries the upstream error text for sources that ran and
+failed. When phoneinfoga reports at least one successful scanner but no source supplied a country
+or E.164, `missing_fields` names the empty fields and `missing_reason` explains why, instead of
+leaving a bare `null`.
+
+## Which numbers are billed?
+
+A record (and the `Phone OSINT result` event) exists only for a number at least one phoneinfoga
+scanner actually succeeded on. Invalid format, timeout (90 s), crash, and zero successful scanners
+produce no dataset record and no charge. The `OUTPUT` key-value record keeps the complete list:
+
+```json
+{
+  "not_charged": [
+    {"number": "abc", "reason_code": "invalid_format", "reason": "not in E.164 international format (e.g. +14155552671)"},
+    {"number": "+14155552671", "reason_code": "timeout", "reason": "the scan took over 90 s"}
+  ],
+  "not_charged_by_reason": {"invalid_format": 1, "timeout": 1},
+  "scanners_skipped_for_missing_credentials": ["numverify", "googlecse"]
+}
+```
+
+The run's status message carries only the counts and at most the first three reasons (plus a
+pointer to `OUTPUT`), so it is not truncated at 900 characters. If every number fails, the run fails
+(`Actor.fail`) and no dataset record is pushed.
 
 ## Common questions
 
