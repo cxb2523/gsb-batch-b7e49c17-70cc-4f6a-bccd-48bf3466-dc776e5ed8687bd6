@@ -278,12 +278,23 @@ class HDClient:
             request_budget if request_budget is not None else settings.request_budget
         )
         self._throttled: bool = False
+        self._throttle_reason: str | None = None
         self._failures: dict[str, int] = {}
         self._metrics = RequestMetrics()
         self._cooldown = ThrottleCooldown(
             getattr(settings, "throttle_cooldown_path", ".hd_throttle_cooldown"),
             getattr(settings, "throttle_cooldown_seconds", 3600.0),
         )
+
+    def _throttle(self, reason: str) -> None:
+        """Stop this client from issuing further requests, recording why.
+
+        The first reason wins: whatever stopped the run is the cause a report
+        needs, not whichever refusal happened to be noticed last.
+        """
+        self._throttled = True
+        if self._throttle_reason is None:
+            self._throttle_reason = reason
 
     def _count_failure(self, reason: str) -> None:
         self._failures[reason] = self._failures.get(reason, 0) + 1
@@ -328,6 +339,11 @@ class HDClient:
         return self._throttled
 
     @property
+    def throttle_reason(self) -> str | None:
+        """Why this client stopped requesting, or None if it has not."""
+        return self._throttle_reason
+
+    @property
     def cooldown(self) -> ThrottleCooldown:
         return self._cooldown
 
@@ -339,7 +355,7 @@ class HDClient:
             # Checked per request rather than once at startup so a cooldown
             # written mid-run — by this client or a concurrent one — takes hold
             # immediately.
-            self._throttled = True
+            self._throttle("cooling_down")
             log.warning(
                 "In throttle cooldown — not requesting",
                 resumes_in_seconds=round(self._cooldown.remaining_seconds()),
@@ -365,7 +381,7 @@ class HDClient:
         """
         ceiling = getattr(self._settings, "max_retry_after_seconds", 300.0)
         if retry_after is not None and retry_after > ceiling:
-            self._throttled = True
+            self._throttle("retry_after_exceeded")
             self._cooldown.start(retry_after)
             log.warning(
                 "Retry-After exceeds ceiling — stopping this run",
@@ -430,7 +446,7 @@ class HDClient:
                 # A refusal ends the run. Pausing 30s and moving to the next
                 # walk meant answering "no" by asking again 51 more times;
                 # the circuit breaker caught it at ten, but only after ten.
-                self._throttled = True
+                self._throttle("http_403")
                 until = self._cooldown.start(
                     getattr(self._settings, "forbidden_cooldown_seconds", 3600.0)
                 )
@@ -444,7 +460,7 @@ class HDClient:
 
             if status_code == 206:
                 _observe_response(status_code, response, refusal_context)
-                self._throttled = True
+                self._throttle("http_206_quota")
                 until = self._cooldown.start(retry_after)
                 log.warning(
                     "Received 206 — quota exhausted, aborting further requests",
@@ -480,7 +496,7 @@ class HDClient:
                 self._metrics.records[-1] = replace(
                     self._metrics.records[-1], outcome="challenge_html"
                 )
-                self._throttled = True
+                self._throttle("challenge_html")
                 until = self._cooldown.start(
                     getattr(self._settings, "forbidden_cooldown_seconds", 3600.0)
                 )

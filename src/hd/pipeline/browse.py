@@ -76,6 +76,10 @@ class Walk:
     # error, an unusable page, or a throttle. Distinct from `truncated`,
     # which is a planning-time judgment; walk_status folds both together.
     cut: bool = field(default=False, compare=False)
+    # WHY the walk was cut: the failure tag off the synthetic response
+    # ("http_206_quota", "cooling_down", ...), the client's throttle reason,
+    # or "fetch_error". None for a walk that ran to its natural end.
+    stop_reason: str | None = field(default=None, compare=False)
     # The split this walk is a piece of: the parent's navParam and the
     # dimension it was split on. Both None for a walk that IS its own node.
     # Persisted to walk_coverage so the next run can read which axis the
@@ -111,6 +115,13 @@ class BrowseSummary:
     # the run had already spent its budget. Same cause as deferred_walks, a
     # different unit.
     deferred_categories: int = 0
+    # Run-level throttle outcome, filled in run_browse's finally from the
+    # client: whether this run was refused, why, and how many requests it had
+    # issued when it ended. A run that was turned away must not read as a
+    # clean pass — `aborted` alone does not say what stopped it.
+    throttled: bool = False
+    throttle_reason: str | None = None
+    requests_made: int = 0
 
 
 def brand_order_cursor_key(store_id: str, tier: str = "network") -> str:
@@ -1121,20 +1132,24 @@ async def _page_direction(
             except Exception as e:
                 log.error("Browse page fetch failed", label=walk.label, page=page, error=str(e))
                 walk.cut = True
+                walk.stop_reason = "fetch_error"
                 break
 
         if client.is_throttled:
             walk.cut = True
+            walk.stop_reason = getattr(client, "throttle_reason", None) or "throttled"
             break
 
         if not is_valid_search_response(raw):
+            reason = failure_reason(raw) or "api_error"
             log.error(
                 "Browse page unusable — coverage incomplete",
                 label=walk.label, store_id=store_id, page=page,
                 storefilter=storefilter,
-                reason=failure_reason(raw) or "api_error",
+                reason=reason,
             )
             walk.cut = True
+            walk.stop_reason = reason
             break
 
         search_model = raw.get("data", {}).get("searchModel") or {}
@@ -2299,6 +2314,13 @@ async def run_browse(
     finally:
         rotation.save_cursors(settings.browse_cursor_path, cursors)
         summary.aborted = summary.aborted or client.is_throttled
+        # The run's own account of how it ended: a throttled run is not a
+        # clean pass, and the reason has to travel with the result, not live
+        # only in a log line halfway through the run. `getattr` because the
+        # test doubles standing in for HDClient carry no throttle_reason.
+        summary.throttled = client.is_throttled
+        summary.throttle_reason = getattr(client, "throttle_reason", None) or None
+        summary.requests_made = client.request_count
         await _record_run_end(settings, run_id, summary, client.request_count)
         log.info(
             "Browse complete",
@@ -2316,6 +2338,7 @@ async def run_browse(
             truncated=summary.truncated_walks or None,
             requests_used=client.request_count,
             throttled=client.is_throttled,
+            throttle_reason=summary.throttle_reason,
             failures=client.failures or None,
         )
         if owns_client:
