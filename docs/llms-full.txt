@@ -102,8 +102,9 @@ looks - `chrome`, `gold`, `copper`, `brushedSteel`, `gunmetal`, `matte`,
 
 Most presets are plain `MeshStandardMaterial` fields (color, metalness,
 roughness, emissive, envMapIntensity, transparency for the legacy `glass`).
-A few use **measured, physically-real** `MeshPhysicalMaterial`-only fields - `applyMaterialPreset` writes these when the target material has the field and
-silently skips them on a plain Standard material:
+A few use **measured, physically-real** `MeshPhysicalMaterial`-only fields - `applyMaterialPreset` writes these when the target material has the field, and
+reports any it had to skip on a plain Standard material instead of dropping them
+silently:
 
 | Preset | Physical fields | Real-world basis |
 |---|---|---|
@@ -123,8 +124,21 @@ import { applyMaterialPreset, materialVariants } from '@three-ws/viewer-presets/
 
 // Re-skin every standard material on a loaded glTF, non-destructively:
 const handle = applyMaterialPreset(THREE, gltf.scene, 'chrome');
+// See exactly which materials changed and which physical fields a plain
+// MeshStandardMaterial target could not store (clearcoat, transmission, ...):
+for (const entry of handle.materials) {
+  console.log(entry.name, 'skipped:', entry.skippedFields.join(', ') || 'none');
+}
 // … later, put it back exactly as it was:
 handle.restore();
+
+// Chained looks are safe: each application clears the transparency, transmission,
+// clearcoat, anisotropy and sheen the new preset does not use, and a restore after
+// any number of skins returns to the original asset (never an intermediate look):
+applyMaterialPreset(THREE, gltf.scene, 'glass');
+applyMaterialPreset(THREE, gltf.scene, 'realGlass');
+const chrome = applyMaterialPreset(THREE, gltf.scene, 'chrome');
+chrome.restore(); // original colors and physical fields, exactly as captured
 
 // Fan a base look out into reproducible colorway variants (same seed → same set):
 const variants = materialVariants('gold', { seed: 42, count: 6 });
@@ -132,10 +146,14 @@ variants.forEach((v) => console.log(v.label, v.config.color));
 ```
 
 `applyMaterialPreset` only touches materials that expose the standard PBR knobs
-(a `MeshBasicMaterial`, sprite, or line material is skipped), captures the prior
-values, and hands back a `restore()` - so edits are a reversible layer over the
-original asset. `materialVariants` is pure and deterministic per `seed`, aligning
-with Forge's `seed` semantics so a variant set is shareable by number.
+(a `MeshBasicMaterial`, sprite, or line material is skipped and never counted),
+captures the prior values once per material, and hands back a `restore()` - so
+edits are a reversible layer over the original asset. Repeated or chained
+applications reuse the first capture, so the model always restores to the state
+before the first skin. The frozen `materials` report on the handle stays
+readable after `restore()`. `materialVariants` is pure and deterministic per
+`seed`, aligning with Forge's `seed` semantics so a variant set is shareable by
+number.
 
 ## API
 
@@ -149,7 +167,7 @@ with Forge's `seed` semantics so a variant set is shareable by number.
 | `BLOOM_DEFAULTS` | Frozen bloom defaults. |
 | `MATERIAL_PRESETS` / `MATERIAL_PRESET_NAMES` | Frozen map of PBR presets, and their ids in order. |
 | `materialPreset(idOrConfig, overrides?)` | `(string \| Partial<MaterialPreset>, overrides?) => MaterialPreset`; throws on unknown id. |
-| `applyMaterialPreset(THREE, root, idOrConfig, opts?)` | `(THREE, Object3D, preset) => { restore(), count }` - non-destructive. |
+| `applyMaterialPreset(THREE, root, idOrConfig, opts?)` | `(THREE, Object3D, preset) => MaterialSkinHandle` - non-destructive; handle has `count`, `materials` (per-material skipped-field report), and `restore()`. |
 | `materialVariants(base, opts?)` | `(preset, { seed, count, hueSpread, jitter }) => MaterialVariant[]` - seeded, reproducible. |
 
 ## Requirements

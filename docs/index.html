@@ -103,8 +103,9 @@ looks - <code>chrome</code>, <code>gold</code>, <code>copper</code>, <code>brush
 <code>skin</code>, <code>carPaint</code>, <code>neon</code>, <code>holographic</code> - each a frozen parameter set.</p>
 <p>Most presets are plain <code>MeshStandardMaterial</code> fields (color, metalness,
 roughness, emissive, envMapIntensity, transparency for the legacy <code>glass</code>).
-A few use <strong>measured, physically-real</strong> <code>MeshPhysicalMaterial</code>-only fields - <code>applyMaterialPreset</code> writes these when the target material has the field and
-silently skips them on a plain Standard material:</p>
+A few use <strong>measured, physically-real</strong> <code>MeshPhysicalMaterial</code>-only fields - <code>applyMaterialPreset</code> writes these when the target material has the field, and
+reports any it had to skip on a plain Standard material instead of dropping them
+silently:</p>
 <table>
 <thead>
 <tr>
@@ -147,18 +148,35 @@ actually refracts what&#39;s behind it.</p>
 
 // Re-skin every standard material on a loaded glTF, non-destructively:
 const handle = applyMaterialPreset(THREE, gltf.scene, &#39;chrome&#39;);
+// See exactly which materials changed and which physical fields a plain
+// MeshStandardMaterial target could not store (clearcoat, transmission, ...):
+for (const entry of handle.materials) {
+  console.log(entry.name, &#39;skipped:&#39;, entry.skippedFields.join(&#39;, &#39;) || &#39;none&#39;);
+}
 // … later, put it back exactly as it was:
 handle.restore();
+
+// Chained looks are safe: each application clears the transparency, transmission,
+// clearcoat, anisotropy and sheen the new preset does not use, and a restore after
+// any number of skins returns to the original asset (never an intermediate look):
+applyMaterialPreset(THREE, gltf.scene, &#39;glass&#39;);
+applyMaterialPreset(THREE, gltf.scene, &#39;realGlass&#39;);
+const chrome = applyMaterialPreset(THREE, gltf.scene, &#39;chrome&#39;);
+chrome.restore(); // original colors and physical fields, exactly as captured
 
 // Fan a base look out into reproducible colorway variants (same seed → same set):
 const variants = materialVariants(&#39;gold&#39;, { seed: 42, count: 6 });
 variants.forEach((v) =&gt; console.log(v.label, v.config.color));
 </code></pre>
 <p><code>applyMaterialPreset</code> only touches materials that expose the standard PBR knobs
-(a <code>MeshBasicMaterial</code>, sprite, or line material is skipped), captures the prior
-values, and hands back a <code>restore()</code> - so edits are a reversible layer over the
-original asset. <code>materialVariants</code> is pure and deterministic per <code>seed</code>, aligning
-with Forge&#39;s <code>seed</code> semantics so a variant set is shareable by number.</p>
+(a <code>MeshBasicMaterial</code>, sprite, or line material is skipped and never counted),
+captures the prior values once per material, and hands back a <code>restore()</code> - so
+edits are a reversible layer over the original asset. Repeated or chained
+applications reuse the first capture, so the model always restores to the state
+before the first skin. The frozen <code>materials</code> report on the handle stays
+readable after <code>restore()</code>. <code>materialVariants</code> is pure and deterministic per
+<code>seed</code>, aligning with Forge&#39;s <code>seed</code> semantics so a variant set is shareable by
+number.</p>
 <h2>API</h2>
 <table>
 <thead>
@@ -201,7 +219,7 @@ with Forge&#39;s <code>seed</code> semantics so a variant set is shareable by nu
 </tr>
 <tr>
 <td><code>applyMaterialPreset(THREE, root, idOrConfig, opts?)</code></td>
-<td><code>(THREE, Object3D, preset) =&gt; { restore(), count }</code> - non-destructive.</td>
+<td><code>(THREE, Object3D, preset) =&gt; MaterialSkinHandle</code> - non-destructive; handle has <code>count</code>, <code>materials</code> (per-material skipped-field report), and <code>restore()</code>.</td>
 </tr>
 <tr>
 <td><code>materialVariants(base, opts?)</code></td>

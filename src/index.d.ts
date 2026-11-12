@@ -95,6 +95,33 @@ export interface MaterialVariant {
 	config: MaterialPreset;
 }
 
+/**
+ * One material actually rewritten by an application, plus the physical fields the
+ * preset carried but this material could not store (for example clearcoat on a
+ * plain MeshStandardMaterial).
+ */
+export interface MaterialSkinEntry {
+	/** The material instance that was rewritten. */
+	material: unknown;
+	/** The material's `.name` when it exposes one. */
+	name?: string;
+	/** Preset physical fields absent on this material, so they were not written. */
+	skippedFields: readonly string[];
+}
+
+/**
+ * Reversible skin handle returned by {@link applyMaterialPreset}. The `materials`
+ * report is a frozen snapshot and stays readable after `restore()`.
+ */
+export interface MaterialSkinHandle {
+	/** Number of materials rewritten by this application (skipped materials excluded). */
+	count: number;
+	/** Per-material report of what was rewritten and which physical fields were skipped. */
+	materials: readonly MaterialSkinEntry[];
+	/** Writes the originally captured values (including physical fields and colors) back. */
+	restore: () => void;
+}
+
 export declare const LIGHT_CONFIG: LightConfig;
 export declare const FLOOR_REFLECTION_DEFAULTS: Readonly<Omit<FloorReflectionProps, 'color'>>;
 export declare const BLOOM_DEFAULTS: BloomProps;
@@ -119,7 +146,7 @@ export declare function applyMaterialPreset(
 	root: unknown,
 	presetOrConfig: string | Partial<MaterialPreset>,
 	opts?: { overrides?: Partial<MaterialPreset> },
-): { restore: () => void; count: number };
+): MaterialSkinHandle;
 export declare function materialVariants(
 	base: string | Partial<MaterialPreset>,
 	opts?: { seed?: number; count?: number; hueSpread?: number; jitter?: number },

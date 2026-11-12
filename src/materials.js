@@ -94,19 +94,36 @@ export function materialPreset(presetOrConfig, overrides = {}) {
 }
 
 /**
+ * Baseline capture of each material at its first restyle, keyed by the material
+ * itself so every handle created before a restore shares one original snapshot.
+ * WeakMap entries do not keep materials alive after the scene drops them.
+ *
+ * @type {WeakMap<object, object>}
+ */
+const ORIGINAL_CAPTURES = new WeakMap();
+
+/**
  * Apply a preset onto every compatible material under `root`, non-destructively.
  *
  * Standard-material properties (color, metalness, roughness, emissive, …) are the
- * only ones touched, and only on materials that actually expose them — a
- * MeshBasicMaterial or a sprite is skipped untouched. The previous values are
- * captured on first apply, so the returned `restore()` puts the model back exactly
- * as it was (the caller keeps the original; edits produce a reversible layer).
+ * only ones touched, and only on materials that actually expose them - a
+ * MeshBasicMaterial or a sprite is skipped untouched and never counted. The previous
+ * values are captured once per material (the first application wins), so repeated or
+ * chained applications never re-capture an already-restyled value and the returned
+ * `restore()` puts the model back exactly as it was before the first skin was
+ * applied, physical fields and colors included, never to an intermediate look.
+ *
+ * The returned handle also exposes a frozen `materials` report describing, for every
+ * material actually rewritten, which preset physical fields had to be skipped because
+ * the target material does not expose them (for example clearcoat on a plain
+ * MeshStandardMaterial). The report is a snapshot and stays readable after
+ * `restore()`. Adding it does not change `count` or `restore()` semantics.
  *
  * @param {any} THREE  the three.js module (for `THREE.Color`)
  * @param {any} root   an Object3D with `.traverse` (a loaded glTF scene/group)
  * @param {string | Partial<MaterialPreset>} presetOrConfig
  * @param {{ overrides?: Partial<MaterialPreset> }} [opts]
- * @returns {{ restore: () => void, count: number }}
+ * @returns {MaterialSkinHandle}
  */
 export function applyMaterialPreset(THREE, root, presetOrConfig, opts = {}) {
 	if (!THREE || typeof THREE.Color !== 'function') {
@@ -117,18 +134,45 @@ export function applyMaterialPreset(THREE, root, presetOrConfig, opts = {}) {
 	}
 	const cfg = materialPreset(presetOrConfig, opts.overrides);
 	const captures = [];
+	const report = [];
+	// A material can be visited more than once in one traversal (array materials
+	// sharing a reference, or the same mesh under several branches); count and
+	// rewrite it only once per application.
+	const seenThisApply = new Set();
 	root.traverse((node) => {
 		const mats = materialsOf(node);
 		for (const m of mats) {
-			if (!isStandardLike(m)) continue;
-			captures.push(captureMaterial(m));
-			assignPreset(THREE, m, cfg);
+			if (!isStandardLike(m) || seenThisApply.has(m)) continue;
+			seenThisApply.add(m);
+			// Keep the first-ever capture for this material: reusing it across
+			// applications is what makes a chain glass -> realGlass -> chrome restore
+			// all the way back to the original asset instead of an intermediate preset.
+			let cap = ORIGINAL_CAPTURES.get(m);
+			if (!cap) {
+				cap = captureMaterial(m);
+				ORIGINAL_CAPTURES.set(m, cap);
+			}
+			captures.push(cap);
+			const skippedFields = assignPreset(THREE, m, cfg);
+			report.push(
+				freeze({
+					material: m,
+					name: typeof m.name === 'string' ? m.name : undefined,
+					skippedFields: Object.freeze(skippedFields),
+				}),
+			);
 		}
 	});
 	return {
 		count: captures.length,
+		materials: Object.freeze(report),
 		restore() {
-			for (const cap of captures) restoreMaterial(cap);
+			for (const cap of captures) {
+				restoreMaterial(cap);
+				// Drop the baseline so a later, genuinely new application re-captures
+				// the material's current state instead of restoring a stale snapshot.
+				ORIGINAL_CAPTURES.delete(cap.m);
+			}
 		},
 	};
 }
@@ -185,11 +229,35 @@ function isStandardLike(m) {
 
 // Physical-only (MeshPhysicalMaterial) scalar/color fields a preset may set.
 // Absent on plain MeshStandardMaterial, so every read/write below is guarded
-// by an `in m` check — a preset with clearcoat/transmission/anisotropy still
+// by an `in m` check - a preset with clearcoat/transmission/anisotropy still
 // applies its color/metalness/roughness cleanly to a Standard-only target,
-// it just quietly skips the physical-only layer.
+// and the fields it could not write are reported on the handle instead of
+// being dropped silently.
 const PHYSICAL_SCALAR_FIELDS = ['clearcoat', 'clearcoatRoughness', 'transmission', 'thickness', 'ior', 'sheen', 'sheenRoughness', 'specularIntensity', 'anisotropy', 'anisotropyRotation', 'attenuationDistance'];
 const PHYSICAL_COLOR_FIELDS = ['sheenColor', 'attenuationColor', 'specularColor'];
+
+// Neutral MeshPhysicalMaterial defaults used to erase a physical look a preset
+// does not re-specify, so switching from realGlass/carPaint/fabric onto an opaque
+// preset leaves no half-set transmission, clearcoat, sheen or anisotropy behind.
+// Values match the three.js MeshPhysicalMaterial constructor defaults.
+const PHYSICAL_SCALAR_DEFAULTS = {
+	clearcoat: 0,
+	clearcoatRoughness: 0,
+	transmission: 0,
+	thickness: 0,
+	ior: 1.5,
+	sheen: 0,
+	sheenRoughness: 1,
+	specularIntensity: 1,
+	anisotropy: 0,
+	anisotropyRotation: 0,
+	attenuationDistance: Infinity,
+};
+const PHYSICAL_COLOR_DEFAULTS = {
+	sheenColor: '#000000',
+	attenuationColor: '#ffffff',
+	specularColor: '#ffffff',
+};
 
 function captureMaterial(m) {
 	const cap = {
@@ -223,6 +291,11 @@ function restoreMaterial(cap) {
 	m.needsUpdate = true;
 }
 
+// Apply one preset to one standard-like material and return the physical fields
+// the preset asked for but this material cannot store. Every supported physical
+// field is driven to an explicit value: the preset value when present, otherwise
+// the neutral default, so a fresh preset never inherits transmission/clearcoat/
+// sheen/anisotropy left behind by an earlier look.
 function assignPreset(THREE, m, cfg) {
 	if (cfg.color) m.color.set(cfg.color);
 	if (cfg.metalness != null) m.metalness = cfg.metalness;
@@ -232,14 +305,33 @@ function assignPreset(THREE, m, cfg) {
 		m.emissiveIntensity = cfg.emissiveIntensity != null ? cfg.emissiveIntensity : cfg.emissive ? 1 : 0;
 	}
 	if (cfg.envMapIntensity != null && 'envMapIntensity' in m) m.envMapIntensity = cfg.envMapIntensity;
+
+	const skippedFields = [];
 	for (const f of PHYSICAL_SCALAR_FIELDS) {
-		if (cfg[f] != null && f in m) m[f] = cfg[f];
+		if (cfg[f] != null) {
+			if (f in m) {
+				m[f] = cfg[f];
+			} else {
+				skippedFields.push(f);
+			}
+		} else if (f in m) {
+			m[f] = PHYSICAL_SCALAR_DEFAULTS[f];
+		}
 	}
 	for (const f of PHYSICAL_COLOR_FIELDS) {
-		if (cfg[f] != null && m[f]) m[f].set(cfg[f]);
+		if (cfg[f] != null) {
+			if (m[f]) {
+				m[f].set(cfg[f]);
+			} else {
+				skippedFields.push(f);
+			}
+		} else if (m[f]) {
+			m[f].set(PHYSICAL_COLOR_DEFAULTS[f]);
+		}
 	}
+
 	if (cfg.transmission != null && 'transmission' in m) {
-		// Real transmission replaces alpha-blend transparency entirely — a
+		// Real transmission replaces alpha-blend transparency entirely - a
 		// realGlass preset must not also carry the old opacity-blend path.
 		m.transparent = false;
 		m.opacity = 1;
@@ -247,16 +339,13 @@ function assignPreset(THREE, m, cfg) {
 		m.transparent = !!cfg.transparent;
 		if (cfg.opacity != null) m.opacity = cfg.opacity;
 	} else {
-		// Opaque preset: undo any prior transparency/transmission so switching
-		// glass→chrome is clean.
+		// Opaque preset: undo any prior transparency so switching glass -> chrome
+		// is clean. Any prior transmission is already zeroed by the scalar reset.
 		m.transparent = false;
 		m.opacity = 1;
-		if ('transmission' in m) m.transmission = 0;
-		if ('clearcoat' in m && cfg.clearcoat == null) m.clearcoat = 0;
-		if ('anisotropy' in m && cfg.anisotropy == null) m.anisotropy = 0;
-		if ('sheen' in m && cfg.sheen == null) m.sheen = 0;
 	}
 	m.needsUpdate = true;
+	return skippedFields;
 }
 
 // ── color + rng helpers (small, inline — no dependency for a few functions) ────
@@ -369,4 +458,26 @@ function freeze(o) {
  * @property {string} [specularColor]        hex
  * @property {number} [anisotropy]           0..1, MeshPhysicalMaterial only (KHR_materials_anisotropy)
  * @property {number} [anisotropyRotation]   radians
+ */
+
+/**
+ * One material actually rewritten by an application, plus the physical fields the
+ * preset carried but this material could not store.
+ *
+ * @typedef {Object} MaterialSkinEntry
+ * @property {any} material                 the material instance that was rewritten
+ * @property {string=} name                  the material's `.name` when it has one
+ * @property {readonly string[]} skippedFields  preset physical fields absent on this material
+ */
+
+/**
+ * Reversible skin handle. `count` is the number of materials rewritten this
+ * application (skipped Basic/sprite/line materials are not counted); `materials` is
+ * the frozen per-material report; `restore()` writes the original captured values
+ * back. The report remains readable after `restore()`.
+ *
+ * @typedef {Object} MaterialSkinHandle
+ * @property {number} count
+ * @property {readonly MaterialSkinEntry[]} materials
+ * @property {() => void} restore
  */

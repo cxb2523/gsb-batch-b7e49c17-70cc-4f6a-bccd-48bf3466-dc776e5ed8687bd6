@@ -340,3 +340,288 @@ test('applyMaterialPreset restore() reverts physical fields exactly', () => {
 	assert.equal(mat.transmission, before.transmission);
 	assert.equal(mat.sheen, before.sheen);
 });
+
+// ── queryable skin handle: what was rewritten and what was skipped ────────────
+
+test('handle.materials reports each rewritten material and its name', () => {
+	const mat = fakeStandardMaterial();
+	mat.name = 'body';
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	assert.equal(handle.count, 1);
+	assert.equal(handle.materials.length, 1);
+	const entry = handle.materials[0];
+	assert.equal(entry.material, mat);
+	assert.equal(entry.name, 'body');
+	assert.deepEqual(entry.skippedFields, []);
+	// The report is frozen data, not a live view that later calls mutate.
+	assert.equal(Object.isFrozen(handle.materials), true);
+	assert.equal(Object.isFrozen(entry), true);
+	assert.equal(Object.isFrozen(entry.skippedFields), true);
+});
+
+test('handle.materials omits the name field value when the material has none', () => {
+	const mat = fakeStandardMaterial();
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	assert.equal(handle.materials[0].name, undefined);
+});
+
+test('handle reports skipped physical scalar fields on a plain Standard material', () => {
+	const mat = fakeStandardMaterial();
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'carPaint');
+	assert.equal(handle.count, 1, 'standard fields still apply and count');
+	assert.deepEqual(handle.materials[0].skippedFields, ['clearcoat', 'clearcoatRoughness']);
+	// Nothing was half-written onto the unsupported target.
+	assert.equal('clearcoat' in mat, false);
+	assert.equal('clearcoatRoughness' in mat, false);
+});
+
+test('handle reports skipped transmission and color fields without throwing', () => {
+	const mat = fakeStandardMaterial();
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'realGlass');
+	assert.deepEqual(handle.materials[0].skippedFields, [
+		'transmission',
+		'thickness',
+		'ior',
+		'attenuationDistance',
+		'attenuationColor',
+	]);
+	assert.equal(mat.metalness, MATERIAL_PRESETS.realGlass.metalness);
+	assert.equal('transmission' in mat, false, 'no half-set physical parameter is created');
+});
+
+test('handle reports skipped sheen color fields for the fabric preset', () => {
+	const mat = fakeStandardMaterial();
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'fabric');
+	assert.deepEqual(handle.materials[0].skippedFields, ['sheen', 'sheenRoughness', 'sheenColor']);
+});
+
+test('a MeshPhysicalMaterial target skips nothing for physical presets', () => {
+	const mat = fakePhysicalMaterial();
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'realGlass');
+	assert.deepEqual(handle.materials[0].skippedFields, []);
+});
+
+test('the materials report stays readable after restore()', () => {
+	const mat = fakeStandardMaterial();
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'carPaint');
+	handle.restore();
+	assert.equal(handle.count, 1, 'count semantics are unchanged by restore()');
+	assert.equal(handle.materials.length, 1);
+	assert.equal(handle.materials[0].material, mat);
+	assert.deepEqual(handle.materials[0].skippedFields, ['clearcoat', 'clearcoatRoughness']);
+});
+
+test('non-standard materials are neither counted nor reported and stay untouched', () => {
+	const basic = { color: new FakeColor(0x123456), needsUpdate: false };
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([basic]), 'gold');
+	assert.equal(handle.count, 0);
+	assert.equal(handle.materials.length, 0);
+	assert.equal(basic.color.getHex(), 0x123456);
+	assert.equal(basic.needsUpdate, false);
+});
+
+test('a material referenced more than once in a traversal is rewritten and counted once', () => {
+	const mat = fakeStandardMaterial();
+	// Two nodes sharing the same material instance, as a duplicated array entry would.
+	const root = { traverse: (fn) => [{ material: mat }, { material: mat }].forEach(fn) };
+	const handle = applyMaterialPreset(FakeTHREE, root, 'chrome');
+	assert.equal(handle.count, 1);
+	assert.equal(handle.materials.length, 1);
+	assert.equal(handle.materials[0].material, mat);
+});
+
+test('mixed roots report only the standard-like materials', () => {
+	const standard = fakeStandardMaterial();
+	const physical = fakePhysicalMaterial();
+	const basic = { color: new FakeColor(0x123456), needsUpdate: false };
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([standard, physical, basic]), 'carPaint');
+	assert.equal(handle.count, 2);
+	assert.equal(handle.materials.length, 2);
+	assert.deepEqual(
+		handle.materials.map((e) => e.material),
+		[standard, physical],
+	);
+	assert.deepEqual(handle.materials[0].skippedFields, ['clearcoat', 'clearcoatRoughness']);
+	assert.deepEqual(handle.materials[1].skippedFields, []);
+	assert.equal(basic.color.getHex(), 0x123456);
+	assert.equal(basic.needsUpdate, false);
+});
+
+// ─- chained applications must clear prior looks and restore to the original ──
+
+test('glass -> realGlass -> chrome ends opaque with every physical layer reset', () => {
+	const mat = fakePhysicalMaterial();
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'glass');
+	assert.equal(mat.transparent, true);
+	assert.equal(mat.opacity, MATERIAL_PRESETS.glass.opacity);
+
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'realGlass');
+	assert.equal(mat.transmission, 1);
+	assert.equal(mat.transparent, false);
+
+	const chrome = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	assert.equal(mat.transparent, false, 'opaque chrome must not stay semi-transparent');
+	assert.equal(mat.opacity, 1);
+	assert.equal(mat.transmission, 0, 'prior transmission is erased');
+	assert.equal(mat.thickness, 0);
+	assert.equal(mat.ior, 1.5);
+	assert.equal(mat.attenuationDistance, Infinity);
+	assert.equal(mat.attenuationColor.getHex(), 0xffffff);
+	assert.equal(mat.clearcoat, 0);
+	assert.equal(mat.anisotropy, 0);
+	assert.equal(mat.sheen, 0);
+	assert.equal(mat.metalness, 1);
+
+	chrome.restore();
+	assert.equal(mat.color.getHex(), 0x808080, 'color returns to the original capture');
+	assert.equal(mat.metalness, 0.3);
+	assert.equal(mat.roughness, 0.6);
+	assert.equal(mat.transparent, false);
+	assert.equal(mat.opacity, 1);
+	assert.equal(mat.transmission, 0);
+	assert.equal(mat.ior, 1.5);
+	assert.equal(mat.attenuationColor.getHex(), 0xffffff);
+});
+
+test('carPaint -> matte clears the clearcoat layer left by carPaint', () => {
+	const mat = fakePhysicalMaterial();
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'carPaint');
+	assert.equal(mat.clearcoat, 1);
+	assert.equal(mat.clearcoatRoughness, MATERIAL_PRESETS.carPaint.clearcoatRoughness);
+
+	const matte = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'matte');
+	assert.equal(mat.clearcoat, 0, 'matte must not inherit the lacquer layer');
+	assert.equal(mat.clearcoatRoughness, 0);
+	assert.equal(mat.color.getHex(), parseInt('8b90a0', 16));
+	assert.equal(mat.metalness, 0);
+	assert.equal(mat.roughness, 0.9);
+
+	matte.restore();
+	assert.equal(mat.color.getHex(), 0x808080);
+	assert.equal(mat.clearcoat, 0);
+	assert.equal(mat.metalness, 0.3);
+	assert.equal(mat.roughness, 0.6);
+});
+
+test('realGlass -> matte clears transmission-related fields and restores exactly', () => {
+	const mat = fakePhysicalMaterial();
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'realGlass');
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'matte');
+	assert.equal(mat.transmission, 0);
+	assert.equal(mat.thickness, 0);
+	assert.equal(mat.attenuationDistance, Infinity);
+	assert.equal(mat.transparent, false);
+	assert.equal(mat.opacity, 1);
+	handle.restore();
+	assert.equal(mat.color.getHex(), 0x808080);
+	assert.equal(mat.transmission, 0);
+	assert.equal(mat.thickness, 0);
+	assert.equal(mat.ior, 1.5);
+});
+
+test('neon -> chrome clears the emissive glow left by neon', () => {
+	const mat = fakeStandardMaterial();
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'neon');
+	assert.equal(mat.emissive.getHex(), parseInt('00ffd5', 16));
+	assert.equal(mat.emissiveIntensity, 1.6);
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	assert.equal(mat.emissive.getHex(), 0x000000);
+	assert.equal(mat.emissiveIntensity, 0);
+});
+
+test('brushedSteel -> matte clears anisotropy and restores the original', () => {
+	const mat = fakePhysicalMaterial();
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'brushedSteel');
+	assert.equal(mat.anisotropy, MATERIAL_PRESETS.brushedSteel.anisotropy);
+	const handle = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'matte');
+	assert.equal(mat.anisotropy, 0);
+	assert.equal(mat.anisotropyRotation, 0);
+	handle.restore();
+	assert.equal(mat.anisotropy, 0);
+	assert.equal(mat.color.getHex(), 0x808080);
+});
+
+// ── capture happens once: repeated applications never restore to a middle state
+
+test('applying the same preset twice still restores to the original values', () => {
+	const mat = fakeStandardMaterial();
+	const before = { color: mat.color.getHex(), metalness: mat.metalness, roughness: mat.roughness };
+	const first = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	assert.equal(mat.metalness, 1);
+	const second = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	assert.equal(second.count, 1);
+	// A second capture of the already-chrome state must not become the baseline.
+	second.restore();
+	assert.equal(mat.color.getHex(), before.color);
+	assert.equal(mat.metalness, before.metalness);
+	assert.equal(mat.roughness, before.roughness);
+	// The first handle's restore is still valid and idempotent on the original.
+	first.restore();
+	assert.equal(mat.metalness, before.metalness);
+});
+
+test('a second, different preset also restores all the way to the original', () => {
+	const mat = fakeStandardMaterial();
+	const before = { color: mat.color.getHex(), transparent: mat.transparent, opacity: mat.opacity };
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'glass');
+	assert.equal(mat.transparent, true);
+	const chrome = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	chrome.restore();
+	assert.equal(mat.color.getHex(), before.color);
+	assert.equal(mat.transparent, before.transparent);
+	assert.equal(mat.opacity, before.opacity);
+	assert.equal(mat.metalness, 0.3);
+	assert.equal(mat.roughness, 0.6);
+});
+
+test('restore() after a full preset chain restores every physical and color field', () => {
+	const mat = fakePhysicalMaterial();
+	const before = {
+		color: mat.color.getHex(),
+		metalness: mat.metalness,
+		roughness: mat.roughness,
+		clearcoat: mat.clearcoat,
+		transmission: mat.transmission,
+		thickness: mat.thickness,
+		ior: mat.ior,
+		sheen: mat.sheen,
+		anisotropy: mat.anisotropy,
+		specularIntensity: mat.specularIntensity,
+		attenuationColor: mat.attenuationColor.getHex(),
+	};
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'glass');
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'realGlass');
+	applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'carPaint');
+	const last = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'matte');
+	last.restore();
+	assert.equal(mat.color.getHex(), before.color);
+	assert.equal(mat.metalness, before.metalness);
+	assert.equal(mat.roughness, before.roughness);
+	assert.equal(mat.clearcoat, before.clearcoat);
+	assert.equal(mat.transmission, before.transmission);
+	assert.equal(mat.thickness, before.thickness);
+	assert.equal(mat.ior, before.ior);
+	assert.equal(mat.sheen, before.sheen);
+	assert.equal(mat.anisotropy, before.anisotropy);
+	assert.equal(mat.specularIntensity, before.specularIntensity);
+	assert.equal(mat.attenuationColor.getHex(), before.attenuationColor);
+});
+
+test('a fresh application after restore captures the current state again', () => {
+	const mat = fakeStandardMaterial();
+	const first = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'chrome');
+	first.restore();
+	assert.equal(mat.metalness, 0.3);
+	// The old baseline was released; gold now captures the restored material and
+	// its restore returns to that state, not the pre-chrome snapshot.
+	const gold = applyMaterialPreset(FakeTHREE, fakeRoot([mat]), 'gold');
+	assert.equal(mat.metalness, 1);
+	gold.restore();
+	assert.equal(mat.color.getHex(), 0x808080);
+	assert.equal(mat.metalness, 0.3);
+});
+
+test('argument validation still throws explicit errors', () => {
+	assert.throws(() => applyMaterialPreset({}, fakeRoot([]), 'gold'), /three\.js module/);
+	assert.throws(() => applyMaterialPreset(FakeTHREE, {}, 'gold'), /Object3D with \.traverse/);
+});
