@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Callable, Mapping
 
     from scrapebadger._internal.client import BaseClient
 
@@ -70,6 +70,37 @@ class PaginatedResponse(Generic[T]):
         return bool(self.data)
 
 
+_MIN_THROTTLE_DELAY = 0.05
+
+
+def _get_header(headers: Mapping[str, str], name: str) -> str | None:
+    """Look up a response header without depending on its casing."""
+    lowered = name.lower()
+    for key, value in headers.items():
+        if isinstance(key, str) and key.lower() == lowered:
+            return value
+    return None
+
+
+def _parse_rate_limit(headers: Mapping[str, str]) -> tuple[int, int, int] | None:
+    """Parse the three rate-limit headers, or ``None`` if any is unusable.
+
+    A header that is missing, empty, or not an integer makes the whole set
+    unusable: callers must not throttle (or raise) on partial data.
+    """
+    raw_remaining = _get_header(headers, "X-RateLimit-Remaining")
+    raw_limit = _get_header(headers, "X-RateLimit-Limit")
+    raw_reset = _get_header(headers, "X-RateLimit-Reset")
+
+    if raw_remaining is None or raw_limit is None or raw_reset is None:
+        return None
+
+    try:
+        return int(raw_remaining), int(raw_limit), int(raw_reset)
+    except (TypeError, ValueError):
+        return None
+
+
 def _compute_throttle_delay(
     remaining: int,
     limit: int,
@@ -79,7 +110,8 @@ def _compute_throttle_delay(
 
     Throttling kicks in when ``remaining < limit * _RATE_LIMIT_THRESHOLD``.
     The delay spreads remaining requests evenly across the time left in the
-    current window, giving a minimum of 0.05 s.
+    current window. When nothing is left, it waits for the window to reset.
+    Every delay has a floor of 0.05 s.
 
     Args:
         remaining: Requests remaining in the current window.
@@ -92,13 +124,28 @@ def _compute_throttle_delay(
     if remaining >= limit * _RATE_LIMIT_THRESHOLD:
         return None
 
-    seconds_left = max(reset_ts - time.time(), 1.0)
+    seconds_left = max(reset_ts - time.time(), 0.0)
     # Spread remaining requests over the window — guard against zero division.
-    if remaining <= 0:
-        return seconds_left
+    delay = seconds_left if remaining <= 0 else seconds_left / remaining
+    return max(delay, _MIN_THROTTLE_DELAY)
 
-    delay = seconds_left / remaining
-    return max(delay, 0.05)
+
+def _log_throttle(
+    remaining: int,
+    limit: int,
+    reset_ts: int,
+    delay: float,
+) -> None:
+    """Emit the warning that accompanies a throttle sleep."""
+    resets_in = max(int(reset_ts - time.time()), 0)
+    rate = round(1.0 / delay, 1) if delay > 0 else 0
+    logger.warning(
+        "Rate limit: %d/%d remaining (resets in %ds), throttling pagination to ~%s req/s",
+        remaining,
+        limit,
+        resets_in,
+        rate,
+    )
 
 
 async def paginate(
@@ -152,9 +199,18 @@ async def paginate(
     pages_fetched = 0
     items_yielded = 0
 
+    # Nothing can be yielded: don't spend a request just to discover that.
+    if max_items is not None and max_items <= 0:
+        return
+
     while True:
-        # Check page limit
+        # Stop as soon as either caller-supplied cap has been reached.  Checking
+        # max_items here (and not only while yielding) matters when a page
+        # happens to end exactly on the cap — otherwise the next page would be
+        # fetched even though nothing from it can ever be yielded.
         if max_pages is not None and pages_fetched >= max_pages:
+            break
+        if max_items is not None and items_yielded >= max_items:
             break
 
         # Add cursor to params if we have one
@@ -164,6 +220,7 @@ async def paginate(
 
         # Fetch page — use get_with_headers so we can inspect rate-limit state.
         response, headers = await client.get_with_headers(path, params=request_params)
+        pages_fetched += 1
 
         # Parse and yield items
         data = response.get("data", [])
@@ -181,7 +238,6 @@ async def paginate(
 
         # Advance the cursor for the next page.
         next_cursor = response.get("next_cursor")
-        pages_fetched += 1
 
         # Stop at the last page, or if the backend echoes the same cursor it was
         # given — advancing on a non-advancing cursor would re-fetch the page we
@@ -190,61 +246,42 @@ async def paginate(
             break
         cursor = next_cursor
 
+        # A cap reached on this page means there will be no next request, so
+        # there is nothing to throttle.
+        if max_pages is not None and pages_fetched >= max_pages:
+            break
+        if max_items is not None and items_yielded >= max_items:
+            break
+
         # Rate-limit-aware throttling between pages.
-        _maybe_throttle_between_pages(headers)
-        delay = _extract_throttle_delay(headers)
-        if delay is not None:
-            await asyncio.sleep(delay)
+        rate_limit = _parse_rate_limit(headers)
+        if rate_limit is not None:
+            delay = _compute_throttle_delay(*rate_limit)
+            if delay is not None:
+                _log_throttle(*rate_limit, delay)
+                await asyncio.sleep(delay)
 
 
-def _extract_throttle_delay(headers: dict[str, str]) -> float | None:
+def _extract_throttle_delay(headers: Mapping[str, str]) -> float | None:
     """Parse rate-limit headers and return a throttle delay if needed.
 
-    Returns ``None`` when headers are absent or throttling is not required.
+    Returns ``None`` when headers are absent, malformed, or throttling is not
+    required.
     """
-    raw_remaining = headers.get("x-ratelimit-remaining") or headers.get("X-RateLimit-Remaining")
-    raw_limit = headers.get("x-ratelimit-limit") or headers.get("X-RateLimit-Limit")
-    raw_reset = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
-
-    if raw_remaining is None or raw_limit is None or raw_reset is None:
+    rate_limit = _parse_rate_limit(headers)
+    if rate_limit is None:
         return None
-
-    try:
-        remaining = int(raw_remaining)
-        limit = int(raw_limit)
-        reset_ts = int(raw_reset)
-    except ValueError:
-        return None
-
-    return _compute_throttle_delay(remaining, limit, reset_ts)
+    return _compute_throttle_delay(*rate_limit)
 
 
-def _maybe_throttle_between_pages(headers: dict[str, str]) -> None:
+def _maybe_throttle_between_pages(headers: Mapping[str, str]) -> None:
     """Log a warning if rate-limit throttling will be applied."""
-    raw_remaining = headers.get("x-ratelimit-remaining") or headers.get("X-RateLimit-Remaining")
-    raw_limit = headers.get("x-ratelimit-limit") or headers.get("X-RateLimit-Limit")
-    raw_reset = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
-
-    if raw_remaining is None or raw_limit is None or raw_reset is None:
+    rate_limit = _parse_rate_limit(headers)
+    if rate_limit is None:
         return
 
-    try:
-        remaining = int(raw_remaining)
-        limit = int(raw_limit)
-        reset_ts = int(raw_reset)
-    except ValueError:
-        return
-
-    delay = _compute_throttle_delay(remaining, limit, reset_ts)
+    delay = _compute_throttle_delay(*rate_limit)
     if delay is None:
         return
 
-    resets_in = max(int(reset_ts - time.time()), 0)
-    rate = round(1.0 / delay, 1) if delay > 0 else 0
-    logger.warning(
-        "Rate limit: %d/%d remaining (resets in %ds), throttling pagination to ~%s req/s",
-        remaining,
-        limit,
-        resets_in,
-        rate,
-    )
+    _log_throttle(*rate_limit, delay)
