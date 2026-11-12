@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "remotion studio",
     "build": "remotion bundle",
+    "test": "node --import tsx --test tests/cache.test.ts tests/fetch-data.test.ts tests/via-graphql.test.ts",
     "lint": "eslint src && tsc"
   },
   "license": "UNLICENSED",
@@ -22,6 +23,7 @@
     "@types/react": "19.3.0",
     "eslint": "10.12.0",
     "prettier": "3.8.1",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3"
   },
   "engines": {

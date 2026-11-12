@@ -34,19 +34,63 @@ type GitHubApiResponse =
       errors: ApiError[];
     };
 
-export const fetchViaGraphQl = async ({
-  count,
-  cursor,
-  repoName,
-  repoOrg,
-  abortSignal,
-}: {
+type FetchViaGraphQlOptions = {
   repoOrg: string;
   repoName: string;
   count: number;
   cursor: string | null;
   abortSignal: AbortSignal;
-}): Promise<QueryResult> => {
+};
+
+const MAX_RATE_LIMIT_RETRIES = 3;
+export const DEFAULT_RATE_LIMIT_RETRY_DELAY_MS = 60 * 1000;
+
+class RateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RateLimitError";
+  }
+}
+
+const makeCancellationError = (repoOrg: string, repoName: string) => {
+  const error = new Error(
+    `Fetching stargazers for ${repoOrg}/${repoName} was cancelled.`,
+  );
+  error.name = "AbortError";
+  return error;
+};
+
+const waitForRetry = (
+  delayMs: number,
+  abortSignal: AbortSignal,
+  makeCancellation: () => Error,
+): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    if (abortSignal.aborted) {
+      reject(makeCancellation());
+      return;
+    }
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(makeCancellation());
+    };
+
+    const timer = setTimeout(() => {
+      abortSignal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+};
+
+const fetchPage = async ({
+  count,
+  cursor,
+  repoName,
+  repoOrg,
+  abortSignal,
+}: FetchViaGraphQlOptions): Promise<QueryResult> => {
   const token = process.env.REMOTION_GITHUB_TOKEN?.trim();
   const authenticationInstructions =
     `GitHub requires admin or collaborator access to ${repoOrg}/${repoName} to list its stargazers, even for public repositories. ` +
@@ -66,20 +110,20 @@ export const fetchViaGraphQl = async ({
     return cache;
   }
   const query = `{
-		repository(owner: "${repoOrg}", name: "${repoName}") {
-			stargazers(first: ${count}${cursor ? `, after: "${cursor}"` : ""}) {
-				edges {
-					starredAt
-					node {
-						avatarUrl
-						name
-						login
+			repository(owner: "${repoOrg}", name: "${repoName}") {
+				stargazers(first: ${count}${cursor ? `, after: "${cursor}"` : ""}) {
+					edges {
+						starredAt
+						node {
+							avatarUrl
+							name
+							login
+						}
+						cursor
 					}
-					cursor
 				}
 			}
-		}
-	}`;
+		}`;
 
   const res = await fetch("https://api.github.com/graphql", {
     method: "POST",
@@ -103,6 +147,12 @@ export const fetchViaGraphQl = async ({
       );
     }
 
+    if (rateLimited) {
+      throw new RateLimitError(
+        `GitHub rate limit exceeded while fetching stargazers for ${repoOrg}/${repoName}. HTTP ${res.status} ${res.statusText}: ${textResponse}`,
+      );
+    }
+
     throw Error(`HTTP ${res.status} ${res.statusText}: ${textResponse}`);
   }
 
@@ -119,12 +169,10 @@ export const fetchViaGraphQl = async ({
       );
     }
 
-    if (json.errors[0].type === "RATE_LIMITED") {
-      console.error("Rate limit exceeded, waiting 1 minute...");
-      await new Promise((resolve) => {
-        setTimeout(resolve, 60 * 1000);
-      });
-      return fetchViaGraphQl({ repoOrg, repoName, count, cursor, abortSignal });
+    if (json.errors.some((error) => error.type === "RATE_LIMITED")) {
+      throw new RateLimitError(
+        `GitHub rate limit exceeded while fetching stargazers for ${repoOrg}/${repoName}. ${JSON.stringify(json.errors)}`,
+      );
     }
     throw new Error(JSON.stringify(json.errors));
   }
@@ -151,4 +199,51 @@ export const fetchViaGraphQl = async ({
   saveResult({ repoOrg, repoName, count, cursor, result });
 
   return result;
+};
+
+export const fetchViaGraphQl = async ({
+  count,
+  cursor,
+  repoName,
+  repoOrg,
+  abortSignal,
+  retryDelayMs = DEFAULT_RATE_LIMIT_RETRY_DELAY_MS,
+}: FetchViaGraphQlOptions & {
+  retryDelayMs?: number;
+}): Promise<QueryResult> => {
+  for (let retries = 0; ; retries++) {
+    if (abortSignal.aborted) {
+      throw makeCancellationError(repoOrg, repoName);
+    }
+
+    try {
+      return await fetchPage({
+        repoOrg,
+        repoName,
+        count,
+        cursor,
+        abortSignal,
+      });
+    } catch (err) {
+      if (!(err instanceof RateLimitError)) {
+        throw err;
+      }
+
+      if (retries >= MAX_RATE_LIMIT_RETRIES) {
+        throw new RateLimitError(
+          `GitHub rate limit exceeded while fetching stargazers for ${repoOrg}/${repoName}. ` +
+            `Gave up after ${MAX_RATE_LIMIT_RETRIES} retries. ${err.message}`,
+        );
+      }
+
+      const nextRetry = retries + 1;
+      console.error(
+        `Rate limit exceeded while fetching stargazers for ${repoOrg}/${repoName}, ` +
+          `waiting ${Math.round(retryDelayMs / 1000)}s before retry ${nextRetry}/${MAX_RATE_LIMIT_RETRIES}...`,
+      );
+      await waitForRetry(retryDelayMs, abortSignal, () =>
+        makeCancellationError(repoOrg, repoName),
+      );
+    }
+  }
 };

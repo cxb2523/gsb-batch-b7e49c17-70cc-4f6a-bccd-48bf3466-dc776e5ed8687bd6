@@ -60,9 +60,40 @@ export const getFromCache = ({
   cursor: string | null;
 }): QueryResult | null => {
   const key = makeKey({ count, cursor, repoName, repoOrg });
-  const value = window.localStorage.getItem(key);
+  let value: string | null;
+  try {
+    value = window.localStorage.getItem(key);
+  } catch {
+    // Accessing localStorage can throw (for example when storage is
+    // disabled). Treat that the same as a cache miss so the caller refetches.
+    return null;
+  }
   if (!value) {
     return null;
   }
-  return JSON.parse(value);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    // Corrupted cache entries must not break rendering.
+    return null;
+  }
+
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("cursor" in parsed) ||
+    !("results" in parsed) ||
+    !Array.isArray((parsed as { results: unknown }).results)
+  ) {
+    return null;
+  }
+
+  const cursorValue = (parsed as { cursor: unknown }).cursor;
+  if (cursorValue !== null && typeof cursorValue !== "string") {
+    return null;
+  }
+
+  return parsed as QueryResult;
 };
