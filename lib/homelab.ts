@@ -9,8 +9,22 @@ const options = {
   next: { revalidate: 3600 },
 };
 
+// Overridable so tests can point the site at a local GitHub stub.
+const apiUrl = process.env.GITHUB_API_URL ?? "https://api.github.com";
+const rawUrl = process.env.GITHUB_RAW_URL ?? "https://raw.githubusercontent.com";
+
 type Route = { id: string; href: string };
 export type PublicService = Route & { name: string; description?: string };
+
+export type RouteFailure = { path: string; reason: string };
+export type PublicServicesResult = {
+  services: PublicService[];
+  failures: RouteFailure[];
+};
+
+function reason(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 export function publicRoutes(source: string): Route[] {
   return parseAllDocuments(source).flatMap((document) => {
@@ -39,32 +53,40 @@ export function publicRoutes(source: string): Route[] {
   });
 }
 
-export async function publicServices(): Promise<PublicService[]> {
+export async function publicServices(): Promise<PublicServicesResult> {
   try {
     const response = await fetch(
-      `https://api.github.com/repos/${repository}/contents/${directory}?ref=main`,
+      `${apiUrl}/repos/${repository}/contents/${directory}?ref=main`,
       { ...options, signal: AbortSignal.timeout(3000) },
     );
     if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
     const files: { type: string; path: string }[] = await response.json();
-    const routes = await Promise.all(
+    const results = await Promise.all(
       files
         .filter((file) => file.type === "file" && /\.ya?ml$/.test(file.path))
-        .map(async (file) => {
+        .map(async (file): Promise<{ routes: Route[]; failure?: RouteFailure }> => {
           try {
             const response = await fetch(
-              `https://raw.githubusercontent.com/${repository}/main/${file.path}`,
+              `${rawUrl}/${repository}/main/${file.path}`,
               { ...options, signal: AbortSignal.timeout(3000) },
             );
             if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-            return publicRoutes(await response.text());
+            return { routes: publicRoutes(await response.text()) };
           } catch (err) {
             logger.warn({ err, path: file.path }, "Homelab route unavailable");
-            return [];
+            // A broken file must not silently drop its routes: report it.
+            return {
+              routes: [],
+              failure: { path: file.path, reason: reason(err) },
+            };
           }
         }),
     );
-    return [...new Map(routes.flat().map((route) => [route.href, route])).values()]
+    const routes = results.flatMap((result) => result.routes);
+    const failures = results.flatMap((result) =>
+      result.failure ? [result.failure] : [],
+    );
+    const services = [...new Map(routes.map((route) => [route.href, route])).values()]
       .map((route) => ({
         ...route,
         name: serviceDetails[route.id]?.name ?? route.id.replaceAll("-", " "),
@@ -74,8 +96,12 @@ export async function publicServices(): Promise<PublicService[]> {
         Number(!!serviceDetails[b.id]?.featured) - Number(!!serviceDetails[a.id]?.featured) ||
         a.name.localeCompare(b.name, "en-GB"),
       );
+    return { services, failures };
   } catch (err) {
     logger.warn({ err, repository }, "Public homelab services unavailable");
-    return [];
+    return {
+      services: [],
+      failures: [{ path: directory, reason: reason(err) }],
+    };
   }
 }

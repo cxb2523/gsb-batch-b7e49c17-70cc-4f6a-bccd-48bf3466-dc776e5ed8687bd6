@@ -1,13 +1,23 @@
 import { projects, site } from "@/data/site";
 import { logger } from "@/lib/logger";
 
+export type GitHubProjectStatus =
+  | "ok"
+  | "metadata-error"
+  | "pins-unavailable";
+
 export type GitHubProject = {
   name: string;
   href: string;
   description: string;
   tags: readonly string[];
   stars: number | null;
+  status: GitHubProjectStatus;
 };
+
+// Overridable so tests can point the site at a local GitHub stub.
+const webUrl = process.env.GITHUB_WEB_URL ?? "https://github.com";
+const apiUrl = process.env.GITHUB_API_URL ?? "https://api.github.com";
 
 export function pinnedRepositories(html: string): string[] | null {
   // GitHub renders this list in public profile HTML; no browser or token is needed.
@@ -27,9 +37,9 @@ export function pinnedRepositories(html: string): string[] | null {
 }
 
 export async function githubProjects(): Promise<GitHubProject[]> {
-  let pins: string[] = [];
+  let pins: string[] | null = null;
   try {
-    const response = await fetch(`https://github.com/${site.handle}`, {
+    const response = await fetch(`${webUrl}/${site.handle}`, {
       headers: { Accept: "text/html" },
       next: { revalidate: 3600 },
       signal: AbortSignal.timeout(3000),
@@ -49,6 +59,19 @@ export async function githubProjects(): Promise<GitHubProject[]> {
     }
   } catch (err) {
     logger.warn({ err }, "GitHub pinned projects unavailable");
+  }
+
+  // Without the pinned list the curated entries are all we can show; mark
+  // them so readers can tell the data is stale rather than absent.
+  if (pins === null) {
+    return projects.map((project) => ({
+      name: project.name,
+      href: project.href,
+      description: project.description,
+      tags: [],
+      stars: null,
+      status: "pins-unavailable",
+    }));
   }
 
   const seen = new Set<string>();
@@ -74,17 +97,15 @@ export async function githubProjects(): Promise<GitHubProject[]> {
         description: curated?.description ?? "",
         tags: [],
         stars: null,
+        status: "metadata-error",
       };
 
       try {
-        const response = await fetch(
-          `https://api.github.com/repos/${repository}`,
-          {
-            headers: { Accept: "application/vnd.github+json" },
-            next: { revalidate: 3600 },
-            signal: AbortSignal.timeout(3000),
-          },
-        );
+        const response = await fetch(`${apiUrl}/repos/${repository}`, {
+          headers: { Accept: "application/vnd.github+json" },
+          next: { revalidate: 3600 },
+          signal: AbortSignal.timeout(3000),
+        });
         if (!response.ok) {
           logger.warn(
             { repository, statusCode: response.status },
@@ -96,6 +117,7 @@ export async function githubProjects(): Promise<GitHubProject[]> {
         const data = await response.json();
         return {
           ...fallback,
+          status: "ok",
           description:
             typeof data.description === "string" ? data.description : "",
           tags: Array.isArray(data.topics)

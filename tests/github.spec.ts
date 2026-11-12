@@ -80,9 +80,50 @@ test("projects keep curated priorities, deduplicate pins, and use live GitHub me
     description: "Live: h8s",
     tags: ["cuda", "inference", "gpu", "fourth-topic"],
     stars: 42,
+    status: "ok",
   });
+  expect(result.every((project) => project.status === "ok")).toBe(true);
   expect(result[3].href).toBe("https://github.com/another-owner/new.repo");
   expect(calls).toHaveLength(6);
+});
+
+test("a single repository metadata failure keeps its place and marks only that entry", async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url === "https://github.com/okwilkins") {
+      return new Response(profile("okwilkins/h8s", "okwilkins/.dotfiles", "okwilkins/inferlace"));
+    }
+    if (url.endsWith("/repos/okwilkins/h8s")) {
+      return new Response("unavailable", { status: 503 });
+    }
+    return Response.json({
+      description: `Live: ${url.split("/").at(-1)}`,
+      topics: ["nix"],
+      stargazers_count: 7,
+    });
+  };
+
+  const result = await githubProjects();
+  expect(result.map((project) => project.name)).toEqual([
+    "h8s",
+    ".dotfiles",
+    "inferlace",
+  ]);
+  const [failed, ...rest] = result;
+  expect(failed).toEqual({
+    name: "h8s",
+    href: "https://github.com/okwilkins/h8s",
+    description: projects[0].description,
+    tags: [],
+    stars: null,
+    status: "metadata-error",
+  });
+  for (const project of rest) {
+    expect(project.status).toBe("ok");
+    expect(project.stars).toBe(7);
+    expect(project.tags).toEqual(["nix"]);
+    expect(project.description).toBe(`Live: ${project.name}`);
+  }
 });
 
 test("metadata failure preserves current pins and uses curated fallback content", async () => {
@@ -97,13 +138,19 @@ test("metadata failure preserves current pins and uses curated fallback content"
   };
 
   expect(await githubProjects()).toEqual([
-    ...projects.map((project) => ({ ...project, tags: [], stars: null })),
+    ...projects.map((project) => ({
+      ...project,
+      tags: [],
+      stars: null,
+      status: "metadata-error",
+    })),
     {
       name: "new.repo",
       href: "https://github.com/another-owner/new.repo",
       description: "",
       tags: [],
       stars: null,
+      status: "metadata-error",
     },
   ]);
 });
@@ -117,25 +164,35 @@ test("repositories without topics keep their star counts and omit tags", async (
   };
 
   const result = await githubProjects();
-  expect(result.every((project) => project.tags.length === 0 && project.stars === 14)).toBe(true);
+  expect(result.every((project) =>
+    project.tags.length === 0 && project.stars === 14 && project.status === "ok",
+  )).toBe(true);
 });
 
-test("profile failure or changed markup falls back to the three featured projects", async () => {
+test("an unavailable pinned list falls back to curated projects marked pins-unavailable", async () => {
   for (const profileResponse of [
     new Response("unavailable", { status: 503 }),
     new Response("<html>GitHub markup changed</html>"),
   ]) {
+    const calls: string[] = [];
     globalThis.fetch = async (input) => {
-      if (String(input) === "https://github.com/okwilkins") return profileResponse;
+      const url = String(input);
+      calls.push(url);
+      if (url === "https://github.com/okwilkins") return profileResponse;
       return Response.json({ description: null, topics: [], stargazers_count: 0 });
     };
 
     const result = await githubProjects();
-    expect(result.map((project) => project.name)).toEqual([
-      "h8s", ".dotfiles", "inferlace",
-    ]);
-    expect(result.every((project) =>
-      project.description === "" && project.tags.length === 0 && project.stars === 0,
-    )).toBe(true);
+    expect(result).toEqual(
+      projects.map((project) => ({
+        ...project,
+        tags: [],
+        stars: null,
+        status: "pins-unavailable",
+      })),
+    );
+    // Without the pinned list there is nothing to enrich, so no repository
+    // metadata requests are made at all.
+    expect(calls).toEqual(["https://github.com/okwilkins"]);
   }
 });

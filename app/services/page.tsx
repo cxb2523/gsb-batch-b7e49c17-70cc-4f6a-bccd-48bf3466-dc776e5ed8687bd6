@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 };
 
 export default async function Services() {
-  const services = await publicServices();
+  const { services, failures } = await publicServices();
   return (
     <>
       <BackHomeHeader href="/#services" />
@@ -20,7 +20,7 @@ export default async function Services() {
         </p>
       </section>
       <section className="section surface" aria-label="Public services">
-        {services.length ? <ServiceLinks services={services} /> : (
+        {services.length ? <ServiceLinks services={services} failures={failures} /> : (
           <p className="text-sm leading-relaxed text-muted-foreground">
             The service list is unavailable right now.{" "}
             <a href="https://github.com/okwilkins/h8s" className="text-link underline underline-offset-4">View h8s on GitHub.</a>

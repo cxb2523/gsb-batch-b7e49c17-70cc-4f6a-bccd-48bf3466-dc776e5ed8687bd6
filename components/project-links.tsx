@@ -36,6 +36,11 @@ export function ProjectLinks({ projects, preview = false }: {
                       {project.description}
                     </p>
                   )}
+                  {project.status !== "ok" && (
+                    <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground/80">
+                      Latest GitHub data is temporarily unavailable.
+                    </p>
+                  )}
                   {project.tags.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {project.tags.map((tag) => (

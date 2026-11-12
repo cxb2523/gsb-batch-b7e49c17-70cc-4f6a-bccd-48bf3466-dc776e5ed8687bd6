@@ -1,10 +1,11 @@
 import { ArrowUpRight } from "lucide-react";
 import { ResourceLink } from "@/components/resource-link";
-import type { PublicService } from "@/lib/homelab";
+import type { PublicService, RouteFailure } from "@/lib/homelab";
 
-export function ServiceLinks({ services, preview = false }: {
+export function ServiceLinks({ services, preview = false, failures = [] }: {
   services: PublicService[];
   preview?: boolean;
+  failures?: RouteFailure[];
 }) {
   return (
     <div className={`resource-list${preview ? " section-preview" : ""}`}>
@@ -27,6 +28,11 @@ export function ServiceLinks({ services, preview = false }: {
           );
         })}
       </ul>
+      {failures.length > 0 && (
+        <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground/80">
+          Some services couldn&rsquo;t be loaded just now, so this list may be incomplete.
+        </p>
+      )}
     </div>
   );
 }

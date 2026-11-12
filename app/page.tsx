@@ -12,7 +12,7 @@ import { publicServices } from "@/lib/homelab";
 
 export default async function Home() {
   const recentExperience = experience.slice(0, 3);
-  const [selectedProjects, services] = await Promise.all([
+  const [selectedProjects, { services, failures: serviceFailures }] = await Promise.all([
     githubProjects(),
     publicServices(),
   ]);
@@ -146,7 +146,7 @@ export default async function Home() {
         <p className="text-sm leading-relaxed text-muted-foreground">
           A few things I host on my Kubernetes homelab.
         </p>
-        {services.length > 0 ? <ServiceLinks services={services} preview /> : (
+        {services.length > 0 ? <ServiceLinks services={services} preview failures={serviceFailures} /> : (
           <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
             The service list is unavailable right now.{" "}
             <a href="https://github.com/okwilkins/h8s" className="text-link underline underline-offset-4">View h8s on GitHub.</a>

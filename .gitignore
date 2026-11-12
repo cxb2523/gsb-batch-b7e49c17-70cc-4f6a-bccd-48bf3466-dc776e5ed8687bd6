@@ -1,6 +1,7 @@
 # JavaScript and Next.js
 node_modules/
 .next/
+.next-degraded/
 out/
 dist/
 *.tsbuildinfo
