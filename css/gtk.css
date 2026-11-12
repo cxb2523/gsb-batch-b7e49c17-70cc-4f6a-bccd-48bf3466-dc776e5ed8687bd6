@@ -1,0 +1,20 @@
+entry,
+menubar,
+notebook,
+notebook stack,
+notebook tabs arrow,
+notebook tabs tab,
+text{
+    background-color: #000;
+    background-image: none;
+    color: #aaa;
+    font-family: monospace;
+    font-size: 15px;
+}
+overshoot.bottom,
+overshoot.top{
+    background: none;
+}
+paned separator{
+    border-width: 2px;
+}

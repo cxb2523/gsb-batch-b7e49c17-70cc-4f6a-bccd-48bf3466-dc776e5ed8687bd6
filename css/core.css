@@ -1,0 +1,202 @@
+a{
+    color: #4c4;
+    cursor: pointer;
+    text-decoration: underline .125rem #191;
+}
+.active{
+    text-decoration: underline .125rem;
+}
+.big{
+    font-size: 225%;
+}
+body{
+    margin: 0;
+    overscroll-behavior: none;
+    padding-top: 2rem;
+    text-align: center;
+}
+body,
+button,
+input,
+select,
+textarea,
+::file-selector-button{
+    background-color: #000;
+    color: #ccc;
+    font: 700 1rem monospace;
+}
+button,
+input,
+select,
+::file-selector-button{
+    border: 2px solid #999;
+    padding: .2rem .4rem;
+    vertical-align: middle;
+}
+button:disabled,
+input:disabled,
+input:disabled::file-selector-button,
+input:not([type=color]):not([type=file]):read-only,
+textarea:read-only{
+    border-color: #555;
+}
+button:enabled,
+input:enabled::file-selector-button,
+input[type=checkbox]:enabled,
+input[type=color]:enabled,
+input[type=file]:enabled,
+input[type=range]:enabled,
+label,
+select:enabled{
+    cursor: pointer;
+}
+#canvas{
+    inset: 0;
+    position: fixed;
+    touch-action: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+.center,
+input{
+    text-align: center;
+}
+#core_menu_info,
+.tabcontents div{
+    padding: .5rem;
+}
+#core_ui{
+    background-color: #111;
+    left: 0;
+    max-width: 100%;
+    position: fixed;
+    text-align: left;
+    top: 0;
+    user-select: none;
+    z-index: 9;
+}
+#core_ui.open{
+    position: absolute;
+    user-select: auto;
+}
+#core_ui table{
+    background-color: #000;
+    margin: 0;
+}
+.external{
+    color: #f99;
+    text-decoration-color: #c66;
+}
+.external::after{
+    content: '↗';
+    line-height: 1;
+}
+.gridbutton{
+    background-color: #222;
+    border: 0;
+    font-size: 20px;
+    height: 25px;
+    margin: 1px;
+    padding: 0;
+    vertical-align: top;
+    width: 25px;
+}
+.gridbuttonclickable{
+    background-color: #222;
+    border: 0;
+    color: #000;
+    font-size: 40px;
+    height: 50px;
+    margin: 1px;
+    padding: 0;
+    width: 50px;
+}
+.header{
+    background-color: #333;
+    text-align: center;
+}
+.header td{
+    vertical-align: bottom;
+}
+.hidden{
+    display: none;
+}
+input,
+progress{
+    margin: 0;
+    width: 13rem;
+}
+input[type=checkbox],
+input[type=file]{
+    width: auto;
+}
+input[type=checkbox],
+input[type=range],
+progress{
+    accent-color: #07f;
+}
+input[type=color],
+input[type=file],
+::-webkit-color-swatch-wrapper{
+    padding: 0;
+}
+input[type=color],
+.mini{
+    width: 5rem;
+}
+:invalid{
+    border-color: #f00;
+}
+.left{
+    text-align: left;
+}
+.medium{
+    font-size: 150%;
+}
+.right{
+    text-align: right;
+}
+table{
+    border-collapse: collapse;
+    margin: auto;
+}
+td,
+textarea{
+    border: 2px solid #444;
+    padding: .3rem;
+    vertical-align: top;
+}
+textarea{
+    border-color: #999;
+    box-sizing: border-box;
+    height: 12rem;
+    max-width: 100%;
+    width: 30rem;
+}
+::-moz-color-swatch,
+::-webkit-color-swatch{
+    border: 0;
+}
+
+*:focus{
+    outline: 3px solid #4c4;
+}
+a:active,
+a:hover,
+button:enabled:active,
+input[type=file]:enabled:active::file-selector-button{
+    color: #07f;
+}
+a:active::after,
+a:hover::after{
+    color: #f00;
+}
+tr:hover{
+    background-color: #111;
+}
+@media (hover:hover) and (pointer:fine){
+  button:enabled:hover,
+  input[type=file]:enabled:hover::file-selector-button{
+      color: #07f;
+  }
+}
