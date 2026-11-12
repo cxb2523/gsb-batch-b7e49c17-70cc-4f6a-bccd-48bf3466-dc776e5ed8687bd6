@@ -1,0 +1,4 @@
+{
+  "topic": "Rule proposal",
+  "tip": "A high-confidence detection rule must be accompanied by both a positive test fixture that reliably triggers the rule and a benign negative fixture that proves no false alarms occur on safe code."
+}

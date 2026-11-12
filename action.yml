@@ -1,0 +1,35 @@
+name: SkillHawk AI Agent Security Scan
+description: Scan SKILL.md, MCP configs and AI agent instructions for secrets, prompt injection and dangerous shell commands.
+author: Berserk-hub150
+branding:
+  icon: shield
+  color: orange
+inputs:
+  path:
+    description: Path to scan
+    required: false
+    default: .
+  fail-on:
+    description: Minimum severity that fails the action (critical, high, medium, low, none)
+    required: false
+    default: high
+  format:
+    description: Output format (text, json, or sarif)
+    required: false
+    default: text
+  sarif-file:
+    description: Optional path to write SARIF 2.1.0 results for GitHub code scanning
+    required: false
+    default: ''
+outputs:
+  score:
+    description: Security score from 0 to 100
+  risk:
+    description: Highest detected severity
+  findings:
+    description: Number of findings
+  sarif-file:
+    description: SARIF output path when sarif-file is configured
+runs:
+  using: node24
+  main: src/action.js
