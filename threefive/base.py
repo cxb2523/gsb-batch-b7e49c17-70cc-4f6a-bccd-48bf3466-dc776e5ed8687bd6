@@ -1,0 +1,233 @@
+"""
+threefive.base contains
+the class SCTE35Base.
+"""
+
+import json
+from .bitn import NBin
+from .stuff import print2, red
+
+
+class SCTE35Base:
+    """
+    SCTE35Base is a base class for
+    SpliceCommand and SpliceDescriptor classes
+    """
+
+    ROLLOVER = 8589934591
+
+    def __repr__(self):
+        return str(self.__dict__)
+
+    @staticmethod
+    def _chk_nbin(nbin):
+        if not nbin:
+            nbin = NBin()
+        return nbin
+
+    @staticmethod
+    def _err2(var_name, var_value, bit_count, var_type):
+        var_type = str(var_type).split("'")[1]
+        mesg = f"{var_name} is {var_value},"
+        err_mesg = f"{mesg} it should be type {var_type}, {bit_count} bit(s) long."
+        red(err_mesg)
+
+    @staticmethod
+    def _bool_int(var_value, var_type):
+        if var_type == int:
+            return isinstance(var_value, bool)
+        return False
+
+    @staticmethod
+    def _wrong_type(var_value, var_type):
+        return not isinstance(var_value, var_type)
+
+    @staticmethod
+    def as_90k(int_time):
+        """
+        ticks to 90k timestamps
+
+        example:
+                        >>> from threefive import TimeSignal
+                        >>> ts=TimeSignal()
+                        >>> ts.as_90k(123456789)
+                        1371.7421
+        """
+        ninetyk = float(int_time) / 90000.0
+        return round(ninetyk, 6)
+
+    @staticmethod
+    def as_ticks(float_time):
+        """
+        90k timestamps to ticks
+
+        example:
+                        >>> from threefive import TimeSignal
+                        >>> ts=TimeSignal()
+                        >>> ts.as_ticks(1371.7421)
+                        123456789
+        """
+        return int(round(float_time * 90000))
+
+    @staticmethod
+    def as_hms(secs_of_time):
+        """
+        as_hms converts timestamp to
+        00:00:00.000 format
+        """
+        hours, seconds = divmod(secs_of_time, 3600)
+        mins, seconds = divmod(seconds, 60)
+        seconds = round(seconds, 3)
+        output = f"{int(hours):02}:{int(mins):02}:{seconds:02}"
+        if len(output.split(".")[1]) < 2:
+            output += "0"
+        return output
+
+    @staticmethod
+    def fix_hex(hexed):
+        """
+        fix_hex adds padded zero if needed for byte conversion.
+        """
+        return (hexed.replace("0x", "0x0", 1), hexed)[len(hexed) % 2 == 0]
+
+    @staticmethod
+    def idxsplit(data, sep):
+        """
+        idxsplit is like split but you keep
+        the sep.
+
+        example:
+                >>> idxsplit('123456789',4)
+                >>>'456789'
+        """
+        if sep in data:
+            return data[data.index(sep) :]
+        return data
+
+    @staticmethod
+    def _json2dict(data):
+        if isinstance(data, str):
+            data = json.loads(data)
+        return data
+
+    def _chk_var(self, var_type, nbin_method, var_name, bit_count):
+        """
+        _chk_var is used to check var values and types before encoding
+        """
+        var_value = self.__dict__[var_name]
+        if self._bool_int(var_value, var_type) or self._wrong_type(var_value, var_type):
+            self._err2(var_name, var_value, bit_count, var_type)
+            return False
+        nbin_method(var_value, bit_count)
+        return True
+
+    def get(self):
+        """
+        Returns instance as a kv_clean'ed dict
+        """
+        return self.kv_clean()
+
+    def has(self, what):
+        """
+        has check if what is an attribute
+        of the calling object (self).
+
+        if what is an attribute of this
+        object, return it.
+
+        If what is Not an attribute,
+        return None
+
+        example:
+                >>> from threefive import Cue, TimeSignal
+                >>> ts=TimeSignal()
+                >>> ts.has('command_type')  # ts has command_type so it's value of 6 is returned
+                6
+                >>> ts.has("pts_time")    # pts_time is set to None, None is returned.
+                >>> ts.has("your_momma")  # ts does not have your_momma, None is returned.
+                # has methods can be chained
+                >>> cue=Cue()
+                >>> cue.command=ts
+                >>> cue.has("command").has("command_type")
+                6
+
+        """
+        if what in vars(self):
+            return vars(self)[what]
+        return None
+
+    def json(self):
+        """
+        json returns self as kv_clean'ed json
+        """
+        return json.dumps(self.get(), indent=4)
+
+    def _v2v(self, val):
+        bites = (
+            bytes,
+            bytearray,
+        )
+        if isinstance(val, bites):
+            val = val.decode(errors="ignore")
+        elif isinstance(val, list):
+            val = [self._v2v(v) for v in val]
+        elif isinstance(val, dict):
+            val = {k: self._v2v(v) for k, v in val.items()}
+        elif isinstance(val, SCTE35Base):
+            val.kv_clean()
+            print(val)
+        elif hasattr(val, "__dict__"):
+            val = {k: self._v2v(v) for k, v in val.__dict__.items()}
+        return val
+
+    def chk_obj(self, obj):
+        """
+        chk_obj set object.
+        if obj is None, return self,
+        else just return obj.
+        """
+        if obj is None:
+            obj = self
+        return obj
+
+    def kv_clean(self, obj=None):
+        """
+        kv_clean recursively removes items
+        from a dict if the value is None.
+        """
+        obj = self.chk_obj(obj)
+        return {
+            k: self._v2v(v)
+            for k, v in obj.__dict__.items()
+            if v
+            not in [
+                None,
+                [],
+            ]
+        }  # added empty list []
+
+    def _chk_vars(self, k, v):
+        if k in vars(self):
+            self.__dict__[k] = v
+
+    def _vrfy_load(self, data):
+        _ = {self._chk_vars(k, v) for k, v in data.items()}
+
+    def _load_dict(self, data):
+        if isinstance(data, dict):
+            self._vrfy_load(data)
+
+    def load(self, data):
+        """
+        load is used to load
+        data from a dict or json string.
+        only updates vars that exist in the obj.
+        """
+        data = self._json2dict(data)
+        self._load_dict(data)
+
+    def show(self):
+        """
+        show prints self as json to stderr (2)
+        """
+        print2(self.json())

@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+
+"""
+threefive.cli.py
+
+scte35 command line SCTE35 tool.
+
+"""
+
+
+import sys
+from .new_reader import reader
+from .cue import Cue
+from .hls import cli as hlscli
+from .stream import Stream
+from .stuff import print2
+from .stuff import ERR
+from .version import version
+
+
+REV = "\033[7;1m"
+NORM = "\033[27m\033[0m"
+NORM = "\033[0m"
+BLUE = "\033[36;1;1m"
+G = "\033[32;1;1m"
+B = "\033[7;1m"
+U = "\033[m"
+
+
+HELP = f"""
+ {BLUE}threefive{U} cli tool{U}
+
+ {BLUE} Default{U} The default action is to read a input and write a SCTE-35 output.{U}
+
+    {BLUE}Inputs {U} mpegts, base64, hex, json,and xml, and xmlbin{U}.
+
+    {BLUE}Outputs{U} base64, bytes, hex, int, json, xml, and xmlbin.{U}
+
+    {BLUE}SCTE-35 can be read from {U} strings, files, stdin, DASH, HLS,
+                http(s), multicast, SRT, and UDP.
+
+     {U}{BLUE}Input     Output  Example Command{U}
+
+     {BLUE}mpegts    base64 {U} threefive https://example.com/video.ts base64{NORM}
+     {BLUE}base64    hex    {U} threefive '/DAWAAAAAAAAAP/wBQb+AKmKxwAACzuu2Q==' hex{NORM}
+     {BLUE}xmlbin    int    {U} threefive < xmlbin.xml int{NORM}
+     {BLUE}xml       json   {U} threefive < xml.xml{NORM}
+     {BLUE}mpegts    json   {U} threefive video.ts{NORM}
+     {BLUE}json      xml    {U} threefive < json.json  xml{NORM}
+
+{BLUE} Additional Commands{U}
+
+    {U}{BLUE} Show MPEGTS iframes{NORM}  threefive iframes video.ts
+
+    {U}{NORM}{BLUE} Parse SCTE-35 from MPEGTS, copy the MPEGTS to stdout{NORM} threefive proxy video.ts
+
+    {U}{NORM}{BLUE} Print PTS from MPEGTS video{NORM} threefive pts video.ts
+
+    {U}{NORM}{BLUE} Create a SCTE-35 sidecar file{NORM} threefive sidecar video.ts
+
+    {U}{NORM}{BLUE} Probe MPEGTS video{NORM} threefive show video.ts
+
+    {U}{NORM}{BLUE} Show version{NORM} threefive version
+
+    {U}{NORM} {BLUE}Help{NORM} threefive help
+
+"""
+
+
+def done():
+    """
+    done prints the threefive version, interpreter version,
+    and calls sys.exit()
+    """
+    print2(f"# threefive: {version} on python: {sys.version}")
+    sys.exit()
+
+
+def mk_sidecar(cue):
+    """
+    mk_sidecar generates a sidecar file with the SCTE-35 Cues
+    """
+    rollover = 95443.717678
+    pts = 0.001
+    with open("sidecar.txt", "a") as sidecar:
+        cue.show()
+        if cue.packet_data.pts:
+            pts = cue.packet_data.pts
+        if cue.command.pts_time:
+            pts = (cue.command.pts_time + cue.info_section.pts_adjustment) % rollover
+        data = f"{pts},{cue.encode()}\n"
+        sidecar.write(data)
+
+
+def mk_args(keys):
+    """
+    mk_args generates a list of args for inputs
+    if no args are present,read from sys.stdin.buffer
+    """
+    return [arg for arg in sys.argv[1:] if arg not in keys]
+
+
+###   stdin stuff
+
+
+def not_pkt(args, rdr, one):
+    """
+    not_pkt , runs when stdin is NOT an mpegts stream
+    """
+    two = rdr.read()
+    args.append((one + two).decode())  # no rewind on stdin?
+
+
+def is_pkt(args, rdr, one):
+    """
+    is_pkt runs when stdin is an mpegts stream
+    """
+    two = rdr.read(187)
+    strm = Stream(sys.stdin.buffer)
+    strm.parse(one + two)  # dont drop first packet
+    strm.decode(func=funk())
+    done()  # I keep forgetting why I do this
+
+
+def stdin_is_readable():
+    """
+    stdin_is readable detect data on stdin.
+    """
+    return not sys.stdin.isatty()
+
+
+def read_stdin(args):
+    """
+    read_stdin read from stdin
+    """
+    rdr = reader(sys.stdin.buffer)
+    one = rdr.read(1)
+    if one not in [b"G"]:  # is this a packet?
+        not_pkt(args, rdr, one)
+    else:
+        is_pkt(args, rdr, one)
+
+
+def chk_stdin(args):
+    """
+    chk_stdin autodetects input from stdin.
+    """
+    if stdin_is_readable():
+        read_stdin(args)
+    return args
+
+
+# dashdashhelp()
+
+
+def dashdashhelp():
+    """
+    dashdashhelp swaps out "help" with "--help"
+    for keys in cli_map. Pure bureaucracy.
+    I still can't believe I can just edit sys.argv at will,
+    it kind of makes sense, since I wrote sys.argv in the first place,
+    but it just feels so wrong.
+    """
+    if "help" in sys.argv:
+        idx = sys.argv.index("help")
+        sys.argv[idx] = "--help"
+
+
+# chk_hls()
+
+
+def chk_hls():
+    """
+    chk_hls  check if an  m3u8 has
+    been passed on the command line
+    and call the hlscli if it is an m3u8
+    """
+    try:
+        this = sys.argv[1]
+        packet = reader(this).read(188)
+        if b"#EXTM3U" in packet:
+            hlscli()
+            done()
+    except ERR:
+        pass
+
+
+# PrintMapper()
+
+
+class PrintMapper:
+
+    def hls(self):
+        sys.argv.remove("hls")
+        hlscli()
+
+    def print_help(self):
+        """
+        print_help checks sys.argv for the word help
+        and displays the help if found
+        """
+        print2(HELP)
+        done()
+
+    def print_version(self):
+        """
+        print_version print the threefive version
+        """
+        print2(version)
+        done()
+
+    def __init__(self):
+        """
+        chk_print_map checks for print_map.keys() in sys.argv
+        """
+        self.print_map = {
+            "hls": self.hls,
+            "-h": self.print_help,
+            "--help": self.print_help,
+            "help": self.print_help,
+            "-v": self.print_version,
+            "--version": self.print_version,
+            "version": self.print_version,
+        }
+
+        _ = [v() for k, v in self.print_map.items() if k in sys.argv]
+
+
+# MPEGTSMapper()
+
+
+class MPEGTSMapper:
+    """
+    MPEGTSMapper maps keywords to method calls for the cli.
+
+       keyword  method
+       "proxy"  self.proxy_chk,
+        "pts"  self.pts_chk,
+        "show"  self.show_chk,
+        "sidecar"  self.sidecar_chk,
+        "iframes" self.iframe_chk,
+    """
+
+    @staticmethod
+    def iframe_chk(this):
+        """
+        iframe_chk show iframes pts
+        for a mpegts video.
+        """
+        print2(this)
+
+        strm = Stream(this)
+        strm.iframes(shush=False)
+        del strm
+
+    @staticmethod
+    def proxy_chk(this):
+        """
+        proxy_chk checks for the proxy keyword
+        and proxies the stream to stdout if present.
+        proxy_chk also writes pts,cue pairs to sidecar.txt
+        """
+        strm = Stream(this)
+        strm.proxy(func=mk_sidecar)
+        del strm
+
+    @staticmethod
+    def pts_chk(this):
+        """
+        pts_chk is used to display PTS.
+        """
+        print2(this)
+        strm = Stream(this)
+        strm.show_pts()
+        del strm
+
+    @staticmethod
+    def show_chk(this):
+        """
+        show_chk checks for the show keyword
+        and displays the streams if present.
+        """
+        print2(this)
+        strm = Stream(this)
+        strm.show()
+        del strm
+
+    @staticmethod
+    def sidecar_chk(this):
+        """
+        sidecar_chk checks for the sidecar keyword and
+        generates a sidecar file if present.
+        """
+        print2(this)
+        strm = Stream(this)
+        strm.decode(func=mk_sidecar)
+        del strm
+
+    def mpegts_key_in_argv(self, args, key):
+        """
+        key_in_argv check if a key
+        from mpegts_map is in sys.argv
+        """
+        if key in sys.argv:
+            if stdin_is_readable():
+                args.append(sys.stdin.buffer)
+            for arg in args:
+                self.mpegts_map[key](arg)
+            done()
+
+    def chk_mpegts_map(self):
+        """
+        chk_mpegts_map check sys.argv for mpegts_map keys
+        """
+        m_keys = list(self.mpegts_map.keys())
+        args = mk_args(m_keys)
+        for key in m_keys:
+            self.mpegts_key_in_argv(args, key)
+
+    def __init__(self):
+        self.mpegts_map = {
+            "proxy": self.proxy_chk,
+            "pts": self.pts_chk,
+            "show": self.show_chk,
+            "sidecar": self.sidecar_chk,
+            "iframes": self.iframe_chk,
+        }
+
+        self.chk_mpegts_map()
+
+
+def base64_out(cue):
+    """
+    print SCTE-35 from mpegts as base64
+    """
+    print2(cue.base64())
+
+
+def bytes_out(cue):
+    """
+    print SCTE-35 from mpegts as base64
+    """
+    print2(cue.bites)
+
+
+def hex_out(cue):
+    """
+    print SCTE-35 from mpegts as hex
+    """
+    print2(cue.hex())
+
+
+def int_out(cue):
+    """
+    print SCTE-35 from mpegts as int
+    """
+    print2(cue.int())
+
+
+def json_out(cue):
+    """
+    print SCTE-35 from mpegts as json
+    """
+    cue.show()
+
+
+def xmlbin_out(cue):
+    """
+    xml_out prints cue as xml+binary
+    """
+    print2(cue.xmlbin())
+
+
+def xml_out(cue):
+    """
+    xml_out prints cue as xml
+    """
+    print2(cue.xml())
+
+
+def funk():
+    """
+    return a function
+    if a key in funk_map
+    is also in sys.argv
+    """
+    func = json_out
+    for k, v in funk_map.items():
+        if k in sys.argv:
+            func = v
+    return func
+
+
+# func_map is used for SCTE-35 output formats
+
+funk_map = {
+    "base64": base64_out,
+    "bytes": bytes_out,
+    "hex": hex_out,
+    "int": int_out,
+    "json": json_out,
+    "xml": xml_out,
+    "xmlbin": xmlbin_out,
+}
+
+
+class FunkMapper:
+    """
+    FunkMapper maps format related keywords to functions
+    for both Cue and Stream instances. FunkMapper
+    will format output for a single Cue instance or multiple Cues
+    in a Stream instance.
+    """
+
+    def try_stream(self, this):
+        """
+        try_stream attempts to decode `this`
+        with a Stream class instance.
+        """
+        strm = Stream(this)
+        strm.decode(func=funk())  # funk() works here
+        del strm
+
+    def try_cue(self, this):
+        """
+        try_cue attempts to decode `this`
+        with a Cue class instance.
+        """
+        cue = None
+        try:
+            cue = Cue(this)
+            if cue:
+                funk()(cue)  #   funk works here too.
+        except ERR:
+            pass
+
+    def to_funk(self, this):
+        """
+        to_funk prints a cue in a variety of formats.
+        """
+        if this in ["", b""]:
+            return
+        try:
+            self.try_stream(this)
+        except ERR:
+            self.try_cue(this)
+
+    def chk_funk_map(self):
+        """
+        chk_func_map checks for func_map.keys() in sys.argv
+        """
+
+        funk_keys = list(funk_map.keys())
+        args = mk_args(funk_keys)
+        args = chk_stdin(args)
+        _ = [self.to_funk(arg) for arg in args if args]  # multiple file input
+        done()
+
+    def __init__(self):
+        self.chk_funk_map()
+
+
+def threefivecli():
+    """
+    threefivecli check all the maps
+    and the call functions.
+    I have to do this because of
+    python's  packaging drama.
+
+    a toml file instead of python code,
+    yeah, that makes sense.
+
+    """
+    dashdashhelp()
+    chk_hls()
+    PrintMapper()
+    MPEGTSMapper()
+    FunkMapper()

@@ -1,0 +1,816 @@
+"""
+stream.py
+Mpeg-TS Stream parsing class
+"""
+
+import sys
+from .cue import Cue
+from .new_reader import reader
+from .packetdata import PacketData
+from .streamtypes import streamtype_map
+from .stuff import ERR, print2, blue
+
+
+def show_cue(cue):
+    """
+    default function call for Stream.decode
+    when a SCTE-35 packet is found.
+    """
+    cue.show()
+
+
+def no_op():
+    """
+    no_op do nothing
+    """
+    return
+
+
+class Based:
+    """
+    Based is a base class
+    """
+
+    def __repr__(self):
+        stuff = []
+        for k, v in self.__dict__.items():
+            stuff.append(f"\n{k}:\t{v}")
+        return "\n".join(stuff)
+
+    @staticmethod
+    def as_hms(secs_of_time):
+        """
+        as_hms converts timestamp to
+        00:00:00.000 format
+        """
+        hours, seconds = divmod(secs_of_time, 3600)
+        mins, seconds = divmod(seconds, 60)
+        seconds = round(seconds)
+        output = f"{int(hours):02}:{int(mins):02}:{seconds}"
+        return output
+
+
+class ProgramInfo(Based):
+    """
+    ProgramInfo is a class to
+    hold Program information
+    for use with Stream.show()
+    """
+
+    def __init__(self, pid=None, pcr_pid=None):
+        self.streams = {}  # pid to stream_type mapping
+        self.pid = pid
+        self.pcr_pid = pcr_pid
+
+    def _mk_vee(self, k):
+        vee = int(self.streams[k], base=16)
+        if vee in streamtype_map:
+            vee = f"{hex(vee)}\t{streamtype_map[vee]}"
+        else:
+            vee = f"{vee} Unknown"
+        print2(f"\t  {k} [{hex(k)}]\t{vee}")
+
+    def show(self):
+        """
+        show print2 the Program Infomation
+        in a familiar format.
+        """
+        print2(f"    Program Pid: {self.pid}")
+        print2(f"    Pcr Pid:     {self.pcr_pid}")
+        print2("    Streams:")
+        # sorted_dict = {k:my_dict[k] for k in sorted(my_dict)})
+        keys = sorted(self.streams)
+        print2("\t  Pid\t\tType")
+        for k in keys:
+            self._mk_vee(k)
+
+
+class Pids(Based):
+    """
+    Pids holds sets of pids for pat,pcr,pmt, and scte35
+    """
+
+    SDT_PID = 0x11
+    PAT_PID = 0x00
+
+    def __init__(self):
+        self.id3 = set()
+        self.pcr = set()
+        self.pmt = set()
+        self.scte35 = set()
+        self.maybe_scte35 = set()
+        self.not_scte35 = set()
+        self.tables = set([self.PAT_PID, self.SDT_PID])
+
+
+class Maps(Based):
+    """
+    Maps holds mappings
+    pids mapped to continuity_counters,
+    programs, partial tables and last payload.
+
+    programs mapped to pcr and pts
+
+    """
+
+    def __init__(self):
+        self.pid_cc = {}
+        self.pid_prgm = {}
+        self.prgm_pcr = {}
+        self.prgm_pts = {}
+        self.prgm = {}
+        self.partial = {}
+        self.last = {}
+
+
+class Stream(Based):
+    """
+    Stream class for parsing MPEG-TS data.
+    """
+
+    # the _CONST vars are deprecated
+    # please switch to CONST vars
+    # ex. use PACKET_SIZE not _PACKET_SIZE
+    PACKET_SIZE = 188
+    SYNC_BYTE = 0x47
+    MIN_PMT_COUNT = 16
+    # tids
+    PMT_TID = b"\x02"
+    SCTE35_TID = b"\xfc"
+    SDT_TID = b"\x42"
+    ROLLOVER = 8589934591  # 95443.717678
+    ROLLOVER9K = 95443.717678
+    SCTE35_PES_START = b"\x00\x00\x01\xfc"
+
+    def __init__(self, tsdata, show_null=True, headers={}):
+        """
+        tsdata is an file or http/https url
+        set show_null=False to exclude Splice Nulls
+
+        Use like...
+
+        from scte35 import Stream
+        strm = Stream("vid.ts",show_null=False)
+        strm.decode()
+
+        """
+        self.tsfile = tsdata
+        if not isinstance(tsdata, str):
+            self._tsdata = tsdata
+        else:
+            self._tsdata = reader(tsdata, headers=headers)
+        self.show_null = show_null
+        self.start = {}
+        self.info = False
+        self.the_scte35_pids = None
+        self.pids = Pids()
+        self.maps = Maps()
+        self.pmt_payloads = {}
+        self.pmt_count = 0
+        self.pmt_pkt = None
+        self.pat_pkt = None
+        self.shush = False
+
+    @staticmethod
+    def as_90k(ticks):
+        """
+        as_90k returns ticks as 90k clock time
+        """
+        return round((ticks / 90000.0), 6)
+
+    @staticmethod
+    def _abc_flags(pkt):
+        """
+        0x80, 0x20, 0x8
+        """
+        return pkt[5] & 0xA8
+
+    @staticmethod
+    def _afc_flag(pkt):
+        return pkt[3] & 0x20
+
+    @staticmethod
+    def _nal(pkt):
+        return b"\x00\x00\x01\x65" in pkt
+
+    @staticmethod
+    def _pcr_flag(pkt):
+        return pkt[5] & 0x10
+
+    @staticmethod
+    def _pts_flag(pay):
+        # uses pay not pkt
+        return pay[7] & 0x80
+
+    @staticmethod
+    def _pusi_flag(pkt1):
+        return pkt1 & 0x40
+
+    def rai(self, pkt):
+        """
+        rai random access indicator
+        (keyframes)
+        """
+        if pkt[3] & 0x20:
+            return pkt[5] & 0x40
+        return False
+
+    @staticmethod
+    def _rai_flag(pkt):
+        return pkt[5] & 0x40
+
+    @staticmethod
+    def _spi_flag(pkt):
+        return pkt[5] & 0x20
+
+    @staticmethod
+    def _parse_length(byte1, byte2):
+        """
+        parse a 12 bit length value
+        """
+        one = (byte1 & 0xF) << 8
+        return one + byte2
+
+    @staticmethod
+    def _parse_pid(byte1, byte2):
+        """
+        parse a 13 bit pid value
+        """
+        one = (byte1 & 0x1F) << 8
+        return one + byte2
+
+    @staticmethod
+    def _parse_program(byte1, byte2):
+        """
+        parse a 16 bit program number value
+        """
+        one = byte1 << 8
+        return one + byte2
+
+    @staticmethod
+    def _split_by_idx(pay, marker):
+        try:
+            return pay[pay.index(marker) :]
+        except ERR:
+            return False
+
+    def _find_start(self):
+        while one := self._tsdata.read(1):
+            if one[0] == self.SYNC_BYTE:
+                tail = self._tsdata.read(self.PACKET_SIZE - 1)
+                return one + tail
+        print2("No Stream Found\n")
+        return False
+
+    def packetize(self, chunk):
+        """
+        packetize - turn chunk into 188 byte packets
+        """
+        for i in range(0, len(chunk), self.PACKET_SIZE):
+            yield chunk[i : i + self.PACKET_SIZE]
+
+    def chunked(self, num_pkts=1024):
+        """
+        chunked - read chunks from stream
+        """
+        chunksize = self.PACKET_SIZE * num_pkts
+        #  if self._find_start():
+        while chunk := self._tsdata.read(chunksize):
+            yield chunk
+
+    def iter_pkts(self, num_pkts=1):
+        """
+        iter_pkts - iterate packets from stream
+        """
+        if pkt := self._find_start():
+            yield pkt
+            while pkt := self._tsdata.read(self.PACKET_SIZE):
+                yield pkt
+
+    # IFramer stuff
+    def _chk_rai(self, pkt):
+        """
+        _chk_rai check random access indicator
+        """
+        if self._pcr_flag(pkt):
+            return self._rai_flag(pkt)
+        return False
+
+    def _afc_approved(self, pkt):
+        return self._chk_rai(pkt) or self._abc_flags(pkt)
+
+    def _is_key(self, pkt):
+        """
+        _is_key is key frame detection.
+        """
+        if self._nal(pkt):
+            return True
+        if self._afc_flag(pkt):
+            return self._afc_approved(pkt)
+        return False
+
+    def parse_iframe(self, pkt):
+        """
+        parse_iframe, check if a pkt starts an iframe
+        """
+        if self._pusi_flag(pkt[1]):
+            pts = None
+            if self._is_key(pkt):
+                pid = self._parse_pid(pkt[1], pkt[2])
+                pts = self._parse_pts(pkt, pid)
+                pts = self.as_90k(pts)
+                if not self.shush:
+                    print(pts)
+                return pts
+        return None
+
+    def iframes(self, shush=False):
+        """
+        iframes find iframes in mpegts stream
+        """
+        self.shush = shush
+        iframes = []
+        while iframe := self.next_iframe(shush=shush):
+            iframes.append(iframe)
+        return iframes
+
+    def next_iframe(self, shush=True):
+        """
+        next_iframe find pts of the next iframe in
+        a stream
+        """
+        self.shush = shush
+        for pkt in self.iter_pkts():
+            if iframe := self.parse_iframe(pkt):
+                return iframe
+        return False
+
+    # done
+
+    def pkt2cue(self, pkt, func=show_cue):
+        """
+        pkt2cue parse a packet,
+        if Cue : func(Cue)
+        return a Cue instance or None
+        """
+        if cue := self.parse(pkt):
+            if func:
+                func(cue)
+        return cue
+
+    def decode(self, func=show_cue):
+        """
+        Stream.decode reads self.tsdata to find SCTE35 packets.
+        func can be set to a custom function that accepts
+        a scte35.Cue instance as it's only argument.
+        The method is written this way for speed.
+        """
+        while cue := self.decode_next():
+            if cue:
+                func(cue)
+        return False
+
+    def decode_next(self):
+        """
+        Stream.decode_next returns the next
+        SCTE35 cue as a scte35.Cue instance.
+        """
+        for pkt in self.iter_pkts():
+            if cue := self.parse(pkt):
+                return cue
+        return False
+
+    def decoderator(self):
+        """
+        Stream.decoderator is a generator
+        for Cue instances found in the MPEGTS stream
+        example:
+        import Stream
+        strm=Stream('video.ts')
+        for cue in strm.decoderator():
+            cue.show()
+
+        """
+        while cue := self.decode_next():
+            if cue:
+                yield cue
+
+    def decode_pids(self, scte35_pids=None, func=show_cue):
+        """
+        Stream.decode_pids takes a list of SCTE-35 Pids parse
+        and an optional call back function to run when a Cue is found.
+        if scte35_pids is not set, all scte35 pids will be parsed.
+        """
+        if scte35_pids:
+            self.the_scte35_pids = scte35_pids
+        return self.decode(func)
+
+    def decode_start_time(self):
+        """
+        decode_start_time
+        """
+        for pkt in self.iter_pkts():
+            self.parse(pkt)
+            if len(self.start.values()) > 0:
+                return self.start.popitem()[1]
+        return False
+
+    def proxy(self, func=show_cue):
+        """
+        Stream.decode_proxy writes all ts packets are written to stdout
+        for piping into another program like mplayer.
+        SCTE-35 cues are print2`ed to stderr.
+        """
+        for pkt in self.iter_pkts():
+            self.pkt2cue(pkt, func=func)
+            sys.stdout.buffer.write(pkt)
+        return False
+
+    def show(self):
+        """
+        displays streams that will be
+        parsed for SCTE-35.
+        """
+        print2("\n" + "-" * 45)
+        print2(f"{self.tsfile}")
+        self.info = True
+        for pkt in self.iter_pkts():
+            self._parse(pkt)
+            if self.pmt_count > self.MIN_PMT_COUNT:
+                break
+        if self.maps.prgm.keys():
+            sopro = sorted(self.maps.prgm.items())
+            for k, vee in sopro:
+                prog = f"\nProgram: {k}\n "
+                if k in self.start:
+                    prog += f"\n    PTS Start: {self.as_90k(self.start[k])}"
+                print2(prog)
+                vee.show()
+
+    def show_pts(self):
+        """
+        show_pts displays current pts by pid.
+        """
+        print("\t Prgm\t PTS")
+        for pkt in self.iter_pkts():
+            pid = self._parse_info(pkt)
+            prgm = self.pid2prgm(pid)
+            if self._pusi_flag(pkt[1]):
+                if pid in self.pids.pcr:
+                    self._parse_pts(pkt, pid)
+                    pts = self.pid2pts(pid)
+                    if pts:
+                        print("\t", prgm, "\t", pts)
+
+    def pts(self):
+        """
+        pts returns a dict of  program:pts
+        """
+        return self.maps.prgm_pts
+
+    def pid2prgm(self, pid):
+        """
+        pid2prgm takes a pid,
+        returns the program
+        """
+        prgm = 1
+        if pid in self.maps.pid_prgm:
+            prgm = self.maps.pid_prgm[pid]
+        return prgm
+
+    def pid2pts(self, pid):
+        """
+        pid2pts takes a pid
+        returns the current pts
+        """
+        prgm = self.pid2prgm(pid)
+        if prgm in self.maps.prgm_pts:
+            return self.as_90k(self.maps.prgm_pts[prgm])
+        return False
+
+    def pid2pcr(self, pid):
+        """
+        pid2pcr takes a pid
+        returns the current pcr
+        """
+        prgm = self.pid2prgm(pid)
+        if prgm in self.maps.prgm_pcr:
+            return self.as_90k(self.maps.prgm_pcr[prgm])
+        return False
+
+    ##    def _unpad_afc(self, pkt):
+    ##        return pkt[:4] + self._unpad(pkt[4:])
+    ##
+    ##    def _unpad(self, bites=b""):
+    ##        return bites.strip(b"\xff")
+    ##
+    def _mk_packet_data(self, pid):
+        prgm = self.maps.pid_prgm[pid]
+        pdata = PacketData(pid, prgm)
+        pdata.mk_pcr(self.maps.prgm_pcr)
+        pdata.mk_pts(self.maps.prgm_pts)
+        return pdata
+
+    @staticmethod
+    def mk_pts(payload):
+        """
+        mk_pts calculate pts from payload
+        """
+        a = (payload[9] & 14) << 29
+        b = payload[10] << 22
+        a += b
+        c = (payload[11] >> 1) << 15
+        a += c
+        d = payload[12] << 7
+        a += d
+        e = payload[13] >> 1
+        pts = a + e
+        return pts
+
+    def _parse_pts(self, pkt, pid):
+        """
+        parse pts and store by program key
+        in the dict Stream._pid_pts
+        """
+        if pkt[1] & 0x40:
+            payload = self._parse_payload(pkt)
+            # if len(payload) > 13:
+            if payload[7] & 0x80:  # pts flag
+                pts = self.mk_pts(payload)
+                prgm = self.pid2prgm(pid)
+                self.maps.prgm_pts[prgm] = pts
+                if prgm not in self.start:
+                    self.start[prgm] = pts
+                return pts
+        return False
+
+    def _mk_pcr(self, pkt, pid):
+        if self._afc_flag(pkt):
+            a = pkt[6] << 25
+            b = pkt[7] << 17
+            c = pkt[8] << 9
+            d = pkt[9] << 1
+            e = pkt[10] >> 7
+            pcr = a + b + c + d + e
+            prgm = self.pid2prgm(pid)
+            self.maps.prgm_pcr[prgm] = pcr
+
+    def _parse_payload(self, pkt):
+        """
+        _parse_payload returns the packet payload
+        """
+        head_size = 4
+        if self._afc_flag(pkt):
+            # pkt = pkt[:4] + self._unpad(pkt[4:])
+            afl = pkt[4]
+            head_size += afl + 1  # +one for afl byte
+        return pkt[head_size:]
+
+    def _pmt_pid(self, pay, pid):
+        self.pmt_count += 1
+        prgm = self.pid2prgm(pid)
+        if pay not in self.pmt_payloads.values():
+            prgm = self.pid2prgm(pid)
+            self.pmt_payloads[prgm] = pay
+            self._parse_pmt(pay, pid)
+
+    def _parse_tables(self, pkt, pid):
+        pay = self._parse_payload(pkt)
+        if pid == self.pids.PAT_PID:
+            if not self._same_as_last(pay, self.pids.PAT_PID):
+                self._parse_pat(pay)
+        if pid in self.pids.pmt:
+            self._pmt_pid(pay, pid)
+        return False
+
+    def _parse_info(self, pkt):
+        pid = (pkt[1] & 0x1F) << 8 | pkt[2]
+        if pid in self.pids.tables:
+            self._parse_tables(pkt, pid)
+        return pid
+
+    def parse(self, pkt):
+        """
+        parse  parse pkt for tables and SCTE-35
+        """
+        cue = None
+        pid = self._parse_pid(pkt[1], pkt[2])
+        if pid in self.pids.pcr:
+            if self._pusi_flag(pkt[1]):
+                self._parse_pts(pkt, pid)
+        if pid in self.pids.tables:
+            self._parse_tables(pkt, pid)
+        if pid in self.pids.scte35:
+            cue = self._parse_scte35(pkt, pid)
+        return cue
+
+    def _parse(self, pkt):
+        return self.parse(pkt)
+
+    def _chk_partial(self, pay, pid, sep):
+        if pid in self.maps.partial:
+            pay2 = self.maps.partial.pop(pid) + pay
+        else:
+            pay2 = pay
+        return self._split_by_idx(pay2, sep)
+
+    def _same_as_last(self, pay, pid):
+        last = False
+        if pid in self.maps.last:
+            last = self.maps.last[pid]
+        self.maps.last[pid] = pay
+        return last == pay
+
+    def _section_incomplete(self, pay, pid, seclen):
+        # + 3 for the bytes before section starts
+        if len(pay) > (seclen + 3):
+            return False
+        if (seclen + 3) > len(pay):
+            self.maps.partial[pid] = pay
+            return True
+        return False
+
+    def _parse_cue(self, pay, pid):
+        packet_data = None
+        packet_data = self._mk_packet_data(pid)
+        cue = Cue(pay, packet_data)
+        if cue:
+            return cue
+        return False
+
+    def _strip_scte35_pes(self, pkt):
+        """
+        ffmpeg was converting SCTE-35 packets into PES packets,
+        this removes the PES header.
+        """
+        pay = self._parse_payload(pkt)
+        if self.SCTE35_PES_START in pay:
+            pay = pay.split(self.SCTE35_PES_START, 1)[-1]
+            peslen = pay[4] + 5  # PES header length
+            pay = pay[peslen:]
+        return pay
+
+    def _pop_maybe_pid(self, pid):
+        if pid in self.pids.maybe_scte35:
+            self.pids.maybe_scte35.remove(pid)
+            # self.pids.not_scte35.add(pid)
+
+    def _chk_maybe_pid(self, pay, pid):
+        """
+        _chk_maybe_pid mayb scte35 pids are stream type 0x06,
+        they may have scte35 but if the stream doesn't have scte35
+        stop checking.
+        """
+        pay = self._chk_partial(pay, pid, self.SCTE35_TID)
+        if not pay:
+            self._pop_maybe_pid(pid)
+            return False
+        if pay[13] == self.show_null:
+            return False
+        return pay
+
+    def _mk_scte35_payload(self, pkt, pid):
+        pay = self._strip_scte35_pes(pkt)
+        if not pay:
+            return False
+        return self._chk_maybe_pid(pay, pid)
+
+    def _parse_id3_payload(self, pkt, pid):
+        pay = self._parse_payload(pkt)  # strip off mpegts headers .
+        whole = self._chk_partial(pay, pid, b"ID3")  # check for multi-packet payload
+        if not whole:
+            return False  # also check that b'ID3' is in the payload
+        privpay = self._split_by_idx(pay, b"PRIV")  # split just before b'PRIV'
+        if not privpay:
+            return False
+        if b"scte" not in privpay:
+            return False  # check for b'scte' in PRIV tag header
+        return self._split_by_idx(
+            privpay, self.SCTE35_TID
+        )  # split just before SCTE-35 TID
+
+    def _parse_scte35(self, pkt, pid):
+        """
+        parse a threefive cue from one or more packets
+        """
+        if self.the_scte35_pids:  # for parse by pid
+            if pid not in self.the_scte35_pids:
+                return False
+        if pid in self.pids.id3:
+            pay = self._parse_id3_payload(pkt, pid)
+        else:
+            pay = self._mk_scte35_payload(pkt, pid)
+        if not pay:
+            return False
+        seclen = self._parse_length(pay[1], pay[2])
+        if self._section_incomplete(pay, pid, seclen):
+            return False
+        pay = pay[: seclen + 3]
+        cue = self._parse_cue(pay, pid)
+        return cue
+
+    def _mk_pinfo(self, service_id, pn, sn):
+        if service_id not in self.maps.prgm:
+            self.maps.prgm[service_id] = ProgramInfo()
+        pinfo = self.maps.prgm[service_id]
+        pinfo.provider = pn
+        pinfo.service = sn
+
+    def _parse_pat(self, pay):
+        """
+        parse program association table
+        for program to pmt_pid mappings.
+        """
+        pay3 = self._chk_partial(pay, self.pids.PAT_PID, b"")
+        seclen = self._parse_length(pay3[2], pay3[3])
+        if self._section_incomplete(pay3, self.pids.PAT_PID, seclen):
+            return False
+        seclen -= 5  # pay bytes 4,5,6,7,8
+        idx = 9
+        chunk_size = 4
+        while seclen > 4:  #  4 bytes for crc
+            program_number = self._parse_program(pay[idx], pay[idx + 1])
+            if program_number > 0:
+                pmt_pid = self._parse_pid(pay[idx + 2], pay[idx + 3])
+                self.pids.pmt.add(pmt_pid)
+                self.pids.tables.add(pmt_pid)
+            seclen -= chunk_size
+            idx += chunk_size
+        return True
+
+    def _precheck_pmt(self, pay, pid):
+        pay = self._chk_partial(pay, pid, self.PMT_TID)
+        if pay:
+            seclen = self._parse_length(pay[1], pay[2])
+            if not self._section_incomplete(pay, pid, seclen):
+                if not self._same_as_last(pay, pid):
+                    return pay
+        return False
+
+    def _parse_pmt(self, pay, pid):
+        """
+        parse program maps for streams
+        """
+        pay = self._chk_partial(pay, pid, self.PMT_TID)
+        if not pay:
+            return False
+        seclen = self._parse_length(pay[1], pay[2])
+        if self._section_incomplete(pay, pid, seclen):
+            return False
+        if self._same_as_last(pay, pid):
+            return False
+        program_number = self._parse_program(pay[3], pay[4])
+        if not program_number:
+            return False
+        pcr_pid = self._parse_pid(pay[8], pay[9])
+        if program_number not in self.maps.prgm:
+            self.maps.prgm[program_number] = ProgramInfo()
+        pinfo = self.maps.prgm[program_number]
+        pinfo.pid = pid
+        pinfo.pcr_pid = pcr_pid
+        self.pids.pcr.add(pcr_pid)
+        self.maps.pid_prgm[pcr_pid] = program_number
+        proginfolen = self._parse_length(pay[10], pay[11])
+        idx = 12 + proginfolen
+        si_len = self._parse_length(pay[1], pay[2]) - (9 + proginfolen)
+        self._parse_program_streams(si_len, pay, idx, program_number)
+        return True
+
+    def _parse_program_streams(self, si_len, pay, idx, program_number):
+        """
+        parse the elementary streams
+        from a program
+        """
+        # 5 bytes for stream_type info
+        chunk_size = 5
+        end_idx = (idx + si_len) - 4
+        while end_idx - chunk_size >= idx:
+            stream_type, pid, ei_len = self._parse_stream_type(pay, idx)
+            pinfo = self.maps.prgm[program_number]
+            pinfo.streams[pid] = stream_type
+            idx += chunk_size + ei_len
+            self.maps.pid_prgm[pid] = program_number
+
+    def _parse_stream_type(self, pay, idx):
+        """
+        extract stream pid and type
+        """
+        stream_type = hex(pay[idx])
+        el_pid = self._parse_pid(pay[idx + 1], pay[idx + 2])
+        ei_len = self._parse_length(pay[idx + 3], pay[idx + 4])
+        self._set_scte35_pids(el_pid, stream_type)
+        return stream_type, el_pid, ei_len
+
+    def _set_scte35_pids(self, pid, stream_type):
+        """
+        if stream_type is 0x06 or 0x86
+        add it to self._scte35_pids.
+        """
+        if stream_type in ["0x15"]:
+            self.pids.scte35.add(pid)
+            self.pids.id3.add(pid)
+
+        if stream_type in ["0x86"]:
+            self.pids.scte35.add(pid)
+        if stream_type in ["0x06", "0x6"]:
+            self.pids.maybe_scte35.add(pid)

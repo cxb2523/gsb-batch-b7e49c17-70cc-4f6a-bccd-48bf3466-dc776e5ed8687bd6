@@ -1,0 +1,142 @@
+"""
+threefive.new_reader
+
+Home of the reader function
+"""
+
+from sys import stdin
+from .stuff import blue, pif, print2
+
+
+CORS = {
+    "Origin": "null",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "cross-site",
+}
+
+
+def corsreader(uri, headers={}):
+    """
+    corsreader calls reader with CORS headers
+    set to allow all.
+    """
+    all_headers = {**CORS, **headers}
+    return reader(uri, headers=all_headers)
+
+
+def try_srt(uri, headers={}):
+    """
+    try_srt attempt to load an srt uri
+    """
+    try:
+        from srtfu import SRTfu, SRTO_TRANSTYPE, SRT_LIVE, SRTO_RCVSYN, SRTO_RCVBUF
+
+        preflags = {
+        SRTO_TRANSTYPE: SRT_LIVE,
+        SRTO_RCVSYN: 1,
+        SRTO_RCVBUF: 96768000,
+        }
+
+        preflags.update(headers)
+        srtf = SRTfu(uri, preflags)
+        srtf.conlive()
+        srtf.connect()
+        return srtf
+    except ImportError:
+        blue("pip install srtfu to add SRT support")
+        return False
+
+
+
+def reader(uri, headers={}):
+    """
+
+        reader returns an object with a read method.
+        No matter what object is return, meets the
+        interface:
+                            obj.read(bites)
+
+    example:
+        >>> from threefive import reader
+
+        >>> with reader('http://iodisco.com/') as disco:
+        >>> disco.read()
+
+        >>> with reader('http://iodisco.com/',headers={"myHeader":"DOOM"}) as doom:
+        >>> doom.read()
+
+        >>> with reader("udp://@227.1.3.10:4310") as data:
+        >>> data.read(8192)
+
+        >>> with reader("/home/you/video.ts") as data:
+        >>> fu = data.read()
+
+        >>> udp_data =reader("udp://1.2.3.4:5555")
+        >>> chunks = [udp_data.read(188) for i in range(0,1024)]
+
+    """
+    # read from stdin
+    if uri in [None, stdin.buffer]:
+        return stdin.buffer
+    # Multicast
+    if uri.startswith("udp://@"):
+        return _open_mcast(uri)
+    # UDP
+    if uri.startswith("udp://"):
+        return _open_udp(uri)
+    # HTTP(S)
+    if uri.startswith("http"):
+        import urllib.request
+
+        req = urllib.request.Request(uri, headers=headers)
+        return urllib.request.urlopen(req)
+    # SRT
+    if uri.startswith("srt://"):
+        return try_srt(uri, headers=headers)
+    # File
+
+    return open(uri, "rb")
+
+
+def _open_udp(uri):
+    """
+    udp://1.2.3.4:5555
+    """
+    from .udp import udp_receiver
+
+    udp_ip, udp_port = (uri.split("udp://")[1]).rsplit(":", 1)
+    udp_port = pif(udp_port)
+    blue("Opening UDP  Unicast socket")
+    print2("\n")
+    udp_sock = udp_receiver()
+    udp_sock.bind((udp_ip, udp_port))
+    return udp_sock.makefile("rb")
+
+
+def _open_mcast(uri):
+    """
+    udp://@227.1.3.10:4310
+    """
+    import socket
+    from .udp import udp_receiver, mcast_ttl
+
+    ttl = 32
+    interface_ip = "0.0.0.0"
+    multicast_group, port = (uri.split("udp://@")[1]).rsplit(":", 1)
+    multicast_port = pif(port)
+    socked = udp_receiver()
+    print2("\n")
+    blue("Opening Multicast socket")
+    print2("\n")
+    mcast_ttl(socked, ttl)
+    print2("\n\n")
+    socked.bind(("", multicast_port))
+    socked.setsockopt(
+        socket.SOL_IP,
+        socket.IP_ADD_MEMBERSHIP,
+        socket.inet_aton(multicast_group) + socket.inet_aton(interface_ip),
+    )
+    return socked.makefile("rb")
