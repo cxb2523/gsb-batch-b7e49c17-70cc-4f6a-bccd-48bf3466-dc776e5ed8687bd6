@@ -6,6 +6,7 @@ import {
   uploadBoardFile,
   getBoardFile,
   getPublicBoardFile,
+  rotatePublicShare,
 } from './api';
 import { ApiError } from '@/lib/http';
 import { errorResponse, jsonResponse } from '@/test/http';
@@ -184,5 +185,19 @@ describe('boards api', () => {
       code: 'NOT_FOUND',
       message: 'Board not found',
     });
+  });
+
+  it('rotatePublicShare posts to the rotate endpoint and returns the new token', async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: 'b1', isPublic: true, publicShareToken: 'new-tok' }));
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await rotatePublicShare('acme', 'b1');
+
+    expect(result.publicShareToken).toBe('new-tok');
+    const [url, init] = mockFetch.mock.calls[0] ?? [];
+    expect(String(url)).toContain('/api/boards/b1/public-share/rotate');
+    expect(init).toMatchObject({ method: 'POST' });
   });
 });

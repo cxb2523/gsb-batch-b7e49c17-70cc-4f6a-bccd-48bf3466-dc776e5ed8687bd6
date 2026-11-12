@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Check, Eye, Share2, Users } from 'lucide-react';
+import { Check, Eye, RefreshCw, Share2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { ENCRYPTED_CHIP } from '@/lib/copy';
 import { exportKeyToHash } from '@/lib/crypto';
-import { disablePublicShare, enablePublicShare } from '../api';
+import { disablePublicShare, enablePublicShare, rotatePublicShare } from '../api';
 import { boardKeys } from '../keys';
 import type { Board } from '../schemas';
 
@@ -72,8 +72,37 @@ export function BoardSharePanel({
     }
   };
 
+  /**
+   * Rotating replaces the token, so the link this panel copies must be read from the query cache
+   * first: the updated board may not have reached this component's props yet.
+   */
+  const latestPublicShareToken = () =>
+    queryClient.getQueryData<Board>(boardKeys.detail(workspaceRef, boardId))?.publicShareToken ??
+    publicShareToken;
+
+  const rotatePublicLink = async () => {
+    if (isUpdating) return;
+    setIsUpdating(true);
+    try {
+      const token = (await rotatePublicShare(workspaceRef, boardId)).publicShareToken ?? null;
+      queryClient.setQueryData<Board>(boardKeys.detail(workspaceRef, boardId), (board) =>
+        board ? { ...board, publicShareToken: token } : board,
+      );
+      setCopied(false);
+      toast.success('Public link rotated', {
+        description: 'The old link no longer works. Copy the new link and share it.',
+      });
+    } catch (err) {
+      console.error('Failed to rotate public link', err);
+      toast.error('Failed to rotate public link');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const copyPublicLink = async () => {
-    if (!publicShareToken) return;
+    const token = latestPublicShareToken();
+    if (!token) return;
 
     let keyFragment: string | null = null;
     if (cryptoKey) {
@@ -88,7 +117,7 @@ export function BoardSharePanel({
       return;
     }
 
-    const publicUrl = `${window.location.origin}/share/${publicShareToken}#key=${keyFragment}`;
+    const publicUrl = `${window.location.origin}/share/${token}#key=${keyFragment}`;
     try {
       await navigator.clipboard.writeText(publicUrl);
     } catch {
@@ -164,6 +193,17 @@ export function BoardSharePanel({
                     )}
                     <span>{copied ? 'Link Copied!' : 'Copy Public Link'}</span>
                   </button>
+                  <button
+                    onClick={() => void rotatePublicLink()}
+                    disabled={isUpdating}
+                    className="w-full py-2 px-3 bg-white hover:bg-paper disabled:opacity-50 text-ink border border-border font-mono text-[11px] font-semibold uppercase tracking-wider rounded-lg transition-colors cursor-pointer text-center flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-brand" />
+                    <span>Rotate Link</span>
+                  </button>
+                  <p className="text-[10px] text-ink-muted leading-snug">
+                    Rotating issues a new link and stops the old one from working immediately.
+                  </p>
                 </div>
               ) : (
                 <p className="text-[11px] text-ink-muted leading-snug">

@@ -62,9 +62,16 @@ describe('PublicBoardView Component', () => {
 
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = requestUrl(input);
-      if (url.includes('/api/public/boards/tok-valid')) return jsonResponse(sharedBoard());
+      if (url.includes('/api/public/boards/tok-valid')) {
+        return url.includes('/payload')
+          ? new Response(new Uint8Array([1]), { status: 200 })
+          : jsonResponse(sharedBoard());
+      }
       if (url.includes('/api/public/boards/tok-revoked')) {
         return errorResponse(404, 'NOT_FOUND', 'This link was revoked');
+      }
+      if (url.includes('/api/public/boards/tok-malformed')) {
+        return errorResponse(400, 'BAD_REQUEST', 'Invalid share token format');
       }
       return errorResponse(500, 'INTERNAL', 'Unexpected request');
     });
@@ -143,16 +150,53 @@ describe('PublicBoardView Component', () => {
     }
   });
 
-  it('displays access restricted error when token is invalid or revoked (404)', async () => {
+  it('displays the expired-link message when token is invalid or revoked (404)', async () => {
     renderPublicView(`/share/tok-revoked#key=${validKeyHash}`);
 
     await waitFor(() => {
       expect(screen.getByText('Access Restricted')).toBeInTheDocument();
-      expect(screen.getByText(/public link has been revoked/i)).toBeInTheDocument();
+      expect(screen.getByText(/no longer valid/i)).toBeInTheDocument();
+      expect(screen.getByText(/ask the person who shared it for a new link/i)).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /Go to CanvHQ Home/i })).toBeInTheDocument();
     });
 
     expect(screen.queryByTestId('mock-public-excalidraw')).not.toBeInTheDocument();
+  });
+
+  it('displays the expired-link message for a malformed token (400)', async () => {
+    renderPublicView(`/share/tok-malformed#key=${validKeyHash}`);
+
+    await waitFor(() => {
+      expect(screen.getByText('Access Restricted')).toBeInTheDocument();
+      expect(screen.getByText(/no longer valid/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('mock-public-excalidraw')).not.toBeInTheDocument();
+  });
+
+  it('shows the expired-link message when the payload is refused, and never requests its files', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes('/payload')) {
+        return errorResponse(404, 'NOT_FOUND', 'This link was revoked');
+      }
+      if (url.includes('/files/')) {
+        return new Response(new Uint8Array([1]), { status: 200 });
+      }
+      return jsonResponse(sharedBoard({ hasPayload: true, keyVersion: 1 }));
+    });
+
+    renderPublicView(`/share/tok-valid#key=${validKeyHash}`);
+
+    await waitFor(() => {
+      expect(screen.getByText('Access Restricted')).toBeInTheDocument();
+      expect(screen.getByText(/no longer valid/i)).toBeInTheDocument();
+    });
+
+    // The canvas stays hidden, the payload is not retried, and no image file is fetched.
+    expect(screen.queryByTestId('mock-public-excalidraw')).not.toBeInTheDocument();
+    const urls = vi.mocked(global.fetch).mock.calls.map(([input]) => requestUrl(input));
+    expect(urls.filter((url) => url.includes('/payload'))).toHaveLength(1);
+    expect(urls.filter((url) => url.includes('/files/'))).toHaveLength(0);
   });
 
   it('offers a retry when the canvas cannot be fetched, and shows it once the server answers', async () => {

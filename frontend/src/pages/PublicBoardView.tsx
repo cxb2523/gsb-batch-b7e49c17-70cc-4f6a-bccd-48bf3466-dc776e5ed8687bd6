@@ -12,6 +12,11 @@ import { usePublicBoard, usePublicBoardPayload } from '@/features/public-boards/
 import { usePublicBoardOpening } from '@/features/public-boards/hooks/usePublicBoardOpening';
 import { ApiError } from '@/lib/http';
 
+/** 404 (unknown or revoked) and 400 (malformed token) both mean this link cannot be opened. */
+function isInvalidShareLink(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 400);
+}
+
 export function PublicBoardView() {
   const { token } = useParams<{ token: string }>();
   const location = useLocation();
@@ -25,11 +30,14 @@ export function PublicBoardView() {
   const boardQuery = usePublicBoard(token);
   const metadata = boardQuery.data;
   const payloadQuery = usePublicBoardPayload(token, Boolean(metadata?.hasPayload && keyText));
+  // A payload that failed to load is never handed to the opener, so no image file is requested
+  // for a canvas the page is about to hide.
+  const payload = payloadQuery.error ? undefined : payloadQuery.data;
   const opening = usePublicBoardOpening(
     metadata,
     keyText,
     appliedManualKey === null ? 'hash' : 'manual',
-    payloadQuery.data,
+    payload,
     token,
   );
   const scene = opening && 'scene' in opening ? opening.scene : null;
@@ -41,8 +49,9 @@ export function PublicBoardView() {
     setAppliedManualKey(manualKeyInput.trim());
   };
 
-  // 1. Not found or revoked
-  if (boardQuery.error instanceof ApiError && boardQuery.error.status === 404) {
+  // 1. The link is gone: revoked, rotated, unknown, or malformed. Either request can discover it,
+  // because the token may have been rotated between the metadata and payload calls.
+  if (isInvalidShareLink(boardQuery.error) || isInvalidShareLink(payloadQuery.error)) {
     return (
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-paper font-mono p-4">
         <div className="w-full max-w-md bg-white border border-border rounded-2xl shadow-xl p-6 sm:p-8 flex flex-col gap-4 text-center">
@@ -54,7 +63,8 @@ export function PublicBoardView() {
               Access Restricted
             </h1>
             <p className="text-xs text-ink-secondary mt-2 leading-relaxed">
-              This canvas does not exist, or its public link has been revoked by the owner.
+              This link is no longer valid: the canvas does not exist, or its public link has
+              expired or been revoked. Ask the person who shared it for a new link.
             </p>
           </div>
           <div className="pt-2 border-t border-border-subtle flex justify-center">

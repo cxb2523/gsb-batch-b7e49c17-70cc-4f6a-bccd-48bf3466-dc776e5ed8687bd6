@@ -842,4 +842,115 @@ describe('BoardsService', () => {
       await expect(service.getPublicPayload('token')).rejects.toThrow('Board has no saved payload');
     });
   });
+
+  describe('public share rotation and revocation', () => {
+    const oldToken = 'a'.repeat(32);
+    let currentToken: string | null;
+    let isPublic: boolean;
+
+    const boardRow = {
+      id: 'b1',
+      title: 'Shared',
+      isPublic: true,
+      hasPayload: true,
+      keyVersion: 1,
+      revision: 4,
+      createdAt: new Date('2026-01-01'),
+      updatedAt: new Date('2026-01-02'),
+    };
+
+    beforeEach(() => {
+      currentToken = oldToken;
+      isPublic = true;
+
+      // A small stand-in for the board table: the token is the only way to reach a board, and
+      // rotating or revoking it replaces the row's token, exactly as the real update does.
+      prismaMock.board.findUnique.mockImplementation(
+        async ({ where }: { where: { publicShareToken?: string } }) => {
+          if (!('publicShareToken' in where)) return null;
+          if (!isPublic || where.publicShareToken !== currentToken) return null;
+          return boardRow;
+        },
+      );
+      prismaMock.board.update.mockImplementation(
+        async ({ data }: { data: { isPublic?: boolean; publicShareToken?: string | null } }) => {
+          isPublic = data.isPublic ?? isPublic;
+          currentToken = data.publicShareToken ?? null;
+          return { id: 'b1', ...data };
+        },
+      );
+      prismaMock.boardFile.findUnique.mockImplementation(
+        async ({ where }: { where: { boardId_fileId: { boardId: string; fileId: string } } }) =>
+          where.boardId_fileId.boardId === 'b1' && where.boardId_fileId.fileId === 'f1'
+            ? { boardId: 'b1', fileId: 'f1', keyVersion: 1 }
+            : null,
+      );
+      storageMock.getPayload.mockResolvedValue(Buffer.from('encrypted-payload'));
+      storageMock.getFile.mockResolvedValue(Buffer.from('encrypted-file'));
+    });
+
+    const access = () =>
+      accessWith({ workspaceRole: 'editor', projectRole: 'editor', boardId: 'b1' });
+
+    const expectTokenRejectedEverywhere = async (token: string) =>
+      Promise.all([
+        expect(service.getPublicBoard(token)).rejects.toThrow(
+          'Public board not found or link has expired',
+        ),
+        expect(service.getPublicPayload(token)).rejects.toThrow(
+          'Public board not found or link has expired',
+        ),
+        expect(service.getPublicFile(token, 'f1')).rejects.toThrow(
+          'Public board not found or link has expired',
+        ),
+      ]);
+
+    it('stops serving the old token on all three public routes once the link is rotated', async () => {
+      const rotated = await service.rotatePublicShareToken(access());
+      const newToken = rotated.publicShareToken;
+      if (!newToken) throw new Error('rotate must always return a fresh token');
+      expect(newToken).toHaveLength(32);
+      expect(newToken).not.toBe(oldToken);
+
+      await expectTokenRejectedEverywhere(oldToken);
+      // A miss never falls through to another board's stored payload.
+      expect(storageMock.getPayload).not.toHaveBeenCalled();
+      expect(storageMock.getFile).not.toHaveBeenCalled();
+
+      const metadata = await service.getPublicBoard(newToken);
+      expect(metadata.id).toBe('b1');
+      const payload = await service.getPublicPayload(newToken);
+      expect(payload).toEqual({ buffer: Buffer.from('encrypted-payload'), revision: 4 });
+      await expect(service.getPublicFile(newToken, 'f1')).resolves.toEqual(
+        Buffer.from('encrypted-file'),
+      );
+    });
+
+    it('stops serving both the old and the latest token after revocation', async () => {
+      const rotated = await service.rotatePublicShareToken(access());
+      const newToken = rotated.publicShareToken;
+      if (!newToken) throw new Error('rotate must always return a fresh token');
+
+      await service.disablePublicShare(access());
+
+      await Promise.all([oldToken, newToken].map((token) => expectTokenRejectedEverywhere(token)));
+      expect(storageMock.getPayload).not.toHaveBeenCalled();
+      expect(storageMock.getFile).not.toHaveBeenCalled();
+    });
+
+    it('answers 400 for a token that cannot be a share token, on every public route', async () => {
+      const malformed = 'not a token!';
+
+      await expect(service.getPublicBoard(malformed)).rejects.toThrow('Invalid share token format');
+      await expect(service.getPublicPayload(malformed)).rejects.toThrow(
+        'Invalid share token format',
+      );
+      await expect(service.getPublicFile(malformed, 'f1')).rejects.toThrow(
+        'Invalid share token format',
+      );
+      expect(prismaMock.board.findUnique).not.toHaveBeenCalled();
+      expect(storageMock.getPayload).not.toHaveBeenCalled();
+      expect(storageMock.getFile).not.toHaveBeenCalled();
+    });
+  });
 });

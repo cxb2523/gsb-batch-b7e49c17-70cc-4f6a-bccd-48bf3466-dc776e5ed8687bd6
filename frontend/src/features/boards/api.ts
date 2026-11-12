@@ -161,3 +161,18 @@ export async function disablePublicShare(workspaceId: string, boardId: string): 
     workspaceId,
   });
 }
+
+/** Replaces the public link's token; the previous link stops working immediately. */
+export async function rotatePublicShare(
+  workspaceId: string,
+  boardId: string,
+): Promise<PublicShareResult> {
+  const data = await http.post(`/api/boards/${boardId}/public-share/rotate`, undefined, {
+    workspaceId,
+  });
+  return validateResponse(
+    PublicShareResultSchema,
+    data,
+    `POST /api/boards/${boardId}/public-share/rotate`,
+  );
+}

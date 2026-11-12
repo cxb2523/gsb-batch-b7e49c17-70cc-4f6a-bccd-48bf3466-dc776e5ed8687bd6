@@ -110,6 +110,53 @@ describe('BoardSharePanel', () => {
     ).toBeNull();
   });
 
+  it('rotates the link, stores the new token on the cached board, and copies the new link', async () => {
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.url;
+      return url.includes('/rotate')
+        ? jsonResponse({ id: 'b1', isPublic: true, publicShareToken: 'rotated-tok' })
+        : errorResponse(500, 'INTERNAL', 'Unexpected request');
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    queryClient.setQueryData(boardKeys.detail('acme', 'b1'), {
+      ...board,
+      publicShareToken: 'old-tok',
+    });
+    renderPanel({ publicShareToken: 'old-tok' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Rotate Link/i }));
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<Board>(boardKeys.detail('acme', 'b1'))?.publicShareToken,
+      ).toBe('rotated-tok');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Copy Public Link/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const copiedUrl = new URL(writeText.mock.calls[0]?.[0]);
+    expect(copiedUrl.pathname).toBe('/share/rotated-tok');
+  });
+
+  it('leaves the cached token alone and says so when rotation fails', async () => {
+    global.fetch = vi.fn(async () => errorResponse(500, 'INTERNAL', 'Nope'));
+    queryClient.setQueryData(boardKeys.detail('acme', 'b1'), {
+      ...board,
+      publicShareToken: 'tok-1',
+    });
+    renderPanel({ publicShareToken: 'tok-1' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Rotate Link/i }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to rotate public link');
+    });
+    expect(queryClient.getQueryData<Board>(boardKeys.detail('acme', 'b1'))?.publicShareToken).toBe(
+      'tok-1',
+    );
+  });
+
   it('puts the key in the link fragment only', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });

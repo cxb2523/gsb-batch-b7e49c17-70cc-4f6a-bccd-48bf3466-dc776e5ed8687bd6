@@ -14,6 +14,7 @@ import type { Access } from '../access/access.types.js';
 import { isWorkspaceAdministrator } from '../access/roles.js';
 import { randomBytes } from 'crypto';
 import { readWrappedKeyVersions } from '../common/dto/wrapped-key.schema.js';
+import { isPublicShareTokenFormat } from './public-share-token.js';
 
 /** A payload can be 15MB, so the locked save needs more than Prisma's 5 second default. */
 const PAYLOAD_TRANSACTION_TIMEOUT_MS = 30_000;
@@ -713,12 +714,10 @@ export class BoardsService {
   }
 
   async getPublicBoard(token: string) {
-    if (!token || typeof token !== 'string' || token.trim().length === 0) {
-      throw new NotFoundException('Public board not found or link has expired');
-    }
+    const shareToken = this.normalizePublicToken(token);
 
     const board = await this.prisma.board.findUnique({
-      where: { publicShareToken: token.trim() },
+      where: { publicShareToken: shareToken },
       select: {
         id: true,
         title: true,
@@ -748,12 +747,10 @@ export class BoardsService {
   }
 
   async getPublicPayload(token: string): Promise<{ buffer: Buffer; revision: number }> {
-    if (!token || typeof token !== 'string' || token.trim().length === 0) {
-      throw new NotFoundException('Public board not found or link has expired');
-    }
+    const shareToken = this.normalizePublicToken(token);
 
     const board = await this.prisma.board.findUnique({
-      where: { publicShareToken: token.trim() },
+      where: { publicShareToken: shareToken },
       select: {
         id: true,
         isPublic: true,
@@ -780,12 +777,10 @@ export class BoardsService {
   }
 
   async getPublicFile(token: string, fileId: string): Promise<Buffer> {
-    if (!token || typeof token !== 'string' || token.trim().length === 0) {
-      throw new NotFoundException('Public board not found or link has expired');
-    }
+    const shareToken = this.normalizePublicToken(token);
 
     const board = await this.prisma.board.findUnique({
-      where: { publicShareToken: token.trim() },
+      where: { publicShareToken: shareToken },
       select: { id: true, isPublic: true },
     });
     if (!board || !board.isPublic) {
@@ -810,6 +805,21 @@ export class BoardsService {
     }
 
     return buffer;
+  }
+
+  /**
+   * A missing token is an unknown link (404); a token that cannot be one of ours is a malformed
+   * request (400). Both are deliberately distinct so the public page can tell them apart.
+   */
+  private normalizePublicToken(token: string): string {
+    if (!token || typeof token !== 'string' || token.trim().length === 0) {
+      throw new NotFoundException('Public board not found or link has expired');
+    }
+    const trimmed = token.trim();
+    if (!isPublicShareTokenFormat(trimmed)) {
+      throw new BadRequestException('Invalid share token format');
+    }
+    return trimmed;
   }
 
   private validateTitle(title: string): void {
