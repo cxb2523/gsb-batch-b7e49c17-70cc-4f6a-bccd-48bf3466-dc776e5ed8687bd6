@@ -1,0 +1,5 @@
+.DS_Store
+node_modules/
+# drafts and renders that are not part of the simulator
+social/
+shots/

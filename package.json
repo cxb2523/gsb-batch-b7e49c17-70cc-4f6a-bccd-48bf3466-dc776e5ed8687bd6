@@ -1,0 +1,13 @@
+{
+  "name": "cayley-flight-simulator",
+  "version": "0.1.0",
+  "description": "A flight simulator in a browser tab: lifting-line wings, blade-element propellers, live weather, the whole planet.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "python3 -m http.server 8906",
+    "test": "node test/validate.mjs all && node test/systems.mjs && node test/nav.mjs",
+    "validation": "node tools/validation-page.mjs"
+  }
+}

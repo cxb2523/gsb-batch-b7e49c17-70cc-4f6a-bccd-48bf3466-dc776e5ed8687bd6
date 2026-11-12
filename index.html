@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cayley</title>
+<meta name="description" content="A flight simulator in a browser tab. Lifting-line wings, blade-element propellers, live weather, the whole planet. Every aircraft flown against its handbook.">
+<meta property="og:title" content="Cayley">
+<meta property="og:description" content="A flight simulator in a browser tab. Lifting-line wings, blade-element propellers, live weather, the whole planet. Every aircraft flown against its handbook.">
+<meta property="og:image" content="https://lauramionel.github.io/cayley-flight-simulator/docs/hero.jpg">
+<meta property="og:url" content="https://lauramionel.github.io/cayley-flight-simulator/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="load"></div>
+
+<section id="menu">
+  <h1>Cayley</h1>
+  <div class="field">
+    <button id="planeBtn" class="place"><span id="planeName">Cessna 172S</span><em id="planeRole">180 hp</em></button>
+    <div id="planeList" hidden><div id="planeGrid"></div></div>
+  </div>
+  <div class="field">
+    <button id="airportBtn" class="place"><span id="airportName">Sion</span><em id="airportId">LSGS</em></button>
+    <div id="airportList" hidden>
+      <div id="airportGrid"></div>
+      <input id="icao" maxlength="4" placeholder="ICAO" spellcheck="false" autocomplete="off">
+    </div>
+  </div>
+  <div class="seg" id="timeSeg" data-key="time">
+    <button data-v="now" class="on">Now</button><button data-v="dawn">Dawn</button><button data-v="noon">Noon</button><button data-v="dusk">Dusk</button><button data-v="night">Night</button>
+  </div>
+  <div class="seg" id="wxSeg" data-key="weather">
+    <button data-v="live" class="on">Live</button><button data-v="clear">Clear</button><button data-v="fair">Fair</button><button data-v="overcast">Overcast</button><button data-v="storm">Storm</button>
+  </div>
+  <div class="seg" id="startSeg" data-key="start">
+    <button data-v="runway" class="on">Runway</button><button data-v="final">Final</button><button data-v="air">Airborne</button>
+  </div>
+  <p id="metar"></p>
+  <button id="fly">Fly</button>
+</section>
+
+<div id="hud" hidden>
+  <div class="nums">
+    <span><b id="hIas">0</b>kt</span><span><b id="hAlt">0</b>ft</span><span><b id="hHdg">000</b>°</span><span><b id="hVs">0</b>fpm</span>
+  </div>
+  <div class="state" id="hState"></div>
+</div>
+<div id="toast"></div>
+<button id="keysBtn" hidden>Keys</button>
+<button id="faultsBtn" hidden>Faults</button>
+<div id="keys" hidden></div>
+<div id="faults" hidden></div>
+<footer id="credit"><span id="imgCredit"></span> · Elevation: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Mapzen terrain tiles</a> · Buildings, water, woods: <a href="https://openfreemap.org">OpenFreeMap</a> © <a href="https://openmaptiles.org">OpenMapTiles</a>, data from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · <a href="https://open-meteo.com">Weather data by Open-Meteo.com</a> · Airports: <a href="https://ourairports.com">OurAirports</a></footer>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
