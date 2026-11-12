@@ -135,6 +135,17 @@ export function decryptHtmlAuthValue(value: string, sourceId: string): string {
 
   const key = loadHtmlAuthKey();
   if (!key) {
+    // `loadHtmlAuthKey()` already fails closed with a ConfigurationError in
+    // production when no key is available. This branch covers non-production
+    // (or a cached-null key): a stored ciphertext exists but cannot be read.
+    // Throw rather than falling through to the ciphertext or an empty string.
+    if (isProduction()) {
+      throw new ConfigurationError(
+        'Encountered encrypted HTML-source auth material but credential storage is not configured ' +
+          '(HTML_AUTH_KEY). Set HTML_AUTH_KEY (or the SRT_PASSPHRASE_KEY fallback) to a 32-byte ' +
+          'base64/hex key to read it.',
+      );
+    }
     throw new Error(
       'Encountered encrypted HTML-source auth material but HTML_AUTH_KEY/SRT_PASSPHRASE_KEY is not set',
     );
@@ -148,8 +159,35 @@ export function decryptHtmlAuthValue(value: string, sourceId: string): string {
   const tag = bundle.subarray(IV_BYTES, IV_BYTES + TAG_BYTES);
   const ciphertext = bundle.subarray(IV_BYTES + TAG_BYTES);
 
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAAD(Buffer.from(sourceId, 'utf8'));
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  try {
+    const decipher = createDecipheriv(ALGORITHM, key, iv);
+    // The source id is AAD: a ciphertext copied onto another source (or one
+    // encrypted under a rotated key) fails the GCM tag check here.
+    decipher.setAAD(Buffer.from(sourceId, 'utf8'));
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  } catch {
+    // Never return ciphertext, empty string, or partially-decrypted garbage on
+    // authentication failure (wrong source id, tampering, or a rotated key).
+    throw new Error(
+      'Failed to decrypt HTML-source auth material: authentication failed ' +
+        '(wrong source id, tampered ciphertext, or rotated key)',
+    );
+  }
+}
+
+/**
+ * Read-side helper for a stored source credential. Uses the source's OWN `_id`
+ * as the GCM AAD, so it fails closed if the ciphertext was copied onto another
+ * source. Returns `undefined` when the source has no stored credential.
+ *
+ * Callers must only use the returned value transiently (e.g. to hand it to the
+ * renderer); it must never be copied into an API response or a log line.
+ */
+export function decryptStoredHtmlAuthValue(source: {
+  _id: string;
+  authHeaderValueEnc?: string;
+}): string | undefined {
+  if (source.authHeaderValueEnc === undefined) return undefined;
+  return decryptHtmlAuthValue(source.authHeaderValueEnc, source._id);
 }

@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   encryptHtmlAuthValue,
   decryptHtmlAuthValue,
+  decryptStoredHtmlAuthValue,
   isEncrypted,
   loadHtmlAuthKey,
   resetHtmlAuthKeyCache,
@@ -123,12 +124,42 @@ describe('encrypt / decrypt round-trip', () => {
     const enc = encryptHtmlAuthValue(SECRET, SOURCE_ID);
     expect(encryptHtmlAuthValue(enc, SOURCE_ID)).toBe(enc);
   });
+
+  it('non-production without a key stores/returns plaintext and warns loudly', () => {
+    delete process.env['HTML_AUTH_KEY'];
+    delete process.env['SRT_PASSPHRASE_KEY'];
+    resetHtmlAuthKeyCache();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const stored = encryptHtmlAuthValue(SECRET, SOURCE_ID);
+    // Plaintext fallback (no key) must be the whole value, never a half-bundle.
+    expect(stored).toBe(SECRET);
+    expect(isEncrypted(stored)).toBe(false);
+    expect(decryptHtmlAuthValue(stored, SOURCE_ID)).toBe(SECRET);
+    // The risk is surfaced, not silent.
+    expect(warn).toHaveBeenCalled();
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/plaintext/i);
+  });
 });
 
 describe('source-id GCM AAD binding (ADR-003 Decision 4)', () => {
   it('fails to decrypt a ciphertext under a different source id', () => {
     const enc = encryptHtmlAuthValue(SECRET, SOURCE_ID);
     expect(() => decryptHtmlAuthValue(enc, 'src-other')).toThrow();
+  });
+
+  it('fails closed when the whole stored source doc is copied to another source', () => {
+    const enc = encryptHtmlAuthValue(SECRET, SOURCE_ID);
+    // Simulate copying `authHeaderValueEnc` onto a second source's document.
+    expect(() => decryptStoredHtmlAuthValue({ _id: 'src-other', authHeaderValueEnc: enc })).toThrow(
+      /authentication failed/,
+    );
+    // Its own source id still decrypts.
+    expect(decryptStoredHtmlAuthValue({ _id: SOURCE_ID, authHeaderValueEnc: enc })).toBe(SECRET);
+  });
+
+  it('returns undefined when no stored credential exists', () => {
+    expect(decryptStoredHtmlAuthValue({ _id: SOURCE_ID })).toBeUndefined();
   });
 });
 
@@ -141,11 +172,43 @@ describe('fail-closed decryption', () => {
     expect(() => decryptHtmlAuthValue(enc, SOURCE_ID)).toThrow(/is not set/);
   });
 
+  it('throws in production when a ciphertext exists but no key is configured (503 config error)', () => {
+    const enc = encryptHtmlAuthValue(SECRET, SOURCE_ID);
+    delete process.env['HTML_AUTH_KEY'];
+    delete process.env['SRT_PASSPHRASE_KEY'];
+    process.env['NODE_ENV'] = 'production';
+    resetHtmlAuthKeyCache();
+    let caught: unknown;
+    try {
+      decryptHtmlAuthValue(enc, SOURCE_ID);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfigurationError);
+    expect((caught as ConfigurationError).statusCode).toBe(503);
+    expect((caught as ConfigurationError).expose).toBe(true);
+    expect((caught as ConfigurationError).message).toMatch(/HTML_AUTH_KEY/);
+  });
+
   it('throws under a wrong/rotated key rather than returning garbage', () => {
     const enc = encryptHtmlAuthValue(SECRET, SOURCE_ID);
     process.env['HTML_AUTH_KEY'] = ALT_KEY_B64;
     resetHtmlAuthKeyCache();
-    expect(() => decryptHtmlAuthValue(enc, SOURCE_ID)).toThrow();
+    expect(() => decryptHtmlAuthValue(enc, SOURCE_ID)).toThrow(/authentication failed/);
+  });
+
+  it('throws on a tampered ciphertext (flipped byte), never returning plaintext or empty', () => {
+    const enc = encryptHtmlAuthValue(SECRET, SOURCE_ID);
+    const bundle = Buffer.from(enc.slice('encv1:'.length), 'base64url');
+    // Flip the last ciphertext byte; the GCM auth tag can no longer verify.
+    bundle[bundle.length - 1] = (bundle[bundle.length - 1] ?? 0) ^ 0x01;
+    const tampered = 'encv1:' + bundle.toString('base64url');
+    expect(() => decryptHtmlAuthValue(tampered, SOURCE_ID)).toThrow(/authentication failed/);
+  });
+
+  it('throws on a bundle that is too short (no full iv+tag), never returning empty', () => {
+    const tooShort = 'encv1:' + Buffer.alloc(10).toString('base64url');
+    expect(() => decryptHtmlAuthValue(tooShort, SOURCE_ID)).toThrow(/bundle too short/);
   });
 
   it('passes legacy plaintext through unchanged', () => {

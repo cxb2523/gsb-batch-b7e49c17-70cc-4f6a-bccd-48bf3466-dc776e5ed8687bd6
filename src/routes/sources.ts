@@ -7,7 +7,7 @@ import { updateProductionDoc } from './productions.js';
 import { graphicUrl, srtUrl } from '../lib/url-validation.js';
 import { deserializeClipReference } from '../lib/clip-reference.js';
 import { encryptAddressPassphrase, decryptAddressPassphrase } from '../lib/srt-passphrase-crypto.js';
-import { encryptHtmlAuthValue } from '../lib/html-auth-crypto.js';
+import { decryptStoredHtmlAuthValue, encryptHtmlAuthValue } from '../lib/html-auth-crypto.js';
 import { getPortReservation } from '../services/port-reservation.js';
 import { clashesAfterWrite, listenerPortRequest, resolveListenerAddress, usedListenerPorts } from '../services/listener-ports.js';
 import { getWhipIngestState } from '../services/whip-ingest-state.js';
@@ -257,6 +257,14 @@ async function gatewayExists(gatewayId: string): Promise<boolean> {
 }
 
 function toApi(doc: SourceDoc) {
+  // Fail closed on read when a stored header credential exists but cannot be
+  // decrypted under this source's own id: a ciphertext copied from another
+  // source, a tampered bundle, or a rotated/missing key must never be echoed or
+  // silently degraded. The decrypted value is intentionally discarded here —
+  // it is only evidence that the stored material is intact; it is never part of
+  // an API response (the read API masks the credential as `valueSet: true`).
+  decryptStoredHtmlAuthValue(doc);
+
   // Strip internal-only fields: `_rev`/`type` (CouchDB bookkeeping) and
   // `authHeaderValueEnc` (the encrypted header credential — NEVER returned).
   const { _id, _rev, type, authHeaderValueEnc, auth, ...rest } = doc;
@@ -399,12 +407,21 @@ const sourcesRoutes: FastifyPluginAsync = async (fastify) => {
 
   // Get a source
   fastify.get<{ Params: { id: string } }>('/api/v1/sources/:id', async (req, reply) => {
+    let doc: SourceDoc;
     try {
-      const doc = await getSourcesDb().get(req.params.id);
-      return reply.send(toApi(doc));
-    } catch {
-      return reply.status(404).send({ error: 'Source not found', statusCode: 404 });
+      doc = await getSourcesDb().get(req.params.id);
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 404) {
+        return reply.status(404).send({ error: 'Source not found', statusCode: 404 });
+      }
+      throw err;
     }
+    // `toApi` verifies the stored credential is decryptable and can throw a
+    // ConfigurationError (missing key in production → 503 via the global error
+    // handler) or an authentication error (tampered/copied/rotated ciphertext).
+    // Do NOT swallow those as a 404: a corrupt or unreadable stored secret must
+    // fail closed, not pretend the source does not exist.
+    return reply.send(toApi(doc));
   });
 
   // Update a source

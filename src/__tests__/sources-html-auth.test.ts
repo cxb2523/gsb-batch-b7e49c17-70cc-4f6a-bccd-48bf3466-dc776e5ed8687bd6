@@ -16,14 +16,18 @@
  *  - a security canary never leaks into any stored doc or response.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { GatewayDoc, SourceDoc } from '../db/types.js';
+import { decryptHtmlAuthValue, resetHtmlAuthKeyCache } from '../lib/html-auth-crypto.js';
 
 const TEST_API_KEY = 'test-secret-key';
 process.env['API_KEY'] = TEST_API_KEY;
 // A deterministic 32-byte key so header values are actually encrypted at rest.
-process.env['HTML_AUTH_KEY'] = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString('base64');
+const KEY_B64 = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString('base64');
+// A distinct second key, for the key-rotation failure case.
+const ALT_KEY_B64 = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 100)).toString('base64');
+process.env['HTML_AUTH_KEY'] = KEY_B64;
 
 const CANARY = 'Bearer CANARY-9f83b1e0-DO-NOT-LEAK';
 
@@ -131,6 +135,18 @@ beforeEach(() => {
   sourcesStore.clear();
   gatewaysStore.clear();
   activeProductions = [];
+  resetHtmlAuthKeyCache();
+  process.env['HTML_AUTH_KEY'] = KEY_B64;
+  delete process.env['SRT_PASSPHRASE_KEY'];
+  delete process.env['NODE_ENV'];
+});
+
+afterEach(() => {
+  resetHtmlAuthKeyCache();
+  process.env['HTML_AUTH_KEY'] = KEY_B64;
+  delete process.env['SRT_PASSPHRASE_KEY'];
+  delete process.env['NODE_ENV'];
+  vi.restoreAllMocks();
 });
 
 /** Create a plain (anonymous) HTML source and return its id. */
@@ -335,5 +351,175 @@ describe('POST /api/v1/sources/:id/auth/profile/provision — gated', () => {
   it('404s an unknown source before the 501', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/v1/sources/nope/auth/profile/provision', headers: AUTH });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+/**
+ * End-to-end create → read → update chain for the encrypted credential, at the
+ * sources API level. The pure-crypto cases live in `html-auth-crypto.test.ts`;
+ * these prove the route wiring: the ciphertext is bound to the stored source
+ * id, the read path actually decrypts with that same id (fail-closed on any
+ * mismatch), and it never puts the plaintext on the wire.
+ */
+describe('credential encryption chain: create → read → update', () => {
+  it('encrypts on create, decrypts with the same source id on read, re-encrypts on update', async () => {
+    const created = await app.inject({
+      method: 'POST', url: '/api/v1/sources', headers: AUTH,
+      payload: {
+        name: 'dash', address: 'https://dashboard.example.com/', streamType: 'html',
+        auth: { mode: 'header', header: { name: 'Authorization', value: CANARY } },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id as string;
+    const storedEnc = sourcesStore.get(id)!.authHeaderValueEnc!;
+    expect(storedEnc).toMatch(/^encv1:/);
+    // The write used this source's id as AAD; the read path uses the same id.
+    expect(decryptHtmlAuthValue(storedEnc, id)).toBe(CANARY);
+
+    const read = await app.inject({ method: 'GET', url: `/api/v1/sources/${id}`, headers: AUTH });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().auth).toEqual({ mode: 'header', header: { name: 'Authorization', valueSet: true } });
+    expect(JSON.stringify(read.json())).not.toContain('CANARY');
+
+    const UPDATED = 'Bearer updated-secret-2';
+    const patched = await app.inject({
+      method: 'PATCH', url: `/api/v1/sources/${id}`, headers: AUTH,
+      payload: { auth: { mode: 'header', header: { name: 'Authorization', value: UPDATED } } },
+    });
+    expect(patched.statusCode).toBe(200);
+    const updatedEnc = sourcesStore.get(id)!.authHeaderValueEnc!;
+    expect(updatedEnc).toMatch(/^encv1:/);
+    expect(updatedEnc).not.toBe(storedEnc);
+    expect(decryptHtmlAuthValue(updatedEnc, id)).toBe(UPDATED);
+    // The superseded ciphertext still decrypts to its OLD value (under the same
+    // key and id) — it must never yield the new value.
+    expect(decryptHtmlAuthValue(storedEnc, id)).toBe(CANARY);
+    expect(JSON.stringify(patched.json())).not.toContain(UPDATED);
+  });
+
+  it('fails closed when the stored ciphertext is copied onto another source', async () => {
+    const created = await app.inject({
+      method: 'POST', url: '/api/v1/sources', headers: AUTH,
+      payload: {
+        name: 'a', address: 'https://a.example.com/', streamType: 'html',
+        auth: { mode: 'header', header: { name: 'X-Api-Key', value: CANARY } },
+      },
+    });
+    const aId = created.json().id as string;
+    const copiedEnc = sourcesStore.get(aId)!.authHeaderValueEnc!;
+
+    const other = await createHtmlSource();
+    // Simulate a ciphertext copied onto source B's document (same bundle, new id).
+    sourcesStore.get(other)!.auth = { mode: 'header', header: { name: 'X-Api-Key' } };
+    sourcesStore.get(other)!.authHeaderValueEnc = copiedEnc;
+
+    const res = await app.inject({ method: 'GET', url: `/api/v1/sources/${other}`, headers: AUTH });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('An internal error occurred');
+    expect(JSON.stringify(res.json())).not.toContain('CANARY');
+    // The original source still reads fine.
+    const ok = await app.inject({ method: 'GET', url: `/api/v1/sources/${aId}`, headers: AUTH });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it('fails closed on tampered ciphertext and on a too-short bundle', async () => {
+    const created = await app.inject({
+      method: 'POST', url: '/api/v1/sources', headers: AUTH,
+      payload: {
+        name: 'dash', address: 'https://dashboard.example.com/', streamType: 'html',
+        auth: { mode: 'header', header: { name: 'Authorization', value: CANARY } },
+      },
+    });
+    const id = created.json().id as string;
+
+    // Flip a ciphertext byte: the GCM tag check must fail on read.
+    const bundle = Buffer.from(sourcesStore.get(id)!.authHeaderValueEnc!.slice('encv1:'.length), 'base64url');
+    bundle[bundle.length - 1] = (bundle[bundle.length - 1] ?? 0) ^ 0x01;
+    sourcesStore.get(id)!.authHeaderValueEnc = 'encv1:' + bundle.toString('base64url');
+    const tampered = await app.inject({ method: 'GET', url: `/api/v1/sources/${id}`, headers: AUTH });
+    expect(tampered.statusCode).toBe(500);
+    expect(JSON.stringify(tampered.json())).not.toContain('CANARY');
+
+    // A bundle shorter than iv+tag is rejected as malformed.
+    sourcesStore.get(id)!.authHeaderValueEnc = 'encv1:' + Buffer.alloc(10).toString('base64url');
+    const short = await app.inject({ method: 'GET', url: `/api/v1/sources/${id}`, headers: AUTH });
+    expect(short.statusCode).toBe(500);
+    expect(JSON.stringify(short.json())).not.toContain('CANARY');
+  });
+
+  it('returns 503 (config error, not 500 or plaintext) in production with an existing ciphertext and no key', async () => {
+    const created = await app.inject({
+      method: 'POST', url: '/api/v1/sources', headers: AUTH,
+      payload: {
+        name: 'dash', address: 'https://dashboard.example.com/', streamType: 'html',
+        auth: { mode: 'header', header: { name: 'Authorization', value: CANARY } },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id as string;
+
+    delete process.env['HTML_AUTH_KEY'];
+    delete process.env['SRT_PASSPHRASE_KEY'];
+    process.env['NODE_ENV'] = 'production';
+    resetHtmlAuthKeyCache();
+
+    const res = await app.inject({ method: 'GET', url: `/api/v1/sources/${id}`, headers: AUTH });
+    expect(res.statusCode).toBe(503);
+    const body = res.json();
+    expect(body.statusCode).toBe(503);
+    expect(body.error).not.toBe('An internal error occurred');
+    expect(body.error).toMatch(/HTML_AUTH_KEY/);
+    expect(JSON.stringify(body)).not.toContain('CANARY');
+  });
+
+  it('fails closed after a key rotation instead of returning garbage or plaintext', async () => {
+    const id = await createHtmlSource();
+    await app.inject({
+      method: 'PATCH', url: `/api/v1/sources/${id}`, headers: AUTH,
+      payload: { auth: { mode: 'header', header: { name: 'Authorization', value: CANARY } } },
+    });
+    // Same stored ciphertext, now a different key: GCM authentication must fail.
+    process.env['HTML_AUTH_KEY'] = ALT_KEY_B64;
+    resetHtmlAuthKeyCache();
+
+    const res = await app.inject({ method: 'GET', url: `/api/v1/sources/${id}`, headers: AUTH });
+    expect(res.statusCode).toBe(500);
+    expect(JSON.stringify(res.json())).not.toContain('CANARY');
+    // Re-encrypted material under the new key reads fine; old stays unreadable.
+    const patched = await app.inject({
+      method: 'PATCH', url: `/api/v1/sources/${id}`, headers: AUTH,
+      payload: { auth: { mode: 'header', header: { name: 'Authorization', value: 'new-under-new-key' } } },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(decryptHtmlAuthValue(sourcesStore.get(id)!.authHeaderValueEnc!, id)).toBe('new-under-new-key');
+  });
+
+  it('non-production without a key stores plaintext with a loud warning and still reads masked', async () => {
+    delete process.env['HTML_AUTH_KEY'];
+    delete process.env['SRT_PASSPHRASE_KEY'];
+    delete process.env['NODE_ENV'];
+    resetHtmlAuthKeyCache();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/sources', headers: AUTH,
+      payload: {
+        name: 'dash', address: 'https://dashboard.example.com/', streamType: 'html',
+        auth: { mode: 'header', header: { name: 'Authorization', value: CANARY } },
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const id = res.json().id as string;
+    // Dev fallback: plaintext at rest, but never echoed by the API.
+    expect(sourcesStore.get(id)!.authHeaderValueEnc).toBe(CANARY);
+    expect(JSON.stringify(res.json())).not.toContain('CANARY');
+    expect(warn).toHaveBeenCalled();
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/plaintext/i);
+
+    const read = await app.inject({ method: 'GET', url: `/api/v1/sources/${id}`, headers: AUTH });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().auth.header.valueSet).toBe(true);
+    expect(JSON.stringify(read.json())).not.toContain('CANARY');
   });
 });
