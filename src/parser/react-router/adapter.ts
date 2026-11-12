@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import * as t from "@babel/types";
 import type { ActionEdge, Counters, ScreenNode } from "../../schema/index.js";
 import type { IngestorAdapter } from "../adapter-types.js";
+import { posixRelative } from "../paths.js";
 import { lineOf, parseSourceFile, snippetAt, traverseFile, type ParsedFile } from "../nextjs-app-router/parse-source-file.js";
 import { enclosingComponentName } from "../nextjs-app-router/extract-navigation-calls.js";
 import { triggerLabelFor } from "../nextjs-app-router/trigger-label.js";
@@ -25,7 +26,7 @@ export const reactRouterAdapter: IngestorAdapter<DetectedReactRouter> = {
   },
   async ingest(rootDir, detected) {
     const counters: Counters = {};
-    const files = detected.files.flatMap((abs) => { const parsed = parseSourceFile(abs, relative(rootDir, abs)); if (!parsed) { bump(counters, relative(rootDir, abs), "parse-error"); return []; } return [parsed]; });
+    const files = detected.files.flatMap((abs) => { const parsed = parseSourceFile(abs, posixRelative(rootDir, abs)); if (!parsed) { bump(counters, posixRelative(rootDir, abs), "parse-error"); return []; } return [parsed]; });
     const registry = buildReactRouteRegistry(files);
     const states = new Map<string, ScreenNode>();
     for (const file of files) collectSearchParamStates(file, registry.componentRoutes, states);

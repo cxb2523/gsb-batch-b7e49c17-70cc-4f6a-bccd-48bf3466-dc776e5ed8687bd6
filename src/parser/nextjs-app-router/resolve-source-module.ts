@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
+import { isInside, posixRelative } from "../paths.js";
 import { parseSourceFile, type ParsedFile } from "./parse-source-file.js";
 
 const moduleCache = new Map<string, ParsedFile | null>();
@@ -7,13 +8,15 @@ const tsconfigCache = new Map<string, { baseUrl: string; paths: Record<string, s
 
 /** Resolves a local or configured import without following dependencies outside the target repository. */
 export function resolveSourceModule(source: string, fromFile: string, rootDir: string, onLimit?: (name: string) => void): ParsedFile | null {
-  const bases = source.startsWith(".") ? [resolve(dirname(fromFile), source)] : moduleBases(source, rootDir);
+  // `fromFile` may arrive as an absolute path or a POSIX-shaped repo-relative path (graph contract); normalize to absolute for resolution.
+  const absFrom = fromFile.startsWith(rootDir) ? fromFile : join(rootDir, fromFile.split("/").join(sep));
+  const bases = source.startsWith(".") ? [resolve(dirname(absFrom), source)] : moduleBases(source, rootDir);
   for (const base of bases) {
-    if (!base.startsWith(rootDir + "/")) { onLimit?.("import-outside-repo"); continue; }
+    if (!isInside(rootDir, base)) { onLimit?.("import-outside-repo"); continue; }
     const stem = base.replace(/\.(js|jsx|mjs)$/, "");
     for (const candidate of [base, `${stem}.ts`, `${stem}.tsx`, `${stem}.js`, `${stem}.jsx`, join(base, "index.ts"), join(base, "index.tsx")]) {
       if (!existsSync(candidate) || !statSync(candidate).isFile()) continue;
-      if (!moduleCache.has(candidate)) moduleCache.set(candidate, parseSourceFile(candidate, relative(rootDir, candidate)));
+      if (!moduleCache.has(candidate)) moduleCache.set(candidate, parseSourceFile(candidate, posixRelative(rootDir, candidate)));
       return moduleCache.get(candidate) ?? null;
     }
   }

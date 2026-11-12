@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ActionEdge, Counters, ScreenNode } from "../../schema/index.js";
 import type { IngestorAdapter } from "../adapter-types.js";
 import {
@@ -27,14 +28,14 @@ export const staticHtmlAdapter: IngestorAdapter<StaticHtmlDetection> = {
     if (hasPackageManifest(rootDir)) return null;
     const files = htmlPaths(rootDir);
     const hasAnchor = files.some((file) =>
-      /<a\b[^>]*\bhref\s*=/i.test(readFileSync(`${rootDir}/${file}`, "utf8")),
+      /<a\b[^>]*\bhref\s*=/i.test(readFileSync(join(rootDir, file), "utf8")),
     );
     return hasAnchor ? { files } : null;
   },
   async ingest(rootDir, detected) {
     const files: HtmlFile[] = detected.files.map((file) => ({
       file,
-      source: readFileSync(`${rootDir}/${file}`, "utf8"),
+      source: readFileSync(join(rootDir, file), "utf8"),
       route: routeForHtmlFile(file),
     }));
     const routeScreens: ScreenNode[] = files.map(({ file, route }) => ({

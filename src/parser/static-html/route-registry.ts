@@ -1,7 +1,8 @@
 import { existsSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import type { ScreenNode } from "../../schema/index.js";
 import type { RouteResolver } from "../adapter-types.js";
+import { posixRelative } from "../paths.js";
 
 /** Recursively lists HTML files, excluding hidden and dependency directories. */
 export function htmlPaths(rootDir: string, directory = rootDir): string[] {
@@ -12,13 +13,14 @@ export function htmlPaths(rootDir: string, directory = rootDir): string[] {
         ? []
         : htmlPaths(rootDir, fullPath);
     }
-    return entry.name.endsWith(".html") ? [relative(rootDir, fullPath)] : [];
+    return entry.name.endsWith(".html") ? [posixRelative(rootDir, fullPath)] : [];
   });
 }
 
 /** Converts an HTML file path to its canonical route-screen id. */
 export function routeForHtmlFile(file: string): string {
-  const stem = file.replace(/\.html$/, "");
+  // Counter/evidence paths are POSIX-shaped by contract; accept OS-native separators as well.
+  const stem = file.split(/[\\/]/).join("/").replace(/\.html$/, "");
   const route = stem === "index" ? "/" : `/${stem.replace(/\/index$/, "")}`;
   return route.replace(/\/{2,}/g, "/");
 }

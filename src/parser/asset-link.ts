@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
+import { isInside } from "./paths.js";
 
 /** Existing local NON-HTML files (public/*.docx, /brochure.pdf, images) are download assets, not Route Screen targets; .html files stay pages. */
 export function isLocalAssetHref(rootDir: string, href: string, sourceFile?: string): boolean {
@@ -8,11 +9,10 @@ export function isLocalAssetHref(rootDir: string, href: string, sourceFile?: str
   const clean = path.replace(/^\/+/, "");
   if (!/\.[a-z0-9]{1,8}$/i.test(clean) || /\.html?$/i.test(clean)) return false;
   const candidates = [resolve(rootDir, "public", clean), resolve(rootDir, clean)];
-  if (sourceFile) candidates.push(resolve(rootDir, dirname(sourceFile), path));
-  return candidates.some((candidate) => inside(rootDir, candidate) && existsSync(candidate) && statSync(candidate).isFile());
-}
-
-function inside(rootDir: string, candidate: string): boolean {
-  const root = resolve(rootDir);
-  return candidate === root || candidate.startsWith(root + "/");
+  if (sourceFile) {
+    // Evidence paths are POSIX-shaped; convert to OS-native before resolving against the filesystem.
+    const absSource = sourceFile.startsWith(rootDir) ? sourceFile : resolve(rootDir, sourceFile.split("/").join(sep));
+    candidates.push(resolve(rootDir, dirname(absSource), path));
+  }
+  return candidates.some((candidate) => isInside(rootDir, candidate) && existsSync(candidate) && statSync(candidate).isFile());
 }

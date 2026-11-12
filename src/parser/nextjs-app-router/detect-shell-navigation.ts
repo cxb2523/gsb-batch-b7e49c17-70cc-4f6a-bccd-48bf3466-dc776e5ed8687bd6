@@ -1,7 +1,8 @@
 import { existsSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import * as t from "@babel/types";
 import type { ActionEdge, Counters } from "../../schema/index.js";
+import { posixRelative } from "../paths.js";
 import { lineOf, parseSourceFile, snippetAt, traverseFile, type ParseCache, type ParsedFile } from "./parse-source-file.js";
 import type { RouteRegistry } from "./route-registry.js";
 
@@ -32,7 +33,7 @@ export function detectShellNavigation(rootDir: string, appDir: string, pages: Pa
   for (const [, u] of usage) {
     if (u.count / Math.max(pages.length, 1) < SHELL_USAGE_SHARE) continue;
     const file = resolveImport(u.source, u.fromFile, rootDir);
-    if (!file) { bump(counters, relative(rootDir, u.fromFile), "shell-import-unresolved"); continue; }
+    if (!file) { bump(counters, posixRelative(rootDir, u.fromFile), "shell-import-unresolved"); continue; }
     shellFiles.add(file);
     for (const sibling of siblingSources(file)) shellFiles.add(sibling); // one hop: nav-bell.tsx next to app-shell.tsx
   }
@@ -41,8 +42,8 @@ export function detectShellNavigation(rootDir: string, appDir: string, pages: Pa
   const seen = new Set<string>();
   let seq = 0;
   for (const abs of shellFiles) {
-    const parsed = parseSourceFile(abs, relative(rootDir, abs), cache, counters);
-    if (!parsed) { bump(counters, relative(rootDir, abs), "parse-error"); continue; }
+    const parsed = parseSourceFile(abs, posixRelative(rootDir, abs), cache, counters);
+    if (!parsed) { bump(counters, posixRelative(rootDir, abs), "parse-error"); continue; }
     for (const link of literalHrefs(parsed)) {
       if (link.href === "" || link.href.startsWith("#")) { bump(counters, parsed.file, "shell-empty-href"); continue; }
       const target = /^(https?:)?\/\//.test(link.href) ? `external:${link.href}` : registry.resolve(link.href) ?? `missing:${link.href.split("?")[0]}`;
@@ -89,8 +90,8 @@ function collectLayoutShellFiles(rootDir: string, appDir: string, counters: Coun
   const files = new Set<string>();
   for (const abs of collectLayoutFiles(appDir)) {
     files.add(abs);
-    const parsed = parseSourceFile(abs, relative(rootDir, abs), cache, counters);
-    if (!parsed) { bump(counters, relative(rootDir, abs), "parse-error"); continue; }
+    const parsed = parseSourceFile(abs, posixRelative(rootDir, abs), cache, counters);
+    if (!parsed) { bump(counters, posixRelative(rootDir, abs), "parse-error"); continue; }
     const imports = importedComponents(parsed);
     const rendered = new Set<string>();
     traverseFile(parsed, { JSXOpeningElement(p) { if (t.isJSXIdentifier(p.node.name) && imports.has(p.node.name.name)) rendered.add(p.node.name.name); } });

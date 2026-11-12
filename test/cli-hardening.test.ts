@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { diffCommand } from "../src/cli/diff-command.js";
 import { isCliEntry, main, parseArgs } from "../src/cli/index.js";
@@ -10,7 +11,8 @@ import { serveCommand } from "../src/cli/serve-command.js";
 import { copyFixture } from "./helpers/fixture-copy.js";
 
 const fx = copyFixture("cli"); const FIXTURE = fx.dir; const GRAPH = join(FIXTURE, ".code2flow", "graph.json");
-const viewerDir = new URL("../out/viewer", import.meta.url).pathname;
+// URL.pathname keeps a leading slash on Windows (`/D:/...`), which fs APIs reject; fileURLToPath yields the native path.
+const viewerDir = fileURLToPath(new URL("../out/viewer", import.meta.url));
 beforeAll(async () => { await scanCommand(FIXTURE, () => {}); });
 afterAll(() => fx.cleanup());
 
@@ -39,15 +41,17 @@ describe("CLI hardening (seams: process exit codes, HTTP responses, graph.json)"
       expect(await main(["export", FIXTURE, "--feature", "--out", "x"])).toBe(2);
       expect(await main(["diff", FIXTURE])).toBe(1);
     } finally { console.error = orig; }
-    expect(errors).toEqual([expect.stringMatching(/^stories: unknown subcommand "bogus"/), "stories: PRD file not found: /nope/prd.md", "export: --feature needs a value", expect.stringMatching(/^diff: pass --from/)]);
+    // The error echoes the path the platform resolved (`resolve()` adds a drive prefix on Windows).
+    const missingPrd = `stories: PRD file not found: ${resolve("/nope/prd.md")}`;
+    expect(errors).toEqual([expect.stringMatching(/^stories: unknown subcommand "bogus"/), missingPrd, "export: --feature needs a value", expect.stringMatching(/^diff: pass --from/)]);
   });
   it("detects the CLI entry through the npm bin symlink (a bare filename match exits silently)", () => {
-    const self = new URL(import.meta.url); const selfPath = self.pathname;
+    const selfPath = fileURLToPath(import.meta.url);
     const bin = join(FIXTURE, "bin"); mkdirSync(bin, { recursive: true }); symlinkSync(selfPath, join(bin, "code2flow"));
-    expect(isCliEntry(join(bin, "code2flow"), self.href)).toBe(true);
-    expect(isCliEntry(selfPath, self.href)).toBe(true);
-    expect(isCliEntry("/nowhere/index.js", self.href)).toBe(false);
-    expect(isCliEntry(undefined, self.href)).toBe(false);
+    expect(isCliEntry(join(bin, "code2flow"), import.meta.url)).toBe(true);
+    expect(isCliEntry(selfPath, import.meta.url)).toBe(true);
+    expect(isCliEntry("/nowhere/index.js", import.meta.url)).toBe(false);
+    expect(isCliEntry(undefined, import.meta.url)).toBe(false);
   });
   it("keeps boolean flags from swallowing a repository positional and treats help as success", async () => {
     expect(parseArgs(["paths", "--orphans", FIXTURE]).positionals).toEqual([FIXTURE]);

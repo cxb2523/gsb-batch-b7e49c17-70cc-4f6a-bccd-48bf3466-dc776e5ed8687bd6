@@ -1,7 +1,8 @@
 import { knownLocales } from "./locale-samples.js";
 import { readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
-import type { ScreenNode } from "../../schema/index.js";
+import { join, relative } from "node:path";
+import { bump, type Counters, type ScreenNode } from "../../schema/index.js";
+import { posixRelative } from "../paths.js";
 
 const PAGE_FILES = new Set(["page.tsx", "page.jsx", "page.ts", "page.js"]);
 
@@ -17,7 +18,8 @@ function isSkippedSubtree(segment: string): boolean {
 
 /** Converts an App Router directory path (relative to appDir) into a route id such as "/blog/[slug]". */
 export function directoryToRoute(relDir: string): string {
-  const parts = relDir.split(sep).filter((p) => p.length > 0 && !isTransparentSegment(p));
+  // Route ids are POSIX-shaped by contract; split on both separators so a backslash path (Windows `relative()`) works too.
+  const parts = relDir.split(/[\\/]/).filter((p) => p.length > 0 && !isTransparentSegment(p));
   return "/" + parts.join("/");
 }
 
@@ -25,13 +27,15 @@ export interface RouteRegistry {
   screens: ScreenNode[];
   /** Resolves a concrete or parametric path ("/iam/users/anhnt" or "/iam/users/[id]") to a route screen id. */
   resolve(path: string): string | null;
+  /** Counters the resolver bumps when it infers something (e.g. a bare next-intl link mapped onto [locale]); optional for unit tests. */
+  counters?: Counters;
 }
 
 /** Leading `[locale]` / `[lang]` segment of a route id. */
 const LOCALE_SEGMENT = /^\/\[(locale|lang|language)\]/;
 
 /** Walks appDir for page files and builds the Route Screen list plus a path resolver. */
-export function buildRouteRegistry(rootDir: string, appDir: string, locales: string[] = knownLocales(rootDir)): RouteRegistry {
+export function buildRouteRegistry(rootDir: string, appDir: string, locales: string[] = knownLocales(rootDir), counters?: Counters): RouteRegistry {
   const screens: ScreenNode[] = [];
   walk(appDir, appDir, rootDir, screens);
   screens.sort((a, b) => a.id.localeCompare(b.id));
@@ -43,6 +47,7 @@ export function buildRouteRegistry(rootDir: string, appDir: string, locales: str
   const localelessMatchers = localeless.map((m) => ({ id: m.id, regex: routeToRegex(m.stripped), staticDepth: m.stripped.split("/").filter((p) => !p.startsWith("[")).length })).sort((a, b) => b.staticDepth - a.staticDepth);
   return {
     screens,
+    counters,
     resolve(path: string): string | null {
       const clean = path.split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
       const exact = screens.find((s) => s.id === clean);
@@ -52,6 +57,8 @@ export function buildRouteRegistry(rootDir: string, appDir: string, locales: str
       const hit = matchers.find((m) => m.regex.test(clean) && localeOk(m));
       if (hit) return hit.id;
       const bare = localeless.find((m) => m.stripped === clean) ?? localelessMatchers.find((m) => m.regex.test(clean));
+      // Auditable inference: a link written without the locale prefix only matches via the localeless fallback.
+      if (bare && counters) bump(counters, "route-registry", "locale-prefix-inferred");
       return bare ? bare.id : null;
     },
   };
@@ -70,7 +77,7 @@ function walk(dir: string, appDir: string, rootDir: string, out: ScreenNode[]): 
       out.push({
         id,
         kind: "route",
-        filePath: relative(rootDir, join(dir, entry.name)),
+        filePath: posixRelative(rootDir, join(dir, entry.name)),
         dynamic: /\[[^.\]]+\]/.test(id) || undefined,
         catchAll: /\[\.\.\./.test(id) || undefined,
       });

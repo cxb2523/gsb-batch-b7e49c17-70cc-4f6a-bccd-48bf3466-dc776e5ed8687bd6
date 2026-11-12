@@ -13,8 +13,8 @@ import { extractHoverStateScreens } from "./hover-state-screens.js";
 
 /** Two passes: index every screen (state keys, titles, route-as-modal), then edges + shell navigation. */
 async function ingestNextApp(rootDir: string, detected: DetectedFramework): Promise<IngestResult> {
-  const registry = buildRouteRegistry(rootDir, detected.appDir);
   const counters: Counters = {};
+  const registry = buildRouteRegistry(rootDir, detected.appDir, undefined, counters);
   const cache: ParseCache = new Map(); // one memo per ingest: collectScreenFiles and buildScreenIndex otherwise both parse every screen file
   const indexes: ScreenIndex[] = [];
   const pages: ParsedFile[] = [];
