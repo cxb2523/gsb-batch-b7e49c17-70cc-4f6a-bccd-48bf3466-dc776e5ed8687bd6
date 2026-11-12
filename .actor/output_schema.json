@@ -1,0 +1,19 @@
+{
+    "actorOutputSchemaVersion": 1,
+    "title": "PhoneInfoga output",
+    "description": "One OSINT result per scanned phone number; the run summary is in the OUTPUT record.",
+    "properties": {
+        "dataset": {
+            "type": "string",
+            "title": "Dataset",
+            "description": "Default dataset with one record per scanned phone number. Numbers that could not be scanned are listed in the run's status message and OUTPUT record, not charged.",
+            "template": "{{links.publicRunUrl}}/dataset"
+        },
+        "log": {
+            "type": "string",
+            "title": "Log",
+            "description": "Full run log.",
+            "template": "{{links.publicRunUrl}}/log"
+        }
+    }
+}

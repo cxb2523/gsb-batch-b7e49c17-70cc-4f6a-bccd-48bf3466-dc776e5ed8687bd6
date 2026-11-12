@@ -1,0 +1,1 @@
+apify>=4.1,<5  # SDK 3.4.1 crashed on runs from Apify's AI assistant (meta.origin APIFY_AI) at set_status_message; push_data passes no charging argument positionally
