@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>启动链路自测</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b1220; color: #e5e7eb; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; line-height: 1.6; }
+  .wrap { box-sizing: border-box; width: 100%; max-width: 1080px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 8px; color: #fff; overflow-wrap: anywhere; word-break: break-word; }
+  .lede { margin: 0 0 20px; color: #9ca3af; font-size: 15px; overflow-wrap: anywhere; word-break: break-word; }
+  .overall { margin: 0 0 12px; padding: 16px 18px; border-radius: 10px; border: 1px solid #334155; background: #111827; min-height: 56px; font-size: 16px; font-weight: 700; overflow-wrap: anywhere; word-break: break-word; }
+  .overall.pass { border-color: #16a34a; color: #86efac; }
+  .overall.fail { border-color: #dc2626; color: #fca5a5; }
+  .overall.waiting { border-color: #334155; color: #cbd5e1; }
+  .source { margin: 0 0 24px; padding: 10px 14px; border-radius: 8px; border: 1px dashed #475569; color: #9ca3af; font-size: 13px; overflow-wrap: anywhere; word-break: break-word; }
+  .case { margin: 0 0 24px; padding: 18px 18px 20px; border: 1px solid #334155; border-radius: 10px; background: #111827; box-sizing: border-box; min-width: 0; }
+  .case h2 { font-size: 19px; margin: 0 0 8px; color: #fff; overflow-wrap: anywhere; word-break: break-word; }
+  .case .expect { margin: 0 0 12px; font-size: 15px; color: #cbd5e1; overflow-wrap: anywhere; word-break: break-word; }
+  .case .expect strong { color: #fde68a; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+  .badge { display: inline-block; max-width: 100%; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; border: 1px solid; overflow-wrap: anywhere; word-break: break-word; }
+  .badge.ok { color: #86efac; border-color: #16a34a; background: rgba(22, 163, 74, 0.12); }
+  .badge.bad { color: #fca5a5; border-color: #dc2626; background: rgba(220, 38, 38, 0.12); }
+  .badge.info { color: #cbd5e1; border-color: #475569; background: rgba(71, 85, 105, 0.18); }
+  .detail { margin: 8px 0 0; font-size: 14px; color: #9ca3af; overflow-wrap: anywhere; word-break: break-word; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; color: #e2e8f0; overflow-wrap: anywhere; word-break: break-word; }
+  .panel-slot { margin: 16px 0 0; }
+  .preview-label { margin: 16px 0 6px; font-size: 14px; color: #9ca3af; }
+  .preview { display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-height: 180px; border: 1px solid #334155; border-radius: 8px; background: #fff; }
+  .note { margin: 32px 0 0; padding: 16px 18px; border: 1px dashed #475569; border-radius: 10px; color: #9ca3af; font-size: 14px; overflow-wrap: anywhere; word-break: break-word; }
+  .note b { color: #e5e7eb; }
+  .note p { margin: 0 0 8px; }
+  .note p:last-child { margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>启动链路自测</h1>
+  <p class="lede">用页面内构造的分片样例直接运行 <code>index.html</code> 中的启动脚本，逐项断言“收集分片 → Base64 解码 → 异或还原 → UTF-8 解码”这条链路的成功与失败行为。每个用例都在独立的 iframe 中执行，并截获 <code>document.write / open / close</code> 与 <code>console.error</code>，因此不会影响本页面。</p>
+  <div id="overall" class="overall waiting">正在运行…</div>
+  <div id="source" class="source">正在确定被测脚本来源…</div>
+  <div id="cases"></div>
+  <div class="note">
+    <p><b>运行方式一（推荐，自动比对最新代码）：</b>在仓库目录启动本地静态服务器，例如 <code>python -m http.server 8000</code>，然后访问 <code>http://localhost:8000/boot-self-test.html</code>。此时页面会直接读取当前 <code>index.html</code> 里的启动脚本作为被测对象，改过 index.html 也会自动测到最新版本。</p>
+    <p><b>运行方式二（离线）：</b>直接双击打开本文件。浏览器禁止 <code>file://</code> 页面读取本地文件，因此会回退到页面内嵌的启动脚本副本。<span id="drift-status">内嵌副本是否与当前 index.html 一致，需按方式一运行才能校验。</span></p>
+  </div>
+</div>
+
+<script type="text/plain" id="boot-script-source">
+function uK1yGK(){return Math.max(49,46);}
+/* boot loader: 分片收集 → Base64 → 异或 → UTF-8，失败时渲染可见错误面板 */
+(function(){
+"use strict";
+
+var SHARD_PREFIX = 'E19289RbC';
+var SHARD_COUNT = 5;
+var KEY_B64 = 'ou7eMGgzSIXfDzJiOUH/hnk8VyI7vcVL';
+var STAGE_LABELS = {
+  shards: '分片缺失',
+  base64: 'Base64 非法',
+  utf8: 'UTF-8 非法',
+  empty: '内容为空',
+  unexpected: '未知错误'
+};
+
+function bootError(stage, message, details, cause){
+  var err = new Error(message);
+  err.name = 'LandingBootError';
+  err.stage = stage;
+  err.details = details || {};
+  if (cause) { try { err.cause = cause; } catch (ignore) {} }
+  return err;
+}
+
+function joinIds(ids){
+  return ids.join('、');
+}
+
+function elementIds(ids){
+  var out = [];
+  for (var i = 0; i < ids.length; i++) out.push(SHARD_PREFIX + ids[i]);
+  return out.join('、');
+}
+
+/* 步骤 1：收集分片。逐片检查，一次性记录所有缺失编号。 */
+function collectShardsFromDom(){
+  var texts = [];
+  var offsets = [];
+  var missing = [];
+  var present = [];
+  var cursor = 0;
+  for (var i = 0; i < SHARD_COUNT; i++){
+    var el = document.getElementById(SHARD_PREFIX + i);
+    var text = el ? (el.textContent || '') : '';
+    offsets.push({ id: i, start: cursor, length: text.length });
+    cursor += text.length;
+    texts.push(text);
+    if (el && text.replace(/\s+/g, '') !== ''){
+      present.push(i);
+    } else {
+      missing.push(i);
+    }
+  }
+  if (missing.length){
+    throw bootError(
+      'shards',
+      '未能读取到全部页面分片（共 ' + SHARD_COUNT + ' 个，缺少 ' + missing.length + ' 个）。',
+      {
+        missingShards: missing,
+        presentShards: present,
+        totalShards: SHARD_COUNT
+      }
+    );
+  }
+  return { joined: texts.join(''), offsets: offsets };
+}
+
+/* 将拼接文本中的下标映射回具体分片，便于报告出错位置。 */
+function locateInShards(offsets, index){
+  if (typeof index !== 'number' || index < 0) return null;
+  for (var i = 0; i < offsets.length; i++){
+    var s = offsets[i];
+    if (index >= s.start && index < s.start + s.length){
+      return { index: index, shard: s.id, offsetInShard: index - s.start };
+    }
+  }
+  return { index: index };
+}
+
+/* 步骤 2：Base64 解码。先做结构检查，保留 atob 的原始错误。 */
+function decodeBase64Payload(joined, offsets){
+  if (joined.length === 0){
+    throw bootError('base64', '拼接后的 Base64 文本为空，无法解码。', { position: null });
+  }
+
+  var nonSpaceLength = 0;
+  var paddingStart = -1;
+  var paddingCount = 0;
+  var i, ch;
+
+  for (i = 0; i < joined.length; i++){
+    ch = joined.charAt(i);
+    if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n' || ch === '\f'){
+      continue; /* atob 接受这些 ASCII 空白 */
+    }
+    nonSpaceLength++;
+    if (ch === '='){
+      if (paddingStart < 0) paddingStart = i;
+      paddingCount++;
+      continue;
+    }
+    if (paddingStart >= 0){
+      throw bootError(
+        'base64',
+        '填充符 "=" 之后仍出现有效字符，Base64 结构非法。',
+        { position: i, char: ch, location: locateInShards(offsets, i) }
+      );
+    }
+    if (!/^[A-Za-z0-9+/]$/.test(ch)){
+      throw bootError(
+        'base64',
+        '拼接文本中出现非法 Base64 字符 ' + JSON.stringify(ch) + '，无法解码。',
+        { position: i, char: ch, location: locateInShards(offsets, i) }
+      );
+    }
+  }
+
+  if (paddingCount > 2){
+    throw bootError(
+      'base64',
+      'Base64 填充符 "=" 出现 ' + paddingCount + ' 个，超过允许的 2 个。',
+      { position: paddingStart, location: locateInShards(offsets, paddingStart) }
+    );
+  }
+  if (paddingCount > 0 && nonSpaceLength % 4 !== 0){
+    throw bootError(
+      'base64',
+      '带填充符的 Base64 文本长度不合法（去空白后为 ' + nonSpaceLength + ' 个字符，不是 4 的倍数）。',
+      { position: paddingStart, length: nonSpaceLength }
+    );
+  }
+  if (nonSpaceLength % 4 === 1){
+    throw bootError(
+      'base64',
+      'Base64 文本长度不合法（去空白后为 ' + nonSpaceLength + ' 个字符，除以 4 余 1）。',
+      { position: null, length: nonSpaceLength }
+    );
+  }
+
+  try {
+    return atob(joined);
+  } catch (cause) {
+    throw bootError(
+      'base64',
+      '浏览器 atob 拒绝该 Base64 文本，解码失败。',
+      { position: paddingStart >= 0 ? paddingStart : null },
+      cause
+    );
+  }
+}
+
+/* 步骤 3：逐字节异或还原。密钥本身的解码失败也归入 Base64 阶段。 */
+function xorDecode(cipherText){
+  var key;
+  try {
+    key = atob(KEY_B64);
+  } catch (cause) {
+    throw bootError('base64', '固定密钥无法按 Base64 解码，无法执行异或还原。', { position: null, key: KEY_B64 }, cause);
+  }
+  if (key.length === 0){
+    throw bootError('base64', '固定密钥解码后为空，无法执行异或还原。', { position: null, key: KEY_B64 });
+  }
+
+  var bytes = new Uint8Array(cipherText.length);
+  for (var i = 0; i < cipherText.length; i++){
+    bytes[i] = cipherText.charCodeAt(i) ^ key.charCodeAt(i % key.length);
+  }
+  return bytes;
+}
+
+/* 扫描首个非法 UTF-8 字节，返回其索引；全部合法时返回 -1。 */
+function findInvalidUtf8Byte(bytes){
+  var i = 0;
+  var n = bytes.length;
+  var b, b1, b2, b3;
+  while (i < n){
+    b = bytes[i];
+    if (b < 0x80){ i++; continue; }
+    if (b >= 0xC2 && b <= 0xDF){
+      if (i + 1 >= n) return i;
+      b1 = bytes[i + 1];
+      if (b1 < 0x80 || b1 > 0xBF) return i;
+      i += 2; continue;
+    }
+    if (b >= 0xE0 && b <= 0xEF){
+      if (i + 2 >= n) return i;
+      b1 = bytes[i + 1]; b2 = bytes[i + 2];
+      if (b === 0xE0){
+        if (b1 < 0xA0 || b1 > 0xBF) return i;
+      } else if (b === 0xED){
+        if (b1 < 0x80 || b1 > 0x9F) return i;
+      } else if (b1 < 0x80 || b1 > 0xBF){
+        return i;
+      }
+      if (b2 < 0x80 || b2 > 0xBF) return i;
+      i += 3; continue;
+    }
+    if (b >= 0xF0 && b <= 0xF4){
+      if (i + 3 >= n) return i;
+      b1 = bytes[i + 1]; b2 = bytes[i + 2]; b3 = bytes[i + 3];
+      if (b === 0xF0){
+        if (b1 < 0x90 || b1 > 0xBF) return i;
+      } else if (b === 0xF4){
+        if (b1 < 0x80 || b1 > 0x8F) return i;
+      } else if (b1 < 0x80 || b1 > 0xBF){
+        return i;
+      }
+      if (b2 < 0x80 || b2 > 0xBF) return i;
+      if (b3 < 0x80 || b3 > 0xBF) return i;
+      i += 4; continue;
+    }
+    return i;
+  }
+  return -1;
+}
+
+function hexContext(bytes, index){
+  var start = Math.max(0, index - 4);
+  var end = Math.min(bytes.length, index + 8);
+  var parts = [];
+  for (var i = start; i < end; i++){
+    var h = bytes[i].toString(16);
+    if (h.length < 2) h = '0' + h;
+    parts.push(i === index ? '[' + h + ']' : h);
+  }
+  return parts.join(' ');
+}
+
+/* 步骤 4：UTF-8 解码。优先使用 fatal 模式，避免非法字节被悄悄替换成 U+FFFD。 */
+function decodeUtf8Text(bytes){
+  var bad = findInvalidUtf8Byte(bytes);
+  if (bad >= 0){
+    throw bootError(
+      'utf8',
+      '异或还原后的字节序列不是合法的 UTF-8 文本，无法解码。',
+      { position: bad, totalBytes: bytes.length, hex: hexContext(bytes, bad) }
+    );
+  }
+
+  var decoder = null;
+  try {
+    decoder = new TextDecoder('utf-8', { fatal: true });
+  } catch (unsupportedFatal) {
+    /* 个别老浏览器不认 fatal 选项；上面的字节扫描已经完成合法性校验。 */
+    try {
+      decoder = new TextDecoder('utf-8');
+    } catch (unsupportedDecoder) {
+      throw bootError(
+        'utf8',
+        '当前浏览器不支持 UTF-8 解码，无法还原页面内容。',
+        { position: -1, totalBytes: bytes.length },
+        unsupportedDecoder
+      );
+    }
+  }
+
+  try {
+    return decoder.decode(bytes);
+  } catch (cause) {
+    throw bootError(
+      'utf8',
+      'UTF-8 解码器拒绝了还原后的字节序列。',
+      { position: -1, totalBytes: bytes.length },
+      cause
+    );
+  }
+}
+
+/* 完整链路：任一步失败都会抛出带 stage 的 BootError。 */
+function decodePipeline(collected){
+  var joined = collected.joined;
+  var offsets = collected.offsets;
+  var cipherText = decodeBase64Payload(joined, offsets);
+  var bytes = xorDecode(cipherText);
+  var text = decodeUtf8Text(bytes);
+  if (text.length === 0 || text.replace(/\s+/g, '') === ''){
+    throw bootError(
+      'empty',
+      '还原后的内容为空（或仅含空白），已停止，未覆盖当前文档。',
+      { textLength: text.length, whitespaceOnly: text.length > 0 }
+    );
+  }
+  return text;
+}
+
+function appendLine(panel, text, css){
+  var p = document.createElement('p');
+  p.style.cssText = css || 'margin:0 0 10px;padding:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;white-space:normal';
+  p.textContent = text;
+  panel.appendChild(p);
+  return p;
+}
+
+/* 可见错误面板：所有样式均内联，不依赖外部资源。 */
+function buildErrorPanel(err){
+  var stage = (err && err.stage) || 'unexpected';
+  var label = STAGE_LABELS[stage] || STAGE_LABELS.unexpected;
+  var details = (err && err.details) || {};
+  var cause = err && err.cause ? err.cause : err;
+  var pos = details.position;
+  var loc = details.location;
+
+  var panel = document.createElement('div');
+  panel.id = 'landingBootError';
+  panel.setAttribute('role', 'alert');
+  panel.setAttribute('aria-live', 'assertive');
+  panel.style.cssText = 'box-sizing:border-box;width:100%;max-width:100%;min-width:0;min-height:240px;margin:0;padding:24px 20px;background:#111827;color:#f9fafb;border-top:4px solid #ef4444;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Arial,sans-serif;font-size:16px;line-height:1.65;text-align:left;overflow-wrap:anywhere;word-break:break-word;white-space:normal';
+
+  var title = document.createElement('h2');
+  title.style.cssText = 'margin:0 0 12px;padding:0;max-width:100%;font-size:24px;line-height:1.3;font-weight:700;color:#ffffff;overflow-wrap:anywhere;word-break:break-word';
+  title.textContent = '页面启动失败';
+  panel.appendChild(title);
+
+  appendLine(panel, '失败阶段：' + label, 'margin:0 0 12px;padding:0;max-width:100%;font-size:18px;line-height:1.5;font-weight:700;color:#fca5a5;overflow-wrap:anywhere;word-break:break-word');
+
+  appendLine(panel, err && err.message ? err.message : String(err), 'margin:0 0 16px;padding:0;max-width:100%;font-size:16px;line-height:1.65;color:#e5e7eb;overflow-wrap:anywhere;word-break:break-word');
+
+  if (stage === 'shards'){
+    var missing = details.missingShards || [];
+    appendLine(panel, '缺失的分片编号：' + joinIds(missing), 'margin:0 0 10px;padding:0;max-width:100%;font-size:16px;line-height:1.65;font-weight:600;color:#fde68a;overflow-wrap:anywhere;word-break:break-word');
+    appendLine(panel, '缺失的分片元素：' + elementIds(missing), 'margin:0 0 10px;padding:0;max-width:100%;font-size:15px;line-height:1.65;color:#d1d5db;overflow-wrap:anywhere;word-break:break-word');
+    if (details.presentShards && details.presentShards.length){
+      appendLine(panel, '已读取到的分片编号：' + joinIds(details.presentShards), 'margin:0 0 16px;padding:0;max-width:100%;font-size:15px;line-height:1.65;color:#d1d5db;overflow-wrap:anywhere;word-break:break-word');
+    }
+  } else if (stage === 'base64'){
+    if (typeof pos === 'number' && pos >= 0){
+      var posText = '出错位置：拼接文本第 ' + (pos + 1) + ' 个字符（索引 ' + pos + '，从 0 开始计数）';
+      if (loc && typeof loc.shard === 'number'){
+        posText += '；位于分片 ' + loc.shard + '（' + SHARD_PREFIX + loc.shard + '）内的第 ' + (loc.offsetInShard + 1) + ' 个字符';
+      }
+      appendLine(panel, posText + '。', 'margin:0 0 10px;padding:0;max-width:100%;font-size:16px;line-height:1.65;font-weight:600;color:#fde68a;overflow-wrap:anywhere;word-break:break-word');
+    }
+    if (typeof details.char === 'string'){
+      appendLine(panel, '非法字符：' + JSON.stringify(details.char), 'margin:0 0 10px;padding:0;max-width:100%;font-size:15px;line-height:1.65;color:#d1d5db;overflow-wrap:anywhere;word-break:break-word');
+    }
+    if (typeof details.length === 'number'){
+      appendLine(panel, '去空白后的 Base64 长度为 ' + details.length + ' 个字符。', 'margin:0 0 10px;padding:0;max-width:100%;font-size:15px;line-height:1.65;color:#d1d5db;overflow-wrap:anywhere;word-break:break-word');
+    }
+  } else if (stage === 'utf8'){
+    if (typeof pos === 'number' && pos >= 0){
+      appendLine(panel, '出错位置：第 ' + (pos + 1) + ' 个字节（字节索引 ' + pos + '，从 0 开始计数，共 ' + (details.totalBytes || 0) + ' 个字节）。', 'margin:0 0 10px;padding:0;max-width:100%;font-size:16px;line-height:1.65;font-weight:600;color:#fde68a;overflow-wrap:anywhere;word-break:break-word');
+    }
+    if (typeof details.hex === 'string' && details.hex.length){
+      appendLine(panel, '附近字节（方括号内为出错字节）：' + details.hex, 'margin:0 0 10px;padding:0;max-width:100%;font-size:15px;line-height:1.65;color:#d1d5db;overflow-wrap:anywhere;word-break:break-word');
+    }
+  } else if (stage === 'empty'){
+    appendLine(panel, '还原文本长度为 ' + (details.textLength || 0) + ' 个字符' + (details.whitespaceOnly ? '（仅含空白字符）' : '') + '。', 'margin:0 0 10px;padding:0;max-width:100%;font-size:16px;line-height:1.65;color:#fde68a;overflow-wrap:anywhere;word-break:break-word');
+  }
+
+  var rawName = cause && cause.name ? cause.name : 'Error';
+  var rawMessage = cause && cause.message ? cause.message : String(cause);
+  appendLine(panel, '原始错误：' + rawName + ': ' + rawMessage, 'margin:16px 0 10px;padding:0;max-width:100%;font-size:14px;line-height:1.6;color:#9ca3af;overflow-wrap:anywhere;word-break:break-word');
+
+  appendLine(panel, '页面未被覆盖。请检查 index.html 中 5 个分片元素（' + SHARD_PREFIX + '0–' + SHARD_PREFIX + (SHARD_COUNT - 1) + '）是否完整，并检查解码结果。原始错误对象已输出到浏览器控制台（Console）。', 'margin:0;padding:0;max-width:100%;font-size:14px;line-height:1.6;color:#9ca3af;overflow-wrap:anywhere;word-break:break-word');
+
+  return panel;
+}
+
+/* 失败时不再需要页面上残留的分片/占位元素，把它们移出布局，避免窄屏出现横向滚动。 */
+function neutralizeLeftovers(body){
+  var nodes = body.childNodes;
+  if (!nodes) return;
+  for (var i = 0; i < nodes.length; i++){
+    var node = nodes[i];
+    if (node.nodeType !== 1 || !node.id) continue;
+    var id = node.id;
+    if (id.indexOf(SHARD_PREFIX) === 0 || id === 'Pjk5CCzXOI' || id === 'x0a2f1cb'){
+      node.style.display = 'none';
+      node.style.position = 'static';
+      node.style.left = 'auto';
+      node.style.width = '0';
+      node.style.height = '0';
+    }
+  }
+}
+
+function showFailure(err){
+  var stage = (err && err.stage) || 'unexpected';
+  var label = STAGE_LABELS[stage] || STAGE_LABELS.unexpected;
+  var cause = err && err.cause ? err.cause : err;
+
+  try {
+    if (typeof console !== 'undefined' && console.error){
+      console.error('[landing-boot] 启动失败 [' + stage + ': ' + label + ']', err);
+      /* 若底层原始错误与包装错误不是同一个对象，再单独保留一次，便于在控制台展开查看。 */
+      if (cause && cause !== err){
+        console.error('[landing-boot] 原始错误对象', cause);
+      }
+    }
+  } catch (ignore) {}
+
+  try {
+    var body = document.body || document.documentElement;
+    if (body){
+      var panel = buildErrorPanel(err);
+      neutralizeLeftovers(body);
+      if (body.firstChild){
+        body.insertBefore(panel, body.firstChild);
+      } else {
+        body.appendChild(panel);
+      }
+      return;
+    }
+  } catch (renderError) {}
+
+  /* 极端情况下连面板都创建失败：至少输出一段可读文本。 */
+  try {
+    var fallback = document.createElement('pre');
+    fallback.style.cssText = 'box-sizing:border-box;width:100%;max-width:100%;min-height:240px;margin:0;padding:24px 20px;background:#111827;color:#f9fafb;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font-family:monospace;font-size:15px;line-height:1.6';
+    fallback.textContent = '页面启动失败（' + label + '）：' + (err && err.message ? err.message : String(err)) + '\n原始错误已输出到控制台。';
+    (document.body || document.documentElement).appendChild(fallback);
+  } catch (ignore2) {}
+}
+
+try {
+  var restoredHtml = decodePipeline(collectShardsFromDom());
+  document.open();
+  document.write(restoredHtml);
+  document.close();
+} catch (bootFailure) {
+  showFailure(bootFailure);
+}
+})();
+</script>
+
+<script>
+(function(){
+  'use strict';
+
+  var EMBEDDED_BOOT = document.getElementById('boot-script-source').textContent.replace(/^\n/, '');
+
+  var SHARD_PREFIX = 'E19289RbC';
+  var KEY_B64 = 'ou7eMGgzSIXfDzJiOUH/hnk8VyI7vcVL';
+
+  var HARNESS = [
+    '(function(){',
+    '  var result = window.__bootResult = { writes: [], opened: false, closed: false, errors: [] };',
+    '  document.write = function(html){ result.writes.push(String(html)); };',
+    '  document.open = function(){ result.opened = true; };',
+    '  document.close = function(){ result.closed = true; };',
+    '  console.error = function(){ result.errors.push(Array.prototype.slice.call(arguments)); };',
+    '})();'
+  ].join('\n');
+
+  /* ---------- 构造样例：与 index.html 相同的密钥、Base64 与异或方式 ---------- */
+  var keyBytes = (function(){
+    var b64 = atob(KEY_B64);
+    var out = [];
+    for (var i = 0; i < b64.length; i++) out.push(b64.charCodeAt(i));
+    return out;
+  })();
+
+  function xorEncode(bytes){
+    var out = new Uint8Array(bytes.length);
+    for (var i = 0; i < bytes.length; i++) out[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
+    return out;
+  }
+
+  function bytesToBase64(bytes){
+    var binary = '';
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
+  function splitIntoShards(base64Text, count){
+    var size = Math.ceil(base64Text.length / count);
+    var parts = [];
+    for (var i = 0; i < count; i++) parts.push(base64Text.slice(i * size, (i + 1) * size));
+    return parts;
+  }
+
+  function encodePayload(text){
+    return splitIntoShards(bytesToBase64(xorEncode(new TextEncoder().encode(text))), 5);
+  }
+
+  var SUCCESS_PAYLOAD = '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="utf-8"><title>自测：还原成功</title></head>\n<body style="margin:0;padding:24px;font-family:-apple-system,\'Segoe UI\',sans-serif"><h1 style="margin:0 0 12px;font-size:22px">启动链路正常</h1><p style="margin:0">这段可见文本来自自测页构造的样例，用于确认成功路径仍由 document.write 覆盖文档。</p></body></html>';
+
+  var successShards = encodePayload(SUCCESS_PAYLOAD);
+
+  /* 用例 2：缺少分片 3（保留 0、1、2、4）。 */
+  var missingShards = successShards.slice();
+  missingShards[3] = null;
+
+  /* 补充用例：同时缺少分片 0 与 3，用于验证“一次列出全部缺失编号”。 */
+  var missingTwoShards = successShards.slice();
+  missingTwoShards[0] = null;
+  missingTwoShards[3] = null;
+
+  /* 用例 3：把分片 2 的第一个字符替换成非法字符 "!"。 */
+  var badBase64Shards = successShards.slice();
+  var badBase64Pos = badBase64Shards[0].length + badBase64Shards[1].length;
+  badBase64Shards[2] = '!' + badBase64Shards[2].slice(1);
+
+  /* 用例 4：构造合法 UTF-8 文本，再把第 41 个字节改成 0xFF。 */
+  var utf8SourceText = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>utf8 check</title></head><body><p>前面是 ASCII 内容，让出错字节落在可见位置附近。</p></body></html>';
+  var utf8Bytes = new TextEncoder().encode(utf8SourceText);
+  var utf8BadPos = 40;
+  utf8Bytes[utf8BadPos] = 0xFF;
+  var badUtf8Shards = splitIntoShards(bytesToBase64(xorEncode(utf8Bytes)), 5);
+
+  /* ---------- iframe 执行与结果采集 ---------- */
+  function shardHtmlOf(shards){
+    var shardHtml = '';
+    for (var i = 0; i < shards.length; i++){
+      if (shards[i] === null || shards[i] === undefined) continue;
+      shardHtml += '<div id="' + SHARD_PREFIX + i + '" style="display:none">' + shards[i] + '</div>';
+    }
+    return shardHtml;
+  }
+
+  function buildSrcDoc(bootText, shards){
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' +
+      '<script>' + HARNESS + '<\/script>' +
+      shardHtmlOf(shards) +
+      '<script>' + bootText + '<\/script>' +
+      '</body></html>';
+  }
+
+  /* 真实执行（不打桩）：用于成功路径的可视预览。 */
+  function buildRealSrcDoc(bootText, shards){
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' +
+      shardHtmlOf(shards) +
+      '<script>' + bootText + '<\/script>' +
+      '</body></html>';
+  }
+
+  function runInIframe(bootText, shards){
+    return new Promise(function(resolve){
+      var iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:absolute;left:-9999px;top:0;width:640px;height:480px;border:0;visibility:hidden';
+      iframe.setAttribute('aria-hidden', 'true');
+      var done = false;
+      iframe.onload = function(){
+        if (done) return;
+        done = true;
+        var win = iframe.contentWindow;
+        var doc = win.document;
+        var result = win.__bootResult || { writes: [], opened: false, closed: false, errors: [] };
+        var panel = doc.getElementById('landingBootError');
+        result.panelText = panel ? panel.textContent : '';
+        result.panelHtml = panel ? panel.outerHTML : '';
+        resolve(result);
+        setTimeout(function(){ if (iframe.parentNode) iframe.parentNode.removeChild(iframe); }, 0);
+      };
+      iframe.srcdoc = buildSrcDoc(bootText, shards);
+      document.body.appendChild(iframe);
+    });
+  }
+
+  function findBootError(errors){
+    for (var i = 0; i < errors.length; i++){
+      for (var j = 0; j < errors[i].length; j++){
+        var arg = errors[i][j];
+        if (arg && arg.stage) return arg;
+      }
+    }
+    return null;
+  }
+
+  /* ---------- 断言与渲染 ---------- */
+  function caseDefinitions(){
+    return [
+      {
+        id: 'success',
+        title: '① 全部分片正常（成功路径）',
+        expect: '不出现错误面板；启动脚本调用 document.open / document.write / document.close，写入的内容与构造样例逐字符相同；控制台没有 error。下方的还原预览应显示“启动链路正常”。',
+        shards: successShards,
+        check: function(r){
+          var checks = [
+            ['调用了 document.write 且只写一次', r.writes.length === 1],
+            ['写入内容与构造样例逐字符一致', r.writes[0] === SUCCESS_PAYLOAD],
+            ['调用了 document.open / document.close', r.opened && r.closed],
+            ['没有渲染错误面板', r.panelText === ''],
+            ['控制台没有 error 输出', r.errors.length === 0]
+          ];
+          return { checks: checks, ok: checks.every(function(c){ return c[1]; }) };
+        }
+      },
+      {
+        id: 'missing',
+        title: '② 缺少一个分片（分片 3）',
+        expect: '不调用 document.write；出现可见错误面板，失败阶段为“分片缺失”，列出缺失编号 3 与元素 id。控制台保留原始错误对象。',
+        shards: missingShards,
+        check: function(r){
+          var err = findBootError(r.errors);
+          var checks = [
+            ['没有调用 document.write', r.writes.length === 0],
+            ['渲染了错误面板', r.panelText !== ''],
+            ['面板标注“分片缺失”', r.panelText.indexOf('分片缺失') !== -1],
+            ['面板列出缺失编号 3', r.panelText.indexOf('缺失的分片编号：3') !== -1],
+            ['面板列出元素 id E19289RbC3', r.panelText.indexOf('E19289RbC3') !== -1],
+            ['错误对象 stage=shards 且 missingShards=[3]', !!err && err.stage === 'shards' && JSON.stringify(err.details.missingShards) === '[3]'],
+            ['控制台收到原始错误', r.errors.length >= 1]
+          ];
+          return { checks: checks, ok: checks.every(function(c){ return c[1]; }) };
+        }
+      },
+      {
+        id: 'missing-two',
+        title: '②-b 同时缺少两个分片（分片 0 与 3）',
+        expect: '不调用 document.write；错误面板一次性列出全部缺失编号 0、3 及其元素 id，而不是只报第一个。',
+        shards: missingTwoShards,
+        check: function(r){
+          var err = findBootError(r.errors);
+          var checks = [
+            ['没有调用 document.write', r.writes.length === 0],
+            ['渲染了错误面板', r.panelText !== ''],
+            ['面板列出全部缺失编号 0、3', r.panelText.indexOf('缺失的分片编号：0、3') !== -1],
+            ['面板列出全部缺失元素 id', r.panelText.indexOf('E19289RbC0、E19289RbC3') !== -1],
+            ['错误对象 missingShards=[0,3]', !!err && err.stage === 'shards' && JSON.stringify(err.details.missingShards) === '[0,3]'],
+            ['控制台收到原始错误', r.errors.length >= 1]
+          ];
+          return { checks: checks, ok: checks.every(function(c){ return c[1]; }) };
+        }
+      },
+      {
+        id: 'base64',
+        title: '③ Base64 含非法字符（分片 2 首字符替换为 “!”）',
+        expect: '不调用 document.write；错误面板标注“Base64 非法”，给出拼接文本中的字符位置，并定位到分片 2 内的第 1 个字符。',
+        shards: badBase64Shards,
+        check: function(r){
+          var err = findBootError(r.errors);
+          var checks = [
+            ['没有调用 document.write', r.writes.length === 0],
+            ['渲染了错误面板', r.panelText !== ''],
+            ['面板标注“Base64 非法”', r.panelText.indexOf('Base64 非法') !== -1],
+            ['面板给出拼接文本位置（索引 ' + badBase64Pos + '）', r.panelText.indexOf('索引 ' + badBase64Pos) !== -1],
+            ['面板定位到分片 2', r.panelText.indexOf('位于分片 2') !== -1],
+            ['错误对象 stage=base64 且 position=' + badBase64Pos, !!err && err.stage === 'base64' && err.details.position === badBase64Pos],
+            ['控制台收到原始错误', r.errors.length >= 1]
+          ];
+          return { checks: checks, ok: checks.every(function(c){ return c[1]; }) };
+        }
+      },
+      {
+        id: 'utf8',
+        title: '④ 异或结果不是合法 UTF-8（第 41 个字节为 0xFF）',
+        expect: '不调用 document.write；错误面板标注“UTF-8 非法”，给出出错字节位置（索引 40），并以十六进制上下文标出 [ff]。',
+        shards: badUtf8Shards,
+        check: function(r){
+          var err = findBootError(r.errors);
+          var checks = [
+            ['没有调用 document.write', r.writes.length === 0],
+            ['渲染了错误面板', r.panelText !== ''],
+            ['面板标注“UTF-8 非法”', r.panelText.indexOf('UTF-8 非法') !== -1],
+            ['面板给出字节位置（索引 40）', r.panelText.indexOf('字节索引 ' + utf8BadPos) !== -1],
+            ['面板展示十六进制上下文并标出 [ff]', r.panelText.indexOf('[ff]') !== -1],
+            ['错误对象 stage=utf8 且 position=' + utf8BadPos, !!err && err.stage === 'utf8' && err.details.position === utf8BadPos],
+            ['控制台收到原始错误', r.errors.length >= 1]
+          ];
+          return { checks: checks, ok: checks.every(function(c){ return c[1]; }) };
+        }
+      }
+    ];
+  }
+
+  function renderCase(c, result, outcome, bootText){
+    var card = document.createElement('section');
+    card.className = 'case';
+    card.id = 'case-' + c.id;
+
+    var h = document.createElement('h2');
+    h.textContent = c.title;
+    card.appendChild(h);
+
+    var expect = document.createElement('p');
+    expect.className = 'expect';
+    expect.textContent = '应看到：' + c.expect;
+    card.appendChild(expect);
+
+    var badges = document.createElement('div');
+    badges.className = 'badges';
+
+    var verdict = document.createElement('span');
+    verdict.className = 'badge ' + (outcome.ok ? 'ok' : 'bad');
+    verdict.textContent = outcome.ok ? '用例通过' : '用例失败';
+    badges.appendChild(verdict);
+
+    var stageBadge = document.createElement('span');
+    stageBadge.className = 'badge info';
+    stageBadge.textContent = '阶段：' + (outcome.stage || (c.id === 'success' ? '无（成功路径）' : '未识别'));
+    badges.appendChild(stageBadge);
+
+    var writeBadge = document.createElement('span');
+    writeBadge.className = 'badge info';
+    writeBadge.textContent = 'document.write 调用：' + result.writes.length + ' 次';
+    badges.appendChild(writeBadge);
+
+    card.appendChild(badges);
+
+    for (var i = 0; i < outcome.checks.length; i++){
+      var item = document.createElement('div');
+      item.className = 'detail';
+      item.textContent = (outcome.checks[i][1] ? '✓ ' : '✗ ') + outcome.checks[i][0];
+      item.style.color = outcome.checks[i][1] ? '#86efac' : '#fca5a5';
+      card.appendChild(item);
+    }
+
+    if (result.panelHtml){
+      var slot = document.createElement('div');
+      slot.className = 'panel-slot';
+      slot.innerHTML = result.panelHtml;
+      card.appendChild(slot);
+    }
+
+    if (c.id === 'success'){
+      var label = document.createElement('p');
+      label.className = 'preview-label';
+      label.textContent = '还原预览（真实执行启动脚本，由 document.write 覆盖 iframe 文档）：';
+      card.appendChild(label);
+
+      var preview = document.createElement('iframe');
+      preview.className = 'preview';
+      preview.setAttribute('title', '成功路径还原结果预览');
+      preview.setAttribute('sandbox', 'allow-scripts');
+      preview.srcdoc = buildRealSrcDoc(bootText, c.shards);
+      card.appendChild(preview);
+    }
+
+    return card;
+  }
+
+  var casesEl = document.getElementById('cases');
+  var overallEl = document.getElementById('overall');
+  var sourceEl = document.getElementById('source');
+  var driftEl = document.getElementById('drift-status');
+
+  function chooseBootScript(){
+    return fetch('index.html', { cache: 'no-store' }).then(function(resp){
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.text();
+    }).then(function(text){
+      var match = text.match(/<script>([\s\S]*?)<\/script>/);
+      if (!match) throw new Error('index.html 中未找到内联启动脚本');
+      var live = match[1];
+      var same = live.trim() === EMBEDDED_BOOT.trim();
+      sourceEl.textContent = same
+        ? '被测脚本来源：当前 index.html（与内嵌副本一致）。'
+        : '被测脚本来源：当前 index.html（与页面内嵌副本不一致，已优先使用 index.html 的最新脚本）。';
+      if (driftEl){
+        driftEl.textContent = same
+          ? '一致性校验通过：内嵌副本与当前 index.html 完全一致。'
+          : '一致性校验提示：内嵌副本与当前 index.html 不同，建议重新生成本页的内嵌副本以便离线使用。';
+        driftEl.style.color = same ? '#86efac' : '#fca5a5';
+      }
+      return { text: live, fromLive: true };
+    }).catch(function(){
+      sourceEl.textContent = '被测脚本来源：页面内嵌副本。浏览器禁止 file:// 页面读取本地文件，因此无法与当前 index.html 比对；如需比对请用本地静态服务器打开。';
+      return { text: EMBEDDED_BOOT, fromLive: false };
+    });
+  }
+
+  (async function(){
+    var chosen = await chooseBootScript();
+    var bootText = chosen.text;
+    var definitions = caseDefinitions();
+    var failures = 0;
+
+    for (var i = 0; i < definitions.length; i++){
+      var c = definitions[i];
+      var result;
+      try {
+        result = await runInIframe(bootText, c.shards);
+      } catch (e) {
+        result = { writes: [], opened: false, closed: false, errors: [], panelText: '', panelHtml: '' };
+      }
+      var outcome = c.check(result);
+      var err = findBootError(result.errors);
+      outcome.stage = err && err.stage ? err.stage : '';
+      if (!outcome.ok) failures++;
+      casesEl.appendChild(renderCase(c, result, outcome, bootText));
+    }
+
+    overallEl.className = 'overall ' + (failures === 0 ? 'pass' : 'fail');
+    overallEl.textContent = failures === 0
+      ? '全部 ' + definitions.length + ' 个用例通过'
+      : failures + ' / ' + definitions.length + ' 个用例未通过';
+  })();
+})();
+</script>
+</body>
+</html>
