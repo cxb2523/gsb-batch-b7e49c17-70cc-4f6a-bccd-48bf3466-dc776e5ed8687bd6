@@ -1,0 +1,188 @@
+name: Release npm and PyPI
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  prepare:
+    name: Build and test distributions
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.preflight.outputs.publish }}
+      publish_npm: ${{ steps.preflight.outputs.publish_npm }}
+      publish_pypi: ${{ steps.preflight.outputs.publish_pypi }}
+      version: ${{ steps.preflight.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Preflight npm and PyPI versions
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          NPM_EXISTS=false
+          PYPI_EXISTS=false
+          if npm view "@revolist/dash-datagrid@${VERSION}" version >/dev/null 2>&1; then
+            NPM_EXISTS=true
+          fi
+          PYPI_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://pypi.org/pypi/dash-datagrid/${VERSION}/json")"
+          if [ "${PYPI_STATUS}" = "200" ]; then
+            PYPI_EXISTS=true
+          fi
+
+          PUBLISH_NPM=true
+          PUBLISH_PYPI=true
+          if [ "${NPM_EXISTS}" = "true" ]; then
+            PUBLISH_NPM=false
+          fi
+          if [ "${PYPI_EXISTS}" = "true" ]; then
+            PUBLISH_PYPI=false
+          fi
+
+          if [ "${PUBLISH_NPM}" = "false" ] && [ "${PUBLISH_PYPI}" = "false" ]; then
+            echo "Version ${VERSION} already exists in both registries."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            if [ "${NPM_EXISTS}" != "${PYPI_EXISTS}" ]; then
+              echo "Version ${VERSION} is a partial release; publishing only the missing registry artifact."
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "publish_npm=${PUBLISH_NPM}" >> "$GITHUB_OUTPUT"
+          echo "publish_pypi=${PUBLISH_PYPI}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install and generate
+        if: steps.preflight.outputs.publish == 'true'
+        run: |
+          npm ci
+          python -m pip install -r requirements-dev.txt
+          npm run build
+
+      - name: Test both distributions
+        if: steps.preflight.outputs.publish == 'true'
+        run: |
+          npm run test:js
+          python -m pytest tests -m "not browser"
+          python -m build
+          python -m twine check dist/*.whl dist/*.tar.gz
+          npm pack --pack-destination dist
+
+      - name: Upload tested npm distribution
+        if: steps.preflight.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-distribution
+          path: dist/*.tgz
+          if-no-files-found: error
+
+      - name: Upload tested Python distributions
+        if: steps.preflight.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  publish_npm:
+    name: Publish npm package
+    needs: prepare
+    if: needs.prepare.outputs.publish_npm == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-distribution
+          path: dist
+      - run: npm publish dist/*.tgz --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish_python:
+    name: Publish Python distributions
+    needs: prepare
+    if: needs.prepare.outputs.publish_pypi == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  release:
+    name: Create tested tag and GitHub release
+    needs:
+      - prepare
+      - publish_npm
+      - publish_python
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.publish_npm.result == 'success' || needs.publish_npm.result == 'skipped') &&
+      (needs.publish_python.result == 'success' || needs.publish_python.result == 'skipped') &&
+      needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-distribution
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
+      - name: Create tested tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if ! git rev-parse --verify "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            git tag "v${VERSION}"
+          fi
+          git push origin "v${VERSION}"
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" \
+              dist/*.whl \
+              dist/*.tar.gz \
+              dist/*.tgz \
+              --clobber
+          else
+            gh release create "v${VERSION}" \
+              dist/*.whl \
+              dist/*.tar.gz \
+              dist/*.tgz \
+              --generate-notes \
+              --title "dash-datagrid ${VERSION}"
+          fi
