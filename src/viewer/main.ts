@@ -1,0 +1,121 @@
+import type { ScreenNode } from "../schema/index.js";
+import { Canvas } from "./canvas.js";
+import { D, byId, defaultFeatures, featureOf, initData, routeOf, state, storyFeature, storyPath } from "./data-model.js";
+import { closeDrawer, openLightbox, showDrawer } from "./drawer.js";
+import { applyHash, hashOf, renderCrumb, renderRail, setupPalette, type NavHandlers } from "./navigation.js";
+import type { Bundle, ScreenTitles, ShotMeta, ViewerData } from "./types.js";
+import { renderInspect } from "./views-inspect.js";
+import { renderMap } from "./views-map.js";
+import { presenterHud, renderLanes } from "./views-present.js";
+import { renderStoryPlayer } from "./story-player.js";
+import { stageKey, useLiveLayer } from "./stage-view.js";
+import { LiveFrame } from "./stage-live-frame.js";
+import { playStory, rememberStep, resumeStep, stageTargetFor } from "./feature-walk.js";
+import { iconHtml } from "./icons.js";
+
+/** Loads `.code2flow/*` from the serving CLI (or an inlined payload in exports) and boots the canvas. */
+export async function boot(loadData: () => Promise<ViewerData>): Promise<void> {
+  const stage = document.getElementById("stage")!;
+  const printMode = new URLSearchParams(location.search).get("render") === "print";
+  let data: ViewerData;
+  try { data = await loadData(); } catch (err) { emptyState(stage, `Could not load the flow data: ${(err as Error).message}`); return; }
+  if (!data.features.length) data.features = defaultFeatures(data.graph.screens.filter((s) => s.kind === "route").map((s) => s.id));
+  initData(data);
+  if (data.stage?.live) { const info = data.stage; useLiveLayer((frame) => new LiveFrame(frame, info)); } // serve only: exports never frame an app
+  document.title = `${data.productName} · Code2Flow`;
+  if (!data.features.length) { emptyState(stage, `No features detected: the graph has ${data.graph.screens.length} screens and no route screens. Run \`code2flow scan\` on the app root (the folder that contains app/ or src/app/).`); return; }
+  const view = document.getElementById("view") as unknown as SVGGElement; const svg = view.ownerSVGElement!; svg.querySelector(":scope > title")?.remove(); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Flow canvas"); /* aria-label names the canvas for assistive tech without a hover tooltip */ const canvas = new Canvas(stage, view);
+  const player = document.getElementById("player")!;
+  let applyingHash = false;
+  const render = (): void => {
+    if (printMode && state.mode === "present") state.step = -1; // Hand-outs show the complete lane, never a dimmed focused step.
+    view.replaceChildren(); document.body.classList.toggle("playing", state.mode === "play"); document.body.classList.toggle("presenting", state.mode === "present"); document.body.classList.toggle("staging", state.level === "feature" && state.mode === "play" && state.playFocus); renderRail(nav); renderCrumb(nav);
+    const phud = document.getElementById("phud")!;
+    phud.hidden = state.mode !== "present";
+    if (state.level === "map") { player.hidden = true; renderMap(view, (id) => nav.openFeature(id, null)); canvas.fit(); return; }
+    if (state.mode === "present") {
+      player.hidden = true;
+      const { story, stepId } = renderLanes(view, { onSelect: select, onSelectBundle: select, onOpenStory: openStoryOf, onStep: (sid, i) => { state.story = sid; state.step = i; go(); }, onToggleTray: () => { state.showTray = !state.showTray; render(); } });
+      if (story && stepId) { presenterHud(phud, story, stepId, (i) => { state.story = story.id; state.step = i; go(); }); canvas.focusOn(stepId); } else canvas.fit();
+      return;
+    }
+    if (state.mode === "play") {
+      const story = playStory(); // an authored story, or the feature walk (ADR-0008 §1)
+      if (story) { state.story = story.id; state.step = Math.min(Math.max(0, state.step), Math.max(0, storyPath(story).length - 1)); rememberStep(story.id, state.step); }
+      renderStoryPlayer(player, story, state.step, state.playFocus, { step: (index) => { state.step = index; go(); }, openFocus: (index) => { state.step = index; state.playFocus = true; go(); }, view: (focus) => { state.playFocus = focus; go(); } });
+      return;
+    }
+    player.hidden = true;
+    renderInspect(view, { onSelect: select, onSelectBundle: select, onOpenStory: openStoryOf, onPortal: (feature, target) => { state.level = "feature"; state.feature = feature; state.story = null; state.mode = "inspect"; const t = byId.get(target); state.selected = t ?? null; go(); if (t) { showDrawer(t, select, openLightbox); canvas.focusOn(t.id); } } });
+    canvas.fit();
+  };
+  const go = (): void => { render(); const h = hashOf(); if (location.hash !== h) { applyingHash = true; history.pushState(null, "", h); applyingHash = false; } };
+  /** Only the URL hash changes when a rendered frame is re-selected: toggle `.selected` in place instead of a full
+   * `render()` (perf audit H5/measurement 21: a full inspect re-render is 54ms at 147 frames, 320ms at 504).
+   * Bundle (edge) selections and any level/mode/feature change still fall through to a full render — both can
+   * change which nodes/edges exist, so a targeted class toggle would not be correct there. */
+  const select = (item: ScreenNode | Bundle): void => {
+    if (state.mode === "present") return;
+    const prev = state.selected; state.selected = item;
+    const fastPath = state.mode === "inspect" && state.level === "feature" && "id" in item && (prev === null || "id" in prev);
+    if (fastPath) {
+      if (prev && "id" in prev) view.querySelector(`[data-node="${CSS.escape(prev.id)}"]`)?.classList.remove("selected");
+      view.querySelector(`[data-node="${CSS.escape(item.id)}"]`)?.classList.add("selected");
+      const h = hashOf(); if (location.hash !== h) { applyingHash = true; history.pushState(null, "", h); applyingHash = false; }
+    } else go();
+    showDrawer(item, select, openLightbox); if ("id" in item && state.mode === "inspect" && state.level === "feature") canvas.focusOn(routeOf(item.id) ?? item.id);
+  };
+  const openStoryOf = (s: ScreenNode): void => { const st = D.stories.find((x) => x.screens.some((id) => routeOf(id) === routeOf(s.id))); if (st && state.story !== st.id) { state.story = st.id; state.selected = s; go(); } };
+  const nav: NavHandlers = {
+    openFeature: (id, story) => { state.level = "feature"; state.feature = id; state.story = story; state.step = 0; state.selected = null; go(); },
+    setStory: (id) => { state.story = id; state.step = id && state.mode === "play" ? resumeStep(id) : 0; state.selected = null; go(); },
+    presentScreen: (s) => { const target = stageTargetFor(s.id); state.level = "feature"; state.feature = target.feature; state.story = target.story; state.mode = "play"; state.playFocus = true; state.step = target.step; state.selected = null; go(); },
+    toMap: () => { state.level = "map"; state.selected = null; go(); },
+    toggleDismiss: (v) => { state.showDismiss = v; render(); },
+    gotoScreen: (s) => { state.level = "feature"; state.feature = featureOf(s.id); state.story = null; state.mode = "inspect"; state.step = 0; state.selected = s; go(); showDrawer(s, select, openLightbox); canvas.focusOn(routeOf(s.id) ?? s.id); },
+  };
+  const palette = setupPalette(nav);
+  const help = document.getElementById("canvas-help")!; const helpPopover = document.getElementById("canvas-help-popover")!;
+  help.innerHTML = iconHtml("question", "Legend");
+  help.addEventListener("click", () => { const open = helpPopover.hidden; helpPopover.hidden = !open; help.setAttribute("aria-expanded", String(open)); if (open) helpPopover.innerHTML = `<div class="help-row"><span class="help-line high"></span>Solid · high</div><div class="help-row"><span class="help-line medium"></span>Grey · medium</div><div class="help-row"><span class="help-line low"></span>Dashed · review</div><div class="help-row">${iconHtml("link-break", "Broken target")}Broken target</div><div class="help-row">${iconHtml("sidebar-simple", "Shell target")}Shell target</div><div class="help-row">${iconHtml("arrow-u-up-left", "Return action")}Return action</div><div class="help-row">${iconHtml("keyboard", "Keyboard shortcuts")}Arrows · + · − · F</div>`; });
+  document.querySelectorAll<HTMLButtonElement>("#modeSeg button").forEach((b) => b.addEventListener("click", () => { state.mode = b.dataset.mode as "inspect" | "present" | "play"; state.playFocus = false; if (state.mode === "play" && state.story) state.step = resumeStep(state.story); if (state.level === "map") { state.level = "feature"; state.feature = state.feature ?? [...D.features].sort((a, c) => a.order - c.order)[0]?.id ?? null; } go(); if (state.mode === "inspect" && state.selected) showDrawer(state.selected, select, openLightbox); }));
+  document.getElementById("lightbox")!.addEventListener("click", (ev) => { if (!(ev.target as Element).closest(".scroller")) document.getElementById("lightbox")!.hidden = true; });
+  stage.addEventListener("click", () => { if (state.mode !== "present" && state.selected) { state.selected = null; closeDrawer(); render(); } });
+  window.addEventListener("popstate", () => { if (!applyingHash && applyHash()) { render(); if (state.selected) showDrawer(state.selected, select, openLightbox); } });
+  window.addEventListener("keydown", (ev) => {
+    const tag = (ev.target as HTMLElement).tagName; if (tag === "INPUT" || tag === "SELECT") return;
+    const fs = D.stories.filter((s) => storyFeature(s) === state.feature); const st = state.mode === "play" ? playStory() : fs.find((s) => s.id === (state.story ?? fs[0]?.id));
+    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "k") { palette.open(); ev.preventDefault(); return; } if (ev.key === "/") { palette.open(); ev.preventDefault(); return; }
+    if (document.body.classList.contains("staging") && !palette.isOpen() && stageKey(ev)) return; // Stage keys: E C N I L F ? Home End, Esc chain
+    if (ev.key === "+" || ev.key === "=") { canvas.zoomCenter(1.2); return; }
+    if (ev.key === "-" || ev.key === "_") { canvas.zoomCenter(1 / 1.2); return; }
+    if (ev.key === "f" || ev.key === "F") { canvas.fit(); return; }
+    if ((ev.key === "]" || ev.key === "[") && state.level === "feature" && fs.length) { const i = Math.max(0, fs.findIndex((s) => s.id === state.story)); const j = ev.key === "]" ? (i + 1) % fs.length : (i - 1 + fs.length) % fs.length; nav.setStory(fs[j].id); return; }
+    if (state.level === "feature" && (state.mode === "present" || state.mode === "play") && st) { if (ev.key === "ArrowRight" || ev.key === "PageDown") { state.story = st.id; state.step = Math.min(storyPath(st).length - 1, state.step + 1); go(); ev.preventDefault(); } if (ev.key === "ArrowLeft" || ev.key === "PageUp") { state.story = st.id; state.step = Math.max(0, state.step - 1); go(); ev.preventDefault(); } }
+    if ((ev.key === "p" || ev.key === "P") && state.level === "feature") { state.mode = "present"; go(); }
+    if (ev.key === "Escape") { document.getElementById("lightbox")!.hidden = true; if (palette.isOpen()) { palette.close(); return; } if (state.mode === "play" && state.playFocus) { state.playFocus = false; go(); } else if (state.mode === "play") { state.mode = "present"; go(); } else if (state.mode === "present") { state.mode = "inspect"; go(); } else if (state.selected) { state.selected = null; closeDrawer(); render(); } else if (state.story) { state.story = null; go(); } else if (state.level === "feature") { state.level = "map"; go(); } }
+    if (ev.shiftKey && ev.key === "!") canvas.fit();
+  });
+  if (location.hash && location.hash !== "#map" && applyHash()) { render(); if (state.selected) showDrawer(state.selected, select, openLightbox); } else render();
+}
+
+/** Replaces the canvas with one legible sentence when there is nothing to draw (never a TypeError deep in a view). */
+function emptyState(stage: HTMLElement, message: string): void { const p = document.createElement("p"); p.className = "empty-state"; p.textContent = message; stage.replaceChildren(p); }
+
+/** Serve mode: data comes from the CLI's JSON endpoints; images from /shots/. */
+export async function loadServed(): Promise<ViewerData> {
+  const j = async <T>(p: string, fallback: T): Promise<T> => { const r = await fetch(p); return r.ok ? ((await r.json()) as T) : fallback; };
+  const graphRes = await fetch("/data/graph.json"); if (!graphRes.ok) throw new Error(`/data/graph.json → ${graphRes.status}; run \`code2flow scan\` and restart \`serve\``);
+  const graph = (await graphRes.json()) as ViewerData["graph"];
+  const [meta, titles, urls, storiesFile, config, info] = await Promise.all([ j<Record<string, ShotMeta>>("/data/shots-meta.json", {}), j<Record<string, ScreenTitles>>("/data/titles.json", {}), j<Record<string, string | null>>("/data/url-map.json", {}),
+    j<{ stories?: ViewerData["stories"]; features?: ViewerData["features"]; locales?: string[]; names?: ViewerData["names"] }>("/data/stories.json", {}), j<{ features?: ViewerData["features"] }>("/data/config.json", {}), j<{ product: string; shotIndex: Record<string, string> }>("/data/info.json", { product: "Code2Flow", shotIndex: {} }),
+  ]);
+  const idx = info.shotIndex;
+  const stage = await j<ViewerData["stage"]>("/data/stage.json", { live: false, url: null, origin: null, reason: "no stage info from serve", frameQuery: {}, localeParam: null });
+  return { graph, meta, titles, urls, stories: storiesFile.stories ?? [], features: (storiesFile.features ?? config.features ?? []).map((f, i) => ({ ...f, order: f.order ?? i })), productName: info.product, // manifest wins over config (ADR-0007)
+    locales: storiesFile.locales ?? [], names: storiesFile.names ?? {}, stage,
+    shotUrl: (id) => (id in idx && meta[id] ? `/shots/${idx[id]}.jpg` : null), dialogUrl: (id) => (id in idx && meta[id]?.dialog ? `/shots/${idx[id]}-dialog.jpg` : null) };
+}
+
+declare global { interface Window { CODE2FLOW_DATA?: ViewerData } }
+if (typeof window !== "undefined" && document.getElementById("stage")) boot(window.CODE2FLOW_DATA ? async () => window.CODE2FLOW_DATA! : loadServed);
