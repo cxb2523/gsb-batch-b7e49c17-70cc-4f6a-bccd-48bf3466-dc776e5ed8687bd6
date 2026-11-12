@@ -1,8 +1,8 @@
-import pandas as pd
 import sqlite3
+
 import streamlit as st
 
-from core import auth, db, state
+from core import auth, db, sqlguard, state
 from core.theme import page_header
 
 page_header("SQL Workspace", "Query your in-memory datasets with real SQL.", "🖥️")
@@ -52,19 +52,28 @@ with c1:
         st.success("Query saved.")
 
     if run:
-        try:
-            con = connection()
-            res = pd.read_sql_query(sql, con)
-            st.session_state["_sql_res"] = res
+        con = connection()
+        result = sqlguard.run_query(con, sql, max_rows=1000)
+        con.close()
+        if result.rejected or result.error:
+            # Never let a rejected/failed statement reach the result area.
+            st.session_state.pop("_sql_res", None)
+            st.session_state.pop("_sql_truncated", None)
+            st.error(result.message)
+        else:
+            st.session_state["_sql_res"] = result.df
+            st.session_state["_sql_truncated"] = result.truncated
+            st.session_state["_sql_msg"] = result.message
             db.log(auth.current_user(), "sql_query", sql[:200])
-        except Exception as e:
-            st.error(f"SQL error: {e}")
 
 res = st.session_state.get("_sql_res")
 if res is not None:
     st.divider()
     st.subheader(f"Result — {len(res):,} rows × {res.shape[1]} columns")
-    st.dataframe(res.head(500), use_container_width=True)
+    if st.session_state.get("_sql_truncated"):
+        st.warning(st.session_state.get("_sql_msg") or
+                   "结果已截断。请在查询末尾加上 LIMIT 以获取精确结果。")
+    st.dataframe(res, use_container_width=True, height=420)
     d1, d2, d3 = st.columns(3)
     d1.download_button("⬇ CSV", res.to_csv(index=False), "query_result.csv", "text/csv",
                        use_container_width=True)
