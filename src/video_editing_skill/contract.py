@@ -89,15 +89,17 @@ STINGER: Dict[str, Any] = {
                      "ffmpeg-skill/audio --replace (that mix onto the composite)"],
     "refused": ["no cut_point (INVALID_REQUEST stinger_no_cut_point) or no cover (INVALID_REQUEST stinger_no_cover)",
                 "cut_point outside cover (INVALID_REQUEST stinger_not_covering)",
-                "cut_point not on a frame of the stinger (INVALID_REQUEST cut_point_not_on_frame)",
-                "a stinger whose frame at cut_point is not opaque in every pixel, measured (INVALID_INPUT stinger_not_covering, details.measured), or "
-                "whose alpha there cannot be read (INVALID_INPUT stinger_cover_unmeasured); before anything runs",
+                "cut point not on a whole frame of the stinger's own frame rate (INVALID_REQUEST cut_point_not_on_frame), or the stinger's frame rate "
+                "does not match the edit's (INVALID_INPUT stinger_fps): both are refused before the join tool is called",
+                "a stinger whose frame at cut_point has a pixel under the threshold (INVALID_INPUT stinger_not_covering, details.measured: frame, min_alpha, "
+                "pixels_below, pixels, share_below, threshold), or whose alpha there cannot be read although the frame was written "
+                "(INVALID_INPUT stinger_cover_unmeasured, details.frame): measured before anything runs and never taken as opaque",
                 "a stinger without an alpha plane (INVALID_INPUT stinger_no_alpha), of another aspect (stinger_aspect) or frame rate (stinger_fps)",
                 "an input shorter than the stinger's lead-in (before the join) or tail (after it) (INVALID_TIME_RANGE)",
                 "a stinger that is an operation, not a source (DEPENDENCY_ERROR kind_mismatch)",
                 "an ffmpeg-skill without look.py --at / --no-timecode or overlay.py --place, or (stinger with sound) broll.py / audio.py --replace (TOOL_ERROR)"],
     "report": "execution.operations[].stinger and plan.steps[].stinger: {source, cut_point, cover, duration, audio, joins: [{cut_at, stinger_start, "
-              "stinger_end}], cover_check, cover_measured: {tool, frame, at, measured, covered, pixels, pixels_below, min_alpha, threshold, "
+              "stinger_end}], cover_check, cover_measured: {tool, frame, at, measured, covered, pixels, pixels_below, share_below, min_alpha, threshold, "
               "opaque_within, frame_size, provenance: OBSERVED} (in a plan: measured false, measured when the request runs)}; the output timeline's "
               "overlay track has a {kind: stinger, cut_at, timeline_range} segment per join",
     "cover_check": "declared and measured: the cover window (the stinger maker's statement) must contain cut_point, and the stinger's own frame at "

@@ -956,12 +956,13 @@ class Executor:
         if cov is None:
             raise EditError("INVALID_INPUT", f"{what}: the alpha of the stinger's frame at its cut point ({cp.text(3)}s, frame {n}) could not be read from "
                             "the frame ffmpeg-skill look.py wrote, so the cover there cannot be shown; it is not taken as opaque",
-                            {"operation": ref, "input": st, "reason": "stinger_cover_unmeasured"})
+                            {"operation": ref, "input": st, "reason": "stinger_cover_unmeasured", "frame": n, "cut_point": cp.to_dict()})
+        share = cov["below"] / cov["pixels"]
         m = {"tool": "ffmpeg-skill/look", "frame": n, "at": cp.to_dict(), "measured": True, "covered": cov["below"] == 0,
-             "pixels": cov["pixels"], "pixels_below": cov["below"], "min_alpha": cov["min_alpha"], "threshold": cov["threshold"],
-             "opaque_within": OPAQUE_WITHIN, "frame_size": [cov["width"], cov["height"]], "provenance": "OBSERVED", "commands": list(run.commands)}
+             "pixels": cov["pixels"], "pixels_below": cov["below"], "share_below": round(share, 6), "min_alpha": cov["min_alpha"],
+             "threshold": cov["threshold"], "opaque_within": OPAQUE_WITHIN, "frame_size": [cov["width"], cov["height"]],
+             "provenance": "OBSERVED", "commands": list(run.commands)}
         if not m["covered"]:
-            share = cov["below"] / cov["pixels"]
             raise EditError("INVALID_INPUT", f"{what}: at its cut point ({cp.text(3)}s, frame {n}) the stinger does not cover the whole picture: "
                             f"{cov['below']} of {cov['pixels']} pixels ({share:.1%}) have an alpha under {cov['threshold']} of 255 (lowest "
                             f"{cov['min_alpha']:g}), so the clips would switch where the picture shows through; give the cut point of a frame the "

@@ -1232,19 +1232,29 @@ RGBA for a ProRes 4444 stinger. That holds for every release that has `overlay.p
   per step), since ffmpeg writes ProRes's opaque 10-bit alpha as 65520 (254.94). Nothing here runs ffmpeg or decodes
   video. The engine writes the frame, and this Skill only reads the image file.
 - **Refused before anything runs.**
-  - A pixel under the threshold is refused as `INVALID_INPUT stinger_not_covering`, with `details.measured` (frame,
-    pixels, pixels_below, min_alpha, ...).
+  - A pixel under the threshold is refused as `INVALID_INPUT stinger_not_covering` (reason "不覆盖" / not covering), with
+    `details.measured` carrying every figure the decision can be judged on: `frame` (the stinger's frame index at the cut
+    point), `min_alpha`, `pixels_below`, `pixels`, `share_below` (the share of pixels under the threshold, `pixels_below /
+    pixels`), and `threshold` itself (plus `at`, `opaque_within`, `frame_size`).
   - A frame whose alpha cannot be read (a PNG without an alpha channel, an interlaced one, no file) is refused as
-    `INVALID_INPUT stinger_cover_unmeasured`. An alpha that was not read is never taken as opaque.
+    `INVALID_INPUT stinger_cover_unmeasured` (reason "未测到" / not measured), with `details.frame` naming the frame that
+    could not be measured. An alpha that was not read is never taken as opaque.
   - A missing `cut_point` or `cover` now has its own reason, `stinger_no_cut_point` / `stinger_no_cover`
     (`INVALID_REQUEST`). It used to be refused only by the generic missing-parameter check.
   - The declared check (cut point inside the cover window, `INVALID_REQUEST stinger_not_covering`) is unchanged.
+  - The cut point has to land on a whole frame of the stinger's own frame rate, and that rate has to match the edit's. A
+    stinger rate that differs from the edit's is `INVALID_INPUT stinger_fps`; a cut point that is not on a frame of the
+    stinger is `INVALID_REQUEST cut_point_not_on_frame`. Both are refused while the sources are checked, before the join
+    tool is called, and the error says which of the two is unsatisfied.
 - **Once per stinger and cut point** in a request. A CONCAT whose result is reused was measured when it was made. A
   reuse candidate that no longer validates is measured before its join.
 - **Report.** `stinger.cover_measured` in the record and the plan: `{tool, frame, at, measured, covered, pixels,
-  pixels_below, min_alpha, threshold, opaque_within, frame_size, provenance: OBSERVED, commands}`. A plan says
+  pixels_below, share_below, min_alpha, threshold, opaque_within, frame_size, provenance: OBSERVED, commands}`. A plan says
   `measured: false` (a plan writes no media). `stinger.cover_check` (a description) now says "declared and measured". The
   PNG is removed in every case.
+- **Reuse.** The measurement rule is part of the stinger CONCAT's idempotency key (`stinger_cover`), so an intermediate
+  made by a version without this rule never matches and is never delivered: it is measured and rendered again. A reuse
+  candidate that fails re-validation is discarded and the operation is re-measured and re-run rather than reused.
 - **Engine.** `look` joins `OPTIONAL_TOOLS` (`engine.tools_used` / `tools_optional`, non-pinned).
   `compiler.ALLOWED_FLAGS["look"] = (at, width, no_timecode)`. A stinger CONCAT on a checkout without `look.py --at /
   --width / --no-timecode` is refused before execution (`TOOL_ERROR`), as one without `overlay.py --place` already was.

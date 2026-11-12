@@ -693,6 +693,7 @@ class StingerTransitionTests(FakeEngineHarness):
         m = out["execution"]["operations"][0]["stinger"]["cover_measured"]
         self.assertEqual((m["frame"], m["measured"], m["covered"], m["pixels"], m["pixels_below"], m["min_alpha"]), (15, True, True, 640 * 360, 0, 255.0))
         self.assertEqual((m["frame_size"], m["threshold"], m["provenance"]), ([640, 360], 253, "OBSERVED"))
+        self.assertEqual(m["share_below"], 0.0)
         self.assertEqual(m["at"]["rational"], "1/2")
         self.assertNotIn(".png", " ".join(self.calls()), "the measured frame is not left behind")
 
@@ -725,13 +726,41 @@ class StingerTransitionTests(FakeEngineHarness):
         m = err["details"]["measured"]
         self.assertEqual((m["frame"], m["covered"], m["pixels_below"], m["pixels"]), (15, False, 320 * 360, 640 * 360))
         self.assertEqual(m["min_alpha"], 0.0)
+        self.assertEqual(m["threshold"], 253, "the threshold itself is part of the judgeable details")
+        self.assertAlmostEqual(m["share_below"], 0.5, "the share of pixels under the threshold is reported")
         self.assertEqual([r["status"] for r in out["execution"]["operations"]], ["skipped"])
         self.assertEqual(self.calls(), [], "nothing ran: no join, no overlay, and the measured frame is removed")
 
     def test_alpha_that_cannot_be_read_is_not_taken_as_opaque(self):
         set_mode(self.root, "no_output")   # look.py exits 0 and writes nothing
         rc, out = self.run_(self.doc(), expect=EXIT_CODES["INVALID_INPUT"])
-        self.assertEqual(out["error"]["details"]["reason"], "stinger_cover_unmeasured", out["error"])
+        err = out["error"]
+        self.assertEqual(err["details"]["reason"], "stinger_cover_unmeasured", out["error"])
+        self.assertEqual(err["details"]["frame"], 15, "the frame that could not be measured is still identified")
+
+    def test_a_frame_written_without_alpha_is_unmeasured_not_opaque(self):
+        """look.py extracts the frame but the PNG has no alpha channel: a distinct unmeasured path, never treated as opaque."""
+        set_mode(self.root, "look_no_alpha")
+        rc, out = self.run_(self.doc(), expect=EXIT_CODES["INVALID_INPUT"])
+        self.assertEqual((out["error"]["code"], out["error"]["details"]["reason"]),
+                         ("INVALID_INPUT", "stinger_cover_unmeasured"), out["error"])
+        self.assertEqual(out["error"]["details"]["frame"], 15)
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "out", "c.mp4")))
+
+    def test_stinger_frame_rate_mismatch_is_refused_before_the_join(self):
+        """The stinger's rate must match the edit's and the cut point must land on a whole frame of it; each failure says which."""
+        with open(os.path.join(self.ws, "in", "stinger_24.mov"), "wb") as fh:
+            fh.write(b"FAKE" + json.dumps({"fps": 24.0, "width": 640, "height": 360, "pix_fmt": "yuva444p10le", "duration": 1.2}).encode())
+        doc = self.doc(stinger="S24")
+        doc["project"]["sources"].append({"id": "S24", "path": "in/stinger_24.mov"})
+        rc, out = self.run_(doc, expect=EXIT_CODES["INVALID_INPUT"])
+        self.assertEqual((out["error"]["code"], out["error"]["details"]["reason"]), ("INVALID_INPUT", "stinger_fps"), out["error"])
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "out", "c.mp4")))
+        self.assertEqual(self.calls(), [], "the rate rule fails before look.py or the join is called")
+        # a matching rate but a cut point between frames is the other rule, with its own reason
+        rc, out = self.run_(self.doc(cut_point=0.51, cover={"start": 0.5, "end": 0.6}), expect=EXIT_CODES["INVALID_REQUEST"])
+        self.assertEqual(out["error"]["details"]["reason"], "cut_point_not_on_frame", out["error"])
+        self.assertEqual(self.calls(), [])
 
     def test_no_stated_cut_point_or_cover_is_refused(self):
         for key, reason in (("cut_point", "stinger_no_cut_point"), ("cover", "stinger_no_cover")):

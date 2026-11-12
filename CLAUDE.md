@@ -254,9 +254,16 @@ exception to ADR-001.
   Opt-in (default stays `frame`; `auto` unchanged). `contract_version` "5.0" -> "6.0", `version` 0.6.0 by hand; `next` -> "0.7.0".
 - (ADR-032, step 13 ticked) — the stinger's frame at its cut point is measured before anything runs: ffmpeg-skill `look --at`
   writes it as a PNG with its alpha, `alpha.alpha_coverage` reads every pixel (stdlib), covered = none under 253/255. Not
-  covered -> `INVALID_INPUT stinger_not_covering` (`details.measured`); unreadable -> `stinger_cover_unmeasured`; missing
-  cut_point / cover -> `stinger_no_cut_point` / `stinger_no_cover`. `look` is an optional engine tool (additive). qc-skill
-  still has no stinger check (handed over). Released as a minor version; `contract_version` stays "6.0".
+  covered -> `INVALID_INPUT stinger_not_covering` ("不覆盖"; `details.measured` gives frame, min_alpha, pixels_below, pixels,
+  share_below, threshold — every figure the refusal is judged on); unreadable -> `stinger_cover_unmeasured` ("未测到",
+  `details.frame` names the frame), never taken as opaque; missing cut_point / cover -> `stinger_no_cut_point` /
+  `stinger_no_cover`. A rate mismatch (`stinger_fps`) or a cut point not on a whole frame of the stinger's rate
+  (`cut_point_not_on_frame`) is refused in `_check_stinger`, before any join/measurement call. The measurement rule is in
+  the stinger CONCAT's idempotency key, so pre-ADR-032 intermediates never match and are re-measured/re-run; a failed
+  reuse candidate is re-measured and re-run, never delivered. `look` is an optional engine tool (additive). qc-skill
+  still has no stinger check (handed over). Released as a minor version; `contract_version` stays "6.0". Offline
+  acceptance: `tests/test_stinger_cover_acceptance.py` (fake engine writing real PNGs — full cover, partial alpha,
+  unreadable alpha, fps mismatch, off-frame cut point, reuse/re-measure; error code, details fields and delivery asserted).
 
 ## Picking the next task
 

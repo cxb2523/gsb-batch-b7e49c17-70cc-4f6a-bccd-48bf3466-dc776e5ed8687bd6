@@ -16,13 +16,15 @@ Modes (written to <root>/MODE):
   no_ffmpeg      doctor reports ffmpeg / ffprobe missing (tools never run)
   no_xfade       doctor reports filter:xfade / filter:acrossfade missing (CONCAT unavailable, the rest fine)
   stale_reuse    probe reports no video stream for a *finished* work-dir intermediate (a reuse candidate), never for a partial
+  look_no_alpha  look.py writes a real RGB PNG (no alpha channel): the frame is extracted but its alpha cannot be read (ADR-032 "未测到")
 Probe facts: "alpha" in a video's name -> pix_fmt yuva444p10le (a stinger, ADR-023); look.py writes a real RGBA PNG of that frame, opaque, or with its
-left half transparent when the name contains "holey" (ADR-032); a video whose name contains "noaudio" has no audio stream; an image whose bytes start with "corrupt" does
+left half transparent when the name contains "holey" (ADR-032), and a real RGB PNG with no alpha channel in MODE look_no_alpha; a video whose name contains "noaudio" has no audio stream; an image whose bytes start with "corrupt" does
 not decode (no frame size); a video whose name contains "silent" is fine but has no audio (alias of noaudio); "hdr" in the
 name -> hdr: true (the fake encodes such sources as hevc, like the engine); "rot90" -> rotation: 90 (stored 640x360, shown
-360x640); "vfr" -> variable_frame_rate_suspected: true; "wide" -> 1280x720 @ 25 fps. Frame targets follow fit.py / join.py
+360x640); "vfr" -> variable_frame_rate_suspected: true; "wide" -> 1280x720 @ 25 fps. A FAKE header may itself state
+pix_fmt / fps / width / height / duration, which the probe uses verbatim. Frame targets follow fit.py / join.py
 exactly (even(): round then up to even), including fit.py's aspect-only canvas rule before / from 0.16.10 by package.json version. --crf / --preset are recorded in the output header (visible through probe as
-"encoding" for the tests).
+"encoding" for the tests). look.py invocations are counted in <root>/LOOK_CALLS.
 
 Layouts (make_fake_skill(layout=...), written to <root>/LAYOUT; ADR-013's capability detection is tested against them):
   None        the original fake: _contract.py answers every call with the doctor document and the tools take any
@@ -99,6 +101,8 @@ SCRIPT = textwrap.dedent('''
             video["bt2020_or_hdr"] = hdr
         if "alpha" in base and not h:   # a stinger with an alpha plane (ProRes 4444)
             video["pix_fmt"] = "yuva444p10le"
+        if h.get("pix_fmt"):   # a fixture that states its own pixel format (e.g. an alpha stinger at another frame rate)
+            video["pix_fmt"] = h["pix_fmt"]
         if h.get("encoding"):
             video["encoding"] = h["encoding"]
         if mode == "bad_probe" and ".partial." in path:
@@ -163,14 +167,27 @@ SCRIPT = textwrap.dedent('''
         emit({"status": "completed", "output": out, "dry_run": True, "commands": ["ffmpeg -i x " + out]}); sys.exit(0)
     if mode != "no_output" and name == "look":   # look.py --at: the frame as a PNG, alpha kept (ADR-032); a "holey" stinger shows through on its left half
         import struct, zlib
+        # count how often look is invoked, so a test can prove a reused CONCAT is not measured again
+        calls_path = os.path.join(ROOT, "LOOK_CALLS")
+        try:
+            with open(calls_path, encoding="utf-8") as fh:
+                look_calls = int(fh.read().strip() or "0")
+        except OSError:
+            look_calls = 0
+        with open(calls_path, "w", encoding="utf-8") as fh:
+            fh.write(str(look_calls + 1))
         src = [a for a in args[:args.index("-o")] if not a.startswith("--")][0]
         w = int(flag("--width", "64")); h = max(1, w * 9 // 16)
         holey = "holey" in os.path.basename(src)
+        no_alpha = mode == "look_no_alpha"   # the frame was extracted, but the PNG carries no alpha channel
         def chunk(kind, body):
             return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
-        row = bytes([0]) + b"".join(bytes([0, 200, 0, 0 if (holey and x < w // 2) else 255]) for x in range(w))
+        if no_alpha:
+            row = bytes([0]) + b"".join(bytes([200, 0, 0]) for x in range(w))   # colour type 2: RGB, nothing to read alpha from
+        else:
+            row = bytes([0]) + b"".join(bytes([0, 200, 0, 0 if (holey and x < w // 2) else 255]) for x in range(w))
         with open(out, "wb") as fh:
-            fh.write(bytes([137, 80, 78, 71, 13, 10, 26, 10]) + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            fh.write(bytes([137, 80, 78, 71, 13, 10, 26, 10]) + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2 if no_alpha else 6, 0, 0, 0))
                      + chunk(b"IDAT", zlib.compress(row * h)) + chunk(b"IEND", b""))
         emit({"status": "completed", "output": out, "dry_run": False, "commands": ["ffmpeg -i " + src + " " + out], "outputs": [out]}); sys.exit(0)
     if mode != "no_output":

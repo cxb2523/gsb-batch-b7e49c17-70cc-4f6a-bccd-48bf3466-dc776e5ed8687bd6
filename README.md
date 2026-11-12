@@ -375,8 +375,14 @@ values are reported under `project`, never as observations.
   cut frame. Every clip is joined at whole frames of the edit's rate: a clip whose length is not (a stream-copied
   segment, as a rule) is first cut frame-accurately to it (ADR-030). Its sound is mixed in. Before anything runs, the
   stinger's own frame at the cut point is measured (ffmpeg-skill `look --at` writes it with its alpha; every pixel must be
-  opaque within 2 of 255): a stinger that does not cover it is refused (`INVALID_INPUT stinger_not_covering`, ADR-032),
-  as is one without a stated `cut_point` / `cover`. Needs ffmpeg-skill 2.x+ (look, overlay `--place`, broll, audio `--replace`).
+  opaque within 2 of 255). The cut point has to land on a whole frame of the stinger's own frame rate, and that rate has
+  to match the edit's; otherwise the request is refused before the join (`INVALID_INPUT stinger_fps`, or
+  `INVALID_REQUEST cut_point_not_on_frame`). The measured gate has two distinct refusals (ADR-032): a cut frame with a
+  pixel under the threshold is `INVALID_INPUT stinger_not_covering` ("不覆盖"), whose `details.measured` gives the frame
+  index, lowest alpha, pixel count under the threshold, total pixels, their share and the threshold itself; a frame whose
+  alpha cannot be read even though it was extracted is `INVALID_INPUT stinger_cover_unmeasured` ("未测到"), never treated
+  as opaque. Both refusals deliver no output. A stinger without a stated `cut_point` / `cover` is refused as well. Needs
+  ffmpeg-skill 2.x+ (look, overlay `--place`, broll, audio `--replace`).
 - **AI-generated sources** (ADR-022): `sources[].ai_generated: {"generator": "…", "licence": "…"}` declares a source
   generated; every operation record and output that contains it carries `marks: ["AI_GENERATED"]` and the declaration
   (`provenance: "DECLARED"`). Join it with `CONCAT` and give `width` / `height` / `fps`: the engine conforms size, rate,

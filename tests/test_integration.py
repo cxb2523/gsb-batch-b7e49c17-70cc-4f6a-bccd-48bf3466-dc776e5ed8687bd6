@@ -1174,6 +1174,8 @@ class StingerTests(unittest.TestCase):
         # the cover at the cut point was measured on the stinger's own frame 15 (ADR-032): no pixel shows through
         m = rec["stinger"]["cover_measured"]
         self.assertEqual((m["frame"], m["measured"], m["covered"], m["pixels"], m["pixels_below"], m["frame_size"]), (15, True, True, 320 * 180, 0, [320, 180]))
+        self.assertEqual(m["share_below"], 0.0)
+        self.assertEqual(m["threshold"], 253)
         self.assertGreaterEqual(m["min_alpha"], 253)
         # the stinger's sound is mixed in under the join: louder there than in the clip alone
         def mean_db(ss):
@@ -1231,6 +1233,9 @@ class StingerTests(unittest.TestCase):
         m = err["details"]["measured"]
         self.assertEqual((m["frame"], m["covered"], m["pixels"]), (14, False, 320 * 180))
         self.assertEqual(m["pixels_below"], 160 * 180, "the right half shows through")
+        self.assertAlmostEqual(m["share_below"], 0.5)
+        self.assertEqual(m["threshold"], 253)
+        self.assertEqual(m["min_alpha"], 0.0)
         self.assertEqual([r["status"] for r in out["execution"]["operations"]], ["skipped"])
         self.assertFalse(os.path.exists(path))
         work = os.path.join(os.path.dirname(os.path.dirname(path)), ".video-editing", "work")
