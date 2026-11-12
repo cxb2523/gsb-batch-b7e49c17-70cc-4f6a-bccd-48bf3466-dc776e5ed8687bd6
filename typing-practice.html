@@ -1,0 +1,541 @@
+<!doctype html><html lang="hi"><head><meta charset="utf-8">
+<meta name="description" content="Fast Typing Game — 10-level brick-style Hindi typing game on the Remington GAIL layout. Type each falling word before it lands. 5 mistakes and it's game over. Set your own target speed.">
+<meta name="theme-color" content="#573AFC">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Devanagari:wght@500;600;700&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Fast Typing Game — Thunder Typing</title>
+<style>
+:root{--p:#573AFC;--p-active:#4527E0;--ink:#182033;--muted:#687087;--line:#e5e9f2;--bg:#f7f9fd;--ok:#16a34a;--bad:#dc2626;--warn:#f59e0b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,sans-serif}
+.top{height:60px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:20}
+.brand{font-weight:800;display:flex;align-items:center;gap:8px}
+.brand i{font-style:normal;color:var(--p)}
+.back{color:var(--muted);text-decoration:none;font-weight:700;font-size:14px;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.back:hover{color:var(--p);border-color:var(--p)}
+button{font:inherit;cursor:pointer}
+.btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 14px;font-weight:700;color:var(--ink)}
+.btn:hover{border-color:var(--p);color:var(--p)}
+.btn.primary{background:var(--p);border-color:var(--p);color:#fff}
+.btn.primary:hover{background:var(--p-active);color:#fff}
+.wrap{max-width:760px;margin:0 auto;padding:20px 16px 60px}
+
+/* Start screen */
+.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:26px}
+.card h1{font-size:24px;margin:0 0 6px}
+.card p.lead{color:var(--muted);margin:0 0 22px;line-height:1.5}
+.field{margin-bottom:18px}
+.field label{display:block;font-size:12px;font-weight:800;letter-spacing:.08em;color:var(--muted);margin-bottom:8px;text-transform:uppercase}
+.field .row{display:flex;align-items:center;gap:12px}
+.field input[type=range]{flex:1}
+.field .val{font-weight:800;color:var(--p);min-width:78px;text-align:right}
+.field input[type=number]{width:100px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;font:inherit}
+.hint{color:var(--muted);font-size:13px;margin-top:6px;line-height:1.5}
+.rules{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:18px 0;font-size:14px;color:var(--muted);line-height:1.7}
+.rules b{color:var(--ink)}
+
+/* HUD */
+.hud{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:14px}
+.hud-left{display:flex;gap:8px;flex-wrap:wrap}
+.chip{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-weight:800;font-size:13px;color:var(--ink)}
+.chip .l{color:var(--muted);font-weight:700;font-size:10.5px;letter-spacing:.06em;display:block;margin-bottom:2px;text-transform:uppercase}
+#lives{letter-spacing:2px}
+#lives .lost{opacity:.25}
+.hud-right{display:flex;gap:8px}
+
+/* Game stage */
+.stage-wrap{background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px;position:relative;overflow:hidden}
+.stage{position:relative;height:340px;border-radius:12px;background:
+  linear-gradient(#fbfbff,#f4f2ff);overflow:hidden;border:1px solid var(--line)}
+.ground{position:absolute;left:0;right:0;bottom:46px;height:2px;background:repeating-linear-gradient(90deg,var(--bad),var(--bad) 10px,transparent 10px,transparent 20px);opacity:.55}
+.ground-label{position:absolute;left:10px;bottom:52px;font-size:10.5px;font-weight:800;letter-spacing:.08em;color:var(--bad);opacity:.7;text-transform:uppercase}
+.floor{position:absolute;left:0;right:0;bottom:0;height:46px;background:linear-gradient(#e9e6ff,#ddd6ff);border-top:1px solid var(--line)}
+.brick{position:absolute;left:50%;transform:translateX(-50%);top:0;min-width:120px;max-width:88%;background:#fff;border:2px solid var(--p);border-radius:12px;padding:12px 16px 9px;box-shadow:0 8px 22px #573afc22;text-align:center}
+.brick.impact{animation:impact .35s ease}
+.brick.success{animation:success .32s ease forwards}
+@keyframes impact{0%{transform:translateX(-50%) scale(1)}40%{transform:translateX(-50%) scale(1.06) rotate(-2deg);border-color:var(--bad)}100%{transform:translateX(-50%) scale(.9);opacity:0}}
+@keyframes success{0%{transform:translateX(-50%) scale(1)}50%{transform:translateX(-50%) scale(1.12);border-color:var(--ok)}100%{transform:translateX(-50%) scale(0.2);opacity:0}}
+.brick-word{font-family:'Noto Sans Devanagari','Nirmala UI',sans-serif;font-size:26px;line-height:1.5;white-space:nowrap}
+.brick-word span.ok{color:var(--ok)}
+.brick-word span.bad{color:var(--bad);background:#fee2e2;border-radius:3px}
+.brick-word span.cur{background:var(--p);color:#fff;border-radius:3px}
+.brick-word span.pending{color:var(--ink)}
+.brick-timer{height:4px;border-radius:3px;background:var(--line);margin-top:8px;overflow:hidden}
+.brick-timer i{display:block;height:100%;background:var(--ok);width:100%;transform-origin:left}
+.stage-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px;text-align:center;padding:20px}
+
+/* Level up toast */
+.toast{position:absolute;left:50%;top:14px;transform:translateX(-50%) translateY(-14px);background:var(--ink);color:#fff;padding:8px 16px;border-radius:20px;font-weight:800;font-size:13px;opacity:0;transition:all .25s;pointer-events:none;z-index:5}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* Keyboard helper */
+.kbwrap{margin-top:14px;text-align:center}
+.kbtoggle{font-size:13px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.kb{display:none;justify-content:center;margin-top:10px}
+.kb.open{display:block}
+.row{display:flex;gap:3px;margin:3px 0;justify-content:center}
+.key{min-width:28px;padding:6px;text-align:center;border:1px solid var(--line);border-radius:5px;font-size:11.5px;background:#fff;font-family:'Noto Sans Devanagari',sans-serif}
+.key b{display:block;color:var(--p);font-family:'Noto Sans Devanagari',sans-serif}
+
+/* Game over */
+.overlay{position:fixed;inset:0;background:rgba(10,14,24,.5);display:none;align-items:center;justify-content:center;z-index:30;padding:16px}
+.overlay.open{display:flex}
+.modal{background:#fff;border-radius:18px;padding:26px;max-width:420px;width:100%;text-align:center}
+.modal h2{margin:0 0 4px}
+.modal p.sub{color:var(--muted);margin:0 0 18px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+.statbox{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px}
+.statbox .v{font-size:20px;font-weight:900}
+.statbox .l{font-size:10.5px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.modal .btnrow{display:flex;gap:8px}
+.modal .btnrow .btn{flex:1}
+.hidden{display:none !important}
+@media(max-width:520px){.brick-word{font-size:21px}.stage{height:300px}}
+</style></head>
+<body>
+<header class="top">
+  <div class="brand">⚡ Fast Typing <i>हिंदी</i></div>
+  <a class="back" href="thunder-typing.html">← Thunder Typing</a>
+</header>
+
+<div class="wrap">
+
+  <!-- START SCREEN -->
+  <section class="card" id="startScreen">
+    <h1>Fast Typing Game</h1>
+    <p class="lead">10 levels. Words fall like bricks — finish typing each one on the Remington GAIL layout before it hits the ground. Miss 5 words and the game is over.</p>
+
+    <div class="field">
+      <label>Your target typing speed (WPM)</label>
+      <div class="row">
+        <input type="range" id="wpmRange" min="10" max="100" step="5" value="25">
+        <span class="val" id="wpmVal">25 WPM</span>
+      </div>
+      <div class="hint">This sets how fast the bricks fall. Higher target = less time per word. By level 10 most words give you only ~3 seconds, no matter what you pick.</div>
+    </div>
+
+    <div class="rules">
+      <div><b>10 levels</b> — words get longer and Shift-key letters get mixed in as you climb.</div>
+      <div><b>5 mistakes</b> — miss (don't finish) 5 words across the whole run and it's game over.</div>
+      <div><b>Backspace works</b> — fix a typo, just finish before the timer runs out.</div>
+    </div>
+
+    <button class="btn primary" id="startBtn" style="width:100%;padding:13px;font-size:15px">▶ Start Game</button>
+  </section>
+
+  <!-- GAME SCREEN -->
+  <section id="gameScreen" class="hidden">
+    <div class="hud">
+      <div class="hud-left">
+        <div class="chip"><span class="l">Level</span><span id="hudLevel">1 / 10</span></div>
+        <div class="chip"><span class="l">Score</span><span id="hudScore">0</span></div>
+        <div class="chip"><span class="l">WPM</span><span id="hudWpm">0</span></div>
+        <div class="chip"><span class="l">Lives</span><span id="lives">❤❤❤❤❤</span></div>
+      </div>
+      <div class="hud-right">
+        <button class="btn" id="pauseBtn">Pause</button>
+        <button class="btn" id="quitBtn">Quit</button>
+      </div>
+    </div>
+
+    <div class="stage-wrap">
+      <div class="stage" id="stage">
+        <div class="toast" id="toast"></div>
+        <div class="ground-label">ground</div>
+        <div class="ground"></div>
+        <div class="floor"></div>
+      </div>
+    </div>
+
+    <div class="kbwrap">
+      <label class="kbtoggle"><input type="checkbox" id="kbOn"> Show Remington GAIL keyboard helper</label>
+      <div class="kb" id="kb"></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- GAME OVER -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h2 id="ovTitle">Game Over</h2>
+    <p class="sub" id="ovSub">5 mistakes — better luck this time.</p>
+    <div class="stats" id="ovStats"></div>
+    <div class="btnrow">
+      <button class="btn" id="ovMenuBtn">Change Settings</button>
+      <button class="btn primary" id="ovRetryBtn">Play Again</button>
+    </div>
+  </div>
+</div>
+
+<script src="words-hi.js"></script>
+<script>
+// ============================================================================
+// Remington GAIL keystroke engine — copied 1:1 from thunder-typing.html so
+// typed output composes exactly the same way (matras, conjuncts, ि/र् etc).
+// ============================================================================
+const KEYMAP={
+  Backquote:{n:'़',s:'द्य'},Digit1:{n:'१',s:'।'},Digit2:{n:'२',s:'/'},Digit3:{n:'३',s:'ः'},Digit4:{n:'४',s:'*'},Digit5:{n:'५',s:'-'},Digit6:{n:'६',s:'‘'},Digit7:{n:'७',s:'’'},Digit8:{n:'८',s:'द्ध'},Digit9:{n:'९',s:'त्र'},Digit0:{n:'०',s:'ऋ'},
+  Minus:{n:'·',s:'्'},Equal:{n:'ृ',s:'ॄ'},
+  KeyQ:{n:'ु',s:'फ'},KeyW:{n:'ू',s:'ॅ'},KeyE:{n:'म',s:'म्'},KeyR:{n:'त',s:'त्'},KeyT:{n:'ज',s:'ज्'},KeyY:{n:'ल',s:'ल्'},KeyU:{n:'न',s:'न्'},KeyI:{n:'प',s:'प्'},KeyO:{n:'व',s:'व्'},KeyP:{n:'च',s:'च्'},BracketLeft:{n:'ख्',s:'क्ष्'},BracketRight:{n:',',s:'द्व'},Backslash:{n:'(',s:')'},
+  KeyA:{n:'ं',s:'ॉ'},KeyS:{n:'े',s:'ै'},KeyD:{n:'क',s:'क्'},KeyF:{n:'ि',s:'थ्'},KeyG:{n:'ह',s:'ळ'},KeyH:{n:'ी',s:'भ्'},KeyJ:{n:'र',s:'श्र'},KeyK:{n:'ा',s:'ज्ञ'},KeyL:{n:'स',s:'स्'},Semicolon:{n:'य',s:'रू'},Quote:{n:'श्',s:'ष्'},
+  KeyZ:{n:'्र',s:'र्'},KeyX:{n:'ग',s:'ग्'},KeyC:{n:'ब',s:'ब्'},KeyV:{n:'अ',s:'ट'},KeyB:{n:'इ',s:'ठ'},KeyN:{n:'द',s:'छ'},KeyM:{n:'उ',s:'ड'},Comma:{n:'ए',s:'ढ'},Period:{n:'ण्',s:'झ'},Slash:{n:'ध्',s:'घ्'},Space:{n:' ',s:' '}
+};
+const MAT=new Set(['ा','ि','ी','ु','ू','ृ','ॄ','ॅ','े','ै','ॉ','ो','ौ','ं','ः','ँ','़']);
+const VIR='्';
+const IV=new Set(['अ','आ','इ','ई','उ','ऊ','ऋ','ए','ऐ','ओ','औ','ऑ','ऍ']);
+const COMPOSE={'अ+ा':'आ','ए+ॅ':'ऍ','ए+े':'ऐ','आ+े':'ओ','आ+ै':'औ','आ+ॅ':'ऑ','उ+ु':'ऊ','इ+र्':'ई'};
+const MATRA_COMPOSE={'ा+े':'ो','ा+ै':'ौ','ा+ॅ':'ॉ','ॅ+ं':'ँ'};
+
+let buffer='',pendingI=false;
+function graphemes(str){
+  if(!str)return[];
+  try{
+    if(typeof Intl!=='undefined'&&Intl.Segmenter){
+      return[...new Intl.Segmenter('hi',{granularity:'grapheme'}).segment(str)].map(s=>s.segment);
+    }
+  }catch(e){}
+  const combining=/[\u0900-\u0903\u0907-\u0938\u093e-\u094f\u0951-\u0957\u0962\u0963\u093c]/;
+  const out=[];let i=0;
+  while(i<str.length){let g=str[i++];while(i<str.length&&combining.test(str[i]))g+=str[i++];out.push(g);}
+  return out;
+}
+function clusterize(word){
+  const g=graphemes(word);let idx=0;const out=[];
+  for(const seg of g){out.push({text:seg,start:idx,end:idx+seg.length});idx+=seg.length}
+  return out;
+}
+function lastClusterInfo(){const gs=graphemes(buffer);return{gs,last:gs[gs.length-1]||'',index:gs.length-1};}
+function applyMatra(ch){
+  const {gs,index,last}=lastClusterInfo();
+  if(index<0){buffer+=ch;return;}
+  const direct=COMPOSE[last+'+'+ch];
+  if(direct){gs[index]=direct;buffer=gs.join('');return;}
+  const marks=[...last];
+  if(marks.length>=2){
+    const base=marks.slice(0,-1).join(''),prev=marks[marks.length-1];
+    const mc=MATRA_COMPOSE[prev+'+'+ch];
+    if(mc){gs[index]=base+mc;buffer=gs.join('');return;}
+  }
+  if(last.endsWith(VIR) && ch!=='ं' && ch!=='ः' && ch!=='ँ' && ch!=='़'){
+    const full=last.slice(0,-VIR.length);
+    if(ch==='ा'){gs[index]=full;buffer=gs.join('');return;}
+    gs[index]=full+ch;buffer=gs.join('');return;
+  }
+  buffer+=ch;
+}
+function appendEngineChar(ch){
+  if(MAT.has(ch)){applyMatra(ch);return;}
+  buffer+=ch;
+}
+function press(code,shift){
+  const entry=KEYMAP[code];
+  if(!entry)return;
+  const ch=entry[shift?'s':'n'];
+  if(ch===undefined)return;
+  if(ch===' ')return; // words never contain a space — ignore the spacebar
+  if(ch==='ि'){
+    if(pendingI){pendingI=false;applyMatra('ि');}
+    else if(lastClusterInfo().last.endsWith(VIR)){applyMatra('ि');}
+    else{pendingI=true;}
+    return;
+  }
+  if(pendingI){
+    if(ch.endsWith(VIR)){buffer+=ch.slice(0,-VIR.length)+'ि';}
+    else if(IV.has(ch)){buffer+=ch+'ि';}
+    else{buffer+=ch+'ि';}
+    pendingI=false;
+    return;
+  }
+  const last=lastClusterInfo().last;
+  if(ch==='ु' && last==='उ'){const{gs,index}=lastClusterInfo();gs[index]='ऊ';buffer=gs.join('');return;}
+  if(ch==='र्'){
+    if(last==='इ'){const{gs,index}=lastClusterInfo();gs[index]='ई';buffer=gs.join('');return;}
+    const {gs,index}=lastClusterInfo();
+    if(index>=0){gs.splice(index,0,ch);buffer=gs.join('');return;}
+    buffer+=ch;return;
+  }
+  appendEngineChar(ch);
+}
+
+// ============================================================================
+// Word bank — built from words-hi.js (WORDS_HI_NORMAL / WORDS_HI_SHIFT),
+// bucketed by grapheme length so each level can draw words of the right size.
+// ============================================================================
+const SEED_NORMAL=["कमल","जल","राजा","सूरज","पुस्तक","देश","भारत","गगन","पवन","नगर","जीवन","सुंदर","एकता","इतिहास","कलम","रंग","सुख","नाम","काम","रात","दिन","पानी","घर","समय","बात","लोग","फल","मन","रूप","पैसा","मित्र"];
+const SEED_SHIFT=["ध्यान","मुख्य","श्याम","सत्य","जन्म","स्थान","ज्ञान","श्रम","क्षमा","द्वार","बुद्धि","धर्म","प्रेम","पुष्प","सप्ताह","अरण्य","श्लोक","डॉक्टर","ऋषि","गणेश"];
+const WORDS_NORMAL=[...new Set([...SEED_NORMAL,...(window.WORDS_HI_NORMAL||[])])];
+const WORDS_SHIFT=[...new Set([...SEED_SHIFT,...(window.WORDS_HI_SHIFT||[])])];
+
+let bucketsNormal=null,bucketsShift=null;
+function buildBuckets(list){
+  const b={};
+  for(const w of list){
+    const len=graphemes(w).length;
+    if(len<2||len>14)continue;
+    (b[len]=b[len]||[]).push(w);
+  }
+  return b;
+}
+function ensureBuckets(){
+  if(!bucketsNormal){bucketsNormal=buildBuckets(WORDS_NORMAL);bucketsShift=buildBuckets(WORDS_SHIFT);}
+}
+
+// Level tuning — length range (graphemes), how much of the pool should come
+// from Shift-key words, base fall time (ms) at the reference 25 WPM target,
+// and how many correct words are needed to advance to the next level.
+const LEVELS=[
+  {len:[2,3], shift:0.00, base:7000},
+  {len:[3,4], shift:0.00, base:6400},
+  {len:[3,5], shift:0.05, base:5800},
+  {len:[4,5], shift:0.15, base:5300},
+  {len:[4,6], shift:0.25, base:4800},
+  {len:[5,6], shift:0.40, base:4400},
+  {len:[5,7], shift:0.55, base:4000},
+  {len:[6,8], shift:0.70, base:3600},
+  {len:[6,9], shift:0.85, base:3300},
+  {len:[7,10],shift:1.00, base:3000},
+];
+const WORDS_PER_LEVEL=6;
+const MAX_MISTAKES=5;
+const REF_WPM=25;
+
+function pickWord(level){
+  ensureBuckets();
+  const cfg=LEVELS[level-1];
+  const useShift=Math.random()<cfg.shift;
+  const buckets=useShift?bucketsShift:bucketsNormal;
+  let candidates=[];
+  for(let L=cfg.len[0];L<=cfg.len[1];L++)if(buckets[L])candidates=candidates.concat(buckets[L]);
+  if(!candidates.length){
+    for(const L in buckets)candidates=candidates.concat(buckets[L]);
+  }
+  if(!candidates.length)return'नमस्ते';
+  return candidates[Math.floor(Math.random()*candidates.length)];
+}
+function fallTimeFor(word,level,targetWpm){
+  const len=graphemes(word).length;
+  let ms=LEVELS[level-1].base*(REF_WPM/targetWpm)*(len/5);
+  return Math.max(2200,Math.min(16000,Math.round(ms)));
+}
+
+// ============================================================================
+// Game state & loop
+// ============================================================================
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+const startScreen=document.getElementById('startScreen'),gameScreen=document.getElementById('gameScreen');
+const wpmRange=document.getElementById('wpmRange'),wpmVal=document.getElementById('wpmVal'),startBtn=document.getElementById('startBtn');
+const stage=document.getElementById('stage'),toast=document.getElementById('toast');
+const hudLevel=document.getElementById('hudLevel'),hudScore=document.getElementById('hudScore'),hudWpm=document.getElementById('hudWpm'),livesEl=document.getElementById('lives');
+const pauseBtn=document.getElementById('pauseBtn'),quitBtn=document.getElementById('quitBtn');
+const overlay=document.getElementById('overlay'),ovTitle=document.getElementById('ovTitle'),ovSub=document.getElementById('ovSub'),ovStats=document.getElementById('ovStats');
+const ovMenuBtn=document.getElementById('ovMenuBtn'),ovRetryBtn=document.getElementById('ovRetryBtn');
+const kbOn=document.getElementById('kbOn'),kb=document.getElementById('kb');
+
+wpmRange.oninput=()=>{wpmVal.textContent=wpmRange.value+' WPM'};
+
+let targetWpm=25,level=1,score=0,mistakes=0,correctInLevel=0;
+let currentWord='',fallMs=0,wordStartTime=0,trackHeight=0;
+let running=false,paused=false,pauseStart=0;
+let rafId=null,tickInterval=null;
+let gameStartTime=0,totalCorrectChars=0,totalWordsDone=0;
+let brickEl=null,brickWordEl=null,brickTimerEl=null;
+
+function fmtMinSec(ms){const s=Math.max(0,Math.floor(ms/1000));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+
+function updateHud(){
+  hudLevel.textContent=level+' / 10';
+  hudScore.textContent=score;
+  livesEl.innerHTML='';
+  for(let i=0;i<MAX_MISTAKES;i++){
+    livesEl.innerHTML+='<span'+(i<mistakes?' class="lost"':'')+'>❤</span>';
+  }
+}
+function liveWpm(){
+  const elapsed=performance.now()-gameStartTime;
+  const mins=elapsed/60000;
+  if(mins<=0.001)return 0;
+  return Math.round((totalCorrectChars/5)/mins);
+}
+function showToast(msg){
+  toast.textContent=msg;
+  toast.classList.add('show');
+  setTimeout(()=>toast.classList.remove('show'),1200);
+}
+
+function clearStage(){
+  stage.querySelectorAll('.brick').forEach(b=>b.remove());
+}
+function renderBrickWord(){
+  const clusters=clusterize(currentWord);
+  let out='';
+  for(const c of clusters){
+    let cls;
+    if(c.end<=buffer.length)cls=buffer.slice(c.start,c.end)===c.text?'ok':'bad';
+    else if(c.start<=buffer.length)cls='cur';
+    else cls='pending';
+    out+='<span class="'+cls+'">'+esc(c.text)+'</span>';
+  }
+  if(buffer.length>currentWord.length){
+    clusterize(buffer.slice(currentWord.length)).forEach(c=>{out+='<span class="bad">'+esc(c.text)+'</span>'});
+  }
+  brickWordEl.innerHTML=out;
+}
+function spawnWord(){
+  clearStage();
+  currentWord=pickWord(level);
+  buffer='';pendingI=false;
+  fallMs=fallTimeFor(currentWord,level,targetWpm);
+  wordStartTime=performance.now();
+
+  brickEl=document.createElement('div');
+  brickEl.className='brick';
+  brickEl.innerHTML='<div class="brick-word"></div><div class="brick-timer"><i></i></div>';
+  stage.appendChild(brickEl); // appended last so it paints above ground/floor; toast has its own z-index
+  brickWordEl=brickEl.querySelector('.brick-word');
+  brickTimerEl=brickEl.querySelector('.brick-timer i');
+  renderBrickWord();
+
+  const stageH=stage.clientHeight,brickH=brickEl.offsetHeight;
+  trackHeight=Math.max(10,stageH-brickH-52);
+  brickEl.style.top='0px';
+}
+function handleMiss(){
+  mistakes++;
+  updateHud();
+  if(brickEl)brickEl.classList.add('impact');
+  paused=true; // lock the loop while the impact animation plays / before next word spawns
+  if(mistakes>=MAX_MISTAKES){
+    setTimeout(()=>endGame(),300);
+    return;
+  }
+  setTimeout(()=>{
+    paused=false;
+    if(running)spawnWord();
+  },320);
+}
+function handleSuccess(){
+  const len=graphemes(currentWord).length;
+  score+=len*10*level;
+  totalCorrectChars+=len;
+  totalWordsDone++;
+  correctInLevel++;
+  updateHud();
+  if(brickEl)brickEl.classList.add('success');
+  paused=true;
+  setTimeout(()=>{
+    if(correctInLevel>=WORDS_PER_LEVEL&&level<10){
+      level++;correctInLevel=0;
+      showToast('⚡ Level '+level+'!');
+    }
+    paused=false;
+    if(running)spawnWord();
+  },260);
+}
+function loop(now){
+  if(!running){return;}
+  if(!paused&&brickEl){
+    const elapsed=now-wordStartTime;
+    const progress=Math.min(1,elapsed/fallMs);
+    brickEl.style.top=(progress*trackHeight)+'px';
+    if(brickTimerEl){
+      const left=1-progress;
+      brickTimerEl.style.width=(left*100)+'%';
+      brickTimerEl.style.background=left<0.25?'var(--bad)':left<0.5?'var(--warn)':'var(--ok)';
+    }
+    if(progress>=1){handleMiss();}
+  }
+  rafId=requestAnimationFrame(loop);
+}
+
+function startGame(){
+  targetWpm=Math.max(10,Math.min(150,+wpmRange.value||25));
+  level=1;score=0;mistakes=0;correctInLevel=0;totalCorrectChars=0;totalWordsDone=0;
+  buffer='';pendingI=false;paused=false;running=true;
+  gameStartTime=performance.now();
+  updateHud();
+  startScreen.classList.add('hidden');
+  gameScreen.classList.remove('hidden');
+  spawnWord();
+  cancelAnimationFrame(rafId);
+  rafId=requestAnimationFrame(loop);
+  clearInterval(tickInterval);
+  tickInterval=setInterval(()=>{hudWpm.textContent=liveWpm();},500);
+  pauseBtn.textContent='Pause';
+  document.addEventListener('keydown',onKeydown);
+}
+function endGame(){
+  running=false;
+  cancelAnimationFrame(rafId);
+  clearInterval(tickInterval);
+  document.removeEventListener('keydown',onKeydown);
+  const elapsed=performance.now()-gameStartTime;
+  const attempts=totalWordsDone+mistakes;
+  const acc=attempts?Math.round(totalWordsDone/attempts*100):100;
+  ovTitle.textContent='Game Over';
+  ovSub.textContent='5 mistakes — you reached level '+level+'.';
+  ovStats.innerHTML=[
+    ['⚡ '+score,'SCORE'],
+    ['🏁 '+level+'/10','LEVEL REACHED'],
+    ['⌨ '+liveWpm(),'AVG WPM'],
+    ['✅ '+acc+'%','ACCURACY'],
+    ['🧱 '+totalWordsDone,'WORDS TYPED'],
+    ['⏱ '+fmtMinSec(elapsed),'TIME'],
+  ].map(s=>'<div class="statbox"><div class="v">'+s[0]+'</div><div class="l">'+s[1]+'</div></div>').join('');
+  overlay.classList.add('open');
+}
+function quitToMenu(){
+  running=false;paused=false;
+  cancelAnimationFrame(rafId);
+  clearInterval(tickInterval);
+  document.removeEventListener('keydown',onKeydown);
+  clearStage();
+  overlay.classList.remove('open');
+  gameScreen.classList.add('hidden');
+  startScreen.classList.remove('hidden');
+}
+
+function onKeydown(e){
+  if(!running||paused)return;
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  if(e.code==='Backspace'){
+    e.preventDefault();
+    if(pendingI){pendingI=false;}
+    else{const gs=graphemes(buffer);gs.pop();buffer=gs.join('');}
+  }else if(e.code==='Space'){
+    e.preventDefault();return;
+  }else if(KEYMAP[e.code]){
+    e.preventDefault();press(e.code,e.shiftKey);
+  }else{return;}
+  renderBrickWord();
+  if(buffer===currentWord)handleSuccess();
+}
+
+pauseBtn.onclick=()=>{
+  if(!running)return;
+  if(paused){
+    const delta=performance.now()-pauseStart;
+    wordStartTime+=delta;gameStartTime+=delta;
+    paused=false;pauseBtn.textContent='Pause';
+  }else{
+    pauseStart=performance.now();
+    paused=true;pauseBtn.textContent='Resume';
+  }
+};
+quitBtn.onclick=quitToMenu;
+ovMenuBtn.onclick=()=>{overlay.classList.remove('open');quitToMenu();};
+ovRetryBtn.onclick=()=>{overlay.classList.remove('open');startGame();};
+startBtn.onclick=startGame;
+
+// On-screen keyboard helper (static reference — no live highlighting).
+const KB_ROWS=[['Backquote','Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9','Digit0','Minus','Equal'],
+['KeyQ','KeyW','KeyE','KeyR','KeyT','KeyY','KeyU','KeyI','KeyO','KeyP','BracketLeft','BracketRight','Backslash'],
+['KeyA','KeyS','KeyD','KeyF','KeyG','KeyH','KeyJ','KeyK','KeyL','Semicolon','Quote'],
+['KeyZ','KeyX','KeyC','KeyV','KeyB','KeyN','KeyM','Comma','Period','Slash']];
+kb.innerHTML=KB_ROWS.map(r=>'<div class="row">'+r.map(c=>'<span class="key">'+KEYMAP[c].n+'<b>'+KEYMAP[c].s+'</b></span>').join('')+'</div>').join('');
+kbOn.onchange=e=>kb.classList.toggle('open',e.target.checked);
+</script>
+</body></html>

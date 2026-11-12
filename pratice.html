@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Free Typing Practice — English &amp; Hindi Remington GAIL | WPM Test</title>
+<meta name="description" content="Free unlimited typing practice with live WPM. Switch between English and Hindi Remington GAIL (Mangal Unicode) — the layout used in CPCT, SSC and court typing exams.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta property="og:title" content="Free Typing Practice — English &amp; Hindi Remington GAIL">
+<meta property="og:description" content="Unlimited free typing space with live WPM tracking. Full English ↔ Hindi Remington GAIL switch.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Noto+Sans+Devanagari:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --lightest:#F5F5FF; --light:#B7D8FB; --mid:#AECBF0; --primary:#6699FB; --primary-active:#4C82E8; --primary-focus:#89B4FF;
+    --ink:#1d1d1f; --body:#3c3c3c; --body-strong:#1a1a1a; --muted:#6b6b6b; --muted-soft:#9a9a9a;
+    --hairline:#e6e6e6; --hairline-strong:#cccccc;
+    --canvas:#ffffff; --canvas-parchment:#f5f5f7; --surface-soft:#f7f7f7; --surface-card:#fafafa;
+    --on-primary:#ffffff; --on-dark:#ffffff; --on-dark-soft:#bbbbbb;
+    --success:#22c55e; --warning:#f59e0b; --error:#dc2626;
+    --radius-sm:8px; --radius-lg:18px; --radius-pill:9999px;
+    --sp-xxs:4px; --sp-xs:8px; --sp-sm:12px; --sp-md:16px; --sp-lg:24px; --sp-xl:32px; --sp-xxl:48px;
+  }
+  [data-theme="dark"]{
+    --ink:#f5f5f7; --body:#d1d1d6; --body-strong:#ffffff; --muted:#8e8e93; --muted-soft:#636366;
+    --hairline:#2c2c2e; --hairline-strong:#3a3a3c;
+    --canvas:#0e0e10; --canvas-parchment:#161618; --surface-soft:#1a1a1c; --surface-card:#1c1c1e;
+    --primary:#89B4FF; --primary-active:#6699FB; --primary-focus:#a9c8ff;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--canvas); color:var(--body); font-family:'Inter',system-ui,-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased; transition:background .25s ease,color .25s ease;
+  }
+  .deva{ font-family:'Noto Sans Devanagari','Inter',sans-serif; }
+
+  /* ---------- loader ---------- */
+  #loader{
+    position:fixed; inset:0; z-index:9999; background:var(--canvas);
+    display:flex; align-items:center; justify-content:center; transition:opacity .4s ease;
+  }
+  #loader svg circle{
+    fill:none; stroke:var(--primary); stroke-width:3; stroke-linecap:round;
+    stroke-dasharray:120; stroke-dashoffset:60; transform-origin:center;
+    animation:spin 1.1s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  #loader.hidden{ opacity:0; pointer-events:none; }
+
+  /* ---------- topbar ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:50; height:64px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 var(--sp-lg); background:var(--canvas); border-bottom:1px solid var(--hairline);
+  }
+  .brand{ display:flex; align-items:center; gap:var(--sp-xs); font-weight:700; font-size:17px; color:var(--ink); }
+  .brand-logo{ width:26px; height:26px; border-radius:6px; }
+  .brand-logo[src=""],.brand-logo:not([src]){ display:none; }
+  .top-controls{ display:flex; align-items:center; gap:var(--sp-sm); }
+
+  .lang-toggle{ display:flex; background:var(--surface-soft); border:1px solid var(--hairline); border-radius:var(--radius-pill); padding:3px; }
+  .lang-btn{
+    border:none; background:transparent; color:var(--muted); font:600 13px/1 'Inter',sans-serif; letter-spacing:.2px;
+    padding:8px 16px; border-radius:var(--radius-pill); cursor:pointer; transition:.18s ease;
+  }
+  .lang-btn.active{ background:var(--primary); color:var(--on-primary); }
+  .lang-btn:not(.active):hover{ color:var(--ink); }
+
+  .icon-btn{
+    width:40px; height:40px; border-radius:var(--radius-pill); border:1px solid var(--hairline-strong);
+    background:var(--canvas); color:var(--ink); display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+  .icon-btn:active{ transform:scale(.93); }
+  .icon-btn svg{ width:18px; height:18px; }
+
+  /* ---------- main ---------- */
+  main{ max-width:920px; margin:0 auto; padding:var(--sp-xl) var(--sp-lg) var(--sp-xxl); }
+
+  .stats-bar{
+    display:grid; grid-template-columns:repeat(5,1fr); gap:var(--sp-sm); margin-bottom:var(--sp-lg);
+  }
+  .stat{
+    background:var(--surface-card); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+    padding:var(--sp-md) var(--sp-sm); text-align:center;
+  }
+  .stat-value{ display:block; font:700 28px/1.1 'Inter',sans-serif; color:var(--ink); letter-spacing:-.3px; }
+  .stat-label{ display:block; margin-top:4px; font:700 11px/1.3 'Inter',sans-serif; letter-spacing:1.2px; text-transform:uppercase; color:var(--muted); }
+
+  .type-wrap{ position:relative; }
+  #typeArea{
+    width:100%; min-height:260px; resize:none; overflow:hidden;
+    background:var(--surface-card); color:var(--body-strong); border:1px solid var(--hairline-strong);
+    border-radius:var(--radius-lg); padding:var(--sp-lg); font-size:19px; line-height:1.7;
+    font-family:'Noto Sans Devanagari','Inter',sans-serif; outline:none; transition:border-color .15s ease;
+  }
+  #typeArea:focus{ border-color:var(--primary); box-shadow:0 0 0 3px rgba(102,153,251,.18); }
+  .hint{ margin-top:var(--sp-xs); font-size:13px; color:var(--muted-soft); }
+
+  .actions{ display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-sm); margin-top:var(--sp-md); }
+  .btn{
+    font:600 15px/1 'Inter',sans-serif; border-radius:var(--radius-pill); padding:0 22px; height:44px;
+    cursor:pointer; display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent;
+  }
+  .btn:active{ transform:scale(.95); }
+  .btn-primary{ background:var(--primary); color:var(--on-primary); }
+  .btn-primary:active{ background:var(--primary-active); }
+  .btn-secondary{ background:var(--canvas); color:var(--ink); border-color:var(--hairline-strong); }
+  .btn-text{
+    background:transparent; border:none; color:var(--ink); text-transform:uppercase; font:700 13px/1 'Inter',sans-serif;
+    letter-spacing:1.2px; padding:0 4px; height:auto; margin-left:auto;
+  }
+  .btn-text::after{ content:'›'; margin-left:4px; }
+
+  .keymap{
+    margin-top:var(--sp-lg); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+    background:var(--surface-card); padding:var(--sp-lg); display:none;
+  }
+  .keymap.open{ display:block; }
+  .keymap h3{ margin:0 0 var(--sp-xs); font:700 16px/1.3 'Inter',sans-serif; color:var(--ink); }
+  .keymap p{ margin:0 0 var(--sp-md); font-size:13px; color:var(--muted); }
+  .kb-row{ display:flex; gap:6px; margin-bottom:6px; justify-content:center; flex-wrap:wrap; }
+  .kb-key{
+    flex:1 1 0; min-width:44px; max-width:64px; aspect-ratio:1/1; border:1px solid var(--hairline-strong);
+    border-radius:var(--radius-sm); background:var(--canvas); display:flex; flex-direction:column;
+    align-items:center; justify-content:center; font-size:11px; padding:2px;
+  }
+  .kb-key .top{ color:var(--primary); font-size:15px; line-height:1.1; font-weight:600; }
+  .kb-key .bottom{ color:var(--ink); font-size:15px; line-height:1.1; font-weight:600; }
+  .kb-legend{ display:flex; gap:var(--sp-md); margin-top:var(--sp-sm); font-size:12px; color:var(--muted); }
+  .kb-legend span::before{ content:'●'; margin-right:5px; }
+  .kb-legend .l1::before{ color:var(--primary); }
+  .kb-legend .l2::before{ color:var(--ink); }
+
+  footer{ background:var(--canvas-parchment); border-top:1px solid var(--hairline); padding:var(--sp-xl) var(--sp-lg); }
+  .footer-cols{ max-width:920px; margin:0 auto; display:grid; grid-template-columns:repeat(3,1fr); gap:var(--sp-lg); }
+  .footer-cols h4{ font:700 13px/1.3 'Inter',sans-serif; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin:0 0 var(--sp-sm); }
+  .footer-cols a{ display:block; color:var(--body); text-decoration:none; font-size:14px; margin-bottom:8px; }
+  .footer-cols a:hover{ color:var(--primary); }
+  .footer-bottom{ max-width:920px; margin:var(--sp-lg) auto 0; padding-top:var(--sp-md); border-top:1px solid var(--hairline); font-size:12px; color:var(--muted); text-align:center; }
+
+  @media (max-width:640px){
+    .stats-bar{ grid-template-columns:repeat(3,1fr); }
+    .stat-value{ font-size:20px; }
+    .footer-cols{ grid-template-columns:1fr; }
+    .lang-btn{ padding:8px 10px; font-size:12px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loader" aria-hidden="true">
+  <svg viewBox="0 0 44 44" width="44" height="44"><circle cx="22" cy="22" r="19"></circle></svg>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-logo" src="/favicon.svg" alt="" onerror="this.remove()">
+    <span>Typing Practice</span>
+  </div>
+  <div class="top-controls">
+    <div class="lang-toggle" role="tablist" aria-label="Typing language">
+      <button class="lang-btn active" data-lang="en" role="tab" aria-selected="true">English</button>
+      <button class="lang-btn" data-lang="hi" role="tab" aria-selected="false">Hindi · Remington GAIL</button>
+    </div>
+    <button class="icon-btn" id="themeToggle" aria-label="Toggle dark mode">
+      <svg id="iconSun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
+      <svg id="iconMoon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"></path></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+  <section class="stats-bar" aria-live="polite">
+    <div class="stat"><span class="stat-value" id="statWpm">0</span><span class="stat-label">WPM</span></div>
+    <div class="stat"><span class="stat-value" id="statCpm">0</span><span class="stat-label">CPM</span></div>
+    <div class="stat"><span class="stat-value" id="statWords">0</span><span class="stat-label">Words</span></div>
+    <div class="stat"><span class="stat-value" id="statChars">0</span><span class="stat-label">Characters</span></div>
+    <div class="stat"><span class="stat-value" id="statTime">00:00</span><span class="stat-label">Time</span></div>
+  </section>
+
+  <div class="type-wrap">
+    <textarea id="typeArea" spellcheck="false" autocomplete="off" autocapitalize="off"
+      placeholder="Start typing here — English keyboard, no limit on length. Switch to Hindi · Remington GAIL above to type in Devanagari using the same keys."></textarea>
+  </div>
+  <p class="hint" id="modeHint">English mode — keys type normally.</p>
+
+  <div class="actions">
+    <button class="btn btn-secondary" id="pauseBtn">Pause</button>
+    <button class="btn btn-secondary" id="resetBtn">Reset</button>
+    <button class="btn btn-secondary" id="copyBtn">Copy text</button>
+    <button class="btn-text" id="mapToggleBtn">Show keyboard map</button>
+  </div>
+
+  <div class="keymap" id="keymap">
+    <h3>Remington GAIL key map</h3>
+    <p>Each key shown with its Shift output (top, indigo) and normal output (bottom). Layout follows the official Remington-GAIL Unicode (Mangal) keyboard.</p>
+    <div id="kbGrid"></div>
+    <div class="kb-legend"><span class="l1">Shift + key</span><span class="l2">key alone</span></div>
+  </div>
+</main>
+
+<footer>
+  <div class="footer-cols">
+    <div>
+      <h4>Thunder</h4>
+      <a href="https://commercesehoga.github.io/">ThunderStudy</a>
+      <a href="https://commercesehoga.github.io/dashboard">CBT Mock Platform</a>
+      <a href="https://thunderstudy.github.io">Free Study Material</a>
+      <a href="https://commercesehoga.github.io/help">Help / Donate</a>
+    </div>
+    <div>
+      <h4>wondermayank</h4>
+      <a href="https://wondermayank.indevs.in">Portfolio</a>
+      <a href="https://wondermayank.github.io/">wondermayank.github.io</a>
+      <a href="https://wondermayank.github.io/mail">Mail</a>
+      <a href="https://wondermayank.github.io/contact">Contact</a>
+    </div>
+    <div>
+      <h4>Legal</h4>
+      <a href="https://wondermayank.github.io/terms">Terms</a>
+      <a href="https://wondermayank.github.io/privacy">Privacy</a>
+      <a href="https://wondermayank.github.io/disclaimer">Disclaimer</a>
+    </div>
+  </div>
+  <div class="footer-bottom">© 2025 Thunder · by wondermayank</div>
+</footer>
+
+<script>
+(function(){
+  'use strict';
+
+  /* ============================================================
+     REMINGTON GAIL ENGINE
+     Faithful port of the official SIL/Keyman "Remington GAIL"
+     keyboard (remington_gail.kmn). Every key below is keyed by
+     the literal character a standard US-QWERTY key + Shift
+     produces — exactly what the source keyboard file matches on.
+  ============================================================ */
+
+  // Base single-key output (no special preceding context needed)
+  const BASE = {
+    // digits pass through unchanged
+    '0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',
+    // lowercase — vowels & consonants
+    'a':'ं','b':'इ','c':'ब','d':'क','e':'म','f':'ि','g':'ह','h':'ी','i':'प','j':'र',
+    'k':'ा','l':'स','m':'उ','n':'द','o':'व','p':'च','q':'ु','r':'त','s':'े','t':'ज',
+    'u':'न','v':'अ','w':'ू','x':'ग','y':'ल','z':'्र',
+    // uppercase — half-consonants, extra consonants & matras
+    'A':'ा','B':'ठ','C':'ब्','D':'क्','E':'म्','F':'थ्','G':'ळ','H':'भ्','I':'प्','J':'श्र',
+    'K':'ज्ञ','L':'स्','M':'ड','N':'छ','O':'व्','P':'च्','Q':'फ','R':'त्','S':'ै','T':'ज्',
+    'U':'न्','V':'ट','W':'ॅ','X':'ग्','Y':'ल्','Z':'र्',
+    // punctuation / symbol keys
+    '`':'़', '~':'द्य',
+    '-':';', '_':'.',
+    '=':'ृ', '+':'्',
+    '[':'ख्', '{':'क्ष्',
+    ']':',', '}':'द्व',
+    '\\':'(', '|':')',
+    ';':'य', ':':'रू',
+    "'":'श्', '"':'ष्',
+    ',':'ए', '<':'ढ',
+    '.':'ण्', '>':'झ',
+    '/':'ध्', '?':'घ्',
+    '!':'।', '@':'/', '#':'ः', '$':'*', '%':'-',
+    '^':'‘', '&':'’', '*':'द्ध', '(':'त्र', ')':'ऋ'
+  };
+
+  // Context rules: previous output char + newly pressed char -> replace
+  // last `remove` chars of the buffer with `insert`.
+  const CONTEXT = {
+    'अ|k':{remove:1,insert:'आ'},        'अ|A':{remove:1,insert:'आ'},
+    'आ|W':{remove:1,insert:'ऑ'},        'आ|s':{remove:1,insert:'ओ'},        'आ|S':{remove:1,insert:'औ'},
+    'इ|Z':{remove:1,insert:'ई'},
+    'उ|q':{remove:1,insert:'ऊ'},
+    'ए|W':{remove:1,insert:'ऍ'},        'ए|s':{remove:1,insert:'ऐ'},
+    'ा|W':{remove:1,insert:'ॉ'},        'ा|s':{remove:1,insert:'ो'},        'ा|S':{remove:1,insert:'ौ'},
+    'ॅ|a':{remove:1,insert:'ँ'},        'ॅ|A':{remove:1,insert:'ँ'},
+    '।|!':{remove:1,insert:'॥'},
+    'ृ|=':{remove:1,insert:'ॄ'},
+    'ॉ|a':{remove:1,insert:'ाँ'},
+    'ं|W':{remove:1,insert:'ँ'},
+    '‘|^':{remove:1,insert:'“'},
+    '’|&':{remove:1,insert:'”'}
+  };
+
+  // Nukta family: consonant + backtick -> nukta consonant
+  const NUKTA = {'न':'ऩ','र':'ऱ','ळ':'ऴ','क':'क़','ख':'ख़','ग':'ग़','ज':'ज़','ड':'ड़','ढ':'ढ़','फ':'फ़','य':'य़'};
+
+  // Chars after which Shift+3 means literal ':' instead of visarga 'ः'
+  const COLON_CONTEXT = new Set("1234567890;,()/*-‘’“”÷×!* ".split(''));
+
+  function transliterate(prevChar, key){
+    if (key === '`' && NUKTA[prevChar]) return {remove:1, insert:NUKTA[prevChar]};
+    if (key === '#' && COLON_CONTEXT.has(prevChar)) return {remove:0, insert:':'};
+    const hit = CONTEXT[prevChar + '|' + key];
+    if (hit) return hit;
+    if (BASE.hasOwnProperty(key)) return {remove:0, insert:BASE[key]};
+    return null; // let the character pass through unchanged
+  }
+
+  /* ============================================================
+     UI WIRING
+  ============================================================ */
+
+  const typeArea = document.getElementById('typeArea');
+  const modeHint = document.getElementById('modeHint');
+  let currentLang = 'en';
+
+  document.querySelectorAll('.lang-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.lang-btn').forEach(b=>{ b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
+      btn.classList.add('active'); btn.setAttribute('aria-selected','true');
+      currentLang = btn.dataset.lang;
+      typeArea.lang = currentLang === 'hi' ? 'hi' : 'en';
+      modeHint.textContent = currentLang === 'hi'
+        ? 'Hindi · Remington GAIL mode — same keys, Devanagari (Mangal) output.'
+        : 'English mode — keys type normally.';
+      typeArea.focus();
+    });
+  });
+
+  typeArea.addEventListener('keydown', function(e){
+    if (e.key === 'Tab'){ e.preventDefault(); return; } // never lose focus mid-test
+    startTimerIfNeeded();
+
+    if (currentLang !== 'hi') return; // English: let the browser handle it natively
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key.length !== 1) return; // Backspace, Enter, arrows, etc. pass through natively
+
+    e.preventDefault();
+    const el = typeArea;
+    let start = el.selectionStart, end = el.selectionEnd;
+    let value = el.value;
+
+    if (end > start){ value = value.slice(0,start) + value.slice(end); } // selection replaced first
+    const prevChar = value.slice(0, start).slice(-1);
+    const result = transliterate(prevChar, e.key);
+
+    let newValue, newPos;
+    if (result){
+      const cut = start - result.remove;
+      newValue = value.slice(0, cut) + result.insert + value.slice(start);
+      newPos = cut + result.insert.length;
+    } else {
+      newValue = value.slice(0, start) + e.key + value.slice(start);
+      newPos = start + e.key.length;
+    }
+    el.value = newValue;
+    el.setSelectionRange(newPos, newPos);
+    autosize();
+    updateStats();
+  });
+
+  typeArea.addEventListener('input', function(){ autosize(); updateStats(); });
+
+  function autosize(){
+    typeArea.style.height = 'auto';
+    typeArea.style.height = Math.max(260, typeArea.scrollHeight) + 'px';
+  }
+
+  /* ---------- stats & timer ---------- */
+  let started = false, running = false, timerStart = 0, elapsedMs = 0, tickHandle = null;
+  const statWpm = document.getElementById('statWpm');
+  const statCpm = document.getElementById('statCpm');
+  const statWords = document.getElementById('statWords');
+  const statChars = document.getElementById('statChars');
+  const statTime = document.getElementById('statTime');
+  const pauseBtn = document.getElementById('pauseBtn');
+
+  function startTimerIfNeeded(){
+    if (started) return;
+    started = true; running = true; timerStart = Date.now();
+    tickHandle = setInterval(updateStats, 250);
+  }
+  function getElapsedMs(){ return running ? elapsedMs + (Date.now() - timerStart) : elapsedMs; }
+
+  function updateStats(){
+    const text = typeArea.value;
+    const chars = text.length;
+    const words = (text.trim().match(/\S+/g) || []).length;
+    const minutes = Math.max(getElapsedMs() / 60000, 1/60);
+    const wpm = started ? Math.round((chars / 5) / minutes) : 0;
+    const cpm = started ? Math.round(chars / minutes) : 0;
+
+    statWpm.textContent = wpm;
+    statCpm.textContent = cpm;
+    statWords.textContent = words;
+    statChars.textContent = chars;
+
+    const totalSec = Math.floor(getElapsedMs()/1000);
+    const mm = String(Math.floor(totalSec/60)).padStart(2,'0');
+    const ss = String(totalSec%60).padStart(2,'0');
+    statTime.textContent = mm+':'+ss;
+  }
+
+  pauseBtn.addEventListener('click', function(){
+    if (!started) return;
+    if (running){
+      elapsedMs += Date.now() - timerStart; running = false;
+      clearInterval(tickHandle); pauseBtn.textContent = 'Resume';
+    } else {
+      timerStart = Date.now(); running = true;
+      tickHandle = setInterval(updateStats, 250); pauseBtn.textContent = 'Pause';
+    }
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', function(){
+    typeArea.value = ''; autosize();
+    started = false; running = false; elapsedMs = 0;
+    clearInterval(tickHandle); pauseBtn.textContent = 'Pause';
+    updateStats(); typeArea.focus();
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', function(){
+    navigator.clipboard.writeText(typeArea.value).catch(()=>{});
+  });
+
+  /* ---------- keyboard map panel ---------- */
+  const mapBtn = document.getElementById('mapToggleBtn');
+  const keymapPanel = document.getElementById('keymap');
+  const kbGrid = document.getElementById('kbGrid');
+  const SHIFT_OF = {'1':'!','2':'@','3':'#','4':'$','5':'%','6':'^','7':'&','8':'*','9':'(','0':')',
+    '-':'_','=':'+','[':'{',']':'}','\\':'|',';':':',"'":'"',',':'<','.':'>','/':'?'};
+  const ROWS = ["1234567890-=","qwertyuiop[]\\","asdfghjkl;'","zxcvbnm,./"];
+
+  function buildKeyboardMap(){
+    ROWS.forEach(row=>{
+      const rowEl = document.createElement('div'); rowEl.className='kb-row';
+      row.split('').forEach(k=>{
+        const shiftChar = SHIFT_OF[k] || k.toUpperCase();
+        const top = BASE[shiftChar] || shiftChar;
+        const bottom = BASE[k] || k;
+        const cell = document.createElement('div'); cell.className='kb-key deva';
+        cell.innerHTML = '<span class="top">'+top+'</span><span class="bottom">'+bottom+'</span>';
+        rowEl.appendChild(cell);
+      });
+      kbGrid.appendChild(rowEl);
+    });
+  }
+  buildKeyboardMap();
+
+  mapBtn.addEventListener('click', function(){
+    const open = keymapPanel.classList.toggle('open');
+    mapBtn.textContent = open ? 'Hide keyboard map' : 'Show keyboard map';
+  });
+
+  /* ---------- theme toggle ---------- */
+  const themeToggle = document.getElementById('themeToggle');
+  const iconSun = document.getElementById('iconSun');
+  const iconMoon = document.getElementById('iconMoon');
+  function applyTheme(theme){
+    document.documentElement.setAttribute('data-theme', theme);
+    iconSun.style.display = theme === 'dark' ? 'none' : 'block';
+    iconMoon.style.display = theme === 'dark' ? 'block' : 'none';
+  }
+  const savedTheme = localStorage.getItem('theme') ||
+    (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  applyTheme(savedTheme);
+  themeToggle.addEventListener('click', function(){
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    applyTheme(next); localStorage.setItem('theme', next);
+  });
+
+  /* ---------- loader ---------- */
+  window.addEventListener('load', function(){
+    document.getElementById('loader').classList.add('hidden');
+  });
+  setTimeout(function(){ document.getElementById('loader').classList.add('hidden'); }, 1500);
+
+  autosize();
+  updateStats();
+})();
+</script>
+</body>
+</html>

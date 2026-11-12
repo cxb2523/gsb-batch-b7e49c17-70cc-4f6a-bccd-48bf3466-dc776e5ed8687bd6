@@ -1,0 +1,795 @@
+<!doctype html><html lang="hi"><head><meta charset="utf-8">
+  <meta name="description" content="Learn the Remington GAIL Hindi keyboard, take CPCT/SSC-style typing tests with live WPM and accuracy, and master the layout with Falling Letters, Key Match and Matra Order games.">
+<meta name="theme-color" content="#573AFC">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Remington GAIL Master — Hindi Typing Test & Learning Games">
+<meta property="og:description" content="Practice the Remington GAIL Hindi keyboard layout with a live on-screen guide, exam-style typing tests, and gamified drills.">
+<meta property="og:image" content="og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Remington GAIL Master">
+<meta name="twitter:description" content="Hindi Remington GAIL typing test and keyboard learning games for CPCT, SSC and RSSB exam prep.">
+<meta name="twitter:image" content="og-image.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+  
+  <meta name="viewport" content="width=device-width,initial-scale=1"><title>Thunder Typing</title><style>
+:root{--p:#573AFC;--ink:#182033;--muted:#687087;--line:#e5e9f2}*{box-sizing:border-box}body{margin:0;background:#f7f9fd;color:var(--ink);font-family:Inter,system-ui,sans-serif}.top{height:62px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:5}.brand{font-weight:800}.brand i{font-style:normal;color:var(--p)}button,select{font:inherit}.controls{display:flex;gap:8px;align-items:center}.btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 12px;cursor:pointer}.btn:hover{border-color:var(--p);color:var(--p)}#wpm{font-weight:800;color:var(--p);padding:8px 10px}.settings{position:fixed;right:20px;top:70px;width:300px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 18px 50px #0002;display:none;z-index:10}.settings.open{display:block}.settings label{display:block;font-size:12px;font-weight:700;margin:12px 0 5px}.settings select{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:#fff}.settings .check{display:flex;gap:8px;align-items:center;margin-top:16px}.practice{height:calc(100vh - 62px);padding:18px;display:grid;gap:14px}.left,.right{min-width:0}.layout-left,.layout-right{grid-template-columns:1fr 1fr}.layout-right .passage{order:2}.layout-top,.layout-bottom{grid-template-rows:1fr 1fr}.layout-bottom .passage{order:2}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;overflow:auto}.label{font-size:11px;font-weight:900;letter-spacing:.13em;color:var(--muted);margin-bottom:12px}.passage-text{font-family:'Noto Sans Devanagari','Nirmala UI',sans-serif;font-size:23px;line-height:2;white-space:pre-wrap}.typebox textarea{width:100%;height:calc(100% - 30px);border:0;outline:0;resize:none;background:transparent;font-family:'Noto Sans Devanagari','Nirmala UI',sans-serif;font-size:23px;line-height:2}.free .passage{display:none}.free{display:block}.free .typebox{height:100%}.kb{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);background:#fff;border:1px solid var(--line);border-radius:14px;padding:8px;display:none;max-width:95vw;z-index:4}.kb.open{display:block}.row{display:flex;gap:3px;margin:3px}.key{min-width:30px;padding:6px;text-align:center;border:1px solid var(--line);border-radius:5px;font-size:12px}.key b{display:block;color:var(--p)}@media(max-width:700px){.layout-left,.layout-right{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.practice{padding:10px}.passage-text,.typebox textarea{font-size:19px}.top{padding:0 10px}.settings{right:10px;width:calc(100% - 20px)}}
+.controls{flex-wrap:wrap}.stat{font-size:12px;font-weight:700;color:var(--muted);padding:6px 8px;white-space:nowrap}#wpm{font-size:15px}.btn.primary{background:var(--p);border-color:var(--p);color:#fff;width:100%;margin-top:14px;font-weight:700;padding:11px 12px}.passage-text span.ok{color:#16a34a}.passage-text span.bad{color:#dc2626;background:#fee2e2;border-radius:3px}.passage-text span.cur{background:var(--p);color:#fff;border-radius:2px}.passage-text span.pending{color:var(--muted)}.err-backdrop{display:none;position:fixed;inset:0;background:rgba(10,14,24,.45);z-index:19}.err-backdrop.open{display:block}.errpanel{display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:420px;max-width:92vw;max-height:76vh;overflow:auto;z-index:20;right:auto}.errpanel.open{display:block}.errsummary{font-size:14px;color:var(--muted);margin:0 0 14px;line-height:1.5}.errlist{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}.echip{background:#fee2e2;color:#b42318;border-radius:8px;padding:5px 9px;font-size:14px;cursor:pointer;font-family:'Noto Sans Devanagari','Nirmala UI',sans-serif;line-height:1.4}.echip b{color:#b42318;margin-right:3px}.muted2{color:var(--muted);font-size:13px}.passage-text span.cur-word-char{color:#2563eb;font-weight:600}.passage-text span.next-word-char{color:#dc2626}.key{position:relative;transition:background .12s,color .12s}.key.active{background:#dc2626;border-color:#dc2626;color:#fff}.key.active b{color:#fff}.key.active-shift{background:#dc2626;border-color:#dc2626;color:#fff;box-shadow:0 0 0 2px #fecaca}.key.active-shift b{color:#fff}.key.active-shift::after{content:'⇧';position:absolute;top:-9px;right:-4px;background:#b42318;color:#fff;font-size:9px;border-radius:50%;width:14px;height:14px;line-height:14px;text-align:center}.statbox{background:#f7f9fd;border:1px solid var(--line);border-radius:12px;padding:10px 12px}.statbox .v{font-size:20px;font-weight:900;color:var(--ink)}.statbox .l{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.06em}#resultBtns.show,#resultStats.show{display:flex}#resultStats.show{display:grid}.typebox.locked-flash{background:#fee2e2;transition:background .05s}#wordLen{display:none}#examBadge{display:none;background:#fee2e2;color:#b42318;font-weight:800}
+.hovertip{position:fixed;background:#182033;color:#fff;font-size:13px;font-weight:700;padding:6px 10px;border-radius:8px;pointer-events:none;z-index:30;display:none;white-space:nowrap;font-family:'Noto Sans Devanagari',Inter,sans-serif;box-shadow:0 6px 18px #0003}.hovertip b{color:#ffd166;margin-left:4px;font-family:Inter,sans-serif}
+.pf-badge{display:none;font-size:13px;font-weight:800;padding:10px 12px;border-radius:10px;margin-bottom:12px}.pf-badge.pf-pass{background:#dcfce7;color:#15803d}.pf-badge.pf-fail{background:#fee2e2;color:#b42318}.pf-badge.pf-warn{background:#fef3c7;color:#92400e}
+#resultBtns{flex-wrap:wrap}#resultBtns .btn{flex:1 1 130px}
+#mistakeLettersRow{display:none;margin-bottom:10px}#mistakeLettersRow .echip{background:#fef3c7;color:#92400e}#mistakeLettersRow .echip b{color:#92400e}
+.passage-text span[data-h]{cursor:help}
+.passage-text span.jump-flash{outline:2px solid #b42318;outline-offset:1px;border-radius:3px}
+</style></head><body><header class="top"><div class="brand">Thunder Typing <i>हिंदी</i></div><div class="controls"><span id="time" class="stat" title="Elapsed / time left">00:00</span><span id="wpm">0 WPM</span><span id="acc" class="stat">100% acc</span><span id="err" class="stat">0 err</span><span id="wordLen" class="stat" title="Word Length = characters (incl. spaces) ÷ words. Exams use this to convert speed to key depressions.">WL —</span><span id="examBadge" class="stat">🔒 EXAM</span><button class="btn" id="pauseBtn">Pause</button><button class="btn" id="settingsBtn">Settings</button><button class="btn" id="clearBtn">Clear</button></div></header>
+<div class="settings" id="settings"><label>Passage</label><select id="mode"><option value="free">Free typing</option><option value="normal-easy">No Shift · Easy</option><option value="normal-hard">No Shift · Hard</option><option value="shift-easy">Shift + Normal · Easy</option><option value="shift-hard">Shift + Normal · Hard</option><option value="word-normal">Word Practice · No Shift</option><option value="word-shift">Word Practice · With Shift</option><optgroup label="Starter Passages (25 words)"><option value="starter-1">Starter 1</option><option value="starter-2">Starter 2</option><option value="starter-3">Starter 3</option><option value="starter-4">Starter 4</option><option value="starter-5">Starter 5</option><option value="starter-6">Starter 6</option><option value="starter-7">Starter 7</option><option value="starter-8">Starter 8</option><option value="starter-9">Starter 9</option><option value="starter-10">Starter 10</option></optgroup><optgroup label="Practice Passages"><option value="passage-1">Passage 1 · शिक्षा</option><option value="passage-2">Passage 2 · लोकतंत्र</option><option value="passage-3">Passage 3 · मौलिक अधिकार</option><option value="passage-4">Passage 4 · नरेंद्र मोदी</option></optgroup><optgroup label="AI Generated (Groq)"><option value="ai-passage">AI Passage · 20 words</option></optgroup></select><div class="wordrow" id="wordRow" style="display:none"><label>Word Count</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="wordCount" min="5" max="50" step="1" value="15" style="flex:1"><span id="wordCountVal" style="font-weight:800;color:var(--p);min-width:28px;text-align:right">15</span></div><button class="btn" id="shuffleBtn" style="width:100%;margin-top:10px">🔀 New Words</button></div><div class="wordrow" id="aiRow" style="display:none"><label>AI Passage (Groq)</label><button class="btn" id="aiGenBtn" style="width:100%">🤖 Generate New Passage</button><div id="aiUsage" class="muted2" style="margin-top:8px;text-align:center"></div></div><label>Time Limit</label><select id="timeLimit"><option value="0">No limit</option><option value="60000">1 minute</option><option value="120000">2 minutes</option><option value="300000">5 minutes</option><option value="600000">10 minutes</option><option value="900000">15 minutes</option><option value="1200000">20 minutes</option></select><label>Position</label><select id="layout"><option value="left">Passage left / typing right</option><option value="right">Typing left / passage right</option><option value="top">Passage top / typing bottom</option><option value="bottom">Typing top / passage bottom</option></select><label>Target WPM (Pass/Fail)</label><select id="wpmTarget"><option value="0">No target</option><option value="15">15 WPM</option><option value="20">20 WPM</option><option value="25">25 WPM</option><option value="30">30 WPM</option><option value="35">35 WPM</option><option value="40">40 WPM</option><option value="50">50 WPM</option><option value="60">60 WPM</option><option value="80">80 WPM</option></select><label class="check"><input type="checkbox" id="kbOn"> Open keyboard helper</label><label class="check"><input type="checkbox" id="examMode"> Exam Mode — no backspace, real Net WPM scoring</label><label class="check"><input type="checkbox" id="hoverMode"> Hover Mode — hover a letter to see its key (with Shift)</label></div>
+<main class="practice layout-left" id="practice"><section class="card passage"><div class="label">PASSAGE</div><div class="passage-text" id="passage"></div></section><section class="card typebox"><div class="label">YOUR TYPING</div><textarea id="doc" autofocus spellcheck="false" placeholder="Free typing — start here…"></textarea></section></main><div class="kb" id="kb"></div><div class="hovertip" id="hoverTip"></div><div class="err-backdrop" id="errBackdrop"></div><div class="settings errpanel" id="errPanel"><div class="label" id="errTitle">MISTAKE REVIEW</div><div id="passFailBadge" class="pf-badge"></div><div id="resultStats" style="display:none;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px"></div><p id="errSummary" class="errsummary"></p><div id="mistakeLettersRow" class="errlist"></div><div id="errList" class="errlist"></div><button class="btn primary" id="resumeBtn">Resume Typing</button><div id="resultBtns" style="display:none;gap:8px;margin-top:14px"><button class="btn primary" id="retryBtn" style="flex:1;margin-top:0">↺ Retry Same</button><button class="btn primary" id="newWordsBtn" style="flex:1;margin-top:0;display:none">🔀 New Words</button><button class="btn primary" id="newPassageBtn" style="flex:1;margin-top:0;display:none">📖 New Passage</button><button class="btn primary" id="fixWordsBtn" style="flex:1;margin-top:0;display:none">🛠 Fix These Letters</button></div></div>
+<script src="words-hi.js"></script>
+<script>
+// Cross-checked against the authoritative source (github.com/keymanapp/keyboards,
+// release/r/remington_gail) and kept identical across index.html, thunder-typing.html,
+// master-learning.html and typing-practice.html.
+const KEYMAP={
+  Backquote:{n:'़',s:'द्य'},Digit1:{n:'१',s:'।'},Digit2:{n:'२',s:'/'},Digit3:{n:'३',s:'ः'},Digit4:{n:'४',s:'*'},Digit5:{n:'५',s:'-'},Digit6:{n:'६',s:'‘'},Digit7:{n:'७',s:'’'},Digit8:{n:'८',s:'द्ध'},Digit9:{n:'९',s:'त्र'},Digit0:{n:'०',s:'ऋ'},
+  Minus:{n:'·',s:'्'},Equal:{n:'ृ',s:'ॄ'},
+  KeyQ:{n:'ु',s:'फ'},KeyW:{n:'ू',s:'ॅ'},KeyE:{n:'म',s:'म्'},KeyR:{n:'त',s:'त्'},KeyT:{n:'ज',s:'ज्'},KeyY:{n:'ल',s:'ल्'},KeyU:{n:'न',s:'न्'},KeyI:{n:'प',s:'प्'},KeyO:{n:'व',s:'व्'},KeyP:{n:'च',s:'च्'},BracketLeft:{n:'ख्',s:'क्ष्'},BracketRight:{n:',',s:'द्व'},Backslash:{n:'(',s:')'},
+  KeyA:{n:'ं',s:'ॉ'},KeyS:{n:'े',s:'ै'},KeyD:{n:'क',s:'क्'},KeyF:{n:'ि',s:'थ्'},KeyG:{n:'ह',s:'ळ'},KeyH:{n:'ी',s:'भ्'},KeyJ:{n:'र',s:'श्र'},KeyK:{n:'ा',s:'ज्ञ'},KeyL:{n:'स',s:'स्'},Semicolon:{n:'य',s:'रू'},Quote:{n:'श्',s:'ष्'},
+  KeyZ:{n:'्र',s:'र्'},KeyX:{n:'ग',s:'ग्'},KeyC:{n:'ब',s:'ब्'},KeyV:{n:'अ',s:'ट'},KeyB:{n:'इ',s:'ठ'},KeyN:{n:'द',s:'छ'},KeyM:{n:'उ',s:'ड'},Comma:{n:'ए',s:'ढ'},Period:{n:'ण्',s:'झ'},Slash:{n:'ध्',s:'घ्'},Space:{n:' ',s:' '}
+};
+
+// Remington GAIL / Hindi Indic Input 3 composition behavior.
+// TypingWale documents the GAIL convention as typewriter-style input,
+// especially the special treatment of ि; the legacy Hindi Indic Input 3
+// rules add the vowel, matra, poonch, rakar and reph combinations below.
+const HALF={'म्':'म','त्':'त','ज्':'ज','ल्':'ल','न्':'न','प्':'प','व्':'व','च्':'च','छ्':'छ','क्':'क','ग्':'ग','ब्':'ब','र्':'र','स्':'स','श्':'श','ष्':'ष','भ्':'भ','थ्':'थ','ख्':'ख','ण्':'ण','ध्':'ध','घ्':'घ','क्ष्':'क्ष'};
+const MAT=new Set(['ा','ि','ी','ु','ू','ृ','ॄ','ॅ','े','ै','ॉ','ो','ौ','ं','ः','ँ','़']);
+const VIR='्';
+const IV=new Set(['अ','आ','इ','ई','उ','ऊ','ऋ','ए','ऐ','ओ','औ','ऑ','ऍ']);
+
+// Base/matra combinations explicitly documented for Hindi Indic Input 3 /
+// Remington GAIL. These are legacy visual constructions, not generic Sanskrit sandhi.
+const COMPOSE={
+  'अ+ा':'आ',
+  'ए+ॅ':'ऍ',
+  'ए+े':'ऐ',
+  'आ+े':'ओ',
+  'आ+ै':'औ',
+  'आ+ॅ':'ऑ',
+  'उ+ु':'ऊ',
+  'इ+र्':'ई'
+};
+const MATRA_COMPOSE={
+  'ा+े':'ो',
+  'ा+ै':'ौ',
+  'ा+ॅ':'ॉ',
+  'ॅ+ं':'ँ'
+};
+
+// --- Hover Mode: reverse-lookup from a Devanagari character/cluster back to
+// the physical QWERTY key(s) (with Shift where needed) that produce it. ---
+const CODE_LABEL={Backquote:'`',Digit1:'1',Digit2:'2',Digit3:'3',Digit4:'4',Digit5:'5',Digit6:'6',Digit7:'7',Digit8:'8',Digit9:'9',Digit0:'0',Minus:'-',Equal:'=',
+  KeyQ:'Q',KeyW:'W',KeyE:'E',KeyR:'R',KeyT:'T',KeyY:'Y',KeyU:'U',KeyI:'I',KeyO:'O',KeyP:'P',BracketLeft:'[',BracketRight:']',Backslash:'\\',
+  KeyA:'A',KeyS:'S',KeyD:'D',KeyF:'F',KeyG:'G',KeyH:'H',KeyJ:'J',KeyK:'K',KeyL:'L',Semicolon:';',Quote:"'",
+  KeyZ:'Z',KeyX:'X',KeyC:'C',KeyV:'V',KeyB:'B',KeyN:'N',KeyM:'M',Comma:',',Period:'.',Slash:'/',Space:'Space'};
+const KEY_ENTRIES=[];
+for(const code in KEYMAP){
+  if(code==='Space')continue;
+  const e=KEYMAP[code];
+  if(e.n)KEY_ENTRIES.push({str:e.n,code,shift:false});
+  if(e.s!==undefined)KEY_ENTRIES.push({str:e.s,code,shift:true});
+}
+KEY_ENTRIES.sort((a,b)=>b.str.length-a.str.length);
+const COMPOSE_REV={};
+for(const k in COMPOSE){const parts=k.split('+');COMPOSE_REV[COMPOSE[k]]=parts;}
+for(const k in MATRA_COMPOSE){const parts=k.split('+');COMPOSE_REV[MATRA_COMPOSE[k]]=parts;}
+// Poonch/reph legacy shortcuts hard-coded in press() (not simple base+matra composes).
+COMPOSE_REV['ऊ']=['उ','ु'];
+COMPOSE_REV['ई']=['इ','र्'];
+function isShiftChar(ch){
+  for(const code in KEYMAP)if(KEYMAP[code].s===ch)return true;
+  if(COMPOSE_REV[ch])return COMPOSE_REV[ch].some(isShiftChar);
+  return false;
+}
+function keystrokesForPlain(text){
+  const chars=[...text],out=[];let i=0;
+  while(i<chars.length){
+    let matched=false;
+    for(const entry of KEY_ENTRIES){
+      const L=entry.str.length;
+      if(L<=chars.length-i&&chars.slice(i,i+L).join('')===entry.str){
+        out.push({code:entry.code,shift:entry.shift});i+=L;matched=true;break;
+      }
+    }
+    if(matched)continue;
+    const ch=chars[i];
+    if(COMPOSE_REV[ch]){
+      const[a,b]=COMPOSE_REV[ch];
+      out.push(...keystrokesForPlain(a),...keystrokesForPlain(b));i++;continue;
+    }
+    // A few consonants (ख, थ, भ, श, ष, ण, ध, घ...) only exist on this keyboard in
+    // their half (halant) form — the full letter is reached by pressing that half
+    // key and letting it resolve to full once the following matra is typed. Fall
+    // back to the half-form key so these letters aren't reported as unknown.
+    const halfEntry=KEY_ENTRIES.find(e=>e.str===ch+VIR);
+    if(halfEntry){out.push({code:halfEntry.code,shift:halfEntry.shift});i++;continue;}
+    out.push({code:null,unknown:true});i++;
+  }
+  return out;
+}
+function keystrokesFor(text){
+  // ि is always pressed FIRST even though it's stored after its consonant.
+  const idx=text.indexOf('ि');
+  if(idx!==-1){
+    const rest=text.slice(0,idx)+text.slice(idx+1);
+    return[{code:'KeyF',shift:false}].concat(keystrokesForPlain(rest));
+  }
+  return keystrokesForPlain(text);
+}
+function keyLabelsFor(text){
+  return keystrokesFor(text).map(k=>{
+    if(k.unknown||!k.code)return'?';
+    const lbl=CODE_LABEL[k.code]||k.code;
+    return k.shift?('Shift+'+lbl):lbl;
+  }).join(' → ');
+}
+
+let buffer='',pendingI=false,start=0;
+function graphemes(str){
+  if(!str)return[];
+  try{
+    if(typeof Intl!=='undefined'&&Intl.Segmenter){
+      return[...new Intl.Segmenter('hi',{granularity:'grapheme'}).segment(str)].map(s=>s.segment);
+    }
+  }catch(e){}
+  const combining=/[\u0900-\u0903\u0907-\u0938\u093e-\u094f\u0951-\u0957\u0962\u0963\u093c]/;
+  const out=[];let i=0;
+  while(i<str.length){
+    let g=str[i++];
+    while(i<str.length&&combining.test(str[i]))g+=str[i++];
+    out.push(g);
+  }
+  return out;
+}
+function clusterize(word){
+  const g=graphemes(word);let idx=0;const out=[];
+  for(const seg of g){out.push({text:seg,start:idx,end:idx+seg.length});idx+=seg.length}
+  return out;
+}
+function editDistance(a,b){
+  const m=a.length,n=b.length,dp=[];
+  for(let i=0;i<=m;i++){dp.push([]);for(let j=0;j<=n;j++){
+    if(i===0)dp[i][j]=j;
+    else if(j===0)dp[i][j]=i;
+    else dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j-1],dp[i-1][j],dp[i][j-1]);
+  }}
+  return dp[m][n];
+}
+function classifyMistake(target,typed){
+  if(typed===target)return'none';
+  if(!typed)return'full';
+  return editDistance(graphemes(target),graphemes(typed))<=1?'half':'full';
+}
+
+function lastClusterInfo(){
+  const gs=graphemes(buffer);
+  return {gs,last:gs[gs.length-1]||'',index:gs.length-1};
+}
+function replaceLastCluster(text){
+  const {gs,index}=lastClusterInfo();
+  if(index<0){buffer=text;return;}
+  gs[index]=text;buffer=gs.join('');
+}
+function applyMatra(ch){
+  const {gs,index,last}=lastClusterInfo();
+  if(index<0){buffer+=ch;return;}
+
+  // Special independent-vowel legacy constructions.
+  const direct=COMPOSE[last+'+'+ch];
+  if(direct){gs[index]=direct;buffer=gs.join('');return;}
+
+  // Matra-on-matra construction, e.g. ा+े -> ो and ॅ+ं -> ँ.
+  const marks=[...last];
+  if(marks.length>=2){
+    const base=marks.slice(0,-1).join(''),prev=marks[marks.length-1];
+    const mc=MATRA_COMPOSE[prev+'+'+ch];
+    if(mc){gs[index]=base+mc;buffer=gs.join('');return;}
+  }
+
+  // A half consonant followed by a dependent vowel sign becomes the full
+  // consonant carrying that vowel sign. Keep the explicit halant when another
+  // consonant/reph/rakar is subsequently entered.
+  if(last.endsWith(VIR) && ch!=='ं' && ch!=='ः' && ch!=='ँ' && ch!=='़'){
+    const full=last.slice(0,-VIR.length);
+    if(ch==='ा'){
+      // ा against a half consonant is a completion press, not a real vowel
+      // sign: per the Remington GAIL spec, half+ा = the bare full consonant
+      // with its own inherent vowel (ख्+ा=ख), since these letters have no
+      // dedicated full-form key of their own. The ा itself isn't kept — a
+      // second ा press now lands on the resolved full consonant and adds
+      // the actual ा matra normally (ख्+ा+ा=खा).
+      gs[index]=full;buffer=gs.join('');return;
+    }
+    gs[index]=full+ch;buffer=gs.join('');return;
+  }
+
+  buffer+=ch;
+}
+function appendEngineChar(ch){
+  if(MAT.has(ch)){applyMatra(ch);return;}
+  if(ch===VIR){buffer+=ch;return;}
+  // A half consonant (halant-ending) followed by another consonant is a
+  // genuine conjunct in Devanagari (ण्+य=ण्य as in अरण्य, त्+य=त्य as in
+  // सत्य, श्+ल=श्ल as in श्लोक, न्+म=न्म as in जन्म...). Never drop the
+  // halant here — the half letter stays half and simply joins with
+  // whatever full consonant follows. Only a dependent vowel sign (matra)
+  // resolves a half consonant to its full form, and that's handled
+  // separately in applyMatra().
+  buffer+=ch;
+}
+
+function press(code,shift){
+  const entry=KEYMAP[code];
+  if(!entry)return;
+  const ch=entry[shift?'s':'n'];
+  if(ch===undefined)return;
+
+  // GAIL visual/typewriter rule: F (ि) is always pressed BEFORE the consonant
+  // it belongs to, and must always attach to whatever consonant comes NEXT —
+  // never to whatever was already typed before it. We keep the internal text
+  // in canonical Unicode order (consonant + ि) for matching/rendering.
+  if(ch==='ि'){
+    if(pendingI){
+      pendingI=false;
+      applyMatra('ि');
+    }else if(lastClusterInfo().last.endsWith(VIR)){
+      // A half consonant is already sitting in the buffer (e.g. ख् just typed).
+      // Pressing ि now should complete THAT half letter into full — same as
+      // pressing ा does — rather than arming pendingI and waiting to preposed-
+      // attach ि to whatever consonant comes next.
+      applyMatra('ि');
+    }else{
+      pendingI=true;
+    }
+    return;
+  }
+
+  if(pendingI){
+    if(ch===' '){
+      // Word ends while ि is still armed. If one or more half consonants
+      // were deferred below (e.g. स्+ह with nothing to close the cluster),
+      // resolve that trailing half consonant to its full form + ि now
+      // instead of leaving a stray, disconnected ि.
+      const{last}=lastClusterInfo();
+      if(last&&last.endsWith(VIR))applyMatra('ि');
+      else buffer+='ि';
+      buffer+=' ';
+    }else if(ch.endsWith(VIR)){
+      // A half consonant while ि is armed may only be the FIRST part of a
+      // conjunct — e.g. स्+ह (स्ह) or स्+थ् (स्थ) — with the ि actually
+      // meant to land on whatever full consonant follows it. So keep this
+      // consonant half (as typed) and leave ि armed, rather than collapsing
+      // it to full+ि immediately: that used to turn ि+स्+ह into सिह instead
+      // of the correct स्हि (half consonant kept in the middle, matra on
+      // the final full consonant).
+      buffer+=ch;
+      return; // pendingI stays true — wait for the consonant that closes it
+    }else if(IV.has(ch)){
+      // Independent vowels do not take a dependent i-matra; retain the
+      // explicitly typed visual mark after the vowel so the error is visible.
+      buffer+=ch+'ि';
+    }else{
+      buffer+=ch+'ि';
+    }
+    pendingI=false;
+    return;
+  }
+
+  // Poonch composition from Hindi Indic Input 3: उ+ु=ऊ (उ is an independent
+  // vowel and can't carry a dependent u-matra on its own, so it composes).
+  // प+ु and र+ु are NOT special — पु and रु are normal, valid consonant+matra
+  // combinations (पुस्तक, रुक, अनुपम...) and must stay as two plain characters,
+  // not get hijacked into फ (which lives on its own key, Shift+Q).
+  const last=lastClusterInfo().last;
+  if(ch==='ु' && last==='उ'){replaceLastCluster('ऊ');return;}
+
+  // Reph (Shift+Z, र्) is a typewriter-style key: it's struck AFTER the
+  // consonant it will visually sit above, not before. So धमर् (ध, म, then
+  // reph) must land as धर्म — the reph has to jump back and slot in
+  // immediately before the consonant that was just typed, the same way ि
+  // jumps forward to attach to the consonant that's about to be typed.
+  if(ch==='र्'){
+    if(last==='इ'){replaceLastCluster('ई');return;} // इ + र् = ई legacy compose
+    const {gs,index}=lastClusterInfo();
+    if(index>=0){gs.splice(index,0,ch);buffer=gs.join('');return;}
+    buffer+=ch;return;
+  }
+
+  // Rakar (KeyZ, ्र) is a combining conjunct mark typed in normal forward
+  // order and is intentionally not collapsed or reordered.
+  appendEngineChar(ch);
+}
+
+const PASS={"normal-easy": "एक नगर में राजा रहा। राजा बहुत दयालु एवं वीर था। एक समय शत्रु ने नगर पर वार किया। राजा ने अपनी सेना बुलाई। सब जन युद्ध पर गए। राजा ने साहस से वार किया और शत्रु दल को हरा दिया। युद्ध के बाद नगर में शांति आई। सब लोग बहुत खुश हुए। राजा ने सब जन को मान दिया। नदी के तट पर मेला लगा। लोग उपवन में गए। वहाँ कमल के फूल खिले। पवन शीतल बही। सब जन ने मिलकर राजा का जयकार किया। राजा ने भी सबको अपना आशीष दिया। इस तरह पूरा नगर सुख और चैन से रहने लगा।", "normal-hard": "प्राचीन समय में एक प्रतापी नृप रहा। उसका नाम जयपाल था। वह परम वीर, दयालु एवं नीति-निपुण नरपति था। एक दिन दुष्ट शत्रु दल ने अचानक नगर सीमा पर भीषण वार किया। तब प्रतापी राजा ने अपनी विशाल चतुरंगिणी सेना को रणभूमि में उतरने की आज्ञा दी। शूरवीर सैनिक शस्त्र लेकर युद्ध में कूद पड़े। भीषण रण हुआ। बाणों की वर्षा हुई। राजा ने अद्भुत पराक्रम दिखाया और शत्रु दल का मान मर्दन कर दिया। अंत में राजा ने पूर्ण विजय पायी। विजय के उपरांत नगर में अपार हर्ष छा गया। सब जन ने राजा का जयघोष किया। पावन नदी के तट पर स्थित उपवन में विशाल उत्सव रखा गया। वहाँ रंग-बिरंगे कमल खिले थे और सुगंधित शीतल पवन बह रही थी। विद्वानों ने प्रभु का ध्यान किया। जन-जन के प्राण में नया उल्लास और नया जोश भर गया। राजा ने समस्त प्रजा को अभयदान दिया। इस प्रकार धर्म और न्याय की स्थापना से सम्पूर्ण राज्य में सुख, शांति और समृद्धि का विस्तार हुआ।", "shift-easy": "ऋषि-मुनियों द्वारा प्रतिपादित ज्ञान तथा अध्यात्म की श्रेष्ठ परंपरा हमारे समाज को सदैव सही दिशा देती रही है। इस पावन भूमि पर अनेक शूरवीरों, विद्वानों और तपस्वियों ने त्याग, निष्ठा तथा सत्य की रक्षा हेतु अपना सर्वस्व समर्पित किया। मानव जीवन में विद्या, धैर्य और क्षमा का अद्भुत महत्व है। कठिन परिस्थितियों के बीच भी दृढ़ संकल्प और अदम्य साहस से व्यक्ति बड़े से बड़े लक्ष्य को प्राप्त कर सकता है। समय का सदुपयोग, निरंतर परिश्रम तथा कर्तव्यपरायणता ही प्रत्येक कार्य में सफलता के मूलमंत्र हैं। समाज में परस्पर प्रेम, बंधुत्व, दया तथा सहयोग की भावना ही देश को उन्नति के उच्च शिखर तक पहुंचाती है।", "shift-hard": "प्राचीन काल से ही हमारे राष्ट्र में ज्ञान-विज्ञान, कला, साहित्य और दर्शन का अद्वितीय विकास हुआ है। ऋग्वेद जैसे प्राचीन ग्रंथों से लेकर आधुनिक युग तक भारतीय मेधा ने संपूर्ण विश्व को ज्ञान का नया आलोक प्रदान किया। किसी भी सभ्य समाज की आधारशिला उसके नागरिकों के नैतिक आचरण, दृढ़ चरित्र, श्रम और सत्यनिष्ठा पर निर्भर करती है। आज के तकनीकी युग में भी प्राचीन संस्कारों, शुद्ध चिंतन और मानवीय दृष्टिकोण का महत्व कम नहीं हुआ है। मनुष्य जब कठिन मार्ग पर चलते हुए धैर्य खोए बिना निरंतर अभ्यास करता है, तब असंभव प्रतीत होने वाले कार्य भी सहज बन जाते हैं। शिक्षा का वास्तविक उद्देश्य केवल पुस्तकीय ज्ञान अर्जित करना नहीं, अपितु व्यक्ति के विवेक, संयम और बौद्धिक क्षमता का सर्वांगीण विकास करना है। समाज के सभी वर्गों के उत्थान, पर्यावरण के संरक्षण, जल संचयन तथा सामाजिक समरसता की स्थापना में प्रत्येक नागरिक की सक्रिय सहभागिता अनिवार्य है। जब हम अपने अधिकारों के साथ-साथ राष्ट्रीय कर्तव्यों का निष्ठापूर्वक पालन करेंगे, तभी राष्ट्र सशक्त, समृद्ध और आत्मनिर्भर बन सकेगा।", "passage-1": "किसी भी इंसान की प्रथम पाठशाला उसका परिवार होता है और मां को ही पहली गुरु कहा गया है। शिक्षा वो औजार है जिसकी सहायता से बडी से बडी कठिनाइयों का सामना कर सकते है। वह शिक्षा ही होती है जिससे हमें सही गलत का भेद पता चलता है। शिक्षा पर अनेकों निबंध लिखे गयें हैं। आगे भी लिखे जायेंगे। इसकी अहमियत का अंदाजा इसी बात से लगाया जा सकता है। किंतु शिक्षा जरुर मिलनी चाहिए। शिक्षा पाना हर प्राणी का अधिकार है। शिक्षा एक अहम उपकरण है। जो हर किसी के जीवन में बहुत उपयोगी है। शिक्षा वह है जो हमें धरती पर बाकी जीवित प्राणियों से अलग करती है। यह इंसान को धरती का सबसे चतुर प्राणी बनाती है। यह इंसानों को मजबूत बनाती है और उनके जीवन की चुनौतियों का कुशलता से सामना करने के लिए तैयार करती है। शिक्षा से ही हम अपने सपनों को पूरा कर सकते हैं। जीवन को नयी दशा और दिशा दे सकते हैं। बिना शिक्षा के हम कुछ भी मुकाम हासिल नहीं कर सकते। आजकल जीवनयापन करने के लिये हर किसी को शिक्षा की जरुरत है। जिसके लिए आपका शिक्षित होना बेहद जरूरी है। आज की पीढी का बिना पढे लिखे भला नहीं हो सकता। शिक्षा से ही रोजगार के अवसर पैदा होते है। आज वही देश सबसे ताकतवर की श्रेणी में आता है। जिसके पास ज्ञान की पावर है। अब वो दिन गये जब तलवार और बंदूकों से लडाईयां लडी जाती थी। केवल शिक्षा की वजह से आज हमने सभी कामों में विकास कर लिया है। हमारा देश प्राचीनकाल से ही शिक्षा का केंद्र रहा है। भारत में शिक्षा का अपना अलग इतिहास रहा है। ऐसा माना जाता है कि प्राचीन काल में संत और महान शिक्षा मौखिक रूप से दिया करते थे और एक पीढी से दूसरी पीढी तक जानकारी को प्रेषित किया जाता था। इससे लिखित लिटरेचर के प्रसार में भी मदद मिली थी। मंदिरों और सामुदायिक केंद्रों ने शिक्षालयों की भूमिका बनाई। बाद में शिक्षा की गुरुकुल प्रणाली वजुद में आई। शिक्षा समाज में एक अहम भूमिका निभाती है। शिक्षा ही हमारे ज्ञान को बढाती है। आधुनिकीकरण सामाजिक बदलाव की एक प्रक्रिया है। यह मानदंडों और संरचनाओं को शामिल करने वाली बदलाव की श्रेणी है। एक समाज में शैक्षिक प्रणाली का अहम काम तहजीब को विरासत में नई पीढियों तक पहुंचाने का होता है। लेकिन एक बदलते समाज में इसका रुप पीढी दर पीढी बदलते रहता हैं और ऐसे समाज में शैक्षणिक इंतेजाम को न केवल विरासत के रुप में लेना चाहिए। युवा को उनमें बदलाव के समायोजन के लिए तैयार करने में मदद भी करनी चाहिए और यही अनागत में होने वाली संभावनाओं की आधारशिला रखता है। इस प्रकार शिक्षा आधुनिकीकरण का एक अहम हाथियार हो सकती है। शिक्षा की अहमियत को इस बात से महसूस किया जा सकता है कि सभी आधुनिक समाज शिक्षा के समग्र विकास पर जोर देते हैं और प्राचीन दिनों में शिक्षा एक विशेष समूह के लिए केंद्रित थी। लेकिन शिक्षा के आधुनिकीकरण के साथ अब हर किसी के पास अपनी जाति एवं समुदाय एवं विषयक तंगी के बावजूद शिक्षा हासिल करने की सुविधा है। शिक्षा समाज में एक अहम भूमिका निभाती है। युवा को उनमें बदलाव के समायोजन के लिए तैयार करने में भी मदद करनी चाहिए और यही आने वाले समय में होने वाली संभावनाओं की आधारशिला रखता है।", "passage-2": "लोकतंत्र एक ऐसी प्रणाली है जिसमें लोगों को आजादी और मानवाधिकार दिये जाते है। वैसे तो दुनियाभर में राजशाही तथा तानाशाही जैसे तमाम तरह की शासन प्रणालियां है। लेकिन लोकतंत्र को इन सभी से उपरी लेवल का माना गया है। ऐसा केवल इसलिए है कि लोकतंत्र में जनता के पास चुनाव के जरिये अपनी सरकार खुद चुनने की ताकत होती है। एक लोकतांत्रिक देश में चुनाव प्रबंध काफी अहम होता है। इसी के जरिये जनता अपने देश की सरकार का चुनाव करती है। चुनाव लोकतंत्र को सुचारु रुप से चलाने के लिए बहुत ही जरूरी है। एक लोकतांत्रिक देश के हर नागरिक का यह काम है कि वह चुनाव में मतदान करके लोकतंत्र की रक्षा का जरूरी काम करें। हमें कभी भी यह नही सोचना चाहिए कि यदि मैं वोट नही दूंगा या दूंगी। लेकिन लोगों को यह बात समझनी चाहिए कि कई बार चुनावों में एक ही वोट के जरिये हार जीत का फैसला होता है। इस तरह से लोकतंत्र में चुनाव प्रक्रिया एक आम नागरिक को भी विशेष अधिकार प्रदान करती है। चुनाव में मतदान करके वह शासन के संचालन में भागीदार बन सकता है। किसी भी लोकतांत्रिक देश में होने वाले चुनाव उस देश के नागरिकों को यह पावर प्रदान करते है कि चुनाव प्रक्रिया के जरिये नागरिक या फिर विफल शासकों और सरकारों का तखता पलट करते हुए उनको मंत्री से बाहर कर सकते है। कोई भी नागरिक जो महसूस करता है कि वह पात्र है लेकिन उसका नाम सूची में नहीं है तो वह एक परचा भर सकता है और अपना नाम मतदाता सूची में शामिल करवा सकता है। चुनाव के दौरान अपने मत का जागरुक रुप से प्रयोग करना ही चुनाव का सही प्रतीक है। जब भी नए चुनाव होने वाले होते हैं। चुनाव आयोग उस आशय की अधिसूचना जारी करता है। इसके बाद की अलग अलग सरकारों को किसी भी ऐसे काम को करने से मना किया जाता है जो आगे चलकर उनकी चुनावी संभावनाओं के अनुकूल हो। लोकतंत्र की सफलता के लिए यह काफी जरूरी है कि राजनीतिक शासकीय पदों पर ईमानदार छवि के लोग चुनकर जायें और जो कि केवल जनता के वोटों की ताकत के जरिये ही संभव है। इसलिए हमें हमेशा इस बात का प्रयास करना चाहिए कि हमें अपने वोट का सही उपयोग करना चाहिए। जब शासकीय पदों पर सही लोग चुनकर जायेंगे तभी किसी भी देश का विकास संभव हो पायेगा और ऐसा होने पर ही चुनाव का असली मतलब सही हो पायेगा। चुनाव लोकतंत्र का एक बहुत ही अहम भाग है और इसके बिना लोकतंत्र का सुचारु रुप से काम करना संभव नही है। हमें इस बात को समझना होगा कि चुनाव वह अवसर होता है। जब हमें अपने मतदान का सही उपयोग करना चाहिए। किसी भी लोकतांत्रिक देश में चुनाव और राजनीति एक दूसरे के पूरक का काम करते है और लोकतंत्र के सुचारु रूप से काम के लिए यह जरूरी भी है ताकि अधिक से अधिक साफ सुथरे तथा ईमानदरी छवि के लोग राजनीति का भाग बन सकें। भारत में कोई भी इंसान दो तरीकों से चुनाव लड सकता है। किसी दल का दावेदार बनकर उसके चुनाव चिंह पर जिसे बोल चाल की भाषा में टिकट के नाम से भी जाना जाता है और दूसरा तरीका पक्षराहित दावेदार के तौर पर है। दोनो ही तरीकों में दावेदार को नामांकन पत्र भरना जरूरी होता है।", "passage-3": "मौलिक अधिकार भारतीय संविधान का अंग हैं। सभी नागरिकों के बुनियादी मानवाधिकारों को मौलिक अधिकारों के रूप में परिभाषित किया गया है। संविधान में यह कहा गया है कि किसी भी इंसान के लिंग और जाति और समुदाय या पंथ या जनम की जगह की दशा के आधार पर भेदभाव ना करके उन को ये अधिकार दिए जाते हैं। ये सटीक प्रतिबंधों के अधीन अदालतों ने लागू किए हैं। इन को नागरिक संविधान के रूप में भारत के संविधान ने गारंटी दी जाती है। जिसके अनुसार सभी लोग भारतीय नागरिकों के रूप में सदभाव और शांति से अपना जीवन यापन कर सकते हैं। भारत का संविधान अपने नागरिकों को मौलिक अधिकार की गारंटी देता है और नागरिकों के पास भाषण को जाहिर करने का अधिकार हो सकता है लेकिन इन अधिकारों से जुडे कुछ प्रतिबंध और अपवाद भी हैं। एक नागरिक पूरी तरह से मौलिक अधिकारों का प्रयोग नहीं कर सकता है। लेकिन कुछ संवैधानिक प्रतिबंध के साथ वही नागरिक अपने अधिकारों का आनंद उठा सकता है। भारत का संविधान इन अधिकारों को प्रयोग में लाने पर कुछ सीमाएं लागू करता है ताकि नैतिकता बरकरार रहे। संविधान हमेशा इंसान के हितों के साथ साथ सांप्रदायिक हितों की भी रक्षा करता है। उदाहरण के लिए समुदाय का अधिकार और नैतिकता और शारीरिक हित में प्रदेशों के जरिये सीमाओं के अधीन है। हमारे संविधान ने देश को उचित सीमाएं लागू करने के लिए अधिकार दिया है। इसलिए यह समुदाय के हित के लिए जरूरी है। हमारा संविधान इंसान की आजादी और सामाजिक नियंत्रण के बीच संतुलन को रोकने और एक कलयाणकारी प्रदेश को बनाए रखने का प्रयास करता है जहां सांप्रदायिक हित इंसानों के हितों पर जोर देता है। सभा करने की आजादी भी प्रदेश के जरिये लगायी जाने वाली उचित सीमाओं के अधीन है और सभी जन के आदेशों के हित में होनी चाहिए। प्रेस की आजादी और जो वयकत की आजादी में शामिल है को भी उचित सीमाओं के अधीन किया जाता है और सरकार प्रेस की आजादी पर देश के बेहतर हित में या अदालत की अवमानना और मानहानि या पीडन से बचने के लिए प्रतिबंध लगा सकती है। जब बंगलादेश की आजादी की लडाई बंद हो चुका था और देश उस समय भी अतिक्रमण से उबरने की कोशिश कर रहा था। उस समय के दौरान शिवसेना और असम गण परिषद जैसे जगह और क्षेत्रीय दलों में अधिक असंतोष पैदा हो रहा था। फिर भी इससे इनकार नहीं किया जा सकता है कि भारत सरकार ने इन सबसे निपटने में आईपीसी के लागू करने के बारे में अधिक प्रतिक्रिया दिखाई। समान अवसर प्रदान करने के लिए और सरकार की सेवाओं में अनुसूचित जाति और अनुसूचित जनजाति और बाकी पिछडे लोगों के सिवाय सैनिकों की विधवाएं और शारीरिक रूप से विकलांग इंसान को कोई आरक्षण नहीं होगा। इसमें भाषण को वयकत और बोलने की आजादी और यूनियन और सहयोगी बनने की आजादी तथा भारत में कहीं भी यात्रा करने की आजादी और भारत के किसी भी भाग में रहने और बसने की आजादी और किसी पेशे का चयन करने की आजादी शामिल है। इस अधिकार के तहत यह भी कहा गया है कि भारत के किसी भी नागरिक को देश के किसी भी भाग में जमीन खरीदने और बेचने और बनाए रखने का पूरा अधिकार है। अंत में कहा गया है कि भारत के सभी नागरिकों के लिए आजादी होगी।", "starter-1": "सूरज सुबह जल्दी उगता है। पक्षी मीठे स्वर में गाते हैं। किसान खेत में काम करने जाता है। सुबह की हवा ताजा और सुहावनी है।", "starter-2": "मेरा घर एक छोटे से गांव में है। घर के आगे एक बड़ा बगीचा है। बगीचे में फूल खिलते हैं। यह जगह मुझे बहुत पसंद।", "starter-3": "पानी जीवन के लिए बहुत जरूरी है। हमें पानी को बर्बाद नहीं करना चाहिए। पेड़ पौधे भी पानी से जीवित रहते हैं। इनकी रक्षा करें।", "starter-4": "खेल खेलने से शरीर और मन दोनों स्वस्थ रहते हैं। बच्चों को रोज कुछ समय खेल के लिए निकालना चाहिए। इससे टीम भावना बढ़ती है।", "starter-5": "दीवाली भारत का एक बड़ा त्योहार है। इस दिन लोग घरों को दीयों से सजाते हैं। सभी नए कपड़े पहनते और मिठाई भी बांटते हैं।", "starter-6": "आजकल हर काम में कंप्यूटर का उपयोग होता है। स्कूल कॉलेज और दफ्तर में कंप्यूटर जरूरी बन गया है। इंटरनेट से जानकारी जल्दी मिल जाती।", "starter-7": "स्वस्थ रहने के लिए संतुलित भोजन जरूरी है। हमें रोज फल और हरी सब्जियां खानी चाहिए। सुबह व्यायाम करने से शरीर में ऊर्जा बनी रहती।", "starter-8": "यात्रा करना ज्ञान बढ़ाने का एक अच्छा तरीका है। नई जगहों पर जाकर नई संस्कृति के बारे में पता चलता है। हर यात्रा नया अनुभव।", "starter-9": "पुस्तकें हमारी सबसे अच्छी मित्र मानी जाती हैं। अच्छी किताबें पढ़ने से ज्ञान और सोचने की शक्ति बढ़ती है। हमें रोज कुछ समय पढ़ना चाहिए।", "starter-10": "समय का सही उपयोग सफलता की पहली सीढ़ी है। जो लोग समय की कद्र करते हैं वे जीवन में आगे बढ़ते हैं। सब काम करें।", "passage-4": "भारत के प्रधानमंत्री श्री मोदी जी का पूरा नाम नरेंद्र दामोदर दास मोदी है। मोदी जी को भारतीय जनता दल में तीन बार गुजरात के चुनावों में जीत हासिल हुई थी। गुजरात के मंत्री रहते हुए उनकी छवि एक सफल और ईमानदार और कठोर प्रशासक की बनी। जिसके चलते बाद के चुनाव में भाजपा ने उनको प्रधानमंत्री पद का दावेदार घोषित कर चुनाव लडा। और भाजपा के इस चुनाव ने मोदी को प्रभावी इंसान के रूप में उभारा। मोदी के करिशमाई भाषण शैली और विकास चुनाव घोषणा पत्र के चलते उनको जनता का पूरा साथ मिला और पहली बार भाजपा पूरी बहुमत के साथ जीतकर शासन में आई। मोदी अपने समय के प्रभावी नेता है और साथ ही सुशिक्षित भी हैं। मोदी जी ने राजनीति विज्ञान में एमए की उपाधि ली है। आज मोदी जी को भारत के इतिहास का सफल शिखर पुरुष माना जाता है। लेकिन उनका जीवन हमेशा इतना ही आसान नहीं रहा है। मोदी का बचपन बहुत कठिन था। बचपन में उन को रेलवे पर चाय बेचने के काम में अपने पिता का हाथ बंटाना पडता था और साथ ही शिक्षा भी ग्रहण करने जाना पडता था। बडे होने के बाद उन को सब कुछ खुद ही करना पडा। आगे चल कर वे आर एस एस के सफलतम प्रचारक बने। फिर तो मोदी जी ने सक्रीय राजनीति की राह पकडी और अलग अलग प्रदेशो के प्रभारी रहते हुए प्रशासन के गुण सीखे। फिर गुजरात के मंत्री बनने के बाद मोदी जी ने सफलता के नए आयाम पा लिये और आज उनकी गिनती भारत के सबसे सफल मंत्रियों में होती है। जिनके शासनकाल में विकास की नयी नयी गाथाएं लिखी गई है। उनके जरिये गुजरात में किये गए विकास के कामों के चलते ही वह मशहुर हुए थे और उसी के चलते भाजपा ने पहली बार पूरी बहुमत से सरकार बनाई थी। उनके प्रधानमंत्री बनने के बाद से भारत की साख दुनिया जगत में चारों ओर तेजी से फैली है और भारत की छवि तेजी से विकास की ओर उठी है। आशा है भारत उनके रहनुमाई में ऐसे ही बढोतरी के पथ पर बढता रहेगा। सबसे पहले वे गुजरात प्रदेश के मंत्री रहे। फिर उनके काम के कारण गुजरात की जनता ने लगातार उनको मंत्री चुना। गुजरात कालेज से राजनीति विज्ञान में डिग्री लेने के बाद से वह विकास पुरूष के नाम से जाने जाते हैं और आज के समय में देश के सबसे लोकप्रिय नेता बन गये हैं। मोदी जी का जनम मेहशाना जिला में बडनगर गांव में हुआ। वे पूरी तरह से शाकाहारी हैं। एक बेहतर आयोजक के रूप में काम करने के बाद उनको भारतीय जनता दल ने संगठन का प्रतिनिधि मनोनीत किया। मोदी जी अपनी किशोर आयु में अपने भाई के साथ एक चाय की दुकान चला चुके थे। मोदी ने अपनी शिक्षा बडनगर में पूरी की। अपने माता पिता की कुल छह संतानों में तीसरे पुत्र मोदी ने बचपन में रेलवे पर चाय बेचने में अपने पिता का भी हाथ बटाया। बडनगर के ही एक टीचर के अनुसार मोदी हालांकि एक औसत श्रेणी का छात्र था लेकिन वाद विवाद और नाटक प्रतियोगिताओं में उसकी बेहद रूचि थी। छोटी आयु में मोदी जी की सगाई जशोदाबेन चमनसाल के साथ कर दी गई। जब उनका विवाह हुआ तब वे किशोर ही थे। मोदी जी के जीवनी लेखकों के अनुसार उन दोनों की शादी जरूर हुई।"};
+const WORDS_NORMAL_SEED=["कमल","जल","राजा","सूरज","पुस्तक","देश","भारत","गगन","पवन","चमन","नगर","जीवन","सुंदर","संगीत","मंत्र","यंत्र","एकता","इतिहास","उदय","अमर","कलम","हंस","रंग","गुलाब","चोर","योग","दवा","सुख","दुख","नाम","काम","रात","दिन","पानी","घर","समय","बात","लोग","फल","मन","रूप","कृपा","कौशल","पैसा","मित्र"];
+const WORDS_SHIFT_SEED=["ध्यान","मुख्य","श्याम","ख्याल","पुण्य","सत्य","जन्म","स्थान","ज्ञान","श्रम","क्षमा","द्वार","बुद्धि","धर्म","प्रकट","प्रेम","पुष्प","निश्चय","सप्ताह","ख्याति","अरण्य","लावण्य","ध्येय","श्लोक","कौशल","डॉक्टर","ऋषि","गणेश"];
+// Merge the small curated seed lists with the big real-word pool loaded from
+// words-hi.js (67,000+ dictionary words, split by whether typing them needs
+// Shift on this keyboard). Falls back to just the seed lists if that file
+// isn't present.
+const WORDS_NORMAL=[...new Set([...WORDS_NORMAL_SEED,...(window.WORDS_HI_NORMAL||[])])];
+const WORDS_SHIFT=[...new Set([...WORDS_SHIFT_SEED,...(window.WORDS_HI_SHIFT||[])])];
+function shuffleArr(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+let currentWordPassage='';
+function generateWordPassage(){
+  const n=+wordCount.value,list=mode.value==='word-shift'?WORDS_SHIFT:WORDS_NORMAL;
+  const picked=[];while(picked.length<n)picked.push(...shuffleArr(list));
+  currentWordPassage=picked.slice(0,n).join(' ');
+}
+
+// --- Task 2 "AI Passage": ask Groq for a fresh 20-word real-Hindi passage.
+// No daily cap — generate as many times as you like. Falls back to a random
+// passage from the big local word pool if the API/network isn't available.
+function updateAiUsageLabel(){
+  aiUsage.textContent='Unlimited AI passages';
+  aiGenBtn.disabled=false;
+}
+let currentAiPassage='';
+async function generateAiPassage(){
+  aiGenBtn.disabled=true;const oldTxt=aiGenBtn.textContent;aiGenBtn.textContent='⏳ Generating…';
+  const words=await fetchFixWords([],20);
+  currentAiPassage=words.join(' ');
+  aiGenBtn.disabled=false;aiGenBtn.textContent=oldTxt;
+  updateAiUsageLabel();
+}
+const doc=document.getElementById('doc'),mode=document.getElementById('mode'),layout=document.getElementById('layout'),practice=document.getElementById('practice'),wordRow=document.getElementById('wordRow'),wordCount=document.getElementById('wordCount'),wordCountVal=document.getElementById('wordCountVal'),shuffleBtn=document.getElementById('shuffleBtn');
+const aiRow=document.getElementById('aiRow'),aiGenBtn=document.getElementById('aiGenBtn'),aiUsage=document.getElementById('aiUsage');
+const wpmEl=document.getElementById('wpm'),accEl=document.getElementById('acc'),errEl=document.getElementById('err'),timeEl=document.getElementById('time'),pauseBtn=document.getElementById('pauseBtn'),errPanel=document.getElementById('errPanel'),errBackdrop=document.getElementById('errBackdrop'),errList=document.getElementById('errList'),errSummary=document.getElementById('errSummary'),resumeBtn=document.getElementById('resumeBtn'),passageEl=document.getElementById('passage');
+const timeLimit=document.getElementById('timeLimit'),examMode=document.getElementById('examMode'),wordLenEl=document.getElementById('wordLen'),examBadge=document.getElementById('examBadge');
+let paused=false,pausedTotal=0,pauseStart=0,idleTimer=null,finished=false,timeLimitMs=0;
+let wordIndex=0,completedWords=[],mistakeLetters={};
+const IDLE_MS=10000;
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function passageText(){return(mode.value==='word-normal'||mode.value==='word-shift')?currentWordPassage:mode.value==='ai-passage'?currentAiPassage:(PASS[mode.value]||'')}
+function passageWords(){const p=passageText();return p?p.split(' '):[]}
+function renderPassage(){
+  const p=passageText();
+  if(mode.value==='free'){passageEl.textContent='';updateKbHighlight('');return}
+  const words=passageWords();
+  let out='';
+  for(let w=0;w<words.length;w++){
+    const word=words[w];
+    if(w<wordIndex){
+      const rec=completedWords[w],wordCls=(rec&&rec.correct?'ok':'bad');
+      out+=clusterize(word).map(c=>'<span class="'+wordCls+'" data-w="'+w+'" data-h="'+esc(c.text)+'">'+esc(c.text)+'</span>').join('');
+    }else if(w===wordIndex){
+      const clusters=clusterize(word);
+      let wOut='';
+      for(const c of clusters){
+        let cls;
+        if(c.end<=buffer.length)cls=buffer.slice(c.start,c.end)===c.text?'ok':'bad';
+        else if(c.start<=buffer.length)cls='cur';
+        else cls='pending';
+        wOut+='<span class="'+cls+'" data-w="'+w+'" data-h="'+esc(c.text)+'">'+esc(c.text)+'</span>';
+      }
+      if(buffer.length>word.length){
+        clusterize(buffer.slice(word.length)).forEach(c=>{wOut+='<span class="bad" data-w="'+w+'" data-h="'+esc(c.text)+'">'+esc(c.text)+'</span>'});
+      }
+      out+=wOut;
+    }else if(w===wordIndex+1){
+      out+=clusterize(word).map(c=>'<span class="next-word-char" data-w="'+w+'" data-h="'+esc(c.text)+'">'+esc(c.text)+'</span>').join('');
+    }else{
+      out+=clusterize(word).map(c=>'<span class="pending" data-w="'+w+'" data-h="'+esc(c.text)+'">'+esc(c.text)+'</span>').join('');
+    }
+    if(w<words.length-1)out+=' ';
+  }
+  passageEl.innerHTML=out;
+  updateKbHighlight(words[wordIndex]||'');
+}
+function trackMistakeLetters(target,typed){
+  const tG=graphemes(target),yG=graphemes(typed),len=Math.max(tG.length,yG.length);
+  for(let i=0;i<len;i++){
+    const t=tG[i],y=yG[i];
+    if(t!==undefined&&t!==y)mistakeLetters[t]=(mistakeLetters[t]||0)+1;
+  }
+}
+function finalizeWord(){
+  const words=passageWords();
+  if(wordIndex>=words.length)return;
+  // Word-final र् (Shift+Z, reph) has no following consonant left to attach
+  // to once the word ends — in real typing that's almost always (~90%) a
+  // plain र the typist meant to land at the end of the word, not a
+  // dangling reph. Resolve it to full र only at this finalize point, so
+  // mid-word reph (धर्म, वर्षा...) is completely untouched, and the person
+  // can still just backspace before pressing space if they really did want
+  // the half form.
+  if(buffer.endsWith('र्'))buffer=buffer.slice(0,-'र्'.length)+'र';
+  // If ि was armed (typed) but the word ended before a consonant closed it —
+  // including a deferred half consonant left mid-buffer, e.g. स्+ह — resolve
+  // it now the same way space does in free-typing mode.
+  if(pendingI){
+    const{last}=lastClusterInfo();
+    if(last&&last.endsWith(VIR))applyMatra('ि');
+    else buffer+='ि';
+    pendingI=false;
+  }
+  const target=words[wordIndex];
+  if(buffer!==target)trackMistakeLetters(target,buffer);
+  completedWords.push({target:target,typed:buffer,correct:buffer===target,mistake:classifyMistake(target,buffer)});
+  buffer='';pendingI=false;wordIndex++;
+}
+function checkFinish(){
+  const words=passageWords();
+  if(mode.value!=='free'&&words.length&&wordIndex>=words.length&&!finished){
+    finished=true;paused=true;clearTimeout(idleTimer);
+    const st=computeStats(),elapsed=performance.now()-start-pausedTotal,mins=elapsed/60000;
+    const w=wpmFromStats(st,mins),acc=st.total?Math.round(st.correct/st.total*100):100;
+    wpmEl.textContent=w.netWpm+' WPM';accEl.textContent=acc+'% acc';errEl.textContent=st.incorrect+' err';
+    pauseBtn.textContent='Pause';
+    showResults(w.netWpm,acc,st.incorrect,fmtTime(elapsed),w.grossWpm,st.fullMistakes,st.halfMistakes);
+  }
+}
+function timeUp(){
+  if(finished)return;
+  if(mode.value!=='free'&&buffer.length>0)finalizeWord();
+  finished=true;paused=true;clearTimeout(idleTimer);
+  const elapsed=timeLimitMs,mins=elapsed/60000;
+  pauseBtn.textContent='Pause';
+  if(mode.value==='free'){
+    const words=buffer.trim().split(/\s+/).filter(Boolean).length,wpm=Math.round(words/Math.max(mins,0.001));
+    wpmEl.textContent=wpm+' WPM';
+    showResults(wpm,100,0,fmtTime(elapsed),undefined,undefined,undefined,true);
+  }else{
+    const st=computeStats(),w=wpmFromStats(st,mins),acc=st.total?Math.round(st.correct/st.total*100):100;
+    wpmEl.textContent=w.netWpm+' WPM';accEl.textContent=acc+'% acc';errEl.textContent=st.incorrect+' err';
+    showResults(w.netWpm,acc,st.incorrect,fmtTime(elapsed),w.grossWpm,st.fullMistakes,st.halfMistakes,true);
+  }
+}
+function mark(code,cls){const el=document.querySelector('#kb .key[data-code="'+code+'"]');if(el)el.classList.add(cls)}
+function findDirect(ch){
+  for(const code in KEYMAP)if(KEYMAP[code].n===ch)return{code,cls:'active'};
+  for(const code in KEYMAP)if(KEYMAP[code].s===ch)return{code,cls:'active-shift'};
+  // Same half-only fallback as keystrokesForPlain: ख, थ, भ, श, ष, ण, ध, घ have no
+  // direct key of their own, only their half (halant) form does.
+  const half=ch+VIR;
+  for(const code in KEYMAP)if(KEYMAP[code].n===half)return{code,cls:'active'};
+  for(const code in KEYMAP)if(KEYMAP[code].s===half)return{code,cls:'active-shift'};
+  return null;
+}
+function highlightChar(ch){const f=findDirect(ch);if(f){mark(f.code,f.cls);return true}return false}
+function updateKbHighlight(p){
+  document.querySelectorAll('#kb .key.active,#kb .key.active-shift').forEach(k=>k.classList.remove('active','active-shift'));
+  if(!p||mode.value==='free')return;
+  // Mid-combo: user already pressed अ as the first half of an आ/ई/ऊ/ऐ/औ/ओ/ऋ-style combo — highlight the matra key that completes it.
+  if(buffer.length>0&&buffer[buffer.length-1]==='अ'&&p[buffer.length-1]&&p[buffer.length-1]!=='अ'){
+    const target=p[buffer.length-1];
+    for(const combo in COMPOSE){if(COMPOSE[combo]===target&&combo[0]==='अ'){if(highlightChar(combo[1]))return}}
+  }
+  // ि (short-i matra) is typed BEFORE its consonant on this layout, so while waiting to complete it,
+  // keep highlighting the consonant that finishes the combo (matches existing press() behaviour).
+  if(pendingI){highlightChar(p[buffer.length]);return}
+  const nc=p[buffer.length];
+  if(nc===undefined)return;
+  // If the very next character in the passage is ि, the correct next physical key is the ि key itself
+  // (pressed first), not the consonant that visually precedes it in the text.
+  if(p[buffer.length+1]==='ि'){highlightChar('ि');return}
+  if(highlightChar(nc))return;
+  // Combo-only vowels (आ, ई, ऊ, ऐ, ओ, औ) aren't a direct key — the first real keystroke is अ.
+  for(const combo in COMPOSE){if(COMPOSE[combo]===nc&&combo[0]==='अ'){highlightChar('अ');return}}
+}
+function render(){
+  practice.className='practice layout-'+layout.value+(mode.value==='free'?' free':'');
+  doc.placeholder=mode.value==='free'?'Free typing — start here…':'Type the passage here…';
+  const passOnly=mode.value!=='free';
+  accEl.style.display=passOnly?'':'none';
+  errEl.style.display=passOnly?'':'none';
+  wordRow.style.display=(mode.value==='word-normal'||mode.value==='word-shift')?'block':'none';
+  aiRow.style.display=(mode.value==='ai-passage')?'block':'none';
+  if(passOnly){
+    const pw=passageWords(),ptxt=passageText();
+    wordLenEl.textContent=pw.length?('WL '+(graphemes(ptxt).length/pw.length).toFixed(2)):'WL —';
+    wordLenEl.style.display='';
+  }else{
+    wordLenEl.style.display='none';
+  }
+  renderPassage();
+}
+function computeStats(){
+  const isFree=mode.value==='free';
+  if(isFree)return{correct:0,incorrect:0,errors:[],isFree:true,total:0};
+  let correct=0,incorrect=0,errors=[],fullMistakes=0,halfMistakes=0,grossChars=0;
+  completedWords.forEach((w,idx)=>{
+    const tG=graphemes(w.target),yG=graphemes(w.typed);
+    grossChars+=yG.length+1; // +1 for the space keystroke that finalized this word
+    if(w.mistake==='full')fullMistakes++;else if(w.mistake==='half')halfMistakes++;
+    if(w.correct){correct+=tG.length;return}
+    let c=0;const len=Math.min(tG.length,yG.length);
+    for(let i=0;i<len;i++)if(tG[i]===yG[i])c++;
+    correct+=c;incorrect+=Math.max(tG.length,yG.length)-c;
+    errors.push({idx:idx,expected:w.target,typed:w.typed});
+  });
+  // Include the word currently being typed (not yet submitted with Space) so WPM/accuracy
+  // update live instead of only jumping once a word is finished.
+  const curTarget=passageWords()[wordIndex];
+  if(curTarget!==undefined&&buffer.length>0){
+    const tG=graphemes(curTarget),yG=graphemes(buffer);
+    grossChars+=yG.length;
+    const len=Math.min(tG.length,yG.length);let c=0;
+    for(let i=0;i<len;i++)if(tG[i]===yG[i])c++;
+    correct+=c;incorrect+=Math.max(tG.length,yG.length)-c;
+  }
+  return{correct:correct,incorrect:incorrect,errors:errors,isFree:false,total:correct+incorrect,wordsTotal:completedWords.length,wordsCorrect:completedWords.filter(w=>w.correct).length,fullMistakes:fullMistakes,halfMistakes:halfMistakes,grossChars:grossChars}
+}
+// Real-exam ("CPCT/SSC style") Net WPM formula:
+// Net WPM = (gross keystrokes ÷ 5 − full mistakes − half mistakes ÷ 2) ÷ minutes
+function wpmFromStats(st,mins){
+  mins=Math.max(mins,0.001);
+  const grossWpm=Math.round((st.grossChars/5)/mins);
+  const netWpm=Math.max(0,Math.round((st.grossChars/5-st.fullMistakes-st.halfMistakes/2)/mins));
+  return{grossWpm:grossWpm,netWpm:netWpm};
+}
+function fmtTime(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function tick(){
+  if(!start||paused)return;
+  const elapsed=performance.now()-start-pausedTotal,mins=elapsed/60000;
+  if(timeLimitMs>0&&elapsed>=timeLimitMs&&!finished){timeEl.textContent=fmtTime(0);timeUp();return}
+  timeEl.textContent=timeLimitMs>0?fmtTime(timeLimitMs-elapsed):fmtTime(elapsed);
+  if(mins<=0)return;
+  const st=computeStats();
+  let wpm;
+  if(st.isFree){
+    const words=buffer.trim().split(/\s+/).filter(Boolean).length;
+    wpm=Math.round(words/mins);
+  }else{
+    wpm=wpmFromStats(st,mins).netWpm;
+    const acc=st.total?Math.round(st.correct/st.total*100):100;
+    accEl.textContent=acc+'% acc';
+    errEl.textContent=st.incorrect+' err';
+  }
+  wpmEl.textContent=wpm+' WPM';
+}
+function resetTest(){
+  buffer='';pendingI=false;start=0;pausedTotal=0;paused=false;finished=false;
+  wordIndex=0;completedWords=[];mistakeLetters={};
+  clearTimeout(idleTimer);
+  doc.value='';wpmEl.textContent='0 WPM';accEl.textContent='100% acc';errEl.textContent='0 err';
+  timeEl.textContent=timeLimitMs>0?fmtTime(timeLimitMs):'00:00';
+  pauseBtn.textContent='Pause';
+  examBadge.style.display=examMode.checked?'':'none';
+  hideErrorPanel();
+  renderPassage();
+}
+function resetIdle(){
+  clearTimeout(idleTimer);
+  if(mode.value==='free')return;
+  idleTimer=setTimeout(()=>{if(start&&!paused&&!finished&&(buffer.length>0||wordIndex>0))pauseTest()},IDLE_MS);
+}
+const errTitle=document.getElementById('errTitle'),resultStats=document.getElementById('resultStats'),resultBtns=document.getElementById('resultBtns'),retryBtn=document.getElementById('retryBtn'),newWordsBtn=document.getElementById('newWordsBtn');
+const wpmTarget=document.getElementById('wpmTarget'),hoverMode=document.getElementById('hoverMode'),hoverTip=document.getElementById('hoverTip'),passFailBadge=document.getElementById('passFailBadge'),mistakeLettersRow=document.getElementById('mistakeLettersRow'),newPassageBtn=document.getElementById('newPassageBtn'),fixWordsBtn=document.getElementById('fixWordsBtn');
+function showErrorPanel(customMsg){
+  const st=computeStats();
+  errTitle.textContent='MISTAKE REVIEW';
+  resultStats.classList.remove('show');resultStats.style.display='none';
+  resultBtns.classList.remove('show');resultBtns.style.display='none';
+  passFailBadge.style.display='none';mistakeLettersRow.style.display='none';mistakeLettersRow.innerHTML='';
+  resumeBtn.style.display='block';
+  errSummary.textContent=customMsg||(st.errors.length?st.errors.length+' word(s) with mistakes — review below, then resume.':'No mistakes so far — nice going!');
+  errList.innerHTML=st.errors.length?st.errors.map(e=>'<span class="echip" data-i="'+e.idx+'"><b>'+esc(e.expected)+'</b>→'+esc(e.typed||'—')+'</span>').join(''):'<span class="muted2">Nothing to fix yet.</span>';
+  errPanel.classList.add('open');errBackdrop.classList.add('open');
+}
+// WPM Target / Pass-Fail (task 5): fails if the target isn't reached by the
+// time the test ends (natural finish OR time-limit cutoff), and separately
+// flags the case where the speed target WAS met but the timer ran out before
+// the passage/words were actually finished.
+function evaluatePassFail(wpm,timeExpired,isFree){
+  const target=+wpmTarget.value;
+  if(!target)return null;
+  if(wpm<target)return{status:'fail',msg:'❌ FAIL — target was '+target+' WPM, you typed '+wpm+' WPM.'};
+  if(!isFree&&timeExpired)return{status:'warn',msg:'⚠ Speed target met ('+wpm+'/'+target+' WPM) but time ran out before you finished.'};
+  return{status:'pass',msg:'✅ PASS — '+wpm+'/'+target+' WPM target met'+(isFree?'.':' and finished in time.')};
+}
+function showResults(wpm,acc,errCount,timeStr,grossWpm,fullMistakes,halfMistakes,timeExpired){
+  const st=computeStats(),isWord=mode.value==='word-normal'||mode.value==='word-shift',isMultiPassage=/^(passage|starter)-\d/.test(mode.value),isFree=mode.value==='free';
+  errTitle.textContent=timeExpired?"TIME'S UP":(isWord?'WORD PRACTICE — RESULTS':'PASSAGE COMPLETE');
+  errSummary.textContent=isWord?'You finished '+(st.wordsTotal||0)+' word(s) — '+(st.wordsCorrect||0)+' correct.':(timeExpired?"Time limit reached — here's how you did.":'Great job finishing the passage!');
+  resultStats.style.display='grid';resultStats.classList.add('show');
+  const boxes=[['⏱ '+timeStr,'TIME'],['⚡ '+wpm,grossWpm!==undefined?'NET WPM':'WPM']];
+  if(grossWpm!==undefined)boxes.push(['🚀 '+grossWpm,'GROSS WPM']);
+  boxes.push(['✅ '+acc+'%','ACCURACY']);
+  if(fullMistakes!==undefined){boxes.push(['❌ '+fullMistakes,'FULL MISTAKES']);boxes.push(['⚠ '+halfMistakes,'HALF MISTAKES']);}
+  else boxes.push(['❌ '+errCount,'ERRORS']);
+  resultStats.innerHTML=boxes.map(s=>'<div class="statbox"><div class="v">'+s[0]+'</div><div class="l">'+s[1]+'</div></div>').join('');
+
+  const pf=evaluatePassFail(wpm,!!timeExpired,isFree);
+  if(pf){passFailBadge.className='pf-badge pf-'+pf.status;passFailBadge.textContent=pf.msg;passFailBadge.style.display='block';}
+  else{passFailBadge.style.display='none';}
+
+  const letterEntries=Object.entries(mistakeLetters).sort((a,b)=>b[1]-a[1]);
+  if(letterEntries.length){
+    mistakeLettersRow.style.display='flex';
+    mistakeLettersRow.innerHTML='<span class="muted2" style="width:100%;margin-bottom:2px">Letters you missed:</span>'+
+      letterEntries.slice(0,10).map(([ch,n])=>'<span class="echip"><b>'+esc(ch)+'</b>×'+n+'</span>').join('');
+  }else{
+    mistakeLettersRow.style.display='none';mistakeLettersRow.innerHTML='';
+  }
+
+  errList.innerHTML=st.errors.length?st.errors.map(e=>'<span class="echip"><b>'+esc(e.expected)+'</b>→'+esc(e.typed||'—')+'</span>').join(''):'<span class="muted2">No mistakes — perfect run!</span>';
+
+  resumeBtn.style.display='block';resumeBtn.textContent='Close';
+  retryBtn.style.display=isFree?'none':'block';
+  newWordsBtn.style.display=isWord?'block':'none';
+  newPassageBtn.style.display=isMultiPassage?'block':'none';
+  fixWordsBtn.style.display=(!isFree&&letterEntries.length)?'block':'none';
+  const anyBtn=retryBtn.style.display!=='none'||newWordsBtn.style.display!=='none'||newPassageBtn.style.display!=='none'||fixWordsBtn.style.display!=='none';
+  resultBtns.style.display=anyBtn?'flex':'none';resultBtns.classList.toggle('show',anyBtn);
+
+  errPanel.classList.add('open');errBackdrop.classList.add('open');
+}
+function hideErrorPanel(){errPanel.classList.remove('open');errBackdrop.classList.remove('open');resumeBtn.textContent='Resume Typing'}
+function pauseTest(){
+  if(paused||!start||finished)return;
+  paused=true;pauseStart=performance.now();
+  clearTimeout(idleTimer);
+  pauseBtn.textContent='Resume';
+  showErrorPanel();
+}
+function resumeTest(){
+  if(finished){hideErrorPanel();return}
+  if(!paused)return;
+  pausedTotal+=performance.now()-pauseStart;
+  paused=false;pauseBtn.textContent='Pause';
+  hideErrorPanel();resetIdle();doc.focus();
+}
+mode.onchange=async()=>{
+  if(mode.value==='word-normal'||mode.value==='word-shift')generateWordPassage();
+  else if(mode.value==='ai-passage'){await generateAiPassage()}
+  // Starter passages are short (25 words), so default the timer to a quick
+  // 1–2 minute run instead of whatever long duration was set before.
+  if(/^starter-\d/.test(mode.value)&&timeLimitMs>120000){
+    timeLimit.value='60000';timeLimitMs=60000;
+  }
+  resetTest();render();
+};
+aiGenBtn.onclick=async()=>{await generateAiPassage();resetTest();render();doc.focus()};
+layout.onchange=render;
+wordCount.oninput=()=>{wordCountVal.textContent=wordCount.value};
+wordCount.onchange=()=>{generateWordPassage();resetTest();render()};
+shuffleBtn.onclick=()=>{generateWordPassage();resetTest();render();doc.focus()};
+retryBtn.onclick=()=>{resetTest();render();doc.focus()};
+newWordsBtn.onclick=()=>{generateWordPassage();resetTest();render();doc.focus()};
+newPassageBtn.onclick=()=>{
+  const group=/^starter-\d/.test(mode.value)
+    ?['starter-1','starter-2','starter-3','starter-4','starter-5','starter-6','starter-7','starter-8','starter-9','starter-10']
+    :['passage-1','passage-2','passage-3','passage-4'];
+  const others=group.filter(k=>k!==mode.value);
+  mode.value=others[Math.floor(Math.random()*others.length)]||mode.value;
+  if(/^starter-\d/.test(mode.value)&&timeLimitMs>120000){timeLimit.value='60000';timeLimitMs=60000;}
+  resetTest();render();doc.focus();
+};
+// Task 1 "fix the word": ask Groq for real Hindi words built around the
+// letters the user keeps missing, falling back to a local word pool if the
+// API/network isn't available (e.g. Groq key not configured, offline dev).
+function localFixWords(letters,n){
+  const pool=[...WORDS_NORMAL,...WORDS_SHIFT];
+  const matches=pool.filter(w=>letters.some(l=>w.includes(l)));
+  const chosen=(matches.length?matches:pool);
+  const out=[];while(out.length<n)out.push(...shuffleArr(chosen));
+  return out.slice(0,n);
+}
+async function fetchFixWords(letters,n){
+  try{
+    const ctrl=new AbortController();
+    const timer=setTimeout(()=>ctrl.abort(),2500);
+    const res=await fetch('/api/groq-words',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({letters,count:n}),signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!res.ok)throw new Error('bad status');
+    const data=await res.json();
+    if(Array.isArray(data.words)&&data.words.length)return data.words.slice(0,n);
+    throw new Error('empty');
+  }catch(e){
+    return localFixWords(letters,n);
+  }
+}
+fixWordsBtn.onclick=async()=>{
+  const letters=Object.entries(mistakeLetters).sort((a,b)=>b[1]-a[1]).slice(0,6).map(e=>e[0]);
+  if(!letters.length)return;
+  fixWordsBtn.disabled=true;const oldTxt=fixWordsBtn.textContent;fixWordsBtn.textContent='⏳ Generating…';
+  const words=await fetchFixWords(letters,12);
+  currentWordPassage=words.join(' ');
+  mode.value=letters.some(isShiftChar)?'word-shift':'word-normal';
+  resetTest();render();hideErrorPanel();doc.focus();
+  fixWordsBtn.disabled=false;fixWordsBtn.textContent=oldTxt;
+};
+timeLimit.onchange=()=>{timeLimitMs=+timeLimit.value;resetTest();render()};
+examMode.onchange=()=>{examBadge.style.display=examMode.checked?'':'none'};
+generateWordPassage();updateAiUsageLabel();render();resetTest();
+document.getElementById('settingsBtn').onclick=()=>document.getElementById('settings').classList.toggle('open');
+document.getElementById('clearBtn').onclick=()=>{resetTest();doc.focus()};
+pauseBtn.onclick=()=>{if(finished)return;paused?resumeTest():pauseTest()};
+resumeBtn.onclick=resumeTest;
+errBackdrop.onclick=resumeTest;
+errList.addEventListener('click',e=>{
+  const c=e.target.closest('.echip');if(!c)return;
+  const idx=c.getAttribute('data-i');
+  if(!finished)resumeTest();
+  if(idx!==null){
+    const spans=passageEl.querySelectorAll('[data-w="'+idx+'"]');
+    if(spans.length){
+      spans[0].scrollIntoView({block:'center',behavior:'smooth'});
+      spans.forEach(el=>el.classList.add('jump-flash'));
+      setTimeout(()=>spans.forEach(el=>el.classList.remove('jump-flash')),900);
+    }
+  }
+  doc.focus();
+});
+function flashLocked(){
+  const tb=document.querySelector('.typebox');
+  tb.classList.add('locked-flash');
+  setTimeout(()=>tb.classList.remove('locked-flash'),150);
+}
+doc.addEventListener('keydown',e=>{
+  if(paused)return;
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  const nonFree=mode.value!=='free';
+  if(e.code==='Backspace'){
+    e.preventDefault();
+    // Many real Hindi typing exams (CPCT etc.) disable backspace entirely, so mistakes
+    // count as raw errors without correction — Exam Mode simulates that constraint.
+    if(examMode.checked){flashLocked();return}
+    if(pendingI){pendingI=false}
+    else{
+      // Remove one user-visible grapheme, not one UTF-16 code unit. This keeps
+      // Devanagari conjuncts/matras from being split into corrupt fragments.
+      const gs=graphemes(buffer);gs.pop();buffer=gs.join('');
+    }
+  }
+  else if(nonFree&&(e.code==='Space'||e.code==='Enter')){e.preventDefault();if(!start)start=performance.now();finalizeWord()}
+  else if(e.code==='Enter'){e.preventDefault();pendingI=false;buffer+='\n'}
+  else if(KEYMAP[e.code]){e.preventDefault();if(!start)start=performance.now();press(e.code,e.shiftKey)}
+  else return;
+  if(nonFree){
+    const shown=completedWords.map(w=>w.typed).join(' ')+(completedWords.length?' ':'')+buffer;
+    doc.value=shown;doc.setSelectionRange(shown.length,shown.length);
+  }else{
+    doc.value=buffer;doc.setSelectionRange(buffer.length,buffer.length);
+  }
+  renderPassage();resetIdle();
+  checkFinish();
+});
+doc.addEventListener('paste',e=>{e.preventDefault();});
+doc.addEventListener('input',()=>{ 
+  // keydown owns the model; reset any browser/IME insertion that slipped through.
+  const shown=mode.value!=='free'
+    ?completedWords.map(w=>w.typed).join(' ')+(completedWords.length?' ':'')+buffer
+    :buffer;
+  if(doc.value!==shown){doc.value=shown;doc.setSelectionRange(shown.length,shown.length);}
+});
+
+// Task 2: Hover Mode — hover any letter in the passage to see which
+// physical key (and Shift, if needed) types it.
+function positionHoverTip(e){
+  const w=hoverTip.offsetWidth||120;
+  hoverTip.style.left=Math.max(4,Math.min(e.clientX+14,window.innerWidth-w-8))+'px';
+  hoverTip.style.top=Math.max(4,e.clientY-38)+'px';
+}
+function hideHoverTip(){hoverTip.style.display='none';}
+function hoverMoveHandler(e){
+  if(!hoverMode.checked||mode.value==='free'){hideHoverTip();return;}
+  const el=e.target.closest&&e.target.closest('[data-h]');
+  if(!el){hideHoverTip();return;}
+  const ch=el.getAttribute('data-h');
+  if(!ch||!ch.trim()){hideHoverTip();return;}
+  hoverTip.innerHTML=esc(ch)+'<b>'+esc(keyLabelsFor(ch))+'</b>';
+  hoverTip.style.display='block';
+  positionHoverTip(e);
+}
+passageEl.addEventListener('mouseover',hoverMoveHandler);
+passageEl.addEventListener('mousemove',hoverMoveHandler);
+passageEl.addEventListener('mouseleave',hideHoverTip);
+hoverMode.onchange=()=>{if(!hoverMode.checked)hideHoverTip()};
+
+setInterval(tick,1000);
+const rows=[['Backquote','Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9','Digit0','Minus','Equal'],['KeyQ','KeyW','KeyE','KeyR','KeyT','KeyY','KeyU','KeyI','KeyO','KeyP','BracketLeft','BracketRight','Backslash'],['KeyA','KeyS','KeyD','KeyF','KeyG','KeyH','KeyJ','KeyK','KeyL','Semicolon','Quote'],['KeyZ','KeyX','KeyC','KeyV','KeyB','KeyN','KeyM','Comma','Period','Slash']];document.getElementById('kb').innerHTML=rows.map(r=>'<div class=row>'+r.map(c=>'<span class="key" data-code="'+c+'">'+KEYMAP[c].n+'<b>'+KEYMAP[c].s+'</b></span>').join('')+'</div>').join('');document.getElementById('kbOn').onchange=e=>document.getElementById('kb').classList.toggle('open',e.target.checked);
+</script></body></html>
