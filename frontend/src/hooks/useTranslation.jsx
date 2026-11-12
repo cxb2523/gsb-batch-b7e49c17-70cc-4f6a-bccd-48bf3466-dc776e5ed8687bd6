@@ -1,0 +1,520 @@
+import { useState, useCallback, useEffect, useRef } from 'react';
+import translationService from '../services/translationService';
+import historyService from '../services/historyService';
+import { loadOptions, saveOptions, toRequestGlossary, toRequestStyleGuide } from '../services/translationOptions';
+import { useSettings } from '../contexts/SettingsContext';
+import { toast } from 'react-hot-toast';
+
+export const DEFAULT_TARGET_LANG = 'Spanish';
+
+/** True when the swap button can act: a known source language that differs from the target. */
+export const canSwap = (sourceLang, targetLang) => sourceLang !== 'Auto-detect' && sourceLang !== targetLang;
+
+/**
+ * Custom hook for handling translations
+ * @returns {Object} - Translation state and functions
+ */
+const useTranslation = () => {
+  const [sourceText, setSourceText] = useState('');
+  const [translatedText, setTranslatedText] = useState('');
+  const [sourceLang, setSourceLang] = useState('Auto-detect');
+  // Spanish, not English: the sample sentence and most first tries are English, and an
+  // English target would hand them back unchanged.
+  const [targetLang, setTargetLang] = useState(DEFAULT_TARGET_LANG);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [serviceInfo, setServiceInfo] = useState({ model: '' });
+  // Glossary and style guide, saved in this browser
+  const [options, setOptions] = useState(loadOptions);
+  const [glossaryMisses, setGlossaryMisses] = useState([]);
+  // Review (`review=on`) is off by default; its report comes with the segments it names
+  const [review, setReview] = useState(false);
+  const [reviewResult, setReviewResult] = useState(null);
+  const { settings } = useSettings();
+
+  useEffect(() => {
+    saveOptions(options);
+  }, [options]);
+
+  // Ref to track if a translation has been explicitly initiated by the user (typing, clicking translate, loading from history)
+  const translationInitiated = useRef(false);
+
+  // --- Start: Speak Translation State (Tasks 3.1, 3.2) ---
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [isSpeakingLoading, setIsSpeakingLoading] = useState(false);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [speakError, setSpeakError] = useState(null);
+  const audioPlayerRef = useRef(null); // For controlling the <audio> element
+  const prevTranslatedTextRef = useRef(null); // To compare with current translatedText for caching
+  // --- End: Speak Translation State ---
+
+  // --- Start: Daily Usage Tracking State (Task 4.2) ---
+  const MAX_SPEAKS_PER_DAY = 10; // Define usage limit (Task 4.5)
+  const [speakCount, setSpeakCount] = useState(0);
+  const [lastSpeakDate, setLastSpeakDate] = useState(new Date().toLocaleDateString());
+  const [canSpeak, setCanSpeak] = useState(true);
+  // Add state for tracking if TTS notice has been shown
+  const [hasShownTTSNotice, setHasShownTTSNotice] = useState(false);
+  // --- End: Daily Usage Tracking State ---
+
+
+  // --- Start: Initialize and Manage Speak Count from localStorage (Task 4.3) ---
+  useEffect(() => {
+    const storedSpeakCount = localStorage.getItem('speakCount');
+    const storedLastSpeakDate = localStorage.getItem('lastSpeakDate');
+    const today = new Date().toLocaleDateString();
+
+    if (storedLastSpeakDate && storedLastSpeakDate === today) {
+      const count = parseInt(storedSpeakCount, 10) || 0;
+      setSpeakCount(count);
+      if (count >= MAX_SPEAKS_PER_DAY) {
+        setCanSpeak(false);
+      }
+    } else {
+      // Reset count if it's a new day or no data stored
+      setSpeakCount(0);
+      localStorage.setItem('speakCount', '0');
+      localStorage.setItem('lastSpeakDate', today);
+      setCanSpeak(true);
+    }
+    // Persist the initial or reset date immediately
+    setLastSpeakDate(today);
+  }, []);
+
+  // Update canSpeak whenever speakCount changes
+  useEffect(() => {
+    setCanSpeak(speakCount < MAX_SPEAKS_PER_DAY);
+  }, [speakCount]);
+  // --- End: Initialize and Manage Speak Count ---
+
+  // --- Start: Audio Element Effects (Tasks 3.4) ---
+  // Create audio element on mount
+  useEffect(() => {
+    if (!audioPlayerRef.current) {
+      audioPlayerRef.current = new Audio();
+      console.log('Created audio element programmatically');
+    }
+    
+    return () => {
+      // Cleanup on unmount if needed
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current.src = '';
+      }
+    };
+  }, []);
+  
+  // Set up audio event listeners
+  useEffect(() => {
+    const audioElement = audioPlayerRef.current;
+    if (!audioElement) {
+      console.log('Audio element ref is not available yet');
+      return;
+    }
+    
+    console.log('Setting up audio element event listeners');
+    
+    // Add debugging logs for audio element properties
+    console.log('Audio element initial state:', {
+      src: audioElement.src,
+      paused: audioElement.paused,
+      ended: audioElement.ended,
+      readyState: audioElement.readyState,
+      networkState: audioElement.networkState,
+      error: audioElement.error
+    });
+
+    const handlePlaying = () => {
+      console.log('Audio started playing');
+      setIsAudioPlaying(true);
+    };
+    
+    const handleEnded = () => {
+      console.log('Audio playback ended');
+      setIsAudioPlaying(false);
+    };
+    
+    const handlePause = () => {
+      console.log('Audio playback paused');
+      setIsAudioPlaying(false);
+    };
+    
+    const handleError = () => {
+      console.error('Audio playback error:', {
+        error: audioElement.error,
+        code: audioElement.error ? audioElement.error.code : null,
+        message: audioElement.error ? audioElement.error.message : null,
+        networkState: audioElement.networkState
+      });
+      setSpeakError('Error playing audio.');
+      setIsAudioPlaying(false);
+      // Make sure toast error is displayed
+      toast.error('Error playing audio. Please try again.');
+    };
+
+    // Add a canplay event handler for debugging
+    const handleCanPlay = () => {
+      console.log('Audio can play now:', {
+        duration: audioElement.duration,
+        readyState: audioElement.readyState
+      });
+    };
+
+    audioElement.addEventListener('playing', handlePlaying);
+    audioElement.addEventListener('ended', handleEnded);
+    audioElement.addEventListener('pause', handlePause);
+    audioElement.addEventListener('error', handleError);
+    audioElement.addEventListener('canplay', handleCanPlay);
+
+    return () => {
+      console.log('Cleaning up audio element event listeners');
+      audioElement.removeEventListener('playing', handlePlaying);
+      audioElement.removeEventListener('ended', handleEnded);
+      audioElement.removeEventListener('pause', handlePause);
+      audioElement.removeEventListener('error', handleError);
+      audioElement.removeEventListener('canplay', handleCanPlay);
+    };
+  }, [audioPlayerRef.current]);
+  // --- End: Audio Element Effects ---
+
+  useEffect(() => {
+    // Clean up Object URL when audioUrl changes or component unmounts
+    let currentAudioUrl = audioUrl;
+    return () => {
+      if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        console.log('Revoked Object URL:', currentAudioUrl);
+      }
+    };
+  }, [audioUrl]);
+
+  // One effect owns prevTranslatedTextRef. When the translation changes, the old
+  // audio belongs to the old text: revoke its URL, drop the blob, stop playback and
+  // reset the speak error, so Speak always fetches audio for what is on screen.
+  // Two effects used to write the ref; the first updated it before the second
+  // compared, so the cache never cleared and the old audio played again.
+  useEffect(() => {
+    if (translatedText === prevTranslatedTextRef.current) return;
+    prevTranslatedTextRef.current = translatedText;
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+    // Stop the old audio if any is loaded; with no source there is nothing to stop.
+    if (audioPlayerRef.current?.src) {
+      audioPlayerRef.current.pause();
+    }
+    setAudioBlob(null);
+    setAudioUrl(null);
+    setIsAudioPlaying(false);
+    setSpeakError(null);
+  }, [translatedText, audioUrl]);
+  // --- End: Clear audio cache ---
+
+
+  // Modify translate function to prevent unnecessary API calls
+  const translate = useCallback(async () => {
+    console.log('Translate function called. Source text:', sourceText);
+    
+    if (!sourceText.trim()) {
+      console.log('Skipping translation: sourceText is empty');
+      // setError('Please enter text to translate'); // Avoid setting error here if it's just an empty input
+      return;
+    }
+
+    // Set flag to indicate translation has been initiated
+    translationInitiated.current = true; 
+    
+    setIsLoading(true);
+    setError(null);
+    setGlossaryMisses([]);
+    setReviewResult(null);
+
+    try {
+      const result = await translationService.translate(sourceText, sourceLang, targetLang, {
+        glossary: toRequestGlossary(options.glossary),
+        styleGuide: toRequestStyleGuide(options.styleGuide),
+        review,
+      });
+      
+      console.log('API Response from /v1/translate:', result); // Log the entire API response
+
+      setTranslatedText(result.translation);
+      setServiceInfo({ model: result.model || '' });
+      setGlossaryMisses(result.glossary_misses || []);
+      if (result.review) {
+        setReviewResult({ report: result.review });
+      }
+      
+      // Add to history if enabled
+      if (settings.historyEnabled) {
+        historyService.addToHistory({
+          sourceText,
+          translatedText: result.translation,
+          sourceLang,
+          targetLang,
+          model: result.model,
+        }, settings.maxHistoryItems);
+      }
+      
+      return result;
+    } catch (err) {
+      console.error('Error in translate function:', err); // Log the full error
+      // The error itself, not only its message: the page names a missing model key by its type.
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [sourceText, sourceLang, targetLang, settings, options, review]);
+
+  // --- Start: handleSpeak function (Task 3.3) ---
+  // --- Start: Auto-play audio after load (Task 3.1) ---
+  useEffect(() => {
+    // Only auto-play if audioUrl was just set and not already playing
+    if (audioUrl && !isAudioPlaying && !isSpeakingLoading) {
+      if (audioPlayerRef.current) {
+        // Use the canplay event to wait until the audio is ready before playing
+        const audioElement = audioPlayerRef.current;
+        
+        const playAudio = () => {
+          audioElement.play().catch(() => {
+            setSpeakError('Failed to auto-play audio');
+            setIsAudioPlaying(false);
+            setIsSpeakingLoading(false);
+            toast.error('Could not auto-play audio. Please try again.');
+          });
+          // Clean up event listener after playing
+          audioElement.removeEventListener('canplay', playAudio);
+        };
+        
+        // Add event listener for canplay
+        audioElement.addEventListener('canplay', playAudio);
+        
+        // Set the src - this will trigger loading
+        audioElement.src = audioUrl;
+      }
+    }
+    // No dependencies on translatedText here to avoid double-play
+  }, [audioUrl]);
+  // --- End: Auto-play audio after load ---
+
+  // Handle Speak functionality
+  const handleSpeak = useCallback(async () => {
+    if (!translatedText) {
+      toast.error('No text to speak');
+      return;
+    }
+
+    if (!canSpeak) {
+      toast.error(`Daily limit of ${MAX_SPEAKS_PER_DAY} TTS requests reached`);
+      return;
+    }
+
+    // If audio is already playing, pause it
+    if (isAudioPlaying && audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      return;
+    }
+
+    // If we're in an error state, clear it to allow retry
+    if (speakError) {
+      console.log('Retrying after previous error');
+      setSpeakError(null);
+      setAudioBlob(null);
+      setAudioUrl(null);
+      // Continue with generating new audio
+    }
+
+    // If we already have audio for this text, play it
+    if (audioBlob && prevTranslatedTextRef.current === translatedText && !speakError) {
+      console.log('Using cached audio');
+      if (audioPlayerRef.current) {
+        const playExistingAudio = () => {
+          audioPlayerRef.current.play().catch(err => {
+            console.error('Error playing cached audio:', err);
+            setSpeakError('Error playing audio');
+            toast.error('Error playing audio. Please try again.');
+          });
+          audioPlayerRef.current.removeEventListener('canplay', playExistingAudio);
+        };
+        
+        if (audioPlayerRef.current.readyState >= 3) {
+          // Audio is already loaded and ready to play
+          playExistingAudio();
+        } else {
+          // Add listener for when it's ready
+          audioPlayerRef.current.addEventListener('canplay', playExistingAudio);
+        }
+      }
+      return;
+    }
+
+    // Otherwise, fetch new audio
+    try {
+      setIsSpeakingLoading(true);
+      setSpeakError(null);
+
+      // Show first-time TTS notice if it hasn't been shown yet in this session
+      if (!hasShownTTSNotice) {
+        setHasShownTTSNotice(true);
+        // We'll return the shouldShowTTSNotice flag to the parent component
+      }
+
+      // Increment speak count and update localStorage
+      const newCount = speakCount + 1;
+      setSpeakCount(newCount);
+      localStorage.setItem('speakCount', newCount.toString());
+      localStorage.setItem('lastSpeakDate', lastSpeakDate);
+
+      // Get audio from API
+      const blob = await translationService.getSpeakAudio(
+        translatedText,
+        targetLang
+      );
+
+      // The translation may have changed while the request was in flight; that
+      // audio belongs to the old text, so drop it instead of installing it.
+      if (prevTranslatedTextRef.current !== translatedText) {
+        setIsSpeakingLoading(false);
+        return;
+      }
+
+      // Create URL for the audio blob
+      const url = URL.createObjectURL(blob);
+      setAudioBlob(blob);
+      setAudioUrl(url);
+
+      // Play the audio - ensure we have a valid audio element
+      if (audioPlayerRef.current) {
+        console.log('Setting audio source and playing:', url);
+        
+        const audioElement = audioPlayerRef.current;
+        
+        const playNewAudio = () => {
+          audioElement.play().catch(err => {
+            console.error('Error playing new audio:', err);
+            setSpeakError('Failed to play audio');
+            setIsAudioPlaying(false);
+            toast.error('Failed to play audio. Please try again.');
+          });
+          audioElement.removeEventListener('canplay', playNewAudio);
+        };
+        
+        // Listen for when audio is ready to play
+        audioElement.addEventListener('canplay', playNewAudio);
+        
+        // Set source to trigger loading
+        audioElement.src = url;
+      } else {
+        console.error('Audio element reference is null');
+        toast.error('Audio player not initialized');
+      }
+
+      setIsSpeakingLoading(false);
+    } catch (err) {
+      console.error('Error in handleSpeak:', err);
+      setIsSpeakingLoading(false);
+      setSpeakError('Failed to generate audio');
+      toast.error('Failed to generate audio. Please try again.');
+    }
+  }, [
+    translatedText,
+    canSpeak,
+    isAudioPlaying,
+    audioBlob,
+    targetLang,
+    speakCount,
+    lastSpeakDate,
+    hasShownTTSNotice,
+    setHasShownTTSNotice,
+    speakError,
+  ]);
+  // --- End: handleSpeak function ---
+
+  // Rest of the hook implementation remains the same
+  
+  // Modified loadFromHistory to prevent auto-translating on load
+  const loadFromHistory = useCallback((historyItem) => {
+    console.log('Loading from history:', historyItem);
+    setSourceText(historyItem.sourceText);
+    setTranslatedText(historyItem.translatedText);
+    setSourceLang(historyItem.sourceLang);
+    setTargetLang(historyItem.targetLang);
+    // Items saved before the /v1 client have `model_used` instead of `model`
+    setServiceInfo({ model: historyItem.model || historyItem.model_used || '' });
+    setGlossaryMisses([]);
+    setReviewResult(null);
+    translationInitiated.current = true; // Mark as initiated when loading from history
+  }, []);
+
+  const clearTranslation = useCallback(() => {
+    setSourceText('');
+    setTranslatedText('');
+    setError(null);
+    setGlossaryMisses([]);
+    setReviewResult(null);
+    // Also clear speak related state
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+    setAudioBlob(null);
+    setAudioUrl(null);
+    setIsAudioPlaying(false);
+    setSpeakError(null);
+  }, [audioUrl]);
+
+  // Swaps the languages and, when there is a translation, moves it into the input: the
+  // translation becomes the text to translate and the output starts empty — the old source
+  // is not a translation into the new target. Without a known source language there is
+  // nothing to swap to.
+  const swapLanguages = useCallback(() => {
+    if (!canSwap(sourceLang, targetLang)) return;
+    setSourceLang(targetLang);
+    setTargetLang(sourceLang);
+    if (translatedText) {
+      setSourceText(translatedText);
+      setTranslatedText('');
+    }
+    // The misses and the review belong to the translation that was on screen.
+    setGlossaryMisses([]);
+    setReviewResult(null);
+  }, [sourceLang, targetLang, translatedText]);
+
+  return {
+    sourceText,
+    setSourceText,
+    translatedText,
+    setTranslatedText,
+    sourceLang,
+    setSourceLang,
+    targetLang,
+    setTargetLang,
+    isLoading,
+    error,
+    serviceInfo,
+    options,
+    setOptions,
+    glossaryMisses,
+    review,
+    setReview,
+    reviewResult,
+    translate,
+    loadFromHistory,
+    translationInitiated,
+    swapLanguages, // Make sure it's included here
+    // Add all speak-related states and functions to the returned object
+    audioBlob,
+    audioUrl,
+    audioPlayerRef,
+    isSpeakingLoading,
+    isAudioPlaying,
+    speakError,
+    canSpeak,
+    hasShownTTSNotice,
+    handleSpeak,
+    clearTranslation 
+  };
+};
+
+export default useTranslation;
+

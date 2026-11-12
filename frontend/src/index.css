@@ -1,0 +1,62 @@
+@import "tailwindcss";
+@import "./theme.css";
+@config "../tailwind.config.js";
+
+/*
+  The family design tokens are in theme.css. The semantic Tailwind colours below map onto
+  them, so a component writes `bg-surface text-ink` once and gets both themes.
+  The palettes in tailwind.config.js (primary is the teal accent) are for the few places that
+  still name a shade.
+*/
+:root {
+  --app-canvas: var(--color-bg);
+  --app-surface: var(--color-surface);
+  --app-surface-muted: var(--color-surface-sunken);
+  --app-ink: var(--color-text);
+  --app-ink-muted: var(--color-muted);
+  --app-line: var(--color-border);
+  --app-brand: var(--color-accent);
+  --app-brand-ink: var(--color-on-accent);
+  --app-brand-soft: var(--color-accent-subtle);
+  --app-danger: var(--color-danger);
+  --app-ring: var(--color-focus);
+}
+
+@theme inline {
+  --color-canvas: var(--app-canvas);
+  --color-surface: var(--app-surface);
+  --color-surface-muted: var(--app-surface-muted);
+  --color-ink: var(--app-ink);
+  --color-ink-muted: var(--app-ink-muted);
+  --color-line: var(--app-line);
+  --color-brand: var(--app-brand);
+  --color-brand-ink: var(--app-brand-ink);
+  --color-brand-soft: var(--app-brand-soft);
+  --color-danger: var(--app-danger);
+  --color-ring: var(--app-ring);
+}
+
+@theme {
+  /* Type: the family font stack (theme.css). */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Spacing: the side padding of the shell and the width its content stops at. */
+  --spacing-gutter: 1rem;
+  --container-shell: 76rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    min-height: 100vh;
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+}

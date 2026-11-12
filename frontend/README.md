@@ -1,0 +1,232 @@
+# LLM Translate: Frontend
+
+[![Star on GitHub](https://img.shields.io/github/stars/samestrin/llm-translate?style=social)](https://github.com/samestrin/llm-translate/stargazers) [![Fork on GitHub](https://img.shields.io/github/forks/samestrin/llm-translate?style=social)](https://github.com/samestrin/llm-translate/network/members) [![Watch on GitHub](https://img.shields.io/github/watchers/samestrin/llm-translate?style=social)](https://github.com/samestrin/llm-translate/watchers)
+
+![Version 1.0.0](https://img.shields.io/badge/Version-1.0.0-blue) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Built with Node.js](https://img.shields.io/badge/Built%20with-Node.js-green)](https://nodejs.org/)
+
+LLM Translate is an open-source translation tool that leverages Large Language Models (LLMs) to provide high-quality translations between multiple languages. This is the frontend application, built with Node, React, Vite, Material UI, and Tailwind CSS, providing the user interface for interacting with the translation service. This interface supports language translation, text-to-speech, keyboard shortcuts, copy to clipboard, and translation history management. This app is responsive and a11y compliant and follows the Web Content Accessibility Guidelines (WCAG) 2.1.
+
+## Table of Contents
+- [LLM Translate: Frontend](#llm-translate-frontend)
+ - [Brief Description](#brief-description)
+ - [Installation](#installation)
+ - [Usage Examples](#usage-examples)
+ - [Features](#features)
+ - [Requirements/Dependencies](#requirementsdependencies)
+ - [Configuration](#configuration)
+ - [Project Structure](#project-structure)
+ - [API Documentation](#api-documentation)
+ - [Related Documentation](#related-documentation)
+ - [Contributing](#contributing)
+ - [License](#license)
+ - [Acknowledgments](#acknowledgments)
+ - [Share](#share)
+
+## Brief Description
+LLM Translate is an open-source translation tool that leverages Large Language Models (LLMs) to provide high-quality translations between multiple languages. This is the frontend application, built with Node, React, Vite, Material UI, and Tailwind CSS, providing the user interface for interacting with the translation service.
+
+## Installation
+To get the frontend development environment running:
+
+1. **Clone the repository (if you haven't already):**
+ ```bash
+ git clone https://github.com/samestrin/llm-translate.git
+ cd llm-translate/frontend
+ ```
+
+2. **Install dependencies:**
+ Using npm:
+ ```bash
+ npm install
+ ```
+ Or using yarn (if `yarn.lock` is present and preferred):
+ ```bash
+ yarn install
+ ```
+
+3. **Set up environment variables:**
+ Create a `.env` file in the `frontend` directory. You can copy the example file if one is provided (e.g., `.env.example`).
+ Example:
+ ```
+ VITE_API_URL=http://localhost:8000/
+ VITE_APP_TITLE="LLM Translate"
+ ```
+
+## Usage Examples
+1. **Run the development server:**
+ ```bash
+ npm run dev
+ ```
+ This will start the Vite development server, typically on `http://localhost:5173`.
+
+2. **Build for production:**
+ ```bash
+ npm run build
+ ```
+ This will create a `dist` folder with the optimized production build.
+
+3. **Preview the production build locally:**
+ ```bash
+ npm run preview
+ ```
+
+4. **Lint the code:**
+ ```bash
+ npm run lint
+ ```
+
+5. **Run the component tests (Vitest + Testing Library):**
+ ```bash
+ npm test
+ ```
+
+6. **Run the browser tests (Playwright; first run `npx playwright install chromium`):**
+ ```bash
+ npm run test:e2e
+ ```
+
+7. **Running with Docker (using Docker Compose):**
+ If you have Docker and Docker Compose installed, you can build and run the frontend service (along with the backend if configured in `docker-compose.yml` at the root) using:
+ ```bash
+ # Navigate to the root directory of the project (where docker-compose.yml is)
+ cd ../ 
+ # Build and start all services defined in docker-compose.yml
+ docker-compose up --build
+ # To run in detached mode:
+ # docker-compose up --build -d
+ # To stop the services:
+ # docker-compose down
+ ```
+ The frontend will typically be available at `http://localhost:3000`.
+
+## Features
+* **Real-time Translation:** Input text and get translations powered by LLMs.
+* **File Translation:** On the File tab, drop or choose a JSON, YAML, PO, Markdown, HTML or SRT file, pick the languages, and download the translated file. A report shows the format, the number of segments, the model and the tokens spent; if any segment fails, each failure is listed and no file is offered.
+* **Review:** The "Review the translation" switch (off by default) sends `review=on` with text and file translations. The Review section then lists each flagged segment with its severity (critical, major or minor, read from the reason; "not rated" when the reason names none) and its reason, beside its source and translation, and a table of the model and tokens of each step (translation, back-translation, review, revision) with the total. A text flag shows its source segment (the whole text and its translation when it is one segment); a JSON file flag shows the key's source and translated values; other file formats show the flag without the source. A flag is advice for a person to read, not an error.
+* **Multiple Language Support:** Select from a wide range of source and target languages, including an "Auto-detect" option for the source language.
+* **Model Shown:** The backend chooses the provider and model (see its `LLM_*` settings); the page shows the model that answered each translation.
+* **Service Check:** On load the page calls `GET /` once (it calls no model). A healthy backend shows nothing; an unreachable one shows a banner saying so.
+* **Glossary and Style Guide:** Add glossary terms (a translation, a note, or keep the term as is) and a tone, formality, audience and notes; they are sent with every text translation and saved in this browser's `localStorage`. Glossary terms the translation missed (`glossary_misses`) are listed under it. The [`/guide`](../docs/web-app.md) page explains both fields with a worked example; file mode takes neither.
+* **Speech:** Listen to translated text (beta). With a Kokoro speech model and no `TTS_VOICE`, the backend picks a voice per language; other speech models read every language with one voice.
+* **Translation History:** View, reuse, search, and delete past translations (if enabled).
+* **Customizable Settings:**
+ * Theme (Dark/Light mode)
+ * Interface Language
+ * Auto-translate on/off and delay
+ * History management (enable/disable, max items)
+* **Responsive Design:** User-friendly interface across different devices.
+* **Copy to Clipboard:** Easily copy source or translated text.
+* **Swap Languages & Text:** One swap button between the two language pickers swaps the languages and, when there is a translation, the text with them.
+* **Character Limits:** Visual indicators for text area character limits.
+* **Accessibility:** Includes ARIA attributes, keyboard navigation, and considerations for screen readers.
+* **Keyboard Shortcuts:** For common actions like translate and toggling help.
+* **Informational Pages:** About, the glossary and style guide Guide, Privacy Policy, Terms, and How AI Translation Works.
+
+## Requirements/Dependencies
+* **Node.js:** (e.g., >=18.x.x, check [`package.json`](package.json) for specific engine requirements if listed)
+* **npm** (or **yarn**)
+
+### Key Frontend Dependencies:
+* **React:** For building the user interface.
+* **Vite:** As the build tool and development server.
+* **React Router DOM:** For client-side routing.
+* **Tailwind CSS:** For utility-first styling, and the one design system: semantic colour, type and spacing tokens in `src/index.css`.
+* **Material UI (MUI):** Still used by some page components while they move to Tailwind; the layout shell and `components/UI` no longer use it.
+* **Radix UI Tooltip:** For accessible tooltips.
+* **Axios:** For making HTTP requests to the backend.
+* **Lucide React:** For icons.
+* **date-fns:** For date formatting.
+* **react-hot-toast:** For notifications.
+* **uuid:** For generating unique IDs.
+(See [`package.json`](package.json) for a full list)
+
+## Configuration
+Frontend configuration is primarily managed through:
+
+* **Environment Variables (`.env`):**
+ * `VITE_API_URL`: The base URL for the backend API.
+ * Other `VITE_` prefixed variables can be added as needed and accessed via `import.meta.env`.
+* **Application Settings (UI):** Users can configure preferences like theme, auto-translate and history settings directly in the application's settings page. These are typically stored in `localStorage`.
+* **Vite Configuration (`vite.config.js`):** For build-related settings, aliases, plugins, etc.
+* **Tailwind Configuration (`tailwind.config.js`):** The colour palettes (primary, secondary, accent, success, error).
+* **Design tokens (`src/index.css`):** Semantic colours that switch with the theme (`canvas`, `surface`, `surface-muted`, `ink`, `ink-muted`, `line`, `brand`, `brand-ink`, `brand-soft`, `danger`, `ring`, used as `bg-surface`, `text-ink` and so on), the `font-sans` stack, and the shell spacing (`px-gutter`, `max-w-shell`). It also holds the global focus ring and the `prefers-reduced-motion` rule. The theme follows the system's `prefers-color-scheme` until the visitor uses the toggle; that choice is stored in `localStorage` under `theme`.
+
+## Project Structure
+A high-level overview of the `frontend` directory:
+
+```
+frontend/
+├── .env.example # Example environment variables
+├── .eslintrc.cjs # ESLint configuration (older format if present)
+├── eslint.config.js # ESLint configuration (newer flat format)
+├── .gitignore # Specifies intentionally untracked files
+├── Dockerfile # Instructions to build the Docker image
+├── index.html # Main HTML entry point
+├── package-lock.json # Records exact versions of dependencies
+├── package.json # Project metadata and dependencies
+├── postcss.config.js # PostCSS configuration (often for Tailwind)
+├── README.md # This file
+├── tailwind.config.js # Tailwind CSS configuration
+├── vite.config.js # Vite build tool configuration
+├── public/ # Static assets (e.g., favicon, images)
+│ └── vite.svg # Example static asset
+└── src/ # Main application source code
+ ├── App.css # Global application styles
+ ├── App.jsx # Root React component
+ ├── index.css # Base styles and Tailwind imports
+ ├── main.jsx # Application entry point
+ ├── assets/ # Static assets like images, fonts (if any)
+ ├── components/ # Reusable UI components
+ │ ├── History/ # Components for the History page
+ │ ├── Layout/ # Layout components (Header, Footer, etc.)
+ │ ├── Translation/ # Components for the Translation interface
+ │ └── UI/ # Generic UI elements (Button, Modal, Spinner, etc.)
+ ├── contexts/ # React Context providers (Theme, Settings)
+ ├── hooks/ # Custom React Hooks
+ ├── pages/ # Page-level components (Home, Settings, About, etc.)
+ ├── services/ # API interaction, local storage management
+ └── utils/ # Utility functions, constants
+```
+*(Note: The file tree is a representation and might not include all files or exact current structure. Depth is limited for brevity.)*
+
+## API Documentation
+The frontend application interacts with a backend API. For details on the API endpoints, request/response formats, and authentication (if any), please refer to the backend API documentation.
+
+The page calls only the `/v1` routes, all through one client, [`src/services/api.js`](src/services/api.js):
+* **`POST /v1/translate`**: Submits text with its source and target languages; the answer carries the `translation` and the `model` that answered.
+* **`POST /v1/translate/file`**: Uploads a file to translate, with its source and target languages.
+* **`POST /v1/speak`**: Submits text for text-to-speech conversion.
+
+Requests are never retried, since a retried POST spends the tokens again. They time out after 15 seconds, or 5 minutes for whole-document text, files and review calls.
+
+A contract test (`src/services/api.contract.test.js`) fails if the page calls a path that is not a `/v1` route in the backend's OpenAPI paths. Those paths are kept in `src/test/fixtures/openapi-paths.json`; after changing a route, re-export them from `backend/` with `python -m scripts.export_openapi_paths` (a backend test fails until you do).
+
+(See [Backend Documentation](../backend/README.md) for more details.)
+
+## Related Documentation
+
+1. [Backend Documentation](../../docs/backend/README.md): Including API Documentation for the frontend.
+2. [Deployment Guide](../../docs/deployment_guide.md): For deploying this application.
+
+## Contributing Guidelines
+
+Contributions are welcome! Please follow these general guidelines:
+
+1. Fork the repository.
+2. Create a new branch for your feature or bug fix.
+3. Write clean, well-documented code adhering to Google Python Style Guide.
+4. Add or update tests for your changes.
+5. Ensure all tests pass.
+6. Submit a pull request.
+
+(Detailed contributing guidelines can be found here: [`CONTRIBUTING`](../CONTRIBUTING.md))
+
+## License
+This project is licensed under the MIT License. See the [LICENSE](../LICENSE.md) file for details.
+
+## Acknowledgments
+* Thanks to the creators of React, Vite, Tailwind CSS, Material UI, and other open-source libraries used in this project.
+
+## Share
+[![Twitter](https://img.shields.io/badge/X-Tweet-blue)](https://twitter.com/intent/tweet?text=Check%20out%20this%20awesome%20project!&url=https://github.com/samestrin/llm-translate) [![Facebook](https://img.shields.io/badge/Facebook-Share-blue)](https://www.facebook.com/sharer/sharer.php?u=https://github.com/samestrin/llm-translate) [![LinkedIn](https://img.shields.io/badge/LinkedIn-Share-blue)](https://www.linkedin.com/sharing/share-offsite/?url=https://github.com/samestrin/llm-translate)
+

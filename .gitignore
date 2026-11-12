@@ -1,0 +1,24 @@
+/planning
+/backend/venv
+/frontend/node_modules
+.env
+# Python cache files
+__pycache__/
+.pytest_cache/
+.coverage
+.coverage.*
+*.py[cod]
+*$py.class
+# Ignore .env files in all directories
+**/.env
+# private plans (samestrin/llm-translate-planning)
+.planning/
+# Embassy review stack: holds the litellm key, exists only on embassy
+.env.embassy
+
+# local fake eval runs
+evals/results/*-fake.json
+
+coverage/
+
+.DS_Store
