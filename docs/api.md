@@ -126,6 +126,34 @@ With `messages.json` containing `{"greeting": "Hello, {name}!", "save": "Save"}`
 
 Keys and the `{name}` placeholder are kept; only the values are translated.
 
+### Partial success for SRT files
+
+By default one failed segment fails the whole file: the error's `segment_errors` lists every failed segment and no file is returned. SRT uploads can instead ask for partial success with `partial_success=on`. Each cue is then translated on its own; a cue whose translation loses a placeholder or hits a model error keeps its source text, while the other cues are still translated and re-wrapped to `LLM_SRT_MAX_LINE_CHARS`. The reply names the cues that were replaced and the cues that kept their source, each failed cue by its number line (`cue_number`, the number written in the file), its segment position and the reason:
+
+```bash
+curl -X POST "http://localhost:8000/v1/translate/file" \
+-F "file=@subtitles.srt" \
+-F "from_lang=English" \
+-F "to_lang=Spanish" \
+-F "partial_success=on"
+```
+
+```json
+{
+  "content": "1\n00:00:01,000 --> 00:00:02,000\nHello, {name}!\n\n2\n00:00:03,000 --> 00:00:04,000\nHola.\n",
+  "format": "srt",
+  "from_lang": "English",
+  "to_lang": "Spanish",
+  "report": {"segments": 2, "model": "gpt-4o-mini", "usage": {"prompt_tokens": 60, "completion_tokens": 8, "total_tokens": 68}},
+  "replaced_segments": [2],
+  "failed_segments": [
+    {"segment": 1, "type": "api_error", "message": "Segment 1: the translation did not keep its placeholders (missing {name}).", "cue_number": "1"}
+  ]
+}
+```
+
+The output is always a legal SRT: cue numbers and timings are preserved line for line, an empty translation keeps its cue's number and timing, and a kept cue is written back verbatim rather than re-wrapped. If every cue fails, the request still fails with the usual `segment_errors` body, so a partial success never hands back an untranslated file. The option is SRT-only; sending it for another format is a 400.
+
 ## Translate an i18n file in CI
 
 This GitHub Actions job translates `locales/en.json` into Spanish on every push and fails if the API returns an error. It needs a running instance (here the `LLM_TRANSLATE_URL` repository variable) and `jq`, which the runner already has:

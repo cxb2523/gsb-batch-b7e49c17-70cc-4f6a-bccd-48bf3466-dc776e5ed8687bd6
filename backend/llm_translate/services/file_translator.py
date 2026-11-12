@@ -8,6 +8,10 @@ extension, and its segments (values, text nodes or cues) are checked against
 Each segment's placeholders are masked before the model and checked after; if
 any segment fails, the whole file fails and every failed segment is listed.
 
+With `partial_success` (SRT uploads only), a failed cue keeps its source text
+instead: the other cues are still translated, the response names each cue that
+was replaced or kept, and only an all-failed file errors.
+
 Segments are translated one per call, never merged, but a file of more than one
 segment is summarized first (its key terms and names, with the translation to
 use for each), and every segment is sent with that summary and the segments
@@ -21,7 +25,7 @@ from typing import Callable, List, Optional, Tuple
 from llm_translate.formats import html_file, json_format, markdown_file, po_format, srt, yaml_format
 from llm_translate.formats.limits import check_segments, decode_text, detect_format
 from llm_translate.formats.placeholders import ProtectedText, Segment, protect, restore
-from llm_translate.utils.exceptions import TranslationError
+from llm_translate.utils.exceptions import ErrorType, TranslationError
 
 from llm_translate.review import ReviewReport, build_report, check_segments as review_segments
 
@@ -45,10 +49,34 @@ class ParsedFile:
             its number (from 1) for Markdown, HTML and SRT.
         texts: Each segment's source text, in file order.
         render: Builds the file from one translation per segment.
+        cue_numbers: For an SRT file, each cue's number line as written in the file;
+            None for every other format. Cue number lines need not be sequential.
     """
     labels: List[Segment]
     texts: List[str]
     render: Callable[[List[str]], str]
+    cue_numbers: Optional[List[str]] = None
+
+
+@dataclass
+class SegmentFailure:
+    """A segment that was not translated: its number (from 1), why it failed, and its cue number line for SRT."""
+    segment: int
+    message: str
+    error_type: str
+    status_code: int
+    cue_number: Optional[str] = None
+
+    def as_error(self) -> dict:
+        """The `segment_errors` entry shape used when the whole request fails."""
+        return {"segment": self.segment, "type": self.error_type, "message": self.message}
+
+    def as_report(self) -> dict:
+        """The `failed_segments` entry shape of a partial-success response."""
+        entry = self.as_error()
+        if self.cue_number is not None:
+            entry["cue_number"] = self.cue_number
+        return entry
 
 
 @dataclass
@@ -60,11 +88,20 @@ class FileTranslation:
     model: Optional[str]
     usage: Usage
     review: Optional[ReviewReport] = None
+    # With partial success, the segments (numbers from 1) replaced by a translation and kept in the
+    # source language, in file order; None for the all-or-nothing behaviour.
+    replaced_segments: Optional[List[int]] = None
+    failed_segments: Optional[List[dict]] = None
 
 
-def parse_file(file_format: str, text: str, srt_max_line_chars: int) -> ParsedFile:
+def parse_file(
+    file_format: str, text: str, srt_max_line_chars: int, keep_cues_verbatim: bool = False
+) -> ParsedFile:
     """
     Split a file of a known format into segments.
+
+    `keep_cues_verbatim` (partial-success SRT only) makes a cue whose text is handed
+    back unchanged write its source lines back verbatim instead of re-wrapping them.
 
     Raises:
         TranslationError: 400 if the file is malformed.
@@ -83,10 +120,16 @@ def parse_file(file_format: str, text: str, srt_max_line_chars: int) -> ParsedFi
             labels=list(range(1, len(document.segments) + 1)), texts=list(document.segments), render=document.render
         )
     cues = srt.parse(text)
+    kept_texts = {cue.index: cue.text for cue in cues}
     return ParsedFile(
-        labels=list(range(1, len(cues) + 1)),
+        labels=[cue.index for cue in cues],
         texts=[cue.text for cue in cues],
-        render=lambda translations: srt.render(cues, translations, srt_max_line_chars),
+        render=lambda translations: srt.render(
+            cues, translations, srt_max_line_chars,
+            # a partial-success cue kept in the source language is written back verbatim, never re-wrapped
+            verbatim=kept_texts if keep_cues_verbatim else None,
+        ),
+        cue_numbers=[cue.number for cue in cues],
     )
 
 
@@ -105,7 +148,7 @@ def _has_words(masked: str) -> bool:
 
 async def translate_file(
     translator: LLMTranslator, filename: str, content: bytes, from_lang: str, to_lang: str,
-    review: bool = False
+    review: bool = False, partial_success: bool = False
 ) -> FileTranslation:
     """
     Translate an uploaded file and keep its structure and placeholders.
@@ -123,6 +166,11 @@ async def translate_file(
         to_lang (str): Target language.
         review (bool): Run the review pass on every translated segment; flagged segments
             keep their best translation and are listed in the report.
+        partial_success (bool): SRT only. Translate cue by cue and keep the source text of
+            a cue whose translation fails (a lost placeholder or a model error), instead of
+            failing the whole file. The response lists the replaced and the kept cues, each
+            kept cue with its number line and the reason. If every cue fails, the request
+            still fails. Any other format is a 400 instead.
 
     Returns:
         FileTranslation: The file and its report.
@@ -132,11 +180,20 @@ async def translate_file(
             413 if it has too many or too long segments; if any segment fails
             (a lost placeholder or a model error), one error that lists every
             failed segment in `segment_errors`, with the first one's status;
+            with partial success this only happens when every segment fails;
             if the summary call fails, its error, and no segment is sent.
     """
     settings = translator.client.settings
     file_format = detect_format(filename)
-    parsed = parse_file(file_format, decode_text(content), settings.srt_max_line_chars)
+    if partial_success and file_format != "srt":
+        raise TranslationError(
+            message="Partial success is only available for SRT files; upload an .srt file or leave it off.",
+            error_type=ErrorType.INVALID_REQUEST,
+            status_code=400,
+        )
+    parsed = parse_file(
+        file_format, decode_text(content), settings.srt_max_line_chars, keep_cues_verbatim=partial_success
+    )
     check_segments(parsed.texts, settings.segment_max_chars, settings.max_segments)
 
     protected = [protect(text) for text in parsed.texts]
@@ -165,18 +222,35 @@ async def translate_file(
     for result in results:
         if isinstance(result, BaseException) and not isinstance(result, TranslationError):
             raise result
-    failed = [(i + 1, result) for i, result in zip(pending, results) if isinstance(result, TranslationError)]
-    if failed:
-        raise _segments_failed(failed, len(parsed.texts))
+    failures = [
+        SegmentFailure(
+            segment=i + 1, message=result.message, error_type=result.error_type.value,
+            status_code=result.status_code,
+            cue_number=parsed.cue_numbers[i] if parsed.cue_numbers is not None else None,
+        )
+        for i, result in zip(pending, results) if isinstance(result, TranslationError)
+    ]
+    if failures and not partial_success:
+        raise _segments_failed([(failure.segment, failure) for failure in failures], len(parsed.texts))
 
     translations = list(parsed.texts)
-    for i, (text, result) in zip(pending, results):
-        translations[i] = text
-        model = model or result.model
-        usage = usage + result.usage
+    replaced: List[int] = []
+    if not same:
+        for i, result in zip(pending, results):
+            if isinstance(result, TranslationError):
+                continue  # partial success: the cue keeps its source text
+            text, translation = result
+            translations[i] = text
+            replaced.append(i + 1)
+            model = model or translation.model
+            usage = usage + translation.usage
+    if partial_success and pending and len(failures) == len(pending):
+        # every cue that could be translated failed: an all-source file is not a success
+        raise _segments_failed([(failure.segment, failure) for failure in failures], len(parsed.texts))
     report = None
     if review:
-        todo = [] if same else pending
+        failed_segments = {failure.segment for failure in failures}
+        todo = [i for i in ([] if same else pending) if i + 1 not in failed_segments]
         checked = await review_segments(
             translator.client, [parsed.texts[i] for i in todo], [translations[i] for i in todo], from_lang, to_lang,
         )
@@ -192,6 +266,8 @@ async def translate_file(
     return FileTranslation(
         content=parsed.render(translations), file_format=file_format, segments=len(parsed.texts),
         model=model, usage=usage, review=report,
+        replaced_segments=replaced if partial_success else None,
+        failed_segments=[failure.as_report() for failure in failures] if partial_success else None,
     )
 
 
@@ -212,15 +288,13 @@ def _segment_context(summary: str, texts: List[str], pending: List[int], at: int
     return blocks
 
 
-def _segments_failed(failed: List[Tuple[int, TranslationError]], total: int) -> TranslationError:
+def _segments_failed(failed: List[Tuple[int, SegmentFailure]], total: int) -> TranslationError:
     """One error for the whole file that lists every failed segment; it takes the first one's status."""
-    listed = "; ".join(f"segment {n} of {total}: {error.message}" for n, error in failed)
     first = failed[0][1]
+    listed = "; ".join(f"segment {n} of {total}: {failure.message}" for n, failure in failed)
     return TranslationError(
         message=f"{len(failed)} of {total} segments failed, so the file was not translated ({listed})",
-        error_type=first.error_type,
+        error_type=next(error for error in ErrorType if error.value == first.error_type),
         status_code=first.status_code,
-        segment_errors=[
-            {"segment": n, "type": error.error_type.value, "message": error.message} for n, error in failed
-        ],
+        segment_errors=[failure.as_error() for _, failure in failed],
     )

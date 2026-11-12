@@ -8,7 +8,7 @@ segment: a word longer than the limit stays on a line of its own.
 """
 import re
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from llm_translate.utils.exceptions import ErrorType, TranslationError
 
@@ -24,10 +24,12 @@ class Cue:
         number: The cue number line, surrounding whitespace trimmed.
         timing: The timing line, surrounding whitespace trimmed.
         text: The cue's text, lines joined by newlines; this is the segment to translate.
+        index: The cue's position in the file, from 1; stable even when its number line is not sequential.
     """
     number: str
     timing: str
     text: str
+    index: int
 
 
 def parse(content: str) -> List[Cue]:
@@ -43,17 +45,33 @@ def parse(content: str) -> List[Cue]:
         lines = block.split("\n")
         if len(lines) < 2 or not lines[0].strip().isdigit() or not _TIMING.match(lines[1]):
             raise _malformed(f"cue {len(cues) + 1} has no number and timing line")
-        cues.append(Cue(number=lines[0].strip(), timing=lines[1].strip(), text="\n".join(lines[2:])))
+        cues.append(Cue(
+            number=lines[0].strip(), timing=lines[1].strip(),
+            text="\n".join(lines[2:]), index=len(cues) + 1,
+        ))
     return cues
 
 
-def render(cues: Sequence[Cue], translations: Sequence[str], max_line_chars: int) -> str:
-    """Write `cues` back with `translations` as their text; numbers and timings are untouched."""
+def render(
+    cues: Sequence[Cue], translations: Sequence[str], max_line_chars: int,
+    verbatim: Optional[Dict[int, str]] = None
+) -> str:
+    """
+    Write `cues` back with `translations` as their text; numbers and timings are untouched.
+
+    `verbatim` maps a cue index to the source text it must keep unchanged: such a cue
+    is written back with its source lines as they were and is not re-wrapped (used when
+    a partial-success translation keeps a failed cue in the source language). Every other
+    translation, including an empty one, is wrapped at `max_line_chars`.
+    """
     if len(cues) != len(translations):
         raise ValueError("one translation per cue is required")
     blocks = []
     for cue, translation in zip(cues, translations):
-        text = wrap(translation, max_line_chars)
+        if verbatim is not None and verbatim.get(cue.index) == translation:
+            text = translation  # the source cue is preserved line for line
+        else:
+            text = wrap(translation, max_line_chars)
         blocks.append("\n".join([cue.number, cue.timing] + ([text] if text else [])))
     return "\n\n".join(blocks) + "\n"
 

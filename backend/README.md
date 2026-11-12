@@ -318,6 +318,8 @@ The file is read up to `LLM_MAX_FILE_BYTES`; a larger one, more than `LLM_MAX_SE
    "segment_errors": [{"segment": 1, "type": "api_error", "message": "Segment /greeting: the translation did not keep its placeholders (missing {name}; unexpected {nombre})."}]}}
  ```
 
+SRT uploads can instead take `partial_success=on` (the field defaults to `off`; `review=off|on` works alongside it). A cue whose translation fails then keeps its source text and the other cues are still translated, re-wrapped to `LLM_SRT_MAX_LINE_CHARS`. The reply adds `replaced_segments` (the segment numbers, from 1, that got a translation) and `failed_segments` (each kept cue's `segment`, `type`, `message` and `cue_number`, the number line as written in the file). The output stays a legal SRT: numbers and timings are preserved, an empty translation keeps its cue's number and timing, and a kept cue is written back verbatim. If every cue fails the request still fails with the `segment_errors` body above, so partial success never returns an all-source file as a success. The option is SRT-only; any other format with `partial_success=on` is a 400.
+
 ### `POST /v1/speak`
 
 Converts text to speech using the configured TTS endpoint.

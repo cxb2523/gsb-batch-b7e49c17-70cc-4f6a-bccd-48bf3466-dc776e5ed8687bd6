@@ -6,6 +6,7 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ### Added
 
+- `POST /v1/translate/file` accepts `partial_success=on` for SRT uploads. Each cue is translated on its own; a cue whose translation loses a placeholder or hits a model error keeps its source text while the other cues are still translated and re-wrapped. The reply's `replaced_segments` names the translated cues and `failed_segments` names each kept cue by its number line (`cue_number`), segment position and reason. The output stays a legal SRT with every number and timing preserved; if every cue fails the request still fails, and the option is a 400 for non-SRT formats.
 - The "Swap languages" button moves the current translation into the input and clears the output, so it is ready to translate back without showing the old source text as a translation.
 - Help buttons beside Glossary and Style guide open keyboard-accessible popovers with a short explanation, an example and a "Read the guide" link.
 - A `/guide` page, linked from the footer, explains glossary rows and missed terms, the style-guide fields, and how text and file modes handle terminology and style, with worked examples.

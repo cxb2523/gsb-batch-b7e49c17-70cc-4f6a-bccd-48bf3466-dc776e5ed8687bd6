@@ -23,6 +23,12 @@ def test_parse_reads_numbers_timings_and_text():
     assert cues[2].timing.endswith("X1:10")
 
 
+def test_each_cue_carries_its_file_position_even_when_number_lines_skip():
+    # the number line is kept verbatim, but the index is always the cue's position from 1
+    cues = parse(SAMPLE)
+    assert [(c.index, c.number) for c in cues] == [(1, "1"), (2, "2"), (3, "17")]
+
+
 def test_timings_and_numbers_identical_after_translation():
     cues = parse(SAMPLE)
     out = render(cues, ["Hallo,\nwie geht es dir?", "Gut.", "Auf Wiedersehen"], 42)

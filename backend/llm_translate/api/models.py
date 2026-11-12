@@ -153,6 +153,16 @@ class V1FileReport(BaseModel):
         return data
 
 
+class V1FileSegmentFailure(BaseModel):
+    """A segment a partial-success translation could not translate."""
+    segment: int = Field(..., description="The segment's position in the file, from 1")
+    type: str = Field(..., description="The error type, as in an all-or-nothing failure's `segment_errors`")
+    message: str = Field(..., description="Why the segment was not translated")
+    cue_number: Optional[str] = Field(
+        None, description="SRT only: the failed cue's number line, as written in the uploaded file"
+    )
+
+
 class V1FileTranslationResponse(BaseModel):
     """
     Model for a `/v1/translate/file` response: the translated file and its report.
@@ -176,6 +186,25 @@ class V1FileTranslationResponse(BaseModel):
     from_lang: str = Field(..., description="Source language as requested, e.g. English or Auto-detect")
     to_lang: str = Field(..., description="Target language as requested")
     report: V1FileReport = Field(..., description="Segments, model and tokens spent")
+    replaced_segments: Optional[List[int]] = Field(
+        None,
+        description="Partial success only (SRT with `partial_success=on`): the segments, numbered from 1, whose "
+                    "text was replaced by a translation; absent otherwise",
+    )
+    failed_segments: Optional[List[V1FileSegmentFailure]] = Field(
+        None,
+        description="Partial success only: the segments kept in the source language, each with its cue number line "
+                    "for SRT and the reason the translation failed; absent otherwise",
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_partial_fields_when_off(self, handler):
+        data = handler(self)
+        if data.get("replaced_segments") is None:
+            data.pop("replaced_segments", None)
+        if data.get("failed_segments") is None:
+            data.pop("failed_segments", None)
+        return data
 
 
 class SpeakRequest(BaseModel):

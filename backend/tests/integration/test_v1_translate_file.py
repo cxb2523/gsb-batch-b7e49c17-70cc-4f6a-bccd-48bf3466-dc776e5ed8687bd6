@@ -32,11 +32,15 @@ def spanish(payload):
     return f"ES {segment_of(payload)}"
 
 
-def upload(client, path, from_lang="English", to_lang="Spanish", name=None, content=None):  # noqa: F811
+def upload(client, path, from_lang="English", to_lang="Spanish", name=None, content=None,  # noqa: F811
+           partial_success=None):
     data = path.read_bytes() if content is None else content
+    form = {"from_lang": from_lang, "to_lang": to_lang}
+    if partial_success is not None:
+        form["partial_success"] = "on" if partial_success else "off"
     return client.post(
         "/v1/translate/file",
-        data={"from_lang": from_lang, "to_lang": to_lang},
+        data=form,
         files={"file": (name or path.name, io.BytesIO(data), "application/octet-stream")},
     )
 
@@ -385,3 +389,173 @@ def test_unexpected_error_in_a_segment_is_a_500_that_hides_its_details(server, c
     assert response.status_code == 500
     assert response.json()["error"]["type"] == "unknown_error"
     assert "secret internals" not in response.text
+
+
+# Partial success (`partial_success=on`, SRT only)
+
+# Three cues; the number lines deliberately skip, so a failure can report the file's own number.
+PARTIAL_SRT = (
+    "1\n00:00:01,000 --> 00:00:02,000\nHello, {name}!\n\n"
+    "3\n00:00:03,000 --> 00:00:04,000\nSee you soon.\n\n"
+    "5\n00:00:05,000 --> 00:00:06,000\nTake care.\n"
+)
+
+
+def _fail_the_first_two_cues(payload):
+    """Cue 1 loses its placeholder; cue 2 hits a model error; the rest translate normally."""
+    segment = segment_of(payload)
+    if "⟦0⟧" in segment:
+        return "Hola {nombre}"
+    if "See you soon" in segment:
+        return JSONResponse({"error": {"message": "rate limited"}}, status_code=429)
+    return spanish(payload)
+
+
+def test_partial_success_translates_the_good_cues_and_keeps_the_failed_ones(server, client):  # noqa: F811
+    server.respond = _fail_the_first_two_cues
+    response = upload(client, FORMATS / "sample.srt", content=PARTIAL_SRT.encode(), partial_success=True)
+
+    assert response.status_code == 200
+    body = response.json()
+    # the output is still a legal SRT: every number and timing line is kept verbatim
+    assert body["content"] == (
+        "1\n00:00:01,000 --> 00:00:02,000\nHello, {name}!\n\n"
+        "3\n00:00:03,000 --> 00:00:04,000\nSee you soon.\n\n"
+        "5\n00:00:05,000 --> 00:00:06,000\nES Take care.\n"
+    )
+    assert body["replaced_segments"] == [3]
+    assert body["failed_segments"] == [
+        {
+            "segment": 1,
+            "type": "api_error",
+            "message": "Segment 1: the translation did not keep its placeholders "
+                       "(missing {name}; unexpected {nombre}).",
+            "cue_number": "1",
+        },
+        {
+            "segment": 2, "type": "rate_limit_error",
+            "message": "Model endpoint rate limit exceeded. Please try again later.", "cue_number": "3",
+        },
+    ]
+    # only the good cue's translation call is billed; the summary still ran once
+    assert body["report"]["usage"]["total_tokens"] == (1 + 1) * USAGE_PER_CALL
+    assert len(translation_calls(server)) == 3 and len(summary_calls(server)) == 1
+
+
+def test_partial_success_rewraps_the_translated_cues_under_the_line_limit(server, client, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("LLM_SRT_MAX_LINE_CHARS", "10")
+    server.respond = _fail_the_first_two_cues
+    response = upload(client, FORMATS / "sample.srt", content=PARTIAL_SRT.encode(), partial_success=True)
+
+    assert response.status_code == 200
+    lines = response.json()["content"].split("\n")
+    # the kept cues come back with their source lines untouched (and are not re-wrapped)...
+    assert "Hello, {name}!" in lines and "See you soon." in lines
+    # ...only the translated cue is re-wrapped to the limit
+    translated = [line for line in lines if line.startswith("ES ") or line == "care."]
+    assert translated and all(len(line) <= 10 for line in translated)
+
+
+def test_partial_success_with_all_cues_failing_is_an_error_and_returns_no_file(server, client):  # noqa: F811
+    def break_every_cue(payload):
+        if SUMMARY_MARKER in payload["messages"][0]["content"]:
+            return "A short document."
+        # the first cue loses its placeholder; the second comes back empty, which is never a translation
+        return "Hola {nombre}" if "⟦0⟧" in segment_of(payload) else ""
+
+    server.respond = break_every_cue
+    response = upload(client, FORMATS / "sample.srt", partial_success=True)
+
+    assert response.status_code == 500
+    body = response.json()
+    assert set(body) == {"error"}
+    error = body["error"]
+    assert [entry["segment"] for entry in error["segment_errors"]] == [1, 2]
+    assert error["segment_errors"][0]["message"].startswith("Segment 1: the translation did not keep its placeholders")
+    assert error["message"].startswith("2 of 2 segments failed, so the file was not translated")
+    assert "content" not in json.dumps(body) and "Hello" not in json.dumps(body)
+
+
+def test_partial_success_off_fails_the_whole_file_as_before(server, client):  # noqa: F811
+    server.respond = _fail_the_first_two_cues
+
+    # the option sent explicitly as off, and omitted entirely, behave the same
+    for kwargs in ({"partial_success": False}, {}):
+        server.requests.clear()
+        response = upload(client, FORMATS / "sample.srt", content=PARTIAL_SRT.encode(), **kwargs)
+
+        # the whole file takes the first failed cue's status: the placeholder loss is a 500
+        assert response.status_code == 500
+        body = response.json()
+        assert set(body) == {"error"}
+        assert [entry["segment"] for entry in body["error"]["segment_errors"]] == [1, 2]
+        assert body["error"]["message"].startswith("2 of 3 segments failed, so the file was not translated")
+        assert "replaced_segments" not in json.dumps(body) and "failed_segments" not in json.dumps(body)
+        assert "ES Take care." not in response.text
+
+
+def test_partial_success_on_a_normal_file_reports_every_cue_replaced(server, client):  # noqa: F811
+    server.respond = spanish
+    response = upload(client, FORMATS / "sample.srt", partial_success=True)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["replaced_segments"] == [1, 2]
+    assert body["failed_segments"] == []
+    assert body["content"] == (
+        "1\n00:00:01,000 --> 00:00:03,500\nES Hello, {name}!\n\n"
+        "2\n00:00:04,000 --> 00:00:06,250\nES See you soon.\nTake care.\n"
+    )
+
+
+def test_partial_success_is_rejected_for_other_formats(server, client):  # noqa: F811
+    server.respond = spanish
+    response = upload(client, FORMATS / "app.json", partial_success=True)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert "SRT" in response.json()["error"]["message"]
+    assert server.requests == []
+
+
+def test_partial_success_off_omits_the_partial_fields(server, client):  # noqa: F811
+    server.respond = spanish
+    response = upload(client, FORMATS / "sample.srt", partial_success=False)
+
+    assert response.status_code == 200
+    assert "replaced_segments" not in response.json() and "failed_segments" not in response.json()
+
+
+def test_partial_success_with_review_only_reviews_the_translated_cues(server, client):  # noqa: F811
+    def reviewable(payload):
+        segment = segment_of(payload)
+        if "⟦0⟧" in segment:
+            return "Hola {nombre}"
+        return spanish(payload)
+
+    server.respond = reviewable
+    response = client.post(
+        "/v1/translate/file",
+        data={"from_lang": "English", "to_lang": "Spanish", "partial_success": "on", "review": "on"},
+        files={"file": ("sample.srt", io.BytesIO(PARTIAL_SRT.encode()), "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["replaced_segments"] == [2, 3]
+    assert [failure["cue_number"] for failure in body["failed_segments"]] == ["1"]
+    # the kept cue is untouched, and the review section exists for the two translated cues
+    assert body["content"].startswith("1\n00:00:01,000 --> 00:00:02,000\nHello, {name}!\n")
+    assert "review" in body["report"]
+
+
+def test_partial_success_same_language_returns_the_file_without_a_model(server, client):  # noqa: F811
+    server.respond = _fail_the_first_two_cues
+    response = upload(client, FORMATS / "sample.srt", to_lang="english", partial_success=True)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["content"] == (FORMATS / "sample.srt").read_text()
+    assert body["replaced_segments"] == [] and body["failed_segments"] == []
+    assert body["report"]["model"] is None and body["report"]["usage"]["total_tokens"] == 0
+    assert server.requests == []

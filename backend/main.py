@@ -73,7 +73,8 @@ TRANSLATE_FILE_ERRORS = {
     400: _error_response(
         "The file is unsupported (its extension is not .json, .yaml, .yml, .po, .md, .markdown, .html, .htm "
         "or .srt), empty, not UTF-8 text, or malformed for its format (`bad_request_error`, "
-        "`invalid_request_error`), or the model endpoint rejected the request.",
+        "`invalid_request_error`), the model endpoint rejected the request, or `partial_success=on` was sent "
+        "for a format other than SRT.",
         "bad_request_error",
         "Unsupported file format; the file extension must be one of "
         ".htm, .html, .json, .markdown, .md, .po, .srt, .yaml, .yml."),
@@ -89,7 +90,9 @@ TRANSLATE_FILE_ERRORS = {
                        "changed, or a model error), the whole file fails: the error takes the first failed "
                        "segment's status and type, `segment_errors` lists every failed segment (`segment`, from 1, "
                        "`type`, `message`, which names the key for JSON, YAML and PO), and no file is returned. "
-                       "Otherwise as for `/v1/translate`.",
+                       "With `partial_success=on` on an SRT file, failed cues keep their source text instead and "
+                       "are listed in the reply's `failed_segments`; this error is then returned only when every "
+                       "cue fails. Otherwise as for `/v1/translate`.",
         "content": {"application/json": {"example": {"error": {
             "type": "api_error",
             "message": f"1 of 1 segments failed, so the file was not translated (segment 1 of 1: {_BROKEN_PLACEHOLDER})",
@@ -306,6 +309,11 @@ async def translate_file_v1(
     review: Annotated[Literal["off", "on"], Form(
         description="`on` runs the review pass on every segment and adds flags, models and tokens per step to the report"
     )] = "off",
+    partial_success: Annotated[Literal["off", "on"], Form(
+        description="SRT only: `on` translates cue by cue and keeps the source text of a cue whose translation "
+                    "fails, instead of failing the whole file; the response lists the replaced and kept cues. "
+                    "If every cue fails the request still fails"
+    )] = "off",
 ):
     """
     Translate an uploaded file and return it with the same structure, plus a report.
@@ -320,6 +328,16 @@ async def translate_file_v1(
     `LLM_SEGMENT_MAX_CHARS` and `LLM_MAX_SEGMENTS`. If any segment fails, the
     request fails, `segment_errors` lists each failed segment and no file is
     returned. The file name is never echoed.
+
+    `partial_success` is `off` by default and only applies to SRT. With `on`,
+    each cue is translated on its own: a cue whose translation loses a
+    placeholder or hits a model error keeps its source text, while the other
+    cues are still translated and re-wrapped. The reply's `replaced_segments`
+    names the cues that got a translation and `failed_segments` names each kept
+    cue by its number line (`cue_number`), its segment position and the reason.
+    An empty translation still keeps the cue's number and timing. If every cue
+    fails, the request fails as it does with the option off, and no file is
+    returned. Uploading another format with `on` is a 400.
 
     Each segment is translated in its own call. A file of more than one
     segment is summarized first (key terms and names, one extra call counted
@@ -338,7 +356,8 @@ async def translate_file_v1(
         translator = get_translation_service()
         content = await read_limited(file.read, translator.client.settings.max_file_bytes)
         result = await translate_file(
-            translator, file.filename or "", content, from_lang, to_lang, review=review == "on"
+            translator, file.filename or "", content, from_lang, to_lang, review=review == "on",
+            partial_success=partial_success == "on",
         )
     logger.info(
         f"v1 file translation completed: format={result.file_format}, segments={result.segments}, "
@@ -352,6 +371,8 @@ async def translate_file_v1(
         report=V1FileReport(
             segments=result.segments, model=result.model, usage=result.usage, review=result.review
         ),
+        replaced_segments=result.replaced_segments,
+        failed_segments=result.failed_segments,
     )
 
 
