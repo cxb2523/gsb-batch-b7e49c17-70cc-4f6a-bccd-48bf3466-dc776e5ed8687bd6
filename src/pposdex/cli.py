@@ -190,14 +190,22 @@ def run(args: argparse.Namespace) -> None:
         pprint(published_data, indent=4)
 
     else:
-        ppos_dex_data = pposdex.get_ppos_dex_data(
+        result = pposdex.get_ppos_dex_data(
             indexer_client=indexer_client,
             publisher_address=args.publisher,
             algo_threshold=args.algo_threshold,
             start_block=args.start_block,
             end_block=args.end_block,
         )
-        show_data(args, ppos_dex_data, indexer_client)
+        summary = result.summary
+        print(
+            f"📥 Notes from {args.publisher} since block {args.start_block}: "
+            f"{summary.total_notes} fetched, {summary.valid_data_points} valid, "
+            f"{summary.invalid_notes} schema invalid, "
+            f"{summary.undecodable_notes} undecodable, "
+            f"{summary.threshold_filtered_notes} threshold filtered."
+        )
+        show_data(args, result.data_points, indexer_client)
 
 
 def show_data(

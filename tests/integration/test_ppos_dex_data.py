@@ -18,5 +18,9 @@ def test_ppos_dex_data(
     post_note(algod_client, faucet, b"more noise")
     last_txn = post_note(algod_client, faucet, b"even more noise")
     wait_for_indexer(last_txn["confirmed-round"])
-    get_data = get_ppos_dex_data(indexer_client, faucet.address, 0, 0)
-    assert get_data[0] == post_data
+    result = get_ppos_dex_data(indexer_client, faucet.address, 0, 0)
+    assert result.data_points[0] == post_data
+    assert result.summary.valid_data_points == 1
+    # Three unreadable notes follow the published data point
+    assert result.summary.undecodable_notes == 3
+    assert len(result.dispositions) == result.summary.total_notes

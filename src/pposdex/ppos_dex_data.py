@@ -1,8 +1,10 @@
 import base64
+import binascii
 import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal, NotRequired, TypedDict, cast
 
 import msgpack
@@ -93,6 +95,57 @@ Metric = Literal[
 
 class InvalidDataError(ValueError):
     """PPoS Dex data point does not comply with the schema"""
+
+
+class NoteStatus(StrEnum):
+    """How a single published note was handled when read back"""
+
+    VALID = "valid"
+    INVALID = "invalid"
+    UNDECODABLE = "undecodable"
+    FILTERED = "filtered"
+
+
+@dataclass(frozen=True)
+class NoteDisposition:
+    """Traceable handling result of a single published note"""
+
+    note: str
+    status: NoteStatus
+    reason: str
+
+
+@dataclass(frozen=True)
+class PPoSDexDataSummary:
+    """Counts of how the notes published by an address were handled"""
+
+    # Data points compliant with the SCHEMA and matching the requested threshold
+    valid_data_points: int = 0
+    # Notes whose decoded data point does not comply with the SCHEMA
+    invalid_notes: int = 0
+    # Notes that could not be base64 or msgpack decoded
+    undecodable_notes: int = 0
+    # Valid data points published for another algo_threshold: not an error
+    threshold_filtered_notes: int = 0
+
+    @property
+    def total_notes(self) -> int:
+        """Notes fetched from the publisher, whatever their disposition"""
+        return (
+            self.valid_data_points
+            + self.invalid_notes
+            + self.undecodable_notes
+            + self.threshold_filtered_notes
+        )
+
+
+@dataclass(frozen=True)
+class PPoSDexDataResult:
+    """Valid data points, every note's disposition, and the aggregated counts"""
+
+    data_points: list[PPoSDexData]
+    dispositions: list[NoteDisposition]
+    summary: PPoSDexDataSummary
 
 
 @dataclass(frozen=True)
@@ -347,9 +400,15 @@ def get_ppos_dex_data(
     algo_threshold: int,
     start_block: int,
     end_block: int | None = None,
-) -> list[PPoSDexData]:
+) -> PPoSDexDataResult:
     """
     Get PPoS Dex data from chain
+
+    Every fetched note gets a traceable disposition: valid data points matching
+    the requested threshold are returned in chain order, while notes that fail
+    msgpack decoding, do not comply with the SCHEMA, or were published at
+    another algo_threshold are counted in the summary instead of being dropped
+    silently. Threshold filtering is not an error.
 
     Args:
         indexer_client: Algorand Indexer Client
@@ -359,26 +418,73 @@ def get_ppos_dex_data(
         end_block: Data ending block
 
     Returns:
-        List of PPoS Dex data points
+        The valid data points with the per-note dispositions and counts
+
+    Raises:
+        PPoSDexError: if no valid data point matches the requested threshold
     """
-    ppos_dex_txns_note = helpers.get_address_txns_note(
+    txns_note = helpers.get_address_txns_note(
         indexer_client, publisher_address, start_block, end_block
     )
 
-    ppos_dex_data: list[PPoSDexData] = []
-    for txn_note in ppos_dex_txns_note:
+    data_points: list[PPoSDexData] = []
+    dispositions: list[NoteDisposition] = []
+    for txn_note in txns_note:
         try:
-            data = validate(msgpack.unpackb(base64.b64decode(txn_note)))
-            if data["algo_threshold"] == algo_threshold:
-                ppos_dex_data += [data]
-        except (InvalidDataError, msgpack.ExtraData) as err:
-            # Ignore non compliant or wrongly serialized data
+            decoded = msgpack.unpackb(base64.b64decode(txn_note))
+        except (binascii.Error, msgpack.UnpackException, ValueError) as err:
             logger.debug("Skipping note %s: %s", txn_note, err)
+            dispositions.append(
+                NoteDisposition(txn_note, NoteStatus.UNDECODABLE, str(err))
+            )
+            continue
 
-    if not ppos_dex_data:
+        try:
+            data = validate(decoded)
+        except InvalidDataError as err:
+            logger.debug("Skipping note %s: %s", txn_note, err)
+            dispositions.append(NoteDisposition(txn_note, NoteStatus.INVALID, str(err)))
+            continue
+
+        if data["algo_threshold"] != algo_threshold:
+            reason = (
+                f"algo_threshold {data['algo_threshold']} != requested {algo_threshold}"
+            )
+            logger.debug("Filtering note %s: %s", txn_note, reason)
+            dispositions.append(NoteDisposition(txn_note, NoteStatus.FILTERED, reason))
+            continue
+
+        dispositions.append(
+            NoteDisposition(
+                txn_note,
+                NoteStatus.VALID,
+                f"algo_threshold {algo_threshold}",
+            )
+        )
+        data_points.append(data)
+
+    summary = PPoSDexDataSummary(
+        valid_data_points=sum(
+            disposition.status is NoteStatus.VALID for disposition in dispositions
+        ),
+        invalid_notes=sum(
+            disposition.status is NoteStatus.INVALID for disposition in dispositions
+        ),
+        undecodable_notes=sum(
+            disposition.status is NoteStatus.UNDECODABLE for disposition in dispositions
+        ),
+        threshold_filtered_notes=sum(
+            disposition.status is NoteStatus.FILTERED for disposition in dispositions
+        ),
+    )
+
+    if not data_points:
         raise PPoSDexError(
-            f"No valid PPoS Dex data published by {publisher_address} "
-            f"starting from block {start_block}."
+            f"No valid PPoS Dex data published by {publisher_address} starting "
+            f"from block {start_block} for algo_threshold {algo_threshold}. "
+            f"Notes fetched: {summary.total_notes}, schema invalid: "
+            f"{summary.invalid_notes}, undecodable: {summary.undecodable_notes}, "
+            f"threshold filtered: {summary.threshold_filtered_notes}."
         )
 
-    return ppos_dex_data
+    return PPoSDexDataResult(data_points, dispositions, summary)

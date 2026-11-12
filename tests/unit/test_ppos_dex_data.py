@@ -118,27 +118,121 @@ class TestGet:
         latest = make_data_point(timestamp="2026-11-02 00:00:00.000000")
         oldest = make_data_point(timestamp="2026-11-01 00:00:00.000000")
         noise, incomplete = b"noise", msgpack.packb({"ppos_dex": 2.0})
+        other_threshold = msgpack.packb(make_data_point(algo_threshold=1))
         indexer.notes[PUBLISHER] = [
             msgpack.packb(latest),
             noise,
             incomplete,
-            msgpack.packb(make_data_point(algo_threshold=1)),
+            other_threshold,
             msgpack.packb(oldest),
         ]
 
-        data = pposdex.get_ppos_dex_data(indexer, PUBLISHER, 1000, 1, 2)
+        result = pposdex.get_ppos_dex_data(indexer, PUBLISHER, 1000, 1, 2)
 
-        assert data == [latest, oldest]
+        # Valid data points stay in chain return order
+        assert result.data_points == [latest, oldest]
         assert indexer.requests[0]["min_round"] == 1
+        # Every note has a traceable disposition, in chain order
+        assert [disposition.status for disposition in result.dispositions] == [
+            pposdex.NoteStatus.VALID,
+            pposdex.NoteStatus.UNDECODABLE,
+            pposdex.NoteStatus.INVALID,
+            pposdex.NoteStatus.FILTERED,
+            pposdex.NoteStatus.VALID,
+        ]
+        assert [disposition.note for disposition in result.dispositions] == [
+            b64(note) for note in indexer.notes[PUBLISHER]
+        ]
+        summary = result.summary
+        assert summary.valid_data_points == 2
+        assert summary.invalid_notes == 1
+        assert summary.undecodable_notes == 1
+        assert summary.threshold_filtered_notes == 1
+        assert summary.total_notes == 5
         skipped = [m for m in caplog.messages if m.startswith("Skipping note")]
         assert skipped == [
             f"Skipping note {b64(noise)}: unpack(b) received extra data.",
             f"Skipping note {b64(incomplete)}: Missing key: algo_threshold",
         ]
+        # Threshold filtering is a disposition, not an error
+        filtered = [m for m in caplog.messages if m.startswith("Filtering note")]
+        assert filtered == [
+            f"Filtering note {b64(other_threshold)}: algo_threshold 1 != requested 1000"
+        ]
 
-    def test_no_valid_data(
+    def test_legacy_and_unknown_keys_are_valid(
+        self,
+        indexer: FakeIndexer,
+        make_data_point: Callable[..., PPoSDexData],
+    ) -> None:
+        legacy = make_data_point(ppos_dex_v3=7, ppos_dex_v3_operators=3)
+        newer = make_data_point(unknown_key="ignored")
+        indexer.notes[PUBLISHER] = [
+            msgpack.packb(legacy),
+            msgpack.packb(newer),
+        ]
+
+        result = pposdex.get_ppos_dex_data(indexer, PUBLISHER, 1000, 1)
+
+        assert result.summary.valid_data_points == 2
+        assert result.data_points[0]["ppos_dex_v3_liveness"] == 7
+        assert result.data_points[0]["ppos_dex_v3_liveness_operators"] == 3
+        assert "ppos_dex_v3" not in result.data_points[0]
+        assert "unknown_key" not in result.data_points[1]
+
+    @pytest.mark.parametrize(
+        "note",
+        [b"noise", b""],
+        ids=["extra_data", "empty"],
+    )
+    def test_undecodable_notes_are_counted(
+        self,
+        indexer: FakeIndexer,
+        make_data_point: Callable[..., PPoSDexData],
+        note: bytes,
+    ) -> None:
+        indexer.notes[PUBLISHER] = [note, msgpack.packb(make_data_point())]
+
+        result = pposdex.get_ppos_dex_data(indexer, PUBLISHER, 1000, 1)
+
+        assert result.dispositions[0].status == pposdex.NoteStatus.UNDECODABLE
+        assert result.summary.undecodable_notes == 1
+        assert result.summary.valid_data_points == 1
+
+    def test_no_valid_data_reports_publisher_block_and_counts(
         self, indexer: FakeIndexer, make_data_point: Callable[..., PPoSDexData]
     ) -> None:
-        indexer.notes[PUBLISHER] = [msgpack.packb(make_data_point(algo_threshold=1))]
-        with pytest.raises(PPoSDexError, match="No valid PPoS Dex data"):
-            pposdex.get_ppos_dex_data(indexer, PUBLISHER, 1000, 1)
+        indexer.notes[PUBLISHER] = [
+            b"noise",
+            msgpack.packb({"ppos_dex": 2.0}),
+            msgpack.packb(make_data_point(algo_threshold=1)),
+        ]
+        with pytest.raises(PPoSDexError) as err:
+            pposdex.get_ppos_dex_data(indexer, PUBLISHER, 1000, 4242)
+        message = str(err.value)
+        # The message must locate the failed read, not just say "no data"
+        assert PUBLISHER in message
+        assert "4242" in message
+        assert "1000" in message
+        assert "schema invalid: 1" in message
+        assert "undecodable: 1" in message
+        assert "threshold filtered: 1" in message
+
+    def test_only_invalid_notes(
+        self, indexer: FakeIndexer, make_data_point: Callable[..., PPoSDexData]
+    ) -> None:
+        bad_type: dict[str, object] = dict(make_data_point())
+        bad_type["accounts"] = 1.5
+        out_of_range: dict[str, object] = dict(make_data_point())
+        out_of_range["ppos_gini"] = 1.1
+        missing_key: dict[str, object] = dict(make_data_point())
+        del missing_key["timestamp"]
+        indexer.notes[PUBLISHER] = [
+            msgpack.packb(bad_type),
+            msgpack.packb(out_of_range),
+            msgpack.packb(missing_key),
+        ]
+        with pytest.raises(PPoSDexError) as err:
+            pposdex.get_ppos_dex_data(indexer, PUBLISHER, 1000, 7)
+        assert PUBLISHER in str(err.value)
+        assert "7" in str(err.value)

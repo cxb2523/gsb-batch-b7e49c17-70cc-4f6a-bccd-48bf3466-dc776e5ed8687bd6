@@ -604,14 +604,14 @@ def render(ppos_dex_data: list[PPoSDexData], save: bool = False) -> None:
 
 
 def main() -> None:  # pragma: no cover
-    ppos_dex_data = pposdex.get_ppos_dex_data(
+    result = pposdex.get_ppos_dex_data(
         indexer_client=networks.get_indexer_client(networks.MAINNET),
         publisher_address=cli.DEFAULT_PUBLISHER,
         start_block=cli.DEFAULT_START_BLOCK,
         end_block=None,
         algo_threshold=cli.DEFAULT_ALGO_THRESHOLD,
     )
-    render(ppos_dex_data, save=True)
+    render(result.data_points, save=True)
 
 
 if __name__ == "__main__":

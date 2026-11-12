@@ -8,6 +8,7 @@ import msgpack
 import pytest
 from fakes import FakeAlgod, FakeIndexer
 
+from pposdex import ppos_dex_data as pposdex
 from pposdex.cli import (
     DEFAULT_ALGO_THRESHOLD,
     DEFAULT_PUBLISHER,
@@ -17,7 +18,7 @@ from pposdex.cli import (
 )
 from pposdex.helpers import ENV_MNEMONIC, Json
 from pposdex.networks import LOCALNET, MAINNET, TESTNET, Network
-from pposdex.ppos_dex_data import PPoSDexData
+from pposdex.ppos_dex_data import PPoSDexData, PPoSDexDataSummary
 
 
 def test_defaults() -> None:
@@ -155,6 +156,79 @@ class TestCommands:
         assert [row["ppos_dex_v3_nakamoto"] for row in rows] == ["13", "", ""]
         assert [row["ppos_dex_v3_liveness"] for row in rows] == ["", "7", ""]
         assert [row["round"] for row in rows] == ["66605064", "", ""]
+
+    def test_export_counts_match_csv_rows(
+        self,
+        network: list[Network],
+        indexer: FakeIndexer,
+        images: Path,
+        make_data_point: Callable[..., PPoSDexData],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Mixed old and new versions, one corrupt note, one threshold mismatch
+        indexer.notes[DEFAULT_PUBLISHER] = [
+            msgpack.packb(
+                make_data_point(
+                    timestamp="2026-11-03 00:00:00.0",
+                    ppos_dex_v3_nakamoto=13,
+                    round=66605064,
+                )
+            ),
+            b"noise",
+            msgpack.packb({"ppos_dex": 2.0}),
+            msgpack.packb(make_data_point(algo_threshold=1)),
+            # Legacy 4.0.0 keys renamed to the liveness fields at read time
+            msgpack.packb(make_data_point(ppos_dex_v3=7)),
+        ]
+        result = pposdex.get_ppos_dex_data(
+            indexer, DEFAULT_PUBLISHER, DEFAULT_ALGO_THRESHOLD, DEFAULT_START_BLOCK
+        )
+        assert result.summary == PPoSDexDataSummary(
+            valid_data_points=2,
+            invalid_notes=1,
+            undecodable_notes=1,
+            threshold_filtered_notes=1,
+        )
+
+        main(["export"])
+        with Path("ppos_dex_data.csv").open(encoding="utf8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        # Only valid data points reach the CSV: one row per valid data point
+        assert len(rows) == result.summary.valid_data_points
+        # Columns are the SCHEMA fields present in at least one data point;
+        # fields an older record lacks stay empty, they are never zero-filled
+        assert rows[0]["ppos_dex_v3_nakamoto"] == "13"
+        assert rows[1]["ppos_dex_v3_nakamoto"] == ""
+        assert rows[1]["ppos_dex_v3_liveness"] == "7"
+        assert rows[0]["round"] == "66605064"
+        assert rows[1]["round"] == ""
+        out = capsys.readouterr().out
+        assert "2 valid" in out
+        assert "1 schema invalid" in out
+        assert "1 undecodable" in out
+        assert "1 threshold filtered" in out
+
+    def test_export_without_any_valid_data_is_locatable(
+        self,
+        network: list[Network],
+        indexer: FakeIndexer,
+        images: Path,
+        make_data_point: Callable[..., PPoSDexData],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        indexer.notes[DEFAULT_PUBLISHER] = [
+            b"noise",
+            msgpack.packb({"ppos_dex": 2.0}),
+            msgpack.packb(make_data_point(algo_threshold=1)),
+        ]
+        with pytest.raises(SystemExit) as exit_:
+            main(["export", "-s", "4242"])
+        assert exit_.value.code == 1
+        err = capsys.readouterr().err
+        # Publisher address and start block must identify the failed read
+        assert DEFAULT_PUBLISHER in err
+        assert "4242" in err
+        assert not Path("ppos_dex_data.csv").exists()
 
     @pytest.mark.parametrize("command", ["timeseries", "snapshot"])
     def test_plots(self, network: list[Network], images: Path, command: str) -> None:
