@@ -18,6 +18,22 @@ This is an example shows how to return news headlines from a selection of URLs a
 python3 main.py
 ```
 
+## Run the tests offline
+
+The CSV write/dedupe logic is covered by `test_news_aggregator.py`, which uses
+fake fetch results instead of a real browser. It needs no AgentQL
+credentials and makes no network calls:
+
+```bash
+python -m unittest test_news_aggregator -v
+```
+
+The tests cover two sites fetched concurrently, duplicate URLs (across sites
+and within one site), empty results, a failing fetch, and a pre-existing CSV:
+they assert the final line count, that the header appears once on the first
+line, the `Posted | Entry | URL | Platform | Author` column order, and the
+exact records written.
+
 ## Play with the query
 
 Install the [AgentQL Debugger Chrome extension](https://docs.agentql.com/installation/chrome-extension-installation) to play with the AgentQL query. [Learn more about the AgentQL query language](https://docs.agentql.com/agentql-query/query-intro)
