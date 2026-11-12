@@ -1,0 +1,26 @@
+[
+  {
+    "language": "English",
+    "language_code": "en",
+    "is_generated": false,
+    "is_translatable": true
+  },
+  {
+    "language": "English (auto-generated)",
+    "language_code": "en",
+    "is_generated": true,
+    "is_translatable": true
+  },
+  {
+    "language": "Russian",
+    "language_code": "ru",
+    "is_generated": false,
+    "is_translatable": true
+  },
+  {
+    "language": "Spanish",
+    "language_code": "es",
+    "is_generated": false,
+    "is_translatable": true
+  }
+]

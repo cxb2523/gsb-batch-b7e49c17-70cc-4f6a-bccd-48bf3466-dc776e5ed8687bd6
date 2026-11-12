@@ -1,0 +1,104 @@
+{
+  "query": "python tutorial",
+  "videos": [
+    {
+      "video_id": "UrsmFxEIp5k",
+      "title": "Python Tutorial For Beginners in Hindi | Complete Python Course 🔥",
+      "channel": "CodeWithHarry",
+      "channel_id": "UCeVMnSShP_Iviwkknt83cww",
+      "duration": "10:53:55",
+      "duration_seconds": 39235,
+      "published_text": "1 year ago",
+      "url": "https://www.youtube.com/watch?v=UrsmFxEIp5k",
+      "is_live": false,
+      "is_short": false,
+      "view_count": "18,038,995 views",
+      "short_view_count": "18M views",
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/UrsmFxEIp5k/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAJMEKj43YZAZHZkCUujvGBDmwJUA",
+          "width": 360,
+          "height": 202
+        },
+        {
+          "url": "https://i.ytimg.com/vi/UrsmFxEIp5k/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLCgVi5ujXAKguur03EW6bRz2JX6Hg",
+          "width": 720,
+          "height": 404
+        }
+      ],
+      "moving_thumbnail": "https://i.ytimg.com/an_webp/UrsmFxEIp5k/mqdefault_6s.webp?du=3000&sqp=CO-mt80G&rs=AOn4CLCCVp2Tap0YHy5dS2NMU8YpNwf5Jg",
+      "channel_thumbnail": "https://yt3.ggpht.com/ytc/AIdro_kX3sdbuu3KFmRPsmlu0R5Rx_BhpxwupjtvJmkEdNfla7w=s68-c-k-c0x00ffffff-no-rj",
+      "description_snippet": "Exciting News! I've just launched my Data Science Course – and it's now in Early Bird Access! If you loved this Python course, ...",
+      "is_verified": true,
+      "badges": [
+        "CC"
+      ]
+    },
+    {
+      "video_id": "rfscVS0vtbw",
+      "title": "Learn Python - Full Course for Beginners [Tutorial]",
+      "channel": "freeCodeCamp.org",
+      "channel_id": "UC8butISFwT-Wl7EV0hUK0BQ",
+      "duration": "4:26:52",
+      "duration_seconds": 16012,
+      "published_text": "7 years ago",
+      "url": "https://www.youtube.com/watch?v=rfscVS0vtbw",
+      "is_live": false,
+      "is_short": false,
+      "view_count": "48,477,211 views",
+      "short_view_count": "48M views",
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/rfscVS0vtbw/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLD-9-7sK2ChwTaU2oDci15jO7wEDg",
+          "width": 360,
+          "height": 202
+        },
+        {
+          "url": "https://i.ytimg.com/vi/rfscVS0vtbw/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLABBQtpk83-Gm8-IgPAiGlTtrLH9w",
+          "width": 720,
+          "height": 404
+        }
+      ],
+      "moving_thumbnail": "https://i.ytimg.com/an_webp/rfscVS0vtbw/mqdefault_6s.webp?du=3000&sqp=CICbt80G&rs=AOn4CLARJa5kctFyNLIh6JWSy0WZH1xwxw",
+      "channel_thumbnail": "https://yt3.ggpht.com/ytc/AIdro_lGRc-05M2OoE1ejQdxeFhyP7OkJg9h4Y-7CK_5je3QqFI=s68-c-k-c0x00ffffff-no-rj",
+      "description_snippet": "This course will give you a full introduction into all of the core concepts in python. Follow along with the videos and you'll be a ...",
+      "is_verified": true,
+      "badges": [
+        "CC"
+      ]
+    },
+    {
+      "video_id": "_uQrJ0TkZlc",
+      "title": "Python Full Course for Beginners",
+      "channel": "Programming with Mosh",
+      "channel_id": "UCWv7vMbMWH4-V0ZXdmDpPBA",
+      "duration": "6:14:07",
+      "duration_seconds": 22447,
+      "published_text": "7 years ago",
+      "url": "https://www.youtube.com/watch?v=_uQrJ0TkZlc",
+      "is_live": false,
+      "is_short": false,
+      "view_count": "47,186,110 views",
+      "short_view_count": "47M views",
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/_uQrJ0TkZlc/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLCQfkbApoaN-_QBOuiyHzWJOiziEA",
+          "width": 360,
+          "height": 202
+        },
+        {
+          "url": "https://i.ytimg.com/vi/_uQrJ0TkZlc/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLCpUFKfUMVNbg8mqTcZ8UdSUjpilw",
+          "width": 720,
+          "height": 404
+        }
+      ],
+      "moving_thumbnail": "https://i.ytimg.com/an_webp/_uQrJ0TkZlc/mqdefault_6s.webp?du=3000&sqp=CK2At80G&rs=AOn4CLDHowrE_97YG1orwjgUcfjhryFDtw",
+      "channel_thumbnail": "https://yt3.ggpht.com/HCv0fXFEEcD0HRyF0_qR1K7b7qO3KCzmIoyH1DEJYB94CIUFhIE5i2t2IDIPX97W1-DK4hegww=s68-c-k-c0x00ffffff-no-rj",
+      "description_snippet": "Learn Python for AI, machine learning, and web development with this beginner-friendly course! Get 6 months of PyCharm ...",
+      "is_verified": true,
+      "badges": [
+        "CC"
+      ]
+    }
+  ]
+}

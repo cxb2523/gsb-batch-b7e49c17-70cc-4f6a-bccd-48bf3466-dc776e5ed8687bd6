@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tubescrape"
+version = "0.5.0"
+description = "Scrape YouTube search results, channels, transcripts, and playlists — no API key needed. Sync + async. CLI + REST API included."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Muhammad Zaid" },
+]
+keywords = [
+    "youtube", "scraper", "transcript", "innertube", "search",
+    "channel", "browse", "playlist", "subtitles", "captions",
+    "youtube-api", "youtube-scraper", "youtube-transcript",
+    "async", "cli", "rest-api", "no-api-key",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Multimedia :: Video",
+    "Framework :: AsyncIO",
+    "Framework :: FastAPI",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.25.0",
+]
+
+[project.optional-dependencies]
+cli = ["click>=8.0", "rich>=13.0"]
+api = ["fastapi>=0.100.0", "uvicorn[standard]>=0.20.0"]
+all = ["tubescrape[cli,api]"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "respx>=0.20",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.scripts]
+tubescrape = "tubescrape.cli.app:main"
+
+[project.urls]
+Homepage = "https://github.com/misterzaidxpy/tubescrape"
+Repository = "https://github.com/misterzaidxpy/tubescrape"
+Issues = "https://github.com/misterzaidxpy/tubescrape/issues"
+Documentation = "https://github.com/misterzaidxpy/tubescrape/blob/main/docs/guide.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tubescrape"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+ignore = ["UP031", "B008"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "tubescrape.api.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
