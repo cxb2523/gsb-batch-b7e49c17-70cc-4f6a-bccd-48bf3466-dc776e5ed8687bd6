@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.application.cameras import CameraService
-from app.application.errors import Conflict, InvalidInput, NotFound, Unavailable
+from app.application.errors import Conflict, Forbidden, InvalidInput, NotFound, Unavailable
 from app.application.inference import InferenceService
 from app.application.queries import RecordQueries
 from app.domain.camera import CameraRegistration
@@ -87,5 +87,97 @@ def test_camera_storage_failure_is_an_application_error():
         service = CameraService(BrokenCameras(), MemorySources(), None, asyncio.Lock())
         with pytest.raises(Unavailable, match="Registro de camaras no disponible"):
             await service.list_cameras()
+
+    asyncio.run(exercise())
+
+
+def make_service():
+    repository, sources = MemoryCameras(), MemorySources()
+    default = CameraRegistration(source_id="default", password="private-test-password")
+    return CameraService(repository, sources, default, asyncio.Lock()), repository, sources
+
+
+def test_only_a_real_enabled_change_needs_admin():
+    """El operador edita todo menos enabled; reenviar el mismo valor no es un cambio."""
+    async def exercise():
+        service, repository, _ = make_service()
+        await service.register_camera(CameraRegistration(source_id="cam"))
+        # Cambiar enabled en cualquier sentido exige admin.
+        with pytest.raises(Forbidden):
+            await service.update_camera("cam", CameraRegistration(source_id="cam", enabled=False),
+                                        may_change_enabled=False)
+        assert (await service.get_camera("cam"))["enabled"] is True
+        # Reenviar el mismo valor no cuenta como modificacion.
+        same = await service.update_camera("cam", CameraRegistration(source_id="cam", enabled=True),
+                                           may_change_enabled=False)
+        assert same["enabled"] is True
+        # El admin si puede desactivarla.
+        disabled = await service.update_camera("cam", CameraRegistration(source_id="cam", enabled=False),
+                                               may_change_enabled=True)
+        assert disabled["enabled"] is False
+        # El operador no puede reactivarla...
+        with pytest.raises(Forbidden):
+            await service.update_camera("cam", CameraRegistration(source_id="cam", enabled=True),
+                                        may_change_enabled=False)
+        # ...pero si edita otros campos sin tocar enabled, el valor se conserva.
+        kept = await service.update_camera("cam", CameraRegistration(source_id="cam", name="Nueva"),
+                                           may_change_enabled=False)
+        assert kept["enabled"] is False and kept["name"] == "Nueva"
+        # Y el admin puede volver a activarla.
+        enabled = await service.update_camera("cam", CameraRegistration(source_id="cam", enabled=True),
+                                              may_change_enabled=True)
+        assert enabled["enabled"] is True
+
+    asyncio.run(exercise())
+
+
+def test_repeated_start_creates_a_single_processing_session():
+    async def exercise():
+        service, _, sources = make_service()
+        await service.register_camera(CameraRegistration(source_id="cam"))
+        start = SimpleNamespace(source_id="cam", stream_path=None)
+        first, second = await asyncio.gather(service.start_source(start), service.start_source(start))
+        assert first == second and sources.opened == 1
+        assert await service.start_source(start) == first
+        assert sources.opened == 1
+
+    asyncio.run(exercise())
+
+
+def test_disabled_camera_cannot_start_until_an_admin_enables_it():
+    async def exercise():
+        service, _, sources = make_service()
+        await service.register_camera(CameraRegistration(source_id="cam", enabled=False))
+        with pytest.raises(Conflict):
+            await service.start_source(SimpleNamespace(source_id="cam", stream_path=None))
+        assert sources.opened == 0
+        await service.update_camera("cam", CameraRegistration(source_id="cam", enabled=True),
+                                    may_change_enabled=True)
+        await service.start_source(SimpleNamespace(source_id="cam", stream_path=None))
+        assert sources.opened == 1
+
+    asyncio.run(exercise())
+
+
+def test_delete_is_idempotent_in_result_and_final_for_start():
+    async def exercise():
+        service, repository, sources = make_service()
+        await service.register_camera(CameraRegistration(source_id="cam"))
+        # Eliminar una camara detenida devuelve un resultado claro.
+        assert (await service.delete_camera("cam"))["deleted"] is True
+        # Repetir la baja o consultarla es un 404 de aplicacion, no un 500.
+        with pytest.raises(NotFound):
+            await service.delete_camera("cam")
+        with pytest.raises(NotFound):
+            await service.get_camera("cam")
+        # Arrancarla queda rechazado, con o sin stream_path: no se recrea sola.
+        with pytest.raises(NotFound):
+            await service.start_source(SimpleNamespace(source_id="cam", stream_path=None))
+        with pytest.raises(NotFound):
+            await service.start_source(SimpleNamespace(source_id="cam", stream_path="cam"))
+        assert "cam" not in repository.cameras and sources.opened == 0
+        # Eliminar lo que nunca existio tambien es NotFound.
+        with pytest.raises(NotFound):
+            await service.delete_camera("fantasma")
 
     asyncio.run(exercise())

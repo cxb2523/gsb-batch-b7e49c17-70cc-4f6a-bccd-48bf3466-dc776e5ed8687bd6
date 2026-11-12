@@ -38,6 +38,9 @@ def test_camera_endpoints(configured, monkeypatch):
                 # La baja de la ultima camara ya estaba habilitada en la copia local.
                 assert (await client.delete("/cameras/camara1")).status_code == 200
                 assert (await client.get("/cameras/camara1")).status_code == 404
+                # Una camara eliminada no se puede arrancar: hay que registrarla de nuevo.
+                assert (await client.post("/sources/start", json={"source_id": "camara1"})).status_code == 404
+                assert (await client.post("/sources/start", json={"source_id": "camara1", "stream_path": "camera01"})).status_code == 404
                 assert isinstance((await client.get("/detections?camera=camara1&limit=10")).json(), list)
                 assert "items" in (await client.get("/alerts?camera=camara1&limit=30")).json()
                 assert "items" in (await client.get("/inference-logs?limit=10")).json()

@@ -90,13 +90,8 @@ class CameraService:
         async with self.lock:
             camera = await self._storage(self.repository.get, body.source_id)
             if camera is None:
-                if body.stream_path is None:
-                    raise NotFound("Enviar stream_path para una camara nueva")
-                camera = self.default_camera.model_copy(update={
-                    "source_id": body.source_id, "name": body.source_id,
-                    "stream_path": body.stream_path})
-                if not await self._storage(self.repository.save, camera):
-                    camera = await self._camera(body.source_id)
+                # Una camara eliminada no vuelve al arrancarla: hay que registrarla de nuevo.
+                raise NotFound("Camara no registrada")
             if not camera.enabled:
                 raise Conflict("Camara deshabilitada")
             active = self.sources.active(body.source_id)
