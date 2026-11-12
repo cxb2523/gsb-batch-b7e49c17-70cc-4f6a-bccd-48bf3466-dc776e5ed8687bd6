@@ -1,0 +1,46 @@
+repos:
+# Generic
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+  hooks:
+    - id: check-yaml
+    - id: check-toml
+    - id: check-merge-conflict
+    - id: check-added-large-files
+    - id: detect-private-key
+    - id: end-of-file-fixer
+    - id: trailing-whitespace
+
+# Python (tool versions come from uv.lock)
+- repo: local
+  hooks:
+    - id: uv-lock
+      name: uv lock check
+      entry: uv lock --check
+      language: system
+      files: ^(pyproject\.toml|uv\.lock)$
+      pass_filenames: false
+    - id: ruff-check
+      name: ruff check
+      entry: uv run --locked ruff check --fix
+      language: system
+      types_or: [python, pyi]
+    - id: ruff-format
+      name: ruff format
+      entry: uv run --locked ruff format
+      language: system
+      types_or: [python, pyi]
+    - id: mypy
+      name: mypy
+      entry: uv run --locked mypy
+      language: system
+      types_or: [python, pyi]
+      args: [src, tests]
+      pass_filenames: false
+
+# Markdown
+- repo: https://github.com/rvben/rumdl-pre-commit
+  rev: b0cff962ee693b9e612c097d22e71e0cba127447  # frozen: v0.3.2
+  hooks:
+    - id: rumdl-check
+      args: ["--fix"]

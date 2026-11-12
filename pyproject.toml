@@ -1,0 +1,93 @@
+[project]
+name = "pposdex"
+version = "4.1.0"
+description = "Algorand Pure Proof of Stake Decentralization Index"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "cusma", email = "cosimo.bassi@gmail.com" }]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10",
+    "msgpack>=1.0",
+    "py-algorand-sdk>=2.12,<3",
+]
+
+[project.scripts]
+pposdex = "pposdex.cli:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.140",
+    "mypy>=1.18",
+    "pre-commit>=4.3",
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "ruff>=0.14",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PT", "N", "C4", "PL"]
+ignore = [
+    "PLR2004", # magic values are domain constants here
+    "PLR0913", # plotting and index functions take many explicit parameters
+    "PLR0917",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# py-algorand-sdk ships type hints, but many of its functions are unannotated
+untyped_calls_exclude = ["algosdk", "matplotlib.dates"]
+# Test folders are not packages: name their modules from these roots
+mypy_path = ["src", "tests"]
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["msgpack"]
+ignore_missing_imports = true
+
+[tool.pytest]
+minversion = "9.0"
+testpaths = ["tests"]
+# Shared test helpers, like the fake clients in tests/fakes.py
+pythonpath = ["tests"]
+# Integration tests need a running LocalNet: run them with `pytest -m integration`
+addopts = ["-ra", "--import-mode=importlib", "-m", "not integration", "--cov=pposdex"]
+strict = true
+filterwarnings = ["error"]
+markers = ["integration: requires a running AlgoKit LocalNet"]
+
+[tool.coverage.run]
+source = ["pposdex"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']
+
+[tool.rumdl]
+# mdBook's table of contents is not a regular page
+exclude = ["docs/SUMMARY.md"]
+# Also when pre-commit passes the file explicitly
+force-exclude = true
+
+[tool.rumdl.per-file-ignores]
+# Plots are rendered when the docs are deployed, they are not in the repository
+"docs/data/*.md" = ["MD057"]
+"docs/project/stake.md" = ["MD057"]
+"docs/project/nodes.md" = ["MD057"]
+"docs/project/topology.md" = ["MD057"]
+
+[tool.rumdl.MD013]
+code-blocks = false
+tables = false
