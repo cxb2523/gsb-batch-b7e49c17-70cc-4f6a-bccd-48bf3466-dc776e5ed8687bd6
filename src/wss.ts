@@ -87,8 +87,15 @@ class WSS {
     // the launch page the editor relays for; set by its announce frame, null when it detaches
     private _runtime: Capabilities | undefined;
 
-    // keyed by request id; only the socket the request went to may answer it
-    private _callbacks = new Map<number, { socket: WebSocket; cb: (res: RawResult) => void }>();
+    // keyed by request id; only the socket the request went to may answer it. a
+    // request is also remembered by the method name so disconnects can explain
+    // exactly which call failed instead of leaving it to time out.
+    private _callbacks = new Map<number, {
+        socket: WebSocket;
+        name: string;
+        cb: (res: RawResult) => void;
+        fail: (err: Error) => void;
+    }>();
 
     private _id = 0;
 
@@ -130,10 +137,16 @@ class WSS {
         });
         this._server = server;
         server.on('listening', () => {
+            if (this._server !== server) {
+                return;
+            }
             this._listening = true;
             console.error('[WSS] Listening on port', this._port);
         });
         server.on('error', (err: Error & { code?: string }) => {
+            if (this._server !== server) {
+                return;
+            }
             if (err.code === 'EADDRINUSE') {
                 this._listening = false;
                 console.error(`[WSS] Port ${this._port} is owned by another MCP server instance; standing by and retrying (only one instance controls the editor at a time).`);
@@ -157,7 +170,18 @@ class WSS {
         // disconnect would leak listeners and double-handle messages.
         server.on('connection', (ws, req) => {
 
-            // browsers always send an Origin, so only local processes arrive without one
+            // a server we already relinquished (or failed to bind) must not let its
+            // surviving sockets mutate state after ownership moved elsewhere
+            if (this._server !== server || !this._listening) {
+                try {
+                    ws.close();
+                } catch { /* already closing */ }
+                return;
+            }
+
+            // browsers always send an Origin, so only local processes arrive without one.
+            // this flag is the trust boundary for the yield handshake: a page can never
+            // ask us to give up the editor connection, whatever origin it claims.
             const local = !req.headers.origin;
             if (!this._editor) {
                 this._editor = ws;
@@ -166,6 +190,9 @@ class WSS {
             }
             console.error('[WSS] Peer connected (assumed editor; awaiting registration)');
             ws.on('message', (data) => {
+                if (this._server !== server || !this._listening) {
+                    return;
+                }
                 try {
                     const msg = JSON.parse(data.toString());
 
@@ -173,15 +200,21 @@ class WSS {
                     // controls the editor. we release it (without exiting, so our client
                     // doesn't restart us) and stand by to retake it if that instance exits —
                     // "latest wins" without a kill/restart storm.
-                    if (msg.yield === true && local) {
-                        if (this._editor === ws) {
-                            this._editor = undefined;
+                    if (msg.yield === true) {
+                        if (!local) {
+                            // nothing is torn down: the editor connection stays usable and
+                            // this is a permission decision, not a runtime failure.
+                            console.error(`[WSS] Ignored yield from a page (Origin: ${req.headers.origin}); only a local process without an Origin may request a port handoff. Editor connection is unaffected.`);
+                            return;
                         }
-                        console.error('[WSS] Yield requested; relinquishing port to a newer instance and standing by');
-                        try {
-                            ws.close();
-                        } catch { /* already closing */ }
-                        this._relinquish();
+                        const editor = this._editor;
+                        console.error('[WSS] Yield requested by a local process; relinquishing port and standing by');
+                        this._relinquish(editor);
+                        if (editor !== ws) {
+                            try {
+                                ws.close();
+                            } catch { /* already closing */ }
+                        }
                         return;
                     }
                     if (msg.register === 'editor') {
@@ -217,7 +250,8 @@ class WSS {
                 }
             });
             ws.on('close', () => {
-                if (this._editor === ws) {
+                const editor = this._editor;
+                if (editor === ws) {
                     this._editor = undefined;
                     this._editorCaps = undefined;
 
@@ -229,6 +263,10 @@ class WSS {
                         this._pingInterval = null;
                     }
                 }
+
+                // fail fast with a readable reason instead of letting the callers
+                // sit until the 60s timeout on a peer that can no longer answer
+                this._failPending(ws, name => `The editor disconnected before answering '${name}'. Reconnect the editor (and re-run launch_start for runtime calls) and retry.`);
             });
 
             // a socket 'error' with no listener is re-thrown by `ws` as an uncaught
@@ -267,17 +305,24 @@ class WSS {
      * Release the port and drop peers WITHOUT exiting the process, then re-enter
      * standby so we automatically take the port back if the new owner exits.
      * Used when a newer instance requests a graceful handoff.
+     *
+     * @param editor - The socket currently serving as editor, if any. Its pending
+     * calls are failed immediately with a handoff-specific reason.
      */
-    private _relinquish() {
+    private _relinquish(editor?: WebSocket) {
+        // stop accepting and acting on frames before any socket is closed, so a
+        // late message from a surviving page cannot reclaim the editor slot
         this._listening = false;
         if (this._pingInterval) {
             clearInterval(this._pingInterval);
             this._pingInterval = null;
         }
 
+        this._failPending(editor, name => `This MCP server released port ${this._port} to a newer instance before '${name}' completed. Reconnect the editor to the newer instance and retry.`);
+
         // drop the editor so it reconnects to the new owner
         try {
-            this._editor?.close();
+            editor?.close();
         } catch { /* already closing */ }
         this._editor = undefined;
         this._editorCaps = undefined;
@@ -289,6 +334,23 @@ class WSS {
             clearTimeout(this._bindTimer);
         }
         this._bindTimer = setTimeout(() => this._bind(), BIND_RETRY_DELAY);
+    }
+
+    /**
+     * Fail every in-flight request bound to `socket`, so a disconnect or handoff
+     * surfaces a readable cause instead of a 60s timeout.
+     */
+    private _failPending(socket: WebSocket | undefined, reason: (name: string) => string) {
+        if (!socket) {
+            return;
+        }
+        for (const [id, pending] of this._callbacks) {
+            if (pending.socket !== socket) {
+                continue;
+            }
+            this._callbacks.delete(id);
+            pending.fail(new Error(reason(pending.name)));
+        }
     }
 
     /**
@@ -373,7 +435,7 @@ class WSS {
             }
             if (!socket) {
                 if (!this._listening) {
-                    reject(new Error(`This MCP server is on standby because another instance owns port ${this._port} (only one instance can control the editor at a time). Close the other MCP client/instance, or start this one with MCP_TAKEOVER=1 to force takeover, then retry.`));
+                    reject(new Error(`This MCP server is on standby because another instance owns port ${this._port} (only one instance can control the editor at a time). It will take over automatically when that instance exits; to use it now, stop the other MCP client and retry.`));
                 } else {
                     reject(new Error(`Editor not connected. Open the PlayCanvas Editor, click the MCP button at the bottom of the toolbar and press CONNECT, then retry. ${LNA_EDITOR_HINT}`));
                 }
@@ -406,9 +468,14 @@ class WSS {
             }, DEFAULT_TIMEOUT);
             this._callbacks.set(id, {
                 socket,
+                name,
                 cb: (res: RawResult) => {
                     clearTimeout(timer);
                     resolve(res);
+                },
+                fail: (err: Error) => {
+                    clearTimeout(timer);
+                    reject(err);
                 }
             });
             try {

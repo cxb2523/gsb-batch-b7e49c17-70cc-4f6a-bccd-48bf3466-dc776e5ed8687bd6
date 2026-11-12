@@ -111,8 +111,9 @@ start, about 1,000 tokens.
 ## Data and network use
 
 The server has no telemetry. It listens on `127.0.0.1:52000` for `playcanvas.com` and localhost
-pages, stops any other process holding that port, touches local files only for upload and download
-tools, and makes one outbound request: `download_build` fetches the archive URL the Editor reports.
+pages, asks any existing server instance holding that port to hand it off gracefully (it never
+terminates another process), touches local files only for upload and download tools, and makes one
+outbound request: `download_build` fetches the archive URL the Editor reports.
 
 ## Contributing
 

@@ -1,8 +1,8 @@
 /**
  * Deduped PIDs *listening* on `port`, parsed from raw lsof/netstat output. On Windows
  * netstat also lists the port's client rows (ESTABLISHED/TIME_WAIT), so only LISTENING
- * rows for the port are kept — else reclaiming the port would kill innocent clients
- * (e.g. the browser). PID 0 is skipped.
+ * rows for the port are kept — else the occupancy check would mistake innocent clients
+ * (e.g. the browser) for the instance that owns the port. PID 0 is skipped.
  */
 export const parsePids = (output: string, platform: NodeJS.Platform, port: number) => {
     const lines = output.split('\n');

@@ -36,25 +36,9 @@ const findPids = (port: number): string[] => {
             `lsof -nP -iTCP:${port} -sTCP:LISTEN -t`;
         return parsePids(execSync(cmd).toString(), process.platform, port);
     } catch {
-        // No listener (lsof/netstat exit non-zero when nothing matches).
+        // No listener (lsof/netstat exit non-zero when nothing matches), or the
+        // platform tool is unavailable. Standing by is still safe: never kill.
         return [];
-    }
-};
-
-const kill = (pid: string) => {
-    if (process.platform === 'win32') {
-        try {
-            // /F = force, /T = tree kill (kills child processes too)
-            execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
-        } catch {
-            // Ignore - process may already be dead
-        }
-        return;
-    }
-    try {
-        execSync(`kill -9 ${pid}`);
-    } catch {
-        // Ignore - process may already be dead
     }
 };
 
@@ -117,28 +101,17 @@ const requestYield = (port: number, timeoutMs: number) => {
     });
 };
 
-// Take over the port from any existing instance so the active client controls
-// the editor. Prefer a graceful handoff (no killing); fall back to reclaiming
-// the port only if the current owner won't yield (old build, orphan, or hung).
-const existing = stale();
-if (existing.length) {
-    if (process.env.MCP_TAKEOVER === '1') {
-        console.error('[process] MCP_TAKEOVER=1: killing process(es) on port', PORT, existing.join(', '));
-        existing.forEach(kill);
-        await waitForPortFree(5000);
-    } else {
-        console.error('[process] Port', PORT, 'in use; requesting graceful handoff from the current owner');
-        await requestYield(PORT, 1500);
-        await waitForPortFree(3000);
-        if (stale().length) {
-            console.error('[process] No handoff; reclaiming port', PORT, 'from', stale().join(', '));
-            stale().forEach(kill);
-            await waitForPortFree(5000);
-        }
-    }
-    if (stale().length) {
-        console.error('[process] Port', PORT, 'still in use after timeout; will stand by and retry');
-    }
+// Take over the port from an existing instance with a *graceful* handoff only.
+// We never terminate the current owner: it may belong to another agent's MCP
+// client, and killing it would leave that client without a server. If it yields,
+// we bind; if it doesn't (old build, hung), WSS stands by and retries binding
+// until the port frees up on its own.
+console.error('[process] Requesting a graceful handoff from any instance on port', PORT, '(no process is terminated)');
+await requestYield(PORT, 1500);
+await waitForPortFree(3000);
+const remaining = stale();
+if (remaining.length) {
+    console.error('[process] Port', PORT, 'is still owned by', remaining.join(', '), '— standing by and retrying; this instance takes over automatically when that owner exits.');
 }
 
 // Create a WebSocket server

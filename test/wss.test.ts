@@ -270,3 +270,98 @@ test('a page cannot ask the server to give up its port', async (t) => {
     await new Promise(r => setTimeout(r, 200));
     assert.equal(envelope(await wss.call('ping')).data, 'editor', 'yield from a page with an Origin is ignored');
 });
+
+const PORT5 = 52990;
+
+// true once something accepts a websocket upgrade on `port`
+const bindable = async (port: number, timeoutMs = 8000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const up = await new Promise<boolean>((r) => {
+            const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+            ws.on('open', () => { ws.close(); r(true); });
+            ws.on('error', () => r(false));
+        });
+        if (up) return true;
+        await new Promise(r => setTimeout(r, 100));
+    }
+    return false;
+};
+
+// open a local (no-Origin) socket and ask the owner to yield; resolves when the
+// owner closes the handoff socket
+const yieldLocally = (port: number) => new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    ws.on('open', () => ws.send(JSON.stringify({ yield: true })));
+    ws.on('close', () => resolve());
+    ws.on('error', reject);
+});
+
+test('local yield releases the port and the original holder re-binds after the new owner exits', async (t) => {
+    const a = new WSS(PORT5);
+    const cleanup: (() => void)[] = [() => a.close()];
+    t.after(() => cleanup.forEach(fn => fn()));
+    assert.equal(await bindable(PORT5), true, 'the original holder owns the port');
+
+    // an editor that advertises a method it never answers, so an in-flight call is
+    // still pending when the handoff happens
+    const editor = await new Promise<WebSocket>((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${PORT5}`);
+        ws.on('open', () => {
+            ws.send(JSON.stringify({ register: 'editor', protocolVersion: 1, methods: ['ping', 'slow'] }));
+            resolve(ws);
+        });
+        ws.on('message', (data) => {
+            const msg = JSON.parse(data.toString());
+            if (msg.name === 'ping' && msg.id !== undefined) {
+                ws.send(JSON.stringify({ id: msg.id, res: { data: 'editor' } }));
+            }
+        });
+    });
+    cleanup.push(() => editor.close());
+    for (let i = 0; i < 40 && envelope(await a.call('ping')).data !== 'editor'; i++) {
+        await new Promise(r => setTimeout(r, 50));
+    }
+    assert.equal(envelope(await a.call('ping')).data, 'editor', 'the editor is registered before the handoff');
+
+    const closed = new Promise(r => editor.once('close', r));
+    const pending = a.call('slow');
+    await new Promise(r => setTimeout(r, 50)); // let the request reach the editor
+
+    await yieldLocally(PORT5);
+    await closed;
+
+    // the in-flight call fails fast with a handoff-specific reason, not a timeout
+    const pendingResult = envelope(await pending);
+    assert.equal(pendingResult.meta.status, 'error');
+    assert.match(pendingResult.meta.message, /released port 52990 to a newer instance before 'slow' completed/);
+
+    // the process is still alive and standing by, not exited and not owning the port
+    const standby = envelope(await a.call('ping'));
+    assert.equal(standby.meta.status, 'error');
+    assert.match(standby.meta.message, /on standby because another instance owns port 52990/);
+    assert.doesNotMatch(standby.meta.message, /MCP_TAKEOVER/, 'standby guidance must not suggest killing the holder');
+
+    // a newer instance can bind the port the holder just released
+    const b = new WSS(PORT5);
+    cleanup.push(() => b.close());
+    assert.equal(await bindable(PORT5), true, 'the newer instance takes the port');
+
+    // ... and can serve the editor itself
+    const editorB = await peer(PORT5, 'editor-b', 'https://playcanvas.com');
+    cleanup.push(() => editorB.close());
+    await b.waitForEditor(b.editorGeneration - 1, 2000);
+    assert.equal(envelope(await b.call('ping')).data, 'editor-b');
+
+    // when the new owner exits, the original holder takes the port back on its
+    // own retry loop (no kill needed), and is usable again
+    editorB.close();
+    b.close();
+    assert.equal(await bindable(PORT5, 10000), true, 'the original holder re-binds after the new owner exits');
+
+    const editorA2 = await peer(PORT5, 'editor-back', 'https://playcanvas.com');
+    cleanup.push(() => editorA2.close());
+    await a.waitForEditor(a.editorGeneration - 1, 2000);
+    assert.equal(envelope(await a.call('ping')).data, 'editor-back', 'the re-bound original holder serves the editor');
+});
+
