@@ -1233,7 +1233,9 @@ var objFlows = {
   pulses: {},
   groups: {},
   pending: false,
-  // [van, naar, grondstof, actief]; handmatige acties gebruiken daarnaast pulse()
+  emptyText: null,
+  // [van, naar, grondstof, actief, voorraad?]; handmatige acties gebruiken daarnaast pulse()
+  // voorraad: optionele functie met de inputvoorraad van de keten; 0 = gestippelde "geen grondstof"-lijn
   edges: [
     // Landbouw
     [
@@ -1259,6 +1261,9 @@ var objFlows = {
       function () {
         return objWindmill.GrindTimer > 0;
       },
+      function () {
+        return +objGrainSilo.contents;
+      },
     ],
     [
       "grain-col",
@@ -1266,6 +1271,9 @@ var objFlows = {
       "graan",
       function () {
         return objWindmill.autoGrindTimer > 0;
+      },
+      function () {
+        return +objGrainSilo.contents;
       },
     ],
     [
@@ -1275,6 +1283,9 @@ var objFlows = {
       function () {
         return +objChicken.amount > 0;
       },
+      function () {
+        return +objGrainSilo.contents;
+      },
     ],
     [
       "windmills-col",
@@ -1282,6 +1293,9 @@ var objFlows = {
       "bloem",
       function () {
         return objWindmill.GrindTimer > 0;
+      },
+      function () {
+        return +objGrainSilo.contents;
       },
     ],
     [
@@ -1291,6 +1305,9 @@ var objFlows = {
       function () {
         return objWindmill.autoGrindTimer > 0;
       },
+      function () {
+        return +objGrainSilo.contents;
+      },
     ],
     [
       "flour-col",
@@ -1299,6 +1316,9 @@ var objFlows = {
       function () {
         return +objPastaHelper.amount > 0 && +objPastaFactory.amount > 0;
       },
+      function () {
+        return +objFlourSilo.contents;
+      },
     ],
     [
       "chicken-col",
@@ -1306,6 +1326,9 @@ var objFlows = {
       "eieren",
       function () {
         return +objPastaHelper.amount > 0 && +objPastaFactory.amount > 0;
+      },
+      function () {
+        return +objEgg.amount;
       },
     ],
     [
@@ -1343,6 +1366,9 @@ var objFlows = {
       function () {
         return +objPowerPlant.amount > 0 && +objOilTank.contents > 0;
       },
+      function () {
+        return +objOilTank.contents;
+      },
     ],
     [
       "olie-col",
@@ -1350,6 +1376,9 @@ var objFlows = {
       "olie",
       function () {
         return +objPlasticFactory.workers > 0 && +objPlasticFactory.amount > 0;
+      },
+      function () {
+        return +objOilTank.contents;
       },
     ],
     [
@@ -1368,6 +1397,9 @@ var objFlows = {
       function () {
         return +objCoalPowerPlant.amount > 0 && +objCoal.amount > 0;
       },
+      function () {
+        return +objCoal.amount;
+      },
     ],
     [
       "Coal-col",
@@ -1375,6 +1407,9 @@ var objFlows = {
       "steenkool",
       function () {
         return false;
+      },
+      function () {
+        return +objCoal.amount;
       },
     ],
     [
@@ -1458,6 +1493,9 @@ var objFlows = {
       function () {
         return +objPowerPlant.amount > 0 && +objOilTank.contents > 0;
       },
+      function () {
+        return +objOilTank.contents;
+      },
     ],
     [
       "coalPower",
@@ -1465,6 +1503,9 @@ var objFlows = {
       "energie",
       function () {
         return +objCoalPowerPlant.amount > 0 && +objCoal.amount > 0;
+      },
+      function () {
+        return +objCoal.amount;
       },
     ],
     [
@@ -2024,8 +2065,9 @@ var objFlows = {
         "data-from": edge[0],
         "data-to": edge[1],
       });
+      g.dataset.label = helpTexts[edge[0]][0] + " → " + helpTexts[edge[1]][0];
       var title = objFlows.svg("title");
-      title.textContent = helpTexts[edge[0]][0] + " → " + helpTexts[edge[1]][0];
+      title.textContent = g.dataset.label;
       g.appendChild(title);
       g.appendChild(objFlows.svg("path", { class: "flow-base" }));
       g.appendChild(objFlows.svg("path", { class: "flow-run" }));
@@ -2041,7 +2083,17 @@ var objFlows = {
     var on = objFlows.isOn();
     document.body.classList.toggle("flows-on", on);
     if (!on) {
+      // Uit (of niet te tonen): geen oude lijnen achterlaten
       layer.style.display = "none";
+      Object.keys(objFlows.groups).forEach(function (key) {
+        var g = objFlows.groups[key];
+        g.style.display = "none";
+        g.querySelectorAll("path").forEach(function (path) {
+          path.setAttribute("d", "");
+        });
+      });
+      if (objFlows.emptyText) objFlows.emptyText.style.display = "none";
+      objFlows.updateHint();
       return;
     }
     layer.style.display = "";
@@ -2210,6 +2262,10 @@ var objFlows = {
       circles[1].setAttribute("cx", q.x);
       circles[1].setAttribute("cy", q.y);
     });
+    // Geen enkele stroom te tekenen (alle kaarten verborgen of vergrendeld): laat dat zien
+    if (objFlows.emptyText) {
+      objFlows.emptyText.style.display = routes.length === 0 ? "" : "none";
+    }
     objFlows.updateActivity();
   },
   updateActivity: function () {
@@ -2224,7 +2280,23 @@ var objFlows = {
         active = false;
       }
       g.classList.toggle("active", active);
+      // Inputvoorraad van de keten is op: onderscheidende stijl en uitleg in de tooltip
+      var shortage = false;
+      if (typeof edge[4] === "function") {
+        try {
+          shortage = +edge[4]() <= 0;
+        } catch (error) {
+          shortage = false;
+        }
+      }
+      g.classList.toggle("shortage", shortage);
+      var title = g.querySelector("title");
+      if (title) {
+        title.textContent =
+          g.dataset.label + (shortage ? " — geen grondstof op voorraad" : "");
+      }
     });
+    objFlows.updateHint();
     Object.keys(objFlows.energyUsers).forEach(function (cardId) {
       var port = document.querySelector("#" + cardId + " > .energy-port");
       if (!port) return;
@@ -2243,6 +2315,18 @@ var objFlows = {
           : "Gebruikt energie"
         : "Gebruikt energie (staat stil)";
     });
+  },
+  // Uitleg over de gestippelde "geen grondstof"-lijnen, alleen als er een zichtbaar is
+  updateHint: function () {
+    var hint = document.getElementById("flowHint");
+    if (!hint) return;
+    var visible = Object.keys(objFlows.groups).filter(function (key) {
+      return objFlows.groups[key].style.display !== "none";
+    });
+    var anyShortage = visible.some(function (key) {
+      return objFlows.groups[key].classList.contains("shortage");
+    });
+    hint.style.display = objFlows.isOn() && anyShortage ? "" : "none";
   },
   setFocus: function (cardId) {
     var layer = document.getElementById("flowLayer");
@@ -2277,6 +2361,22 @@ var objFlows = {
       objFlows.edges16
     );
     objFlows.enabled = store.getItem("showFlows") !== "0";
+    // Tekst in de laag als er helemaal geen stroom te tekenen is
+    objFlows.emptyText = objFlows.svg("text", {
+      class: "flow-empty",
+      x: 16,
+      y: 28,
+    });
+    objFlows.emptyText.textContent = "Geen zichtbare productiestromen";
+    objFlows.emptyText.style.display = "none";
+    document.getElementById("flowLayer").appendChild(objFlows.emptyText);
+    // Uitleg bij gestippelde lijnen (geen grondstof op voorraad)
+    var hint = document.createElement("div");
+    hint.id = "flowHint";
+    hint.className = "flow-hint";
+    hint.textContent = "Gestippelde lijn: grondstof niet op voorraad";
+    hint.style.display = "none";
+    document.getElementById("FirstTab").appendChild(hint);
     // Bliksempoortjes op energieverbruikers
     Object.keys(objFlows.energyUsers).forEach(function (cardId) {
       var card = document.getElementById(cardId);
@@ -2314,6 +2414,8 @@ var objFlows = {
         objFlows.showMenu();
         objFlows.schedule();
       });
+    // Venstergrootte: altijd opnieuw tekenen zodat er geen oude lijnen blijven staan
+    window.addEventListener("resize", objFlows.schedule);
     objFlows.showMenu();
     objFlows.schedule();
   },

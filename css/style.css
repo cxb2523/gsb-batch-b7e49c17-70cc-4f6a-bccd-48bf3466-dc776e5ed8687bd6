@@ -1271,6 +1271,42 @@ body.flows-on {
     animation: flow-run 1.2s linear infinite;
 }
 
+/* Grondstof niet op voorraad: gestippelde, vervaagde lijn zonder looplicht */
+.flow.shortage .flow-base {
+    stroke-dasharray: 2 7;
+    opacity: 0.18;
+}
+
+.flow.shortage .flow-port {
+    opacity: 0.25;
+}
+
+.flow.shortage .flow-run {
+    opacity: 0;
+    animation: none;
+}
+
+/* Melding in de laag als er helemaal geen stroom te tekenen is */
+.flow-empty {
+    fill: var(--muted);
+    font-size: 0.9rem;
+}
+
+/* Uitleg bij gestippelde lijnen */
+.flow-hint {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.5rem;
+    z-index: 2;
+    padding: 0.2rem 0.6rem;
+    border: 1px dashed var(--border);
+    border-radius: 0.4rem;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.8rem;
+    pointer-events: none;
+}
+
 /* Tijdens slepen in Indeling bewerken geen lijnen */
 body:has(.rows > .dragging) .flow-layer {
     opacity: 0;
