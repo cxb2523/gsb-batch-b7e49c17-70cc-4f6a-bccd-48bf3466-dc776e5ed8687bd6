@@ -8,6 +8,8 @@ import { Roads, Trees } from "./Streets";
 import { Roundabout, Traffic } from "./Downtown";
 import { Ground, Moon, PALETTE, Sky, Stars } from "./Backdrop";
 import type { CityBuilding, CityLayout } from "../lib/types";
+import type { CameraInteraction } from "../lib/picking";
+import { useCanvasPicking } from "./useCanvasPicking";
 import { useReducedMotion } from "../lib/usePresence";
 
 export interface FocusTarget {
@@ -63,7 +65,17 @@ interface Flight {
   toLook: THREE.Vector3;
 }
 
-function Rig({ focus, homeToken, home }: { focus: FocusTarget | null; homeToken: number; home: Home }) {
+function Rig({
+  focus,
+  homeToken,
+  home,
+  interaction,
+}: {
+  focus: FocusTarget | null;
+  homeToken: number;
+  home: Home;
+  interaction: React.MutableRefObject<CameraInteraction>;
+}) {
   const controls = useRef<OrbitControlsImpl | null>(null);
   const { camera } = useThree();
   const reduce = useReducedMotion();
@@ -115,7 +127,6 @@ function Rig({ focus, homeToken, home }: { focus: FocusTarget | null; homeToken:
     f.toLook.copy(toLook);
     f.t = 0;
     f.active = true;
-    ctl.autoRotate = false;
   };
 
   const snap = (toPos: THREE.Vector3, toLook: THREE.Vector3) => {
@@ -164,6 +175,12 @@ function Rig({ focus, homeToken, home }: { focus: FocusTarget | null; homeToken:
     const ctl = controls.current;
     if (!ctl) return;
     const f = flight.current;
+    // One place owns auto-rotate. While a pointer is held down the city must
+    // stand still: a press on a rotating skyline would hit one instance on
+    // pointerdown and a different one (or sky) on pointerup, which is exactly
+    // the "can't click the tower I aimed at" report.
+    const wantAuto = !userMoved.current && !focus && !f.active && !interaction.current.pressing;
+    if (ctl.autoRotate !== wantAuto) ctl.autoRotate = wantAuto;
     if (f.active) {
       f.t = Math.min(1, f.t + delta * TWEEN_RATE);
       // ease-out cubic, exactly the reference curve
@@ -173,7 +190,6 @@ function Rig({ focus, homeToken, home }: { focus: FocusTarget | null; homeToken:
       ctl.update();
       if (f.t >= 1) {
         f.active = false;
-        if (!userMoved.current && !focus) ctl.autoRotate = true;
       }
       return;
     }
@@ -201,7 +217,6 @@ function Rig({ focus, homeToken, home }: { focus: FocusTarget | null; homeToken:
         // grabbing the city mid-flight takes over instantly
         userMoved.current = true;
         flight.current.active = false;
-        if (controls.current) controls.current.autoRotate = false;
       }}
     />
   );
@@ -303,8 +318,9 @@ export default function CityScene({
     () => ({ color: PALETTE.fog, near: home.distance * 0.8, far: home.distance * 2.3 }),
     [home],
   );
-  // a press that turned into an orbit drag must not count as "clicked the sky"
-  const missPress = useRef<{ x: number; y: number } | null>(null);
+  // shared press/drag/wheel state: a press that turned into an orbit drag or
+  // a wheel zoom must neither select a tower nor count as "clicked the sky"
+  const { interaction, canvasProps } = useCanvasPicking(() => onSelect(null));
 
   return (
     <Canvas
@@ -314,15 +330,7 @@ export default function CityScene({
       onCreated={({ gl }) => {
         gl.setClearColor(PALETTE.skyBottom);
       }}
-      onPointerDown={(e) => {
-        missPress.current = { x: e.clientX, y: e.clientY };
-      }}
-      onPointerMissed={(e) => {
-        const p = missPress.current;
-        missPress.current = null;
-        if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 8) return;
-        onSelect(null);
-      }}
+      {...canvasProps}
     >
       <fog attach="fog" args={[fog.color, fog.near, fog.far]} />
       <Sky />
@@ -337,10 +345,10 @@ export default function CityScene({
       <Roundabout layout={layout} />
       <Traffic layout={layout} />
       <Trees layout={layout} />
-      <Buildings layout={layout} onHover={onHover} onSelect={onSelect} fog={fog} />
+      <Buildings layout={layout} onHover={onHover} onSelect={onSelect} fog={fog} interaction={interaction} />
       <SelectionMarker building={selected} />
       <HoverMarker building={hovered} />
-      <Rig focus={focus} homeToken={homeToken} home={home} />
+      <Rig focus={focus} homeToken={homeToken} home={home} interaction={interaction} />
     </Canvas>
   );
 }

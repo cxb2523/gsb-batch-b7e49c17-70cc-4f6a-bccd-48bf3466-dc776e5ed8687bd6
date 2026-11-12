@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import type { CityBuilding, CityLayout } from "../lib/types";
+import { beginPress, resolveClick, type CameraInteraction, type Press } from "../lib/picking";
 
 // ─── Instanced tower renderer ──────────────────────────────────
 // One draw call for the whole city. A raw shader draws the pixel window grid
@@ -108,12 +109,14 @@ interface BuildingsProps {
   onHover: (b: CityBuilding | null) => void;
   onSelect: (b: CityBuilding) => void;
   fog: { color: string; near: number; far: number };
+  /** shared press/drag/wheel state from useCanvasPicking */
+  interaction: React.MutableRefObject<CameraInteraction>;
 }
 
-export default function Buildings({ layout, onHover, onSelect, fog }: BuildingsProps) {
+export default function Buildings({ layout, onHover, onSelect, fog, interaction }: BuildingsProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   // where the press started, so a drag across the skyline never counts as a tap
-  const press = useRef<{ x: number; y: number; id: number } | null>(null);
+  const press = useRef<Press | null>(null);
   const count = layout.buildings.length;
 
   const geometry = useMemo(() => {
@@ -180,49 +183,99 @@ export default function Buildings({ layout, onHover, onSelect, fog }: BuildingsP
     mesh.computeBoundingSphere();
   }, [layout, geometry, material]);
 
+  // ── hover, driven by a per-frame raycast ─────────────────────
+  // Event-driven hover goes stale the moment the camera moves under a
+  // resting pointer (auto-rotate, damping, the flight tween). Raycasting the
+  // current pointer every frame keeps the highlight, the tooltip and the
+  // cursor glued to the tower that is actually under the cursor.
+  const gl = useThree((s) => s.gl);
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const pointerInside = useRef(false);
+  const hoverId = useRef(-1);
+  const onHoverRef = useRef(onHover);
+  onHoverRef.current = onHover;
+
+  const applyHover = (id: number) => {
+    if (hoverId.current === id) return;
+    hoverId.current = id;
+    document.body.style.cursor = id >= 0 ? "pointer" : "";
+    onHoverRef.current(id >= 0 ? (layout.buildings[id] ?? null) : null);
+  };
+
+  useEffect(() => {
+    const el = gl.domElement;
+    const enter = () => {
+      pointerInside.current = true;
+    };
+    const leave = () => {
+      pointerInside.current = false;
+      applyHover(-1);
+    };
+    // authoritative "is the pointer over the 3D view" check: hovering UI
+    // chrome (HUD, panel, tooltip) means the pointer left the canvas, even
+    // though no pointerleave reaches the canvas in that case
+    const track = (e: PointerEvent) => {
+      pointerInside.current = e.target === el;
+    };
+    el.addEventListener("pointerenter", enter);
+    el.addEventListener("pointerleave", leave);
+    el.addEventListener("pointercancel", leave);
+    window.addEventListener("pointermove", track);
+    return () => {
+      el.removeEventListener("pointerenter", enter);
+      el.removeEventListener("pointerleave", leave);
+      el.removeEventListener("pointercancel", leave);
+      window.removeEventListener("pointermove", track);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gl]);
+
+  useEffect(
+    () => () => {
+      document.body.style.cursor = "";
+    },
+    [],
+  );
+
   useFrame((state) => {
     material.uniforms.uTime.value = state.clock.elapsedTime;
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    if (!pointerInside.current) {
+      applyHover(-1);
+      return;
+    }
+    raycaster.setFromCamera(state.pointer, state.camera);
+    const hit = raycaster.intersectObject(mesh, false)[0];
+    applyHover(hit && hit.instanceId !== undefined ? hit.instanceId : -1);
   });
-
-  const handleMove = (e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
-    if (e.instanceId === undefined) return;
-    onHover(layout.buildings[e.instanceId] ?? null);
-  };
-
-  const handleOver = () => {
-    document.body.style.cursor = "pointer";
-  };
-
-  const handleOut = () => {
-    document.body.style.cursor = "";
-    onHover(null);
-  };
-
-  useEffect(() => () => {
-    document.body.style.cursor = "";
-  }, []);
 
   const handleDown = (e: ThreeEvent<PointerEvent>) => {
     // only the tower under the cursor owns this press
     e.stopPropagation();
-    press.current = {
-      x: e.nativeEvent.clientX,
-      y: e.nativeEvent.clientY,
-      id: e.instanceId === undefined ? -1 : e.instanceId,
-    };
+    press.current = beginPress(
+      e.nativeEvent.clientX,
+      e.nativeEvent.clientY,
+      e.instanceId === undefined ? -1 : e.instanceId,
+      performance.now(),
+    );
   };
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
     const p = press.current;
     press.current = null;
-    if (!p || p.id < 0) return;
-    // a tap, not the tail of an orbit drag
-    const moved = Math.hypot(e.nativeEvent.clientX - p.x, e.nativeEvent.clientY - p.y);
-    if (moved > 8) return;
-    if (e.instanceId !== p.id) return;
-    const b = layout.buildings[p.id];
+    const id = resolveClick(
+      p,
+      {
+        x: e.nativeEvent.clientX,
+        y: e.nativeEvent.clientY,
+        id: e.instanceId === undefined ? -1 : e.instanceId,
+      },
+      interaction.current,
+    );
+    if (id === null) return;
+    const b = layout.buildings[id];
     if (b) onSelect(b);
   };
 
@@ -231,9 +284,6 @@ export default function Buildings({ layout, onHover, onSelect, fog }: BuildingsP
       ref={meshRef}
       args={[geometry, material, count]}
       frustumCulled={false}
-      onPointerMove={handleMove}
-      onPointerOver={handleOver}
-      onPointerOut={handleOut}
       onPointerDown={handleDown}
       onClick={handleClick}
     />

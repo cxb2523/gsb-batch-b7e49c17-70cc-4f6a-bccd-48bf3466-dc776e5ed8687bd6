@@ -6,6 +6,10 @@ export default defineConfig({
   build: {
     target: "es2022",
     chunkSizeWarningLimit: 1600,
+    rollupOptions: {
+      // 点选/悬停验证页：npm run dev 后访问 /verify.html
+      input: ["index.html", "verify.html"],
+    },
   },
   server: {
     host: true,
