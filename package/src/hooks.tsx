@@ -1,27 +1,86 @@
 import { defaults, directiveRegex, idPrefix, spaceDelimiter, specialSymbol } from "@/constants";
 import { composeProps, createElementWithProps } from "@/lib/dom";
-import { addToQueue, clearQueue, clearQueueHook, clearQueueUnload, dequeue, emit, removeFromQueue, speakFromQueue, subscribe } from "@/lib/queue";
+import { addToQueue, clearQueue, clearQueueHook, clearQueueUnload, dequeue, queueHead, queueIndex, removeFromQueue, speakFromQueue, subscribe } from "@/lib/queue";
 import { findCharIndex, getIndex, indexText, isParent, isSetStateFunction, nodeToKey, nodeToWords, parent, stripDirectives, toText } from "@/lib/react";
-import { setState, state } from "@/lib/state";
-import { cancel, getProgress, isMobile, parse, sanitize, shouldHighlightNextPart, splitNode, textToChunks } from "@/lib/utils";
+import { getProgress, isMobile, parse, sanitize, shouldHighlightNextPart, splitNode, textToChunks } from "@/lib/utils";
 import type {
-  DirectiveEvent,
   DivProps,
   NodeProps,
+  QueueChangeEventHandler,
   SpeakingWord,
   SpeakProps,
   SpeechStatus,
+  SpeechSynthesisBoundaryEventHandler,
+  SpeechSynthesisErrorHandler,
+  SpeechSynthesisEventHandler,
   SpeechSynthesisEventName,
   SpeechSynthesisUtteranceProps,
   SpeechUtterancesQueue,
-  State,
   UpdateMode,
   UseSpeakOptions,
   UseSpeechOptions,
   UseSpeechOptionsInternal,
-  VoidFunction,
 } from "@/types";
 import { cloneElement, forwardRef, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+
+type PlaybackEvents = {
+  onError?: SpeechSynthesisErrorHandler;
+  onStart?: SpeechSynthesisEventHandler;
+  onResume?: SpeechSynthesisEventHandler;
+  onPause?: SpeechSynthesisEventHandler;
+  onStop?: SpeechSynthesisEventHandler;
+  onBoundary?: SpeechSynthesisBoundaryEventHandler;
+  onQueueChange?: QueueChangeEventHandler;
+};
+
+/**
+ * Per-instance playback state.
+ *
+ * Everything the Web Speech API needs to continue speaking (chunk position, character offsets,
+ * pending delays, cancel notifications) lives here instead of in module-level state, so that
+ * several speech instances can coexist without interfering with each other.
+ */
+type PlaybackRuntime = {
+  /** Whether this instance currently owns its queue item and may react to utterance events. */
+  live: boolean;
+  phase: "idle" | "queued" | "speaking" | "paused";
+  /** Whether `onStart` has already fired for this playback run. */
+  startedOnce: boolean;
+  /** Whether the `beforeunload` listener is attached for this playback run. */
+  listenerAttached: boolean;
+  /** Index, within `chunks`, of the chunk currently loaded into the utterance. */
+  chunkIndex: number;
+  /** Position, within `speechText`, of the first character of `utterance.text`. */
+  offset: number;
+  /** Start index, within `utterance.text`, of the last boundary event. */
+  boundaryCharIndex: number;
+  specialSymbolOffset: number;
+  /** Highest progress reported so far; progress is never allowed to move backwards. */
+  maxProgress: number;
+  /** Paused while waiting for a pending next chunk (during a directive delay) to be spoken. */
+  pausePending: boolean;
+  /** Pending delay (from a `[[delay]]` directive) before the next chunk is spoken. */
+  delayTimer?: ReturnType<typeof setTimeout>;
+  /** Cancel-induced `end`/`error` events that still need to be ignored. */
+  pendingCancelEvents: number;
+};
+
+const createPlaybackRuntime = (): PlaybackRuntime => ({
+  live: false,
+  phase: "idle",
+  startedOnce: false,
+  listenerAttached: false,
+  chunkIndex: 0,
+  offset: 0,
+  boundaryCharIndex: 0,
+  specialSymbolOffset: 0,
+  maxProgress: 0,
+  pausePending: false,
+  pendingCancelEvents: 0,
+});
+
+/** Result of loading a chunk: the delay that must elapse before it is spoken, if any. */
+type LoadedChunk = { delay: number };
 
 function useStableValue<T>(value: T, mode: UpdateMode, delay: number) {
   const [stableValue, setStableValue] = useState(value);
@@ -111,7 +170,14 @@ export function useSpeechInternal({
   const [speakingWord, speakingWordRef, setSpeakingWord] = useStateRef<SpeakingWord>(null);
   const { utteranceRef, updateProps } = useSpeechSynthesisUtterance();
   const highlightRef = useRef(false);
-  const directiveRef = useRef<{ event: DirectiveEvent; delay: number; abortDelay?: VoidFunction }>({ event: null, delay: 0 });
+  const playbackRef = useRef<PlaybackRuntime | null>(null);
+  if (!playbackRef.current) playbackRef.current = createPlaybackRuntime();
+  const runtime = playbackRef.current;
+  const paramsRef = useRef<SpeechSynthesisUtteranceProps>({ pitch, rate, volume, lang, voiceURI });
+  const eventsRef = useRef<PlaybackEvents>({ onError, onStart, onResume, onPause, onStop, onBoundary, onQueueChange });
+
+  paramsRef.current = { pitch, rate, volume, lang, voiceURI };
+  eventsRef.current = { onError, onStart, onResume, onPause, onStop, onBoundary, onQueueChange };
 
   const uniqueId = useMemo(() => `${idPrefix}${id ?? crypto.randomUUID()}`, [id]);
   const key = useMemo(() => (stableText ? text : nodeToKey(text)), [text, stableText]);
@@ -126,6 +192,23 @@ export function useSpeechInternal({
     return { indexedText: indexText(strippedText, uniqueId), sanitizedText, speechText, words };
   }, [enableDirectives, normalizedText]);
   const chunks = useMemo(() => textToChunks(sanitizedText, maxChunkSize, enableDirectives), [enableDirectives, maxChunkSize, sanitizedText]);
+  /**
+   * Position, within `speechText`, of the first character spoken for every chunk.
+   *
+   * `speechText` is the sanitized text with directives stripped and its single leading space
+   * removed, so the running total walks the same stripped characters. Directive chunks
+   * contribute no characters, which keeps later offsets exact.
+   */
+  const chunkStarts = useMemo(() => {
+    const starts: number[] = [];
+    let position = 0;
+    for (const chunk of chunks) {
+      const spokenChunk = enableDirectives ? (stripDirectives(chunk) as string) : chunk;
+      starts.push(Math.max(0, position + (spokenChunk.length - spokenChunk.trimStart().length) - spaceDelimiter.length));
+      position += spokenChunk.length;
+    }
+    return starts;
+  }, [chunks, enableDirectives]);
 
   const reactContent = useMemo(() => (showOnlyHighlightedText ? highlightedText(indexedText) : indexedText), [speakingWord, showOnlyHighlightedText, highlightMode, indexedText]);
   const Text = useCallback(
@@ -137,165 +220,320 @@ export function useSpeechInternal({
     [reactContent],
   );
 
-  function reset(event: DirectiveEvent = null) {
-    directiveRef.current.abortDelay?.();
-    directiveRef.current = { event, delay: 0 };
+  function reportProgress(progress: number, force = false) {
+    const bounded = Math.max(0, Math.min(100, progress));
+    if (!force && bounded < runtime.maxProgress) return;
+    runtime.maxProgress = Math.max(runtime.maxProgress, bounded);
+    eventsRef.current.onBoundary?.({ progress: runtime.maxProgress });
   }
 
-  function resumeEventHandler() {
-    setSpeechStatus("started");
-    onResume?.();
+  function clearDelay() {
+    if (!runtime.delayTimer) return;
+    clearTimeout(runtime.delayTimer);
+    runtime.delayTimer = undefined;
   }
 
-  function pauseEventHandler() {
-    setSpeechStatus("paused");
-    onPause?.();
+  function detachUtteranceHandlers() {
+    const utterance = utteranceRef.current;
+    if (!utterance) return;
+    utterance.onstart = null;
+    utterance.onend = null;
+    utterance.onerror = null;
+    utterance.onboundary = null;
+  }
+
+  function detachUnloadListener() {
+    if (!runtime.listenerAttached) return;
+    window.removeEventListener("beforeunload", clearQueueUnload);
+    runtime.listenerAttached = false;
+  }
+
+  /** Applies the current playback parameters, optionally overridden by directives, to the utterance. */
+  function applyParams(overrides: SpeechSynthesisUtteranceProps = {}) {
+    updateProps({ ...paramsRef.current, ...overrides });
+  }
+
+  /**
+   * Makes this instance inert: it stops reacting to utterance events and drops any pending work.
+   * Called when the instance is stopped, superseded, or removed from the queue by someone else.
+   */
+  function invalidate() {
+    runtime.live = false;
+    runtime.phase = "idle";
+    runtime.pausePending = false;
+    clearDelay();
+  }
+
+  function resetRuntime() {
+    invalidate();
+    runtime.startedOnce = false;
+    runtime.chunkIndex = 0;
+    runtime.offset = 0;
+    runtime.boundaryCharIndex = 0;
+    runtime.specialSymbolOffset = 0;
+    runtime.maxProgress = 0;
+    runtime.pendingCancelEvents = 0;
+    detachUnloadListener();
+    detachUtteranceHandlers();
+  }
+
+  /**
+   * Loads the next speakable chunk, starting at `index`, into the utterance.
+   *
+   * Leading directive chunks are consumed here: parameter directives update the given `params`,
+   * `[[skip]]` directives skip subsequent chunks. Returns `null` when no chunk is left to speak.
+   */
+  function loadChunk(index: number, params: SpeechSynthesisUtteranceProps = {}): LoadedChunk | null {
+    let delay = 0;
+    if (enableDirectives) {
+      let skip = false;
+      while (index < chunks.length) {
+        const currentText = chunks[index] ?? "";
+        const match = directiveRegex.exec(currentText);
+        if (!match) {
+          if (!skip) break;
+          index++;
+          continue;
+        }
+        const directive = match[1];
+        const value = parse(match[2] ?? "");
+        switch (directive) {
+          case "delay":
+            delay += value as number;
+            break;
+          case "pitch":
+          case "rate":
+          case "volume":
+          case "lang":
+          case "voice":
+            params[directive === "voice" ? "voiceURI" : directive] = value === "default" ? defaults[directive] : (value as never);
+            break;
+          case "skip":
+            if (typeof value === "boolean") skip = value;
+            break;
+        }
+        index++;
+      }
+    }
+
+    const utterance = utteranceRef.current;
+    if (index >= chunks.length || !utterance) return null;
+    runtime.chunkIndex = index;
+    const rawText = chunks[index] ?? "";
+    const text = rawText.trimStart();
+    utterance.text = text;
+    runtime.offset = (chunkStarts[index] ?? 0) + (rawText.length - text.length);
+    runtime.boundaryCharIndex = 0;
+    runtime.specialSymbolOffset = 0;
+    applyParams(params);
+    return { delay };
+  }
+
+  function attachUtteranceHandlers() {
+    const utterance = utteranceRef.current;
+    if (!utterance) return;
+    utterance.onstart = handleStart;
+    utterance.onend = handleEnd;
+    utterance.onerror = handleEnd;
+    utterance.onboundary = handleBoundary;
+  }
+
+  function handleStart() {
+    if (!runtime.live) return;
+    if (!runtime.listenerAttached) {
+      window.addEventListener("beforeunload", clearQueueUnload);
+      runtime.listenerAttached = true;
+    }
+    highlightRef.current = true;
+    runtime.phase = "speaking";
+    runtime.pausePending = false;
+    if (speechStatusRef.current !== "started") setSpeechStatus("started");
+    reportProgress(getProgress(runtime.offset, speechText.length));
+    if (runtime.startedOnce) return;
+    runtime.startedOnce = true;
+    eventsRef.current.onStart?.();
+  }
+
+  function handleEnd() {
+    if (!runtime.live) return;
+    // Events produced by our own `cancel()` calls must not be mistaken for the natural end of a chunk.
+    if (runtime.pendingCancelEvents > 0) {
+      runtime.pendingCancelEvents--;
+      return;
+    }
+    advanceChunk();
+  }
+
+  function handleBoundary(event: SpeechSynthesisEvent) {
+    if (!runtime.live) return;
+    const utterance = utteranceRef.current;
+    if (!utterance) return;
+    const { charIndex, charLength, name } = event as SpeechSynthesisEvent & { name: SpeechSynthesisEventName };
+    if (name === "word") {
+      const isSpecialSymbol = +(utterance.text[charIndex + charLength] === specialSymbol);
+      const index = findCharIndex(words, runtime.offset + runtime.specialSymbolOffset + charIndex - isSpecialSymbol);
+      if (shouldHighlightNextPart(highlightMode, utterance, charIndex) || parent(index) !== parent(speakingWordRef.current?.index))
+        setSpeakingWord({ index, charIndex: isSpecialSymbol ? charIndex + charLength + 1 : charIndex, length: isSpecialSymbol || charLength });
+      if (isSpecialSymbol) runtime.specialSymbolOffset -= charLength + 1;
+    }
+    runtime.boundaryCharIndex = charIndex;
+    reportProgress(getProgress(runtime.offset + charIndex + charLength, speechText.length));
+  }
+
+  function speakCurrent() {
+    if (!runtime.live) return;
+    runtime.phase = "speaking";
+    speakFromQueue();
+  }
+
+  /**
+   * Called when the current chunk has finished. Loads the next chunk and either speaks it right
+   * away or schedules it after the directive delay; when there are no chunks left, playback
+   * completes.
+   */
+  function advanceChunk() {
+    const nextIndex = runtime.chunkIndex + 1;
+    if (nextIndex < chunks.length) {
+      const loaded = loadChunk(nextIndex);
+      if (loaded) {
+        if (runtime.phase === "paused") {
+          runtime.pausePending = true;
+          return;
+        }
+        if (loaded.delay > 0) {
+          clearDelay();
+          runtime.delayTimer = setTimeout(() => {
+            runtime.delayTimer = undefined;
+            if (!runtime.live || runtime.phase !== "speaking" || runtime.pausePending) return;
+            speakCurrent();
+          }, loaded.delay);
+          return;
+        }
+        return speakCurrent();
+      }
+    }
+    finishPlayback({ completed: true });
+  }
+
+  /**
+   * Detaches this instance from playback and from the queue.
+   *
+   * Synthesis is only cancelled when this instance was the one speaking, so stopping a waiting
+   * or already-stopped instance can never disturb another instance that owns the synthesiser.
+   */
+  function finishPlayback({ completed }: { completed: boolean }) {
+    const utterance = utteranceRef.current;
+    const wasLive = runtime.live;
+    const wasSpeaking = wasLive && runtime.phase !== "queued";
+    clearDelay();
+    detachUnloadListener();
+    detachUtteranceHandlers();
+    runtime.live = false;
+    runtime.phase = "idle";
+    runtime.pausePending = false;
+    if (completed) reportProgress(100, true);
+    setSpeakingWord(null);
+    highlightRef.current = false;
+    if (wasLive && utterance) removeFromQueue(utterance, eventsRef.current.onQueueChange);
+    setSpeechStatus("stopped");
+    if (wasSpeaking) window.speechSynthesis?.cancel();
+    // Only hand over to the next queued item when this instance actually owned playback.
+    if (wasSpeaking || (!wasLive && queueHead())) speakFromQueue();
+    if (wasSpeaking) eventsRef.current.onStop?.();
   }
 
   function start() {
     const synth = window.speechSynthesis;
-    if (!synth) return onError(new Error("Browser not supported! Try some other browser."));
-    if (speechStatusRef.current === "paused") {
-      if (directiveRef.current.event === "pause") speakFromQueue();
-      synth.resume();
-      return resumeEventHandler();
+    if (!synth) return eventsRef.current.onError?.(new Error("Browser not supported! Try some other browser."));
+    // Resuming a paused instance continues from where it paused; it is never requeued or restarted.
+    if (runtime.phase === "paused") return resume();
+    if (runtime.phase === "queued") return;
+    if (runtime.live) return;
+
+    resetRuntime();
+    runtime.live = true;
+    runtime.phase = "queued";
+    if (!loadChunk(0)) {
+      runtime.live = false;
+      runtime.phase = "idle";
+      return setSpeechStatus("stopped");
     }
-    if (speechStatusRef.current === "queued") return;
-    let currentChunk = 0;
-    let currentText = chunks[currentChunk] || "";
-    let processedTextLength = -spaceDelimiter.length;
-    const utterance = utteranceRef.current!;
-    utterance.text = currentText.trimStart();
-    let offset = processedTextLength + currentText.length - utterance.text.length;
-    let specialSymbolOffset = 0;
-    updateProps({ pitch, rate, volume, lang, voiceURI });
+    attachUtteranceHandlers();
 
-    function handleDirectives() {
-      let skip = false;
-      while (currentChunk < chunks.length) {
-        const match = directiveRegex.exec(currentText);
-        if (!match) {
-          if (!skip) return true;
-          processedTextLength += currentText.length;
-        } else {
-          const key = match[1];
-          const value = parse(match[2] ?? "");
-          switch (key) {
-            case "delay":
-              directiveRef.current.delay += value as number;
-              break;
-            case "pitch":
-            case "rate":
-            case "volume":
-            case "lang":
-            case "voice":
-              updateProps({ [key]: value === "default" ? defaults[key] : value });
-              break;
-            case "skip":
-              if (typeof value === "boolean") skip = value;
-              break;
-          }
-        }
-        currentText = chunks[++currentChunk] ?? "";
-      }
-
-      return false;
-    }
-
-    function startEventHandler() {
-      window.addEventListener("beforeunload", clearQueueUnload);
-      setState({ stopReason: "auto" });
-      highlightRef.current = true;
-      if (directiveRef.current.event || directiveRef.current.delay) reset();
-      else onStart?.();
-      onBoundary?.({ progress: getProgress(offset, speechText.length) });
-    }
-
-    async function stopEventHandler() {
-      if (state.stopReason === "auto" && currentChunk < chunks.length - 1) {
-        processedTextLength += currentText.length;
-        currentText = chunks[++currentChunk] ?? "";
-        const continueSpeech = !enableDirectives || handleDirectives();
-        if (continueSpeech) {
-          utterance.text = currentText.trimStart();
-          offset = processedTextLength + currentText.length - utterance.text.length;
-          if (speechStatusRef.current === "paused") return reset("pause");
-          const { delay } = directiveRef.current;
-          directiveRef.current.event = "change";
-          if (!delay) return speakFromQueue();
-          const timeout = setTimeout(speakFromQueue, delay);
-          directiveRef.current.abortDelay = () => clearTimeout(timeout);
-          return;
-        }
-      }
-      if (state.stopReason === "change") {
-        if (speakingWordRef.current) {
-          const currentLength = utterance.text.length;
-          utterance.text = utterance.text.slice(speakingWordRef.current.charIndex).trimStart();
-          offset += currentLength - utterance.text.length;
-          setSpeakingWord(null);
-        }
-        return speakFromQueue();
-      }
-      if (state.stopReason === "auto") onBoundary?.({ progress: 100 });
-      if (synth.paused) cancel();
-      window.removeEventListener("beforeunload", clearQueueUnload);
-      setSpeechStatus("stopped");
-      setSpeakingWord(null);
-      utterance.onstart = null;
-      utterance.onend = null;
-      utterance.onerror = null;
-      utterance.onboundary = null;
-      removeFromQueue(utterance, onQueueChange);
-      speakFromQueue();
-      onStop?.();
-    }
-
-    function boundaryEventHandler(event: SpeechSynthesisEvent) {
-      const { charIndex, charLength, name } = event as SpeechSynthesisEvent & { name: SpeechSynthesisEventName };
-      if (name === "word") {
-        const isSpecialSymbol = +(utterance.text[charIndex + charLength] === specialSymbol);
-        const index = findCharIndex(words, offset + specialSymbolOffset + charIndex - isSpecialSymbol);
-        if (shouldHighlightNextPart(highlightMode, utterance, charIndex) || parent(index) !== parent(speakingWordRef.current?.index))
-          setSpeakingWord({ index, charIndex: isSpecialSymbol ? charIndex + charLength + 1 : charIndex, length: isSpecialSymbol || charLength });
-        if (isSpecialSymbol) specialSymbolOffset -= charLength + 1;
-      }
-      onBoundary?.({ progress: getProgress(offset + charIndex + charLength, speechText.length) });
-    }
-
-    utterance.onstart = startEventHandler;
-    utterance.onend = stopEventHandler;
-    utterance.onerror = stopEventHandler;
-    utterance.onboundary = boundaryEventHandler;
-
+    // `preserveUtteranceQueue` decides whether existing utterances are kept. When they are
+    // cleared, their owning instances are invalidated before anything is cancelled.
     if (!preserveUtteranceQueue) clearQueue();
-    addToQueue({ text: speechText, utterance, setSpeechStatus }, onQueueChange);
+    const utterance = utteranceRef.current!;
+    const item = addToQueue({ text: speechText, utterance, setSpeechStatus, onRemove: invalidate }, eventsRef.current.onQueueChange);
+    const index = queueIndex(item);
+
+    if (index > 0) {
+      setSpeechStatus("queued");
+      return;
+    }
+
     setSpeechStatus("started");
-    if (!synth.speaking) return speakFromQueue();
-    if (preserveUtteranceQueue && speechStatus !== "started") return setSpeechStatus("queued");
-    cancel();
+    runtime.phase = "speaking";
+    if (synth.speaking || synth.paused || synth.pending) synth.cancel();
+    speakFromQueue();
   }
 
   function pause() {
-    if (isMobile(false) || speechStatusRef.current === "queued") return stop();
-    if (speechStatusRef.current === "started") {
-      if (directiveRef.current.delay) reset("pause");
-      else window.speechSynthesis?.pause();
-      pauseEventHandler();
+    if (!runtime.live) return;
+    if (isMobile(false) || runtime.phase === "queued") return stop();
+    if (runtime.phase !== "speaking") return;
+    runtime.phase = "paused";
+    if (runtime.delayTimer) {
+      // There is no active utterance to pause yet: freeze the pending chunk instead.
+      clearDelay();
+      runtime.pausePending = true;
+    } else {
+      window.speechSynthesis?.pause();
     }
+    setSpeechStatus("paused");
+    eventsRef.current.onPause?.();
   }
 
-  function stop({ status = speechStatusRef.current, stopReason }: { status?: SpeechStatus; stopReason?: State["stopReason"] } = {}) {
-    if (status === "stopped") return;
-    if (status === "queued") {
-      removeFromQueue(utteranceRef.current!, onQueueChange);
-      return setSpeechStatus("stopped");
-    }
-    if (directiveRef.current.delay || directiveRef.current.event === "pause") {
-      reset();
+  function resume() {
+    if (!runtime.live) return;
+    runtime.phase = "speaking";
+    if (runtime.pausePending) {
+      // The next chunk was loaded while playback was frozen; speaking it resumes at the exact spot.
+      runtime.pausePending = false;
       speakFromQueue();
+    } else {
+      window.speechSynthesis?.resume();
     }
-    cancel(stopReason);
+    setSpeechStatus("started");
+    eventsRef.current.onResume?.();
+  }
+
+  function stop() {
+    if (!runtime.live) {
+      if (speechStatusRef.current !== "stopped") setSpeechStatus("stopped");
+      return;
+    }
+    finishPlayback({ completed: false });
+  }
+
+  /**
+   * Continues from the current reading position after a playback parameter has changed.
+   * Changing utterance properties has no effect on an utterance that is already speaking, so
+   * the current chunk is cancelled and re-spoken from the last reported boundary.
+   */
+  function continueAfterChange() {
+    const utterance = utteranceRef.current;
+    if (!runtime.live || runtime.phase !== "speaking" || !utterance) return;
+    const resumeFrom = Math.max(0, Math.min(runtime.boundaryCharIndex, utterance.text.length));
+    const remaining = utterance.text.slice(resumeFrom).trimStart();
+    if (!remaining) return advanceChunk();
+    runtime.offset += utterance.text.length - remaining.length;
+    utterance.text = remaining;
+    runtime.boundaryCharIndex = 0;
+    applyParams();
+    runtime.pendingCancelEvents++;
+    window.speechSynthesis?.cancel();
+    speakFromQueue();
   }
 
   function highlightedText(node: ReactNode, index = ""): ReactNode {
@@ -316,7 +554,7 @@ export function useSpeechInternal({
   }
 
   useEffect(() => {
-    return () => stop({ status: speechStatusRef.current });
+    return () => stop();
   }, [enableDirectives, key]);
 
   useLayoutEffect(() => {
@@ -355,12 +593,10 @@ export function useSpeechInternal({
   }, [speakingWord, highlightText, showOnlyHighlightedText, highlightMode]);
 
   useEffect(() => {
-    if (speechStatusRef.current !== "started") return;
+    applyParams();
+    if (!runtime.live || runtime.phase !== "speaking") return;
     const timeout = setTimeout(() => {
-      updateProps({ pitch, rate, volume, lang, voiceURI });
-      if (directiveRef.current.delay) return;
-      stop({ stopReason: "change" });
-      emit(onQueueChange);
+      if (runtime.live && runtime.phase === "speaking") continueAfterChange();
     }, 500);
     return () => clearTimeout(timeout);
   }, [pitch, rate, volume, lang, stringifiedVoices]);
@@ -374,7 +610,7 @@ export function useSpeechInternal({
     isInQueue: speechStatus === "started" || speechStatus === "queued",
     start,
     pause,
-    stop: () => stop(),
+    stop,
   };
 }
 

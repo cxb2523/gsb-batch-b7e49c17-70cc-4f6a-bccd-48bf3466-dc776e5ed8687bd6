@@ -25,7 +25,6 @@ export function cancel(stopReason: State["stopReason"] = "manual") {
   setState({ stopReason });
   window.speechSynthesis?.cancel();
 }
-
 export function chunkBySizeWithDelimiters(text: string, size: number): string[] {
   const length = text.length;
   const result: string[] = [];

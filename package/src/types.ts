@@ -103,7 +103,7 @@ export type QueueChangeEventHandler = (queue: SpeechUtterancesQueue) => void;
 
 export type SpeechQueue = SpeechQueueItem[];
 
-export type SpeechQueueItem = { text: string; utterance: SpeechSynthesisUtterance; setSpeechStatus: SpeechStatusUpdater };
+export type SpeechQueueItem = { text: string; utterance: SpeechSynthesisUtterance; setSpeechStatus: SpeechStatusUpdater; onRemove?: VoidFunction };
 
 export type SpeechStatusUpdater = (newStatus: SpeechStatus) => void;
 
