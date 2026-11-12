@@ -1716,42 +1716,95 @@ fn set_cookies(mut cx: FunctionContext) -> JsResult<JsUndefined> {
         .and_then(|v| v.downcast::<JsString, _>(&mut cx).ok())
         .map(|v| v.value(&mut cx));
 
-    let mut cookies = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let obj = entry.downcast_or_throw::<JsObject, _>(&mut cx)?;
+    // Read a required string field, rejecting missing or non-string values with an error that
+    // still names the batch entry responsible.
+    fn required_string(
+        cx: &mut FunctionContext,
+        obj: &Handle<JsObject>,
+        index: usize,
+        key: &str,
+    ) -> NeonResult<String> {
+        match obj.get_opt::<JsValue, _, _>(cx, key)? {
+            Some(value) => match value.downcast::<JsString, _>(cx) {
+                Ok(handle) => Ok(handle.value(cx)),
+                Err(_) => {
+                    let message = format!("Cookie at index {} has a non-string {}", index, key);
+                    cx.throw_type_error(message)
+                }
+            },
+            None => cx.throw_type_error(format!("Cookie at index {} is missing a {}", index, key)),
+        }
+    }
 
-        let name = obj.get::<JsString, _, _>(&mut cx, "name")?.value(&mut cx);
-        let value = obj.get::<JsString, _, _>(&mut cx, "value")?.value(&mut cx);
-        let domain = obj
-            .get_opt(&mut cx, "domain")?
-            .and_then(|v: Handle<JsValue>| v.downcast::<JsString, _>(&mut cx).ok())
-            .map(|v| v.value(&mut cx));
-        let path = obj
-            .get_opt(&mut cx, "path")?
-            .and_then(|v: Handle<JsValue>| v.downcast::<JsString, _>(&mut cx).ok())
-            .map(|v| v.value(&mut cx));
-        let secure = obj
-            .get_opt(&mut cx, "secure")?
-            .and_then(|v: Handle<JsValue>| v.downcast::<JsBoolean, _>(&mut cx).ok())
-            .map(|v| v.value(&mut cx))
-            .unwrap_or(false);
-        let http_only = obj
-            .get_opt(&mut cx, "httpOnly")?
-            .and_then(|v: Handle<JsValue>| v.downcast::<JsBoolean, _>(&mut cx).ok())
-            .map(|v| v.value(&mut cx))
-            .unwrap_or(false);
-        let same_site = obj
-            .get_opt(&mut cx, "sameSite")?
-            .and_then(|v: Handle<JsValue>| v.downcast::<JsString, _>(&mut cx).ok())
-            .map(|v| v.value(&mut cx));
-        let expires_at_ms = obj
-            .get_opt(&mut cx, "expiresAtMs")?
-            .and_then(|v: Handle<JsValue>| v.downcast::<JsNumber, _>(&mut cx).ok())
-            .map(|v| v.value(&mut cx));
-        let url = obj
-            .get_opt(&mut cx, "url")?
-            .and_then(|v: Handle<JsValue>| v.downcast::<JsString, _>(&mut cx).ok())
-            .map(|v| v.value(&mut cx));
+    // Optional string fields keep their absent value, but a present value of the wrong type is a
+    // hard error rather than being silently dropped.
+    fn optional_string(
+        cx: &mut FunctionContext,
+        obj: &Handle<JsObject>,
+        index: usize,
+        key: &str,
+    ) -> NeonResult<Option<String>> {
+        match obj.get_opt::<JsValue, _, _>(cx, key)? {
+            Some(value) => match value.downcast::<JsString, _>(cx) {
+                Ok(handle) => Ok(Some(handle.value(cx))),
+                Err(_) => {
+                    let message = format!("Cookie at index {} has a non-string {}", index, key);
+                    cx.throw_type_error(message)
+                }
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn optional_boolean(
+        cx: &mut FunctionContext,
+        obj: &Handle<JsObject>,
+        index: usize,
+        key: &str,
+    ) -> NeonResult<Option<bool>> {
+        match obj.get_opt::<JsValue, _, _>(cx, key)? {
+            Some(value) => match value.downcast::<JsBoolean, _>(cx) {
+                Ok(handle) => Ok(Some(handle.value(cx))),
+                Err(_) => {
+                    let message = format!("Cookie at index {} has a non-boolean {}", index, key);
+                    cx.throw_type_error(message)
+                }
+            },
+            None => Ok(None),
+        }
+    }
+
+    let mut cookies = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let obj = match entry.downcast::<JsObject, _>(&mut cx) {
+            Ok(obj) => obj,
+            Err(_) => {
+                return cx.throw_type_error(format!("Cookie at index {} must be an object", index));
+            }
+        };
+
+        let name = required_string(&mut cx, &obj, index, "name")?;
+        // An empty value is legitimate; only a missing or non-string value is rejected.
+        let value = required_string(&mut cx, &obj, index, "value")?;
+        let domain = optional_string(&mut cx, &obj, index, "domain")?;
+        let path = optional_string(&mut cx, &obj, index, "path")?;
+        let secure = optional_boolean(&mut cx, &obj, index, "secure")?.unwrap_or(false);
+        let http_only = optional_boolean(&mut cx, &obj, index, "httpOnly")?.unwrap_or(false);
+        let same_site = optional_string(&mut cx, &obj, index, "sameSite")?;
+        let url = optional_string(&mut cx, &obj, index, "url")?;
+
+        let expires_at_ms = match obj.get_opt::<JsValue, _, _>(&mut cx, "expiresAtMs")? {
+            Some(value) => match value.downcast::<JsNumber, _>(&mut cx) {
+                Ok(handle) => Some(handle.value(&mut cx)),
+                Err(_) => {
+                    return cx.throw_type_error(format!(
+                        "Cookie at index {} has a non-number expiresAtMs",
+                        index
+                    ));
+                }
+            },
+            None => None,
+        };
 
         cookies.push(SessionCookieInput {
             name,

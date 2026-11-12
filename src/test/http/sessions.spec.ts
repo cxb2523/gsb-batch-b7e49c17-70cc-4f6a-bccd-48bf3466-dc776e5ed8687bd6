@@ -280,6 +280,242 @@ describe("HTTP sessions", () => {
     }
   });
 
+  test("setCookies rejects a later bad entry atomically and keeps the pre-existing cookie", async () => {
+    const session = await createSession({ browser: "chrome_142" });
+
+    try {
+      // Start from a jar that already holds a legitimate cookie, the way a resumed scrape would.
+      session.setCookie("seeded", "original", httpUrl("/"));
+
+      const badBatch = [
+        { name: "would-be-first", value: "1", url: httpUrl("/") },
+        { name: "   ", value: "1", url: httpUrl("/") },
+      ];
+
+      assert.throws(
+        () => {
+          session.setCookies(badBatch);
+        },
+        (error: unknown) => {
+          if (!(error instanceof RequestError)) {
+            return false;
+          }
+          // The message has to pinpoint the entry: its index, and the reason it failed.
+          return /index 1/.test(error.message) && /empty name/.test(error.message);
+        },
+        "The rejected entry's index and failure reason must both appear in the error",
+      );
+
+      const remaining = session
+        .getAllCookies()
+        .map((cookie) => cookie.name)
+        .sort();
+      assert.deepStrictEqual(
+        remaining,
+        ["seeded"],
+        "Neither the bad entry nor the valid entry ahead of it may land in the jar",
+      );
+      assert.deepStrictEqual(session.getCookies(httpUrl("/")), { seeded: "original" });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("setCookies errors identify the entry index, name and reason for every invalid shape", async () => {
+    const cases: Array<{
+      cookies: Parameters<Session["setCookies"]>[0];
+      url?: string;
+      index: string;
+      name?: string;
+      reason: RegExp;
+    }> = [
+      {
+        cookies: [{ name: "", value: "1", url: httpUrl("/") }],
+        index: "index 0",
+        reason: /empty name/,
+      },
+      {
+        cookies: [
+          { name: "ok", value: "1", domain: "127.0.0.1" },
+          { name: "samesite-bad", value: "1", domain: "127.0.0.1", sameSite: "sometimes" as never },
+        ],
+        index: "index 1",
+        name: "samesite-bad",
+        reason: /invalid sameSite/,
+      },
+      {
+        cookies: [{ name: "nan-expiry", value: "1", domain: "127.0.0.1", expiresAtMs: Number.NaN }],
+        index: "index 0",
+        name: "nan-expiry",
+        reason: /non-finite expiresAtMs/,
+      },
+      {
+        cookies: [{ name: "infinity-expiry", value: "1", domain: "127.0.0.1", expiresAtMs: Number.POSITIVE_INFINITY }],
+        index: "index 0",
+        name: "infinity-expiry",
+        reason: /non-finite expiresAtMs/,
+      },
+      {
+        cookies: [{ name: "huge-expiry", value: "1", domain: "127.0.0.1", expiresAtMs: 1e20 }],
+        index: "index 0",
+        name: "huge-expiry",
+        reason: /out-of-range expiresAtMs/,
+      },
+      {
+        cookies: [{ name: "orphan", value: "1" }],
+        index: "index 0",
+        name: "orphan",
+        reason: /no domain/,
+      },
+      {
+        // A path-only reference parses but resolves to no host, which must be rejected.
+        cookies: [{ name: "bad-url", value: "1", url: "/just-a-path" }],
+        index: "index 0",
+        name: "bad-url",
+        reason: /unparseable url/,
+      },
+    ];
+
+    for (const [caseIndex, testCase] of cases.entries()) {
+      const session = await createSession({ browser: "chrome_142" });
+
+      try {
+        session.setCookie("seeded", "original", httpUrl("/"));
+
+        assert.throws(
+          () => {
+            session.setCookies(testCase.cookies, testCase.url);
+          },
+          (error: unknown) => {
+            if (!(error instanceof RequestError)) {
+              return false;
+            }
+            const hasIndex = error.message.includes(testCase.index);
+            const hasName = testCase.name ? error.message.includes(`"${testCase.name}"`) : true;
+            return hasIndex && hasName && testCase.reason.test(error.message);
+          },
+          `case ${caseIndex} should report index, name and reason, got a different error`,
+        );
+
+        assert.deepStrictEqual(
+          session.getCookies(httpUrl("/")),
+          { seeded: "original" },
+          `case ${caseIndex} must leave the jar untouched`,
+        );
+      } finally {
+        await session.close();
+      }
+    }
+
+    const defaultUrlSession = await createSession({ browser: "chrome_142" });
+    try {
+      defaultUrlSession.setCookie("seeded", "original", httpUrl("/"));
+      assert.throws(
+        () => {
+          defaultUrlSession.setCookies([{ name: "restored", value: "1" }], "/just-a-path");
+        },
+        (error: unknown) => error instanceof RequestError && /Batch default URL is invalid/.test(error.message),
+      );
+      assert.deepStrictEqual(defaultUrlSession.getCookies(httpUrl("/")), { seeded: "original" });
+    } finally {
+      await defaultUrlSession.close();
+    }
+  });
+
+  test("setCookies preserves every attribute, leading-dot domains and root-path fallback", async () => {
+    const session = await createSession({ browser: "chrome_142" });
+    const expiresAtMs = Date.now() + 86_400_000;
+
+    try {
+      session.setCookies([
+        {
+          name: "full",
+          value: "scalar-value",
+          domain: ".127.0.0.1",
+          path: "relative-path",
+          secure: true,
+          httpOnly: true,
+          sameSite: "lax",
+          expiresAtMs,
+        },
+      ]);
+
+      const [stored] = session.getAllCookies();
+      assert.ok(stored, "the valid cookie must be stored");
+      // A leading dot is Set-Cookie spelling, not part of the matched domain.
+      assert.strictEqual(stored.domain?.replace(/^\.+/, ""), "127.0.0.1");
+      assert.strictEqual(stored.path, "/", "a path not starting with / must fall back to the root path");
+      assert.strictEqual(stored.secure, true);
+      assert.strictEqual(stored.httpOnly, true);
+      assert.strictEqual(stored.sameSite, "lax");
+      assert.ok(
+        stored.expiresAtMs !== undefined && Math.abs(stored.expiresAtMs - expiresAtMs) < 1_000,
+        "expiry must be retained to the millisecond",
+      );
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("restored cookies reach the server and host-only and domain scopes differ", async () => {
+    const session = await createSession({ browser: "chrome_142" });
+
+    try {
+      session.setCookie("seeded", "original", httpUrl("/"));
+
+      // A fully valid batch following the rejected one: host-only, domain and path-scoped entries.
+      session.setCookies([
+        { name: "hostonly", value: "h", url: httpUrl("/") },
+        { name: "domained", value: "d", domain: "127.0.0.1" },
+        { name: "pathed", value: "p", url: httpUrl("/"), path: "/cookies" },
+      ]);
+
+      const cookiesResponse = await session.fetch(httpUrl("/cookies"), { timeout: 10_000 });
+      const cookiesBody = await cookiesResponse.json<{ cookies: Record<string, string> }>();
+      assert.deepStrictEqual(
+        cookiesBody.cookies,
+        {
+          seeded: "original",
+          hostonly: "h",
+          domained: "d",
+          // Path /cookies matches the request path, so this one is sent too.
+          pathed: "p",
+        },
+        "the server must receive every cookie whose domain and path match the request",
+      );
+
+      const rootResponse = await session.fetch(httpUrl("/get"), { timeout: 10_000 });
+      const rootBody = await rootResponse.json<{ headers: Record<string, string> }>();
+      const rootCookieHeader = rootBody.headers.Cookie ?? "";
+      assert.match(rootCookieHeader, /hostonly=h/);
+      assert.match(rootCookieHeader, /domained=d/);
+      assert.doesNotMatch(
+        rootCookieHeader,
+        /pathed=p/,
+        "a cookie scoped to /cookies must not be sent to a different path",
+      );
+
+      // Scope difference, checked straight against the jar without touching the network:
+      // a host-only cookie is invisible to a subdomain, a domain cookie is shared with it.
+      const apexCookies = session.getCookies("https://example.com/");
+      session.setCookies([
+        { name: "apex-host-only", value: "1", url: "https://example.com/" },
+        { name: "apex-domain", value: "1", domain: "example.com" },
+      ]);
+
+      assert.deepStrictEqual(session.getCookies("https://example.com/"), {
+        ...apexCookies,
+        "apex-host-only": "1",
+        "apex-domain": "1",
+      });
+      assert.deepStrictEqual(session.getCookies("https://sub.example.com/"), {
+        "apex-domain": "1",
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
   test("isolates cookies for default fetch calls", async () => {
     await wreqFetch(httpUrl("/cookies/set?ephemeral=on"), {
       browser: "chrome_142",

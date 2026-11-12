@@ -153,6 +153,14 @@ restored.setCookies([
 ]);
 ```
 
+The batch is validated as a whole before the jar changes. If any cookie is invalid — an empty
+name, a `sameSite` outside `lax`/`strict`/`none`, a non-finite or out-of-range `expiresAtMs`, a
+host-only cookie with no usable `url`, or a `url` with no parseable host — the call throws a
+`RequestError` naming the entry's index and the reason, and every cookie already in the jar stays
+in place. Cookies that validate are stored with their full `domain`, `path`, `secure`,
+`httpOnly`, `sameSite` and expiry; a leading-dot `domain` works as domain scope, and a `path` not
+starting with `/` is treated as `/`.
+
 ### Clearing cookies
 
 Use `clearCookies()` to remove all cookies from the session:

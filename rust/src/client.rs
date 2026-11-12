@@ -1277,6 +1277,229 @@ mod tests {
             },
         }
     }
+
+    static BATCH_TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_batch_session_id() -> String {
+        let seq = BATCH_TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("batch-cookie-test-{}-{}", std::process::id(), seq)
+    }
+
+    fn batch_cookie_input(name: &str) -> SessionCookieInput {
+        SessionCookieInput {
+            name: name.to_owned(),
+            value: "value".to_owned(),
+            domain: None,
+            path: None,
+            secure: false,
+            http_only: false,
+            same_site: None,
+            expires_at_ms: None,
+            url: None,
+        }
+    }
+
+    fn cookie_names(session_id: &str) -> Vec<String> {
+        get_all_session_cookies(session_id)
+            .unwrap()
+            .into_iter()
+            .map(|cookie| cookie.name)
+            .collect()
+    }
+
+    #[test]
+    fn batch_restore_is_all_or_nothing_and_names_the_offending_entry() {
+        let session_id = unique_batch_session_id();
+        set_session_cookie(&session_id, "keep", "me", "http://example.com/").unwrap();
+
+        let mut good = batch_cookie_input("good");
+        good.domain = Some("example.com".to_owned());
+        let bad = batch_cookie_input("   ");
+
+        let error = set_session_cookies(&session_id, &[good, bad], Some("http://example.com/"))
+            .expect_err("a batch with an empty-name cookie must be rejected");
+        let message = format!("{:#}", error);
+        assert!(message.contains("index 1"), "error should carry the index: {message}");
+        assert!(message.contains("empty name"), "error should carry the reason: {message}");
+
+        // The valid first entry must not have landed before the failure.
+        assert_eq!(cookie_names(&session_id), vec!["keep".to_owned()]);
+    }
+
+    #[test]
+    fn batch_restore_reports_index_name_and_reason_for_every_invalid_shape() {
+        struct Case {
+            cookie: SessionCookieInput,
+            default_url: Option<&'static str>,
+            expected: &'static str,
+        }
+
+        let mut host_only = batch_cookie_input("orphan");
+        host_only.url = None;
+
+        let mut bad_url = batch_cookie_input("bad-url");
+        // A path-only reference parses but has no host, which is exactly the rejected shape.
+        bad_url.url = Some("/just-a-path".to_owned());
+
+        let mut bad_same_site = batch_cookie_input("bad-samesite");
+        bad_same_site.domain = Some("example.com".to_owned());
+        bad_same_site.same_site = Some("sometimes".to_owned());
+
+        let mut nan_expiry = batch_cookie_input("nan-expiry");
+        nan_expiry.domain = Some("example.com".to_owned());
+        nan_expiry.expires_at_ms = Some(f64::NAN);
+
+        let mut infinite_expiry = batch_cookie_input("infinite-expiry");
+        infinite_expiry.domain = Some("example.com".to_owned());
+        infinite_expiry.expires_at_ms = Some(f64::INFINITY);
+
+        let mut huge_expiry = batch_cookie_input("huge-expiry");
+        huge_expiry.domain = Some("example.com".to_owned());
+        huge_expiry.expires_at_ms = Some(1e20);
+
+        let cases = [
+            Case {
+                cookie: batch_cookie_input(""),
+                default_url: Some("http://example.com/"),
+                expected: "empty name",
+            },
+            Case { cookie: host_only, default_url: None, expected: "no domain" },
+            Case { cookie: bad_url, default_url: None, expected: "unparseable url" },
+            Case { cookie: bad_same_site, default_url: None, expected: "invalid sameSite" },
+            Case { cookie: nan_expiry, default_url: None, expected: "non-finite expiresAtMs" },
+            Case { cookie: infinite_expiry, default_url: None, expected: "non-finite expiresAtMs" },
+            Case { cookie: huge_expiry, default_url: None, expected: "out-of-range expiresAtMs" },
+        ];
+
+        for (index, case) in cases.iter().enumerate() {
+            let session_id = unique_batch_session_id();
+            let error = set_session_cookies(&session_id, &[case.cookie.clone()], case.default_url)
+                .expect_err("invalid cookie must reject the whole batch");
+            let message = format!("{:#}", error);
+
+            assert!(message.contains("index 0"), "case {index} lost its index: {message}");
+            assert!(message.contains(case.expected), "case {index} lost its reason: {message}");
+            if !case.cookie.name.is_empty() {
+                assert!(
+                    message.contains(&format!("\"{}\"", case.cookie.name)),
+                    "case {index} lost its name: {message}",
+                );
+            }
+            assert!(
+                cookie_names(&session_id).is_empty(),
+                "case {index} mutated the jar despite failing",
+            );
+        }
+    }
+
+    #[test]
+    fn batch_restore_rejects_an_unparseable_default_url_without_touching_the_jar() {
+        let session_id = unique_batch_session_id();
+        set_session_cookie(&session_id, "keep", "me", "http://example.com/").unwrap();
+
+        let error = set_session_cookies(
+            &session_id,
+            &[batch_cookie_input("restored")],
+            // A path-only default URL parses but resolves to no host.
+            Some("/just-a-path"),
+        )
+        .expect_err("a default url without a host must fail before any write");
+        let message = format!("{:#}", error);
+        assert!(message.contains("Batch default URL is invalid"), "{message}");
+
+        assert_eq!(cookie_names(&session_id), vec!["keep".to_owned()]);
+    }
+
+    #[test]
+    fn batch_restore_preserves_attributes_leading_dot_domain_and_root_path() {
+        use cookie::time::{Duration, OffsetDateTime};
+
+        let session_id = unique_batch_session_id();
+        let expiry_nanos = (OffsetDateTime::now_utc() + Duration::days(2)).unix_timestamp_nanos();
+        let expires_at_ms = (expiry_nanos / 1_000_000) as f64;
+
+        let mut full = batch_cookie_input("full");
+        full.value = "scalar-value".to_owned();
+        full.domain = Some(".example.com".to_owned());
+        full.path = Some("relative-path".to_owned());
+        full.secure = true;
+        full.http_only = true;
+        full.same_site = Some("Lax".to_owned());
+        full.expires_at_ms = Some(expires_at_ms);
+
+        set_session_cookies(&session_id, &[full], None).expect("a fully valid batch must succeed");
+
+        let stored = get_all_session_cookies(&session_id).unwrap();
+        assert_eq!(stored.len(), 1);
+        let cookie = &stored[0];
+
+        assert_eq!(cookie.name, "full");
+        assert_eq!(cookie.value, "scalar-value");
+        // The leading dot is a Set-Cookie spelling, not part of the stored domain.
+        assert_eq!(
+            cookie.domain.as_deref().map(|d| d.trim_start_matches('.')),
+            Some("example.com"),
+        );
+        // A path not beginning with '/' falls back to the root path.
+        assert_eq!(cookie.path.as_deref(), Some("/"));
+        assert!(cookie.secure, "secure flag must survive the restore");
+        assert!(cookie.http_only, "httpOnly flag must survive the restore");
+        assert_eq!(cookie.same_site.as_deref(), Some("lax"));
+        let stored_expiry = cookie.expires_at_ms.expect("expiry must survive the restore");
+        assert!(
+            (stored_expiry - expires_at_ms).abs() < 1_000.0,
+            "expiry mismatch: {stored_expiry} vs {expires_at_ms}",
+        );
+    }
+
+    #[test]
+    fn restored_cookies_match_requests_by_domain_and_path() {
+        use std::collections::HashMap;
+
+        let session_id = unique_batch_session_id();
+
+        let mut host_only = batch_cookie_input("host-only");
+        host_only.url = Some("https://example.com/".to_owned());
+
+        let mut domained = batch_cookie_input("domained");
+        domained.domain = Some("example.com".to_owned());
+
+        let mut pathed = batch_cookie_input("pathed");
+        pathed.url = Some("https://example.com/".to_owned());
+        pathed.path = Some("/account".to_owned());
+
+        set_session_cookies(&session_id, &[host_only, domained, pathed], None)
+            .expect("the valid batch must be stored");
+
+        let pairs_for = |url: &str| -> HashMap<String, String> {
+            get_session_cookies(&session_id, url)
+                .unwrap()
+                .into_iter()
+                .collect()
+        };
+
+        let apex = pairs_for("https://example.com/");
+        assert_eq!(apex.get("host-only").map(String::as_str), Some("value"));
+        assert_eq!(apex.get("domained").map(String::as_str), Some("value"));
+        assert!(!apex.contains_key("pathed"), "a /account cookie must not be sent to /");
+
+        // The host-only cookie is invisible to a subdomain; the domain cookie is shared with it.
+        let subdomain = pairs_for("https://sub.example.com/");
+        assert!(
+            !subdomain.contains_key("host-only"),
+            "host-only cookies must not leak to subdomains",
+        );
+        assert_eq!(subdomain.get("domained").map(String::as_str), Some("value"));
+
+        let account = pairs_for("https://example.com/account/settings");
+        assert_eq!(account.get("pathed").map(String::as_str), Some("value"));
+
+        let other_path = pairs_for("https://example.com/elsewhere");
+        assert!(
+            !other_path.contains_key("pathed"),
+            "path scope must keep the cookie off other paths",
+        );
+    }
 }
 
 /// Map a WebSocket URI onto its HTTP origin for cookie-jar lookups.
@@ -1410,14 +1633,26 @@ pub fn set_session_cookie(session_id: &str, name: &str, value: &str, url: &str) 
 }
 
 /// Extract the cookie-scoping host from a URL.
+///
+/// The error deliberately stays generic: callers know which batch entry owns the URL and wrap the
+/// failure with that entry's index and name, so every rejection can be traced back to one cookie.
 fn host_from_url(url: &str) -> Result<String> {
-    let uri: wreq::Uri = url
-        .parse()
-        .with_context(|| format!("Invalid URL: {}", url))?;
+    let uri: wreq::Uri = url.parse().map_err(|_| anyhow!("URL cannot be parsed: {}", url))?;
     cookie_origin_uri(&uri)
         .host()
         .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("URL has no host: {}", url))
+        .ok_or_else(|| anyhow!("URL cannot be parsed into a host: {}", url))
+}
+
+/// Prefix a batch-entry error with the entry index and, when available, its name, so a rejected
+/// batch can always be traced to the exact cookie responsible.
+fn cookie_entry_error(index: usize, name: Option<&str>, reason: &str) -> anyhow::Error {
+    match name {
+        Some(name) if !name.is_empty() => {
+            anyhow!("Cookie at index {} (\"{}\") {}", index, name, reason)
+        }
+        _ => anyhow!("Cookie at index {} {}", index, reason),
+    }
 }
 
 /// A cookie to restore into a session jar, mirroring `SessionCookieInfo`.
@@ -1450,16 +1685,24 @@ pub fn set_session_cookies(
     default_url: Option<&str>,
 ) -> Result<()> {
     let default_host = match default_url {
-        Some(url) => Some(host_from_url(url)?),
+        Some(url) => Some(host_from_url(url).map_err(|error| {
+            anyhow!("Batch default URL is invalid: {:#}", error)
+        })?),
         None => None,
     };
 
     let mut prepared = Vec::with_capacity(cookies.len());
     for (index, input) in cookies.iter().enumerate() {
-        let name = input.name.trim();
-        if name.is_empty() {
-            return Err(anyhow!("Cookie at index {} has an empty name", index));
-        }
+        let label = input.name.trim();
+        let name = if label.is_empty() {
+            return Err(cookie_entry_error(index, None, "has an empty name"));
+        } else {
+            label
+        };
+        // Every failure below goes through this closure so the index and name are never lost.
+        let fail = |reason: &str| -> anyhow::Error {
+            cookie_entry_error(index, Some(name), reason)
+        };
 
         let domain = input
             .domain
@@ -1470,12 +1713,13 @@ pub fn set_session_cookies(
             // A leading dot is legal in Set-Cookie but not in a URI authority.
             Some(domain) => domain.trim_start_matches('.').to_owned(),
             None => match input.url.as_deref() {
-                Some(url) => host_from_url(url)?,
+                Some(url) => host_from_url(url).map_err(|error| {
+                    fail(&format!("has an unparseable url: {:#}", error))
+                })?,
                 None => default_host.clone().ok_or_else(|| {
-                    anyhow!(
-                        "Cookie \"{}\" has no domain. Host-only cookies lose their origin host \
-                         when exported, so pass a URL to scope them",
-                        name
+                    fail(
+                        "has no domain. Host-only cookies lose their origin host when exported, \
+                         so pass a url on the cookie or a batch default url",
                     )
                 })?,
             },
@@ -1492,7 +1736,7 @@ pub fn set_session_cookies(
         // may overwrite a stored Secure cookie, so restore every cookie over https.
         let uri: wreq::Uri = format!("https://{}{}", host, path)
             .parse()
-            .with_context(|| format!("Cookie \"{}\" has an invalid domain or path", name))?;
+            .map_err(|error| fail(&format!("has an invalid domain or path: {}", error)))?;
 
         let mut builder = cookie::Cookie::build((name.to_owned(), input.value.clone()))
             .path(path.to_owned())
@@ -1509,11 +1753,10 @@ pub fn set_session_cookies(
                 "strict" => cookie::SameSite::Strict,
                 "none" => cookie::SameSite::None,
                 other => {
-                    return Err(anyhow!(
-                        "Cookie \"{}\" has an invalid sameSite value: {}",
-                        name,
+                    return Err(fail(&format!(
+                        "has an invalid sameSite value: {} (expected lax, strict or none)",
                         other
-                    ));
+                    )));
                 }
             };
             builder = builder.same_site(same_site);
@@ -1521,20 +1764,15 @@ pub fn set_session_cookies(
 
         if let Some(expires_at_ms) = input.expires_at_ms {
             if !expires_at_ms.is_finite() {
-                return Err(anyhow!(
-                    "Cookie \"{}\" has a non-finite expiresAtMs value",
-                    name
-                ));
+                return Err(fail("has a non-finite expiresAtMs value"));
             }
             // f64 cannot hold epoch nanoseconds exactly, so scale the whole and fractional
             // milliseconds separately to keep the exported timestamp to the millisecond.
             let whole_ms = expires_at_ms.trunc();
             let nanos =
                 (whole_ms as i128) * 1_000_000 + ((expires_at_ms - whole_ms) * 1_000_000.0) as i128;
-            let expires =
-                cookie::time::OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| {
-                    anyhow!("Cookie \"{}\" has an out-of-range expiresAtMs value", name)
-                })?;
+            let expires = cookie::time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+                .map_err(|_| fail("has an out-of-range expiresAtMs value"))?;
             builder = builder.expires(expires);
         }
 

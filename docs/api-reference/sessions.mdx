@@ -181,9 +181,24 @@ restored.setCookies(JSON.parse(fs.readFileSync('cookies.json', 'utf8')), 'https:
   cookie to place each one precisely.
 </Note>
 
-The batch is validated before anything is stored, so a rejected cookie leaves the jar untouched
-instead of applying half the restore. Cookies whose `expiresAtMs` is already in the past are
-dropped rather than stored, matching how the jar treats an expired `Set-Cookie`.
+The whole batch is validated before anything is stored, so a rejected cookie leaves the jar
+untouched instead of applying half the restore — valid entries earlier in the array never land
+ahead of a failing one. A `RequestError` identifies the offending entry by its array index and
+name (when present) together with the reason, for example
+`Cookie at index 2 ("token") has an invalid sameSite value: sometimes`.
+
+A batch is rejected when an entry:
+
+- has an empty `name`;
+- sets `sameSite` to anything other than `lax`, `strict` or `none`;
+- sets `expiresAtMs` to a non-finite number or a value outside the representable time range;
+- is host-only (no `domain`) and carries neither its own `url` nor a batch default `url`;
+- carries a `url` that cannot be parsed into a host.
+
+A leading dot on `domain` (`.example.com`) is accepted and treated as domain scope, and a `path`
+that does not start with `/` falls back to the root path `/`. Cookies whose `expiresAtMs` is
+already in the past are dropped rather than stored, matching how the jar treats an expired
+`Set-Cookie`.
 
 #### session.clearCookies()
 
