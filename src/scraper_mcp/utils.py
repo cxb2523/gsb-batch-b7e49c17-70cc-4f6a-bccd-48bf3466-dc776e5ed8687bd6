@@ -2,10 +2,63 @@
 
 from __future__ import annotations
 
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify
+
+SUPPORTED_URL_SCHEMES = ("http", "https")
+
+
+def validate_url(url: str) -> str | None:
+    """Validate a URL for scraping.
+
+    Args:
+        url: The URL to validate
+
+    Returns:
+        None if the URL is a valid http/https URL, otherwise an error message
+        describing why the URL cannot be scraped. The message distinguishes
+        between an unsupported protocol (e.g. ftp://) and an address that
+        cannot be parsed at all.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return f"Invalid URL {url!r}: address could not be parsed"
+
+    try:
+        parsed = urlparse(url)
+        # Accessing .port raises ValueError for malformed ports
+        _ = parsed.port
+    except ValueError:
+        return f"Invalid URL '{url}': address could not be parsed"
+
+    scheme = parsed.scheme.lower()
+    if scheme and scheme not in SUPPORTED_URL_SCHEMES:
+        return (
+            f"Unsupported URL scheme '{parsed.scheme}' in '{url}': "
+            f"only http and https are supported"
+        )
+
+    if scheme not in SUPPORTED_URL_SCHEMES or not parsed.netloc:
+        return f"Invalid URL '{url}': address could not be parsed"
+
+    return None
+
+
+def validate_css_selector(css_selector: str) -> None:
+    """Validate CSS selector syntax.
+
+    Args:
+        css_selector: The CSS selector to validate
+
+    Raises:
+        ValueError: If the CSS selector syntax is invalid. The message
+            always contains the original selector text.
+    """
+    try:
+        BeautifulSoup("", "lxml").select(css_selector)
+    except Exception as e:
+        raise ValueError(f"Invalid CSS selector '{css_selector}': {e}") from e
 
 
 def html_to_markdown(html: str, strip_tags: list[str] | None = None) -> str:

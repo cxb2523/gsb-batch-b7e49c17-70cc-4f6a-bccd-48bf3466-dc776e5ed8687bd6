@@ -21,7 +21,31 @@ from scraper_mcp.utils import (
     filter_html_by_selector,
     html_to_markdown,
     html_to_text,
+    validate_css_selector,
+    validate_url,
 )
+
+
+def _select_batch_provider(urls: list[str], render_js: bool = False) -> ScraperProvider:
+    """Select a provider for a batch based on the first valid URL.
+
+    Invalid URLs in the batch are handled per-item by the safe scrape
+    functions, so provider selection must not raise just because some
+    (or even all) URLs are not http/https.
+
+    Args:
+        urls: The batch of URLs
+        render_js: Whether JavaScript rendering was requested
+
+    Returns:
+        A scraper provider for the batch
+    """
+    for url in urls:
+        if validate_url(url) is None:
+            return get_provider(url, render_js)
+    # No valid URLs in the batch: nothing will be scraped, so the default
+    # provider is sufficient and avoids raising on invalid input.
+    return default_provider
 
 
 def clean_metadata(
@@ -107,8 +131,20 @@ async def scrape_single_url_safe(
     Returns:
         ScrapeResultItem with success/error status
     """
+    # Validate the URL before scraping so a bad input fails only its own
+    # item and never consumes a fetch or affects the rest of the batch.
+    url_error = validate_url(url)
+    if url_error is not None:
+        record_request(url=url, success=False, error=url_error, request_type="scraper")
+        return ScrapeResultItem(url=url, success=False, data=None, error=url_error)
+
     async with semaphore:
         try:
+            # Validate the CSS selector up front: an invalid selector fails
+            # this item without scraping and without interrupting the batch.
+            if css_selector:
+                validate_css_selector(css_selector)
+
             result = await provider.scrape(url, timeout=timeout, max_retries=max_retries)
 
             # Apply CSS selector filter if provided
@@ -191,7 +227,7 @@ async def batch_scrape_urls(
         BatchScrapeResponse with results for all URLs
     """
     semaphore = asyncio.Semaphore(concurrency)
-    provider = get_provider(urls[0], render_js) if urls else default_provider
+    provider = _select_batch_provider(urls, render_js)
 
     # Create tasks for all URLs
     tasks = [
@@ -241,8 +277,20 @@ async def scrape_single_url_markdown_safe(
     Returns:
         ScrapeResultItem with success/error status
     """
+    # Validate the URL before scraping so a bad input fails only its own
+    # item and never consumes a fetch or affects the rest of the batch.
+    url_error = validate_url(url)
+    if url_error is not None:
+        record_request(url=url, success=False, error=url_error, request_type="scraper")
+        return ScrapeResultItem(url=url, success=False, data=None, error=url_error)
+
     async with semaphore:
         try:
+            # Validate the CSS selector up front: an invalid selector fails
+            # this item without scraping and without interrupting the batch.
+            if css_selector:
+                validate_css_selector(css_selector)
+
             result = await provider.scrape(url, timeout=timeout, max_retries=max_retries)
 
             # Apply CSS selector filter if provided (before other processing)
@@ -334,7 +382,7 @@ async def batch_scrape_urls_markdown(
         BatchScrapeResponse with markdown results for all URLs
     """
     semaphore = asyncio.Semaphore(concurrency)
-    provider = get_provider(urls[0], render_js) if urls else default_provider
+    provider = _select_batch_provider(urls, render_js)
 
     tasks = [
         scrape_single_url_markdown_safe(
@@ -388,8 +436,20 @@ async def scrape_single_url_text_safe(
     Returns:
         ScrapeResultItem with success/error status
     """
+    # Validate the URL before scraping so a bad input fails only its own
+    # item and never consumes a fetch or affects the rest of the batch.
+    url_error = validate_url(url)
+    if url_error is not None:
+        record_request(url=url, success=False, error=url_error, request_type="scraper")
+        return ScrapeResultItem(url=url, success=False, data=None, error=url_error)
+
     async with semaphore:
         try:
+            # Validate the CSS selector up front: an invalid selector fails
+            # this item without scraping and without interrupting the batch.
+            if css_selector:
+                validate_css_selector(css_selector)
+
             result = await provider.scrape(url, timeout=timeout, max_retries=max_retries)
 
             # Apply CSS selector filter if provided (before other processing)
@@ -481,7 +541,7 @@ async def batch_scrape_urls_text(
         BatchScrapeResponse with text results for all URLs
     """
     semaphore = asyncio.Semaphore(concurrency)
-    provider = get_provider(urls[0], render_js) if urls else default_provider
+    provider = _select_batch_provider(urls, render_js)
 
     tasks = [
         scrape_single_url_text_safe(
@@ -533,8 +593,20 @@ async def extract_links_single_safe(
     Returns:
         LinkResultItem with success/error status
     """
+    # Validate the URL before scraping so a bad input fails only its own
+    # item and never consumes a fetch or affects the rest of the batch.
+    url_error = validate_url(url)
+    if url_error is not None:
+        record_request(url=url, success=False, error=url_error, request_type="scraper")
+        return LinkResultItem(url=url, success=False, data=None, error=url_error)
+
     async with semaphore:
         try:
+            # Validate the CSS selector up front: an invalid selector fails
+            # this item without scraping and without interrupting the batch.
+            if css_selector:
+                validate_css_selector(css_selector)
+
             result = await provider.scrape(url, timeout=timeout, max_retries=max_retries)
 
             # Apply CSS selector filter if provided (to scope link extraction)
@@ -610,7 +682,7 @@ async def batch_extract_links(
         BatchLinksResponse with link extraction results for all URLs
     """
     semaphore = asyncio.Semaphore(concurrency)
-    provider = get_provider(urls[0], render_js) if urls else default_provider
+    provider = _select_batch_provider(urls, render_js)
 
     tasks = [
         extract_links_single_safe(
