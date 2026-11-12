@@ -67,6 +67,14 @@ class HTTPClient:
 
     @property
     def _current_transcript_proxy(self) -> str | None:
+        """Next proxy from the transcript-only pool.
+
+        Never falls back to the normal proxy pool: transcript traffic must
+        stay isolated so it cannot disturb the normal proxy rotation or
+        reuse normal client connections. Callers must check
+        ``has_transcript_proxies`` first and fall back to the normal
+        request path themselves when no transcript proxies are configured.
+        """
         if self._transcript_proxy:
             return self._transcript_proxy
         if self._transcript_proxies:
@@ -75,7 +83,7 @@ class HTTPClient:
             ]
             self._transcript_proxy_index += 1
             return proxy
-        return self._current_proxy
+        return None
 
     @property
     def has_transcript_proxies(self) -> bool:
