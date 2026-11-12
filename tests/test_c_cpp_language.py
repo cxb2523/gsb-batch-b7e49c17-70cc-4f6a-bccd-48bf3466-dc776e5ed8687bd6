@@ -430,5 +430,9 @@ def test_qualification_and_rule_order() -> None:
     assert _cc_rule("scanf", [fmt_s, buf], scope) == "CC002"
     assert _cc_rule("sprintf", [buf, fmt_s, src], scope) == "CC002"
     assert _cc_rule("printf", [src], scope) == "CC003"
-    assert _cc_rule("printf", [src, buf], scope) is None
+    # A non-forwarded identifier is still a runtime format even with a value
+    # after it; only a variadic/va_list wrapper's own parameter is skipped.
+    assert _cc_rule("printf", [src, buf], scope) == "CC003"
+    forwarded = _CcScope(frozenset({"s"}), "")
+    assert _cc_rule("printf", [src, buf], forwarded) is None
     assert _cc_rule("system", [src], scope) == "CC004"

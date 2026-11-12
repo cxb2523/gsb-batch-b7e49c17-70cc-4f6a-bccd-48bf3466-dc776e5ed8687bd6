@@ -14,9 +14,11 @@ finding per construct with a stable ``rule_id``:
 * Rust: RS001 ``unsafe`` inventory, RS002 ``mem::transmute``, RS003 shell
   ``-c`` with a ``format!`` string.
 * C and C++: CC001 ``gets``, CC002 unbounded copy or write (``strcpy``,
-  ``strcat``, ``sprintf`` with ``%s``, ``scanf`` ``%s`` without a width),
-  CC003 format string that is not a literal, CC004 ``system``/``popen`` with
-  a command that is not a literal.
+  ``strcat``, ``sprintf`` with ``%s``, ``scanf`` ``%s`` without a width; a copy
+  whose source passed a ``strlen``/``strnlen`` check in the three preceding
+  statements is safe), CC003 format string that is not a constant and is not
+  forwarded by a variadic/``va_list`` wrapper, CC004 ``system``/``popen`` with
+  a command that is not a constant string (variable or concatenation).
 
 Test files are skipped.
 """
@@ -603,44 +605,123 @@ def _cc_literal(node: GenericNode) -> Optional[str]:
 _CC_GETTEXT = frozenset({"_", "N_", "gettext", "dgettext", "ngettext"})
 
 
-def _cc_const_binary(node: GenericNode, kids: List[GenericNode]) -> bool:
-    return len(kids) == 2 and "+" in node.text and _cc_const(kids[0])
+def _cc_pointer_params(fn: GenericNode) -> frozenset:
+    """Names of pointer/reference/array parameters (char pointers, FILE*, ...).
+
+    A ``string + pointer`` builds a new string at runtime; a
+    ``string + integer`` only indexes into the literal.
+    """
+    pointers: set = set()
+    for node in _walk(fn):
+        if _ts(node) != "parameter_declaration":
+            continue
+        declarator = next(
+            (c for c in node.children if "declarator" in _ts(c)),
+            None,
+        )
+        if declarator is None:
+            continue
+        kind = _ts(declarator)
+        # Pointers and arrays hold addresses; a reference to a plain integer
+        # (``int& n``) is still an integer offset, not a string operand.
+        is_integer_ref = (
+            "reference" in kind
+            and _ts(node.children[0]) == "primitive_type"
+            and node.children[0].text in {"int", "long", "short", "size_t"}
+        )
+        if is_integer_ref:
+            continue
+        if not (
+            "pointer" in kind
+            or "reference" in kind
+            or "array" in kind
+            or "&" in declarator.text
+        ):
+            continue
+        name = next(
+            (c.text for c in _walk(declarator) if _ts(c) == "identifier"),
+            None,
+        )
+        if name:
+            pointers.add(name)
+    return frozenset(pointers)
 
 
-def _cc_const_ternary(node: GenericNode, kids: List[GenericNode]) -> bool:
-    return len(kids) == 3 and _cc_const(kids[1]) and _cc_const(kids[2])
+def _cc_const_binary(
+    node: GenericNode, kids: List[GenericNode], pointers: frozenset
+) -> bool:
+    # Pointer arithmetic on a literal base (``"lit" + n``) stays constant: the
+    # offset only selects a suffix of the same literal. A string built with a
+    # pointer operand (``"lit" + s`` where s is a char pointer) does not.
+    if len(kids) != 2 or "+" not in node.text or not _cc_const(kids[0], pointers):
+        return False
+    other = kids[1]
+    if _ts(other) == "identifier":
+        return other.text not in pointers
+    return not _cc_builds_string(other, pointers)
 
 
-def _cc_const_call(node: GenericNode, kids: List[GenericNode]) -> bool:
+def _cc_builds_string(node: GenericNode, pointers: frozenset) -> bool:
+    """True when ``node`` contains a pointer-typed operand, so it builds a string."""
+    t = _ts(node)
+    if t == "identifier":
+        return node.text in pointers
+    if t in (
+        "binary_expression",
+        "call_expression",
+        "parenthesized_expression",
+        "conditional_expression",
+    ):
+        return any(_cc_builds_string(k, pointers) for k in _named(node))
+    return False
+
+
+def _cc_const_ternary(
+    node: GenericNode, kids: List[GenericNode], pointers: frozenset
+) -> bool:
+    # The condition may be any runtime value; both result branches must be
+    # constant strings (``c ? "a" : "b"``); a variable branch makes it runtime.
+    return len(kids) == 3 and all(_cc_const(k, pointers) for k in kids[1:])
+
+
+def _cc_const_call(
+    node: GenericNode, kids: List[GenericNode], pointers: frozenset
+) -> bool:
     args = _cc_args(node)
-    return _cc_func_name(node) in _CC_GETTEXT and bool(args) and _cc_const(args[-1])
+    return (
+        _cc_func_name(node) in _CC_GETTEXT
+        and bool(args)
+        and _cc_const(args[-1], pointers)
+    )
 
 
-def _cc_const_paren(node: GenericNode, kids: List[GenericNode]) -> bool:
-    return bool(kids) and _cc_const(kids[0])
+def _cc_const_paren(
+    node: GenericNode, kids: List[GenericNode], pointers: frozenset
+) -> bool:
+    return bool(kids) and _cc_const(kids[0], pointers)
 
 
-_CC_CONST_CHECKS: Dict[str, Callable[[GenericNode, List[GenericNode]], bool]] = {
-    "binary_expression": _cc_const_binary,
-    "conditional_expression": _cc_const_ternary,
-    "call_expression": _cc_const_call,
-    "parenthesized_expression": _cc_const_paren,
-}
-
-
-def _cc_const(node: GenericNode) -> bool:
+def _cc_const(node: GenericNode, pointers: frozenset = frozenset()) -> bool:
     """True when ``node`` always yields a constant string.
 
-    Covers literals, ALL-CAPS macro names, ``"lit" + n``, ``c ? "a" : "b"``
-    and gettext calls on a literal such as ``_("text")``.
+    Covers literals, ALL-CAPS macro names, ``"lit" + n`` with an integer
+    offset, ``c ? "a" : "b"`` and gettext calls on a literal such as
+    ``_("text")``. A ``"lit" + pointer`` concatenation is not constant.
     """
     t = _ts(node)
     if t in _CC_STRING_TYPES:
         return True
     if t == "identifier":
         return node.text.isupper()
-    check = _CC_CONST_CHECKS.get(t)
-    return check is not None and check(node, _named(node))
+    if t == "binary_expression":
+        return _cc_const_binary(node, _named(node), pointers)
+    if t == "conditional_expression":
+        return _cc_const_ternary(node, _named(node), pointers)
+    if t == "call_expression":
+        return _cc_const_call(node, _named(node), pointers)
+    if t == "parenthesized_expression":
+        return _cc_const_paren(node, _named(node), pointers)
+    return False
 
 
 def _cc_add(ctx: _Ctx, node: GenericNode, rule: str, func: str) -> None:
@@ -690,9 +771,12 @@ def _cc_add(ctx: _Ctx, node: GenericNode, rule: str, func: str) -> None:
 class _CcScope:
     """Where a call sits: the wrapper's forwarded parameters and earlier statements."""
 
-    def __init__(self, forwarded: frozenset, before: str) -> None:
+    def __init__(
+        self, forwarded: frozenset, before: str, pointers: frozenset = frozenset()
+    ) -> None:
         self.forwarded = forwarded
         self.before = before
+        self.pointers = pointers
 
 
 def _cc_arg(args: List[GenericNode], idx: int) -> Optional[GenericNode]:
@@ -707,11 +791,15 @@ def _cc_length_checked(src: GenericNode, scope: _CcScope) -> bool:
     return re.search(pattern, scope.before) is not None
 
 
-def _cc_nonliteral_format(
-    func: str, args: List[GenericNode], fmt_node: GenericNode, scope: _CcScope
-) -> Optional[str]:
-    """CC003 when a non-constant format has no arguments after it."""
-    if len(args) > _CC_FORMAT[func] + 1 or _cc_const(fmt_node):
+def _cc_nonliteral_format(fmt_node: GenericNode, scope: _CcScope) -> Optional[str]:
+    """CC003 for a non-constant format.
+
+    A parameter of a variadic/``va_list`` wrapper is forwarded verbatim: the
+    caller chose the format, so the wrapper is not at fault. Anything else
+    (a local, a global or an expression) is CC003, including when arguments
+    follow it, since the wrapper still chose to pass a runtime value as format.
+    """
+    if _cc_const(fmt_node, scope.pointers):
         return None
     if _ts(fmt_node) == "identifier" and fmt_node.text in scope.forwarded:
         return None
@@ -724,9 +812,9 @@ def _cc_format_rule(func: str, args: List[GenericNode], scope: _CcScope) -> Opti
         return None
     fmt = _cc_literal(fmt_node)
     if fmt is None:
-        # Only a format with nothing after it: printf(buf) treats data as a
-        # format; printf(fmt, x) passes values to a format chosen in code.
-        return _cc_nonliteral_format(func, args, fmt_node, scope)
+        # A non-literal format is safe only when it is a constant expression
+        # or a parameter forwarded by a variadic/va_list wrapper.
+        return _cc_nonliteral_format(fmt_node, scope)
     if func in ("sprintf", "vsprintf") and _CC_UNBOUNDED_S.search(fmt):
         return "CC002"
     return None
@@ -734,7 +822,7 @@ def _cc_format_rule(func: str, args: List[GenericNode], scope: _CcScope) -> Opti
 
 def _cc_copy_rule(args: List[GenericNode], scope: _CcScope) -> Optional[str]:
     src = _cc_arg(args, 1)
-    if src is None or _cc_const(src) or _cc_length_checked(src, scope):
+    if src is None or _cc_const(src, scope.pointers) or _cc_length_checked(src, scope):
         return None
     return "CC002"
 
@@ -745,9 +833,9 @@ def _cc_scanf_rule(func: str, args: List[GenericNode]) -> Optional[str]:
     return "CC002" if fmt is not None and _CC_SCANF_S.search(fmt) else None
 
 
-def _cc_shell_rule(args: List[GenericNode]) -> Optional[str]:
+def _cc_shell_rule(args: List[GenericNode], scope: _CcScope) -> Optional[str]:
     cmd = _cc_arg(args, 0)
-    return "CC004" if cmd is not None and _cc_literal(cmd) is None else None
+    return "CC004" if cmd is not None and not _cc_const(cmd, scope.pointers) else None
 
 
 def _cc_format_family(func: str, args: List[GenericNode], scope: _CcScope) -> Optional[str]:
@@ -757,7 +845,7 @@ def _cc_format_family(func: str, args: List[GenericNode], scope: _CcScope) -> Op
     if func in _CC_FORMAT:
         return _cc_format_rule(func, args, scope)
     if func in _CC_SHELL:
-        return _cc_shell_rule(args)
+        return _cc_shell_rule(args, scope)
     return None
 
 
@@ -780,13 +868,19 @@ def _cc_call(ctx: _Ctx, node: GenericNode, scope: _CcScope) -> None:
 
 
 def _cc_forwarded(fn: GenericNode) -> frozenset:
-    """Parameter names of a variadic or ``va_list`` function (its format is the caller's)."""
+    """Format parameters forwarded by a variadic or ``va_list`` function.
+
+    The ``va_list`` argument itself is excluded: it carries the caller's values,
+    not a format string, so a local format passed beside it must still be CC003.
+    """
     for node in _walk(fn):
         if _ts(node) == "parameter_list":
             text = node.text
             if "..." not in text and "va_list" not in text:
                 return frozenset()
-            return frozenset(re.findall(r"([A-Za-z_]\w*)\s*(?:\[\s*\])?\s*(?=[,)])", text))
+            names = re.findall(r"([A-Za-z_]\w*)\s*(?:\[\s*\])?\s*(?=[,)])", text)
+            va_lists = set(re.findall(r"va_list\s*[*&]*\s*([A-Za-z_]\w*)", text))
+            return frozenset(name for name in names if name not in va_lists)
     return frozenset()
 
 
@@ -794,12 +888,14 @@ _CC_BEFORE = 3
 
 
 def _check_c_cpp(ctx: _Ctx, root: GenericNode) -> None:
-    stack: List[Tuple[GenericNode, _CcScope]] = [(root, _CcScope(frozenset(), ""))]
+    stack: List[Tuple[GenericNode, _CcScope]] = [
+        (root, _CcScope(frozenset(), "", frozenset()))
+    ]
     while stack:
         node, scope = stack.pop()
         t = _ts(node)
         if t == "function_definition":
-            scope = _CcScope(_cc_forwarded(node), "")
+            scope = _CcScope(_cc_forwarded(node), "", _cc_pointer_params(node))
         if t == "call_expression":
             _cc_call(ctx, node, scope)
         kids = node.children
@@ -807,7 +903,9 @@ def _check_c_cpp(ctx: _Ctx, root: GenericNode) -> None:
             named = _named(node)
             scopes = [
                 _CcScope(
-                    scope.forwarded, "\n".join(c.text for c in named[max(0, i - _CC_BEFORE) : i])
+                    scope.forwarded,
+                    "\n".join(c.text for c in named[max(0, i - _CC_BEFORE) : i]),
+                    scope.pointers,
                 )
                 for i in range(len(named))
             ]

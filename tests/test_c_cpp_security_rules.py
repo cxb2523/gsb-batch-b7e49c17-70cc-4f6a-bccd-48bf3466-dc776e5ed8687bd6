@@ -57,6 +57,10 @@ C_CASES = [
     ('popen(s, "r");', [("CC004", 2, "HIGH")]),
     ('system("ls -l");', []),
     ('popen("date", "r");', []),
+    ('system("ls " "-l");', []),
+    ("system(FIXED_CMD);", []),
+    ('system(_("ls"));', []),
+    ('system("ls " + s);', [("CC004", 2, "HIGH")]),
     # comments and strings never match
     ('/* gets(b); strcpy(d, s); */ const char *t = "system(s)";', []),
 ]
@@ -69,6 +73,10 @@ def test_c_rules(body: str, expected) -> None:
 
 CPP_CASES = [
     ("std::system(s);", [("CC004", 2, "HIGH")]),
+    ('std::system("ls" " -l");', []),
+    ("std::system(FIXED_CMD);", []),
+    ('std::system(_("ls"));', []),
+    ('std::system("ls " + s);', [("CC004", 2, "HIGH")]),
     ("::strcpy(d, s);", [("CC002", 2, "MEDIUM")]),
     ("std::printf(s);", [("CC003", 2, "MEDIUM")]),
     ("obj.system(s);", []),
@@ -171,23 +179,172 @@ def test_exclusions(code: str, expected) -> None:
     assert _rules("c", code + "\n") == expected
 
 
-NO_ARGS_CASES = [
-    # CC003 reports a non-constant format only when nothing follows it:
-    # printf(buf) prints the buffer as a format; printf(fmt, x) is a chosen format.
+RUNTIME_FORMAT_CASES = [
+    # CC003: a non-forwarded, non-constant format is reported whether or not
+    # arguments follow it -- printf(buf) prints the buffer as a format and
+    # printf(fmt, x) still passes a runtime-chosen string as the format.
     ("void g(char *s) { printf(s); }", [("CC003", 1, "MEDIUM")]),
     ("void g(FILE *f, char *m) { fprintf(f, m); }", [("CC003", 1, "MEDIUM")]),
     ("void g(char *m) { syslog(3, m); }", [("CC003", 1, "MEDIUM")]),
     ("void g(char *d, char *m) { sprintf(d, m); }", [("CC003", 1, "MEDIUM")]),
-    ("void g(char *s, int n) { printf(s, n); }", []),
-    ("void g(FILE *f, char *fmt, int n) { fprintf(f, fmt, n); }", []),
-    ("void g(char *m, char *x) { syslog(3, m, x); }", []),
-    ("void g(char *d, char *fmt, int n) { snprintf(d, 8, fmt, n); }", []),
+    ("void g(char *s, int n) { printf(s, n); }", [("CC003", 1, "MEDIUM")]),
+    ("void g(FILE *f, char *fmt, int n) { fprintf(f, fmt, n); }", [("CC003", 1, "MEDIUM")]),
+    ("void g(char *m, char *x) { syslog(3, m, x); }", [("CC003", 1, "MEDIUM")]),
+    ("void g(char *d, char *fmt, int n) { snprintf(d, 8, fmt, n); }", [("CC003", 1, "MEDIUM")]),
+    # A local variable or an expression used as a format is still CC003.
+    ("void g(char *x) { char *m = x; printf(m); }", [("CC003", 1, "MEDIUM")]),
+    ("char *g_msg; void g(void) { printf(g_msg); }", [("CC003", 1, "MEDIUM")]),
+    ("void g(int k, char *s) { printf(k ? s : \"x\"); }", [("CC003", 1, "MEDIUM")]),
 ]
 
 
-@pytest.mark.parametrize("code,expected", NO_ARGS_CASES)
-def test_cc003_only_without_format_arguments(code: str, expected) -> None:
+@pytest.mark.parametrize("code,expected", RUNTIME_FORMAT_CASES)
+def test_cc003_runtime_format_is_reported(code: str, expected) -> None:
     assert _rules("c", code + "\n") == expected
+
+
+FORWARD_CASES = [
+    # A variadic or va_list wrapper forwards its own format parameter: the
+    # caller chose the format, so the wrapper itself is not CC003.
+    ("void lg(const char *fmt, ...) { va_list ap; vprintf(fmt, ap); }", []),
+    ("void lv(const char *fmt, va_list ap) { vfprintf(stderr, fmt, ap); }", []),
+    ("void ls(const char *fmt, ...) { char b[64]; vsnprintf(b, 64, fmt, ap); }", []),
+    ("void lv(const char *fmt, va_list &ap) { vfprintf(stderr, fmt, ap); }", []),
+    ("void lg(const char *fmt, ...) { printf(fmt, 1); }", []),
+    # A non-variadic function cannot forward: its parameter is a plain runtime
+    # string, so passing it as a format is CC003.
+    ("void nv(const char *fmt) { printf(fmt); }", [("CC003", 1, "MEDIUM")]),
+    ("void nv(const char *fmt, int n) { printf(fmt, n); }", [("CC003", 1, "MEDIUM")]),
+    # The va_list argument carries values, not a format: a local format used
+    # beside it in a va_list function is still CC003.
+    (
+        "#include <stdarg.h>\nvoid g(va_list ap) { char *m = 0; vprintf(m, ap); }",
+        [("CC003", 2, "MEDIUM")],
+    ),
+]
+
+
+@pytest.mark.parametrize("code,expected", FORWARD_CASES)
+def test_cc003_forwarded_format(code: str, expected) -> None:
+    lang = "cpp" if "&ap" in code else "c"
+    assert _rules(lang, code + "\n", f"src/app.{'cpp' if lang == 'cpp' else 'c'}") == expected
+
+
+LENGTH_CHECK_CASES = [
+    # strlen/strnlen on the source within the three preceding statements: safe.
+    (
+        "void g(char *d, char *s) {\n if (strlen(s) >= 16) return;\n strcpy(d, s);\n}",
+        [],
+    ),
+    (
+        "void g(char *d, char *s) {\n if (strnlen(s, 64) > 8) return;\n strcpy(d, s);\n}",
+        [],
+    ),
+    (
+        "void g(char *d, char *s) {\n (void)strlen(s);\n int a = 1;\n int b = 2;\n"
+        " strcpy(d, s);\n}",
+        [],
+    ),
+    (
+        "void g(char *d, char *s) {\n size_t n = strlen(s);\n strcat(d, s);\n}",
+        [],
+    ),
+    # Removing the check restores the report.
+    (
+        "void g(char *d, char *s) {\n int x = 1;\n strcpy(d, s);\n}",
+        [("CC002", 3, "MEDIUM")],
+    ),
+    # A check older than the three preceding statements no longer protects.
+    (
+        "void g(char *d, char *s) {\n (void)strlen(s);\n int a = 1;\n int b = 2;\n"
+        " int c = 3;\n strcpy(d, s);\n}",
+        [("CC002", 6, "MEDIUM")],
+    ),
+    # A check on a different source does not protect this copy.
+    (
+        "void g(char *d, char *s, char *t) {\n if (strlen(t) > 3) return;\n strcpy(d, s);\n}",
+        [("CC002", 3, "MEDIUM")],
+    ),
+]
+
+
+@pytest.mark.parametrize("code,expected", LENGTH_CHECK_CASES)
+def test_cc002_length_check_window(code: str, expected) -> None:
+    assert _rules("c", code + "\n") == expected
+
+
+SHELL_LITERAL_CASES = [
+    # Constant commands are not reported: plain and adjacent literals,
+    # ALL-CAPS macros, gettext-style wrappers, ternaries of constants.
+    ('void g(void) { system("ls -l"); }', []),
+    ('void g(void) { system("ls " "-l"); }', []),
+    ('void g(void) { popen("date", "r"); }', []),
+    ("#define FIXED_CMD \"ls\"\nvoid g(void) { system(FIXED_CMD); }", []),
+    ('void g(void) { system(_("ls -l")); }', []),
+    ('void g(void) { system(gettext("ls")); }', []),
+    ('void g(int k) { system(k ? "a" : "b"); }', []),
+    ('void g(int k) { system("ls" + k); }', []),
+    ("void g(char s[]) { system(\"ls \" + s); }", [("CC004", 1, "HIGH")]),
+]
+
+
+@pytest.mark.parametrize("code,expected", SHELL_LITERAL_CASES)
+def test_cc004_constant_commands(code: str, expected) -> None:
+    assert _rules("c", code + "\n") == expected
+
+
+SHELL_RUNTIME_CASES = [
+    # Variables and built expressions are commands an attacker can influence.
+    ("void g(char *c) { system(c); }", [("CC004", 1, "HIGH")]),
+    ('void g(char *s) { system("ls " + s); }', [("CC004", 1, "HIGH")]),
+    ("void g(char *c) { popen(c, \"r\"); }", [("CC004", 1, "HIGH")]),
+    ('void g(int k, char *s) { system(k ? s : "ls"); }', [("CC004", 1, "HIGH")]),
+    ("void g(char *c) { _wsystem(c); }", [("CC004", 1, "HIGH")]),
+]
+
+
+@pytest.mark.parametrize("code,expected", SHELL_RUNTIME_CASES)
+def test_cc004_runtime_commands(code: str, expected) -> None:
+    got = _rules("c", code + "\n")
+    assert got == [(rule, line, sev) for (rule, line, sev) in got if rule == "CC004"]
+    assert got == expected
+    assert all(sev == "HIGH" for _, _, sev in got)
+
+
+def test_cc004_integer_offset_is_constant_in_cpp() -> None:
+    code = (
+        "void g(int& n, const char* s) {\n"
+        ' std::system("ls" + n);\n'
+        ' std::system("ls " + s);\n'
+        "}\n"
+    )
+    assert _rules("cpp", code, "src/a.cpp") == [("CC004", 3, "HIGH")]
+
+
+def test_cc004_keeps_cwe78() -> None:
+    _need_pack()
+    from hefesto.analyzers.security import SecurityAnalyzer
+    from hefesto.core.parsers.treesitter_parser import TreeSitterParser
+
+    code = "void g(char *c) { system(c); }\n"
+    analyzer = SecurityAnalyzer()
+    analyzer.lang_rules = True
+    tree = TreeSitterParser("c").parse(code, "src/a.c")
+    issue = next(i for i in analyzer.analyze(tree, "src/a.c", code) if i.rule_id == "CC004")
+    assert issue.metadata["cwe"] == "CWE-78"
+    assert issue.severity.value == "HIGH"
+
+
+def test_strings_and_comments_never_trigger() -> None:
+    _need_pack()
+    code = (
+        "void g(void) {\n"
+        "  /* gets(b); strcpy(d, s); system(s); printf(s); */\n"
+        "  // system(\"rm -rf /\"); strcat(d, s);\n"
+        '  const char *t = "system(s); strcpy(d, s); gets(b);";\n'
+        "}\n"
+    )
+    assert _rules("c", code) == []
 
 
 def _measured_complexity(name: str) -> int:

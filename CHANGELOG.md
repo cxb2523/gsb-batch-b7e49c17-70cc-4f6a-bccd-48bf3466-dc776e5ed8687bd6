@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — C/C++ CC002/CC003/CC004 decision boundaries
+
+- CC003 (non-literal format, MEDIUM, CWE-134) now reports any non-constant format that is not a parameter forwarded by a variadic (`...`) or `va_list` wrapper, whether or not arguments follow it. Previously `printf(fmt, x)` with a runtime `fmt` was silently accepted. A local variable, a global variable or an expression used as the format is reported; only the wrapper's own forwarded format parameter is skipped. The `va_list` argument itself is no longer mistaken for a forwarded format, so `vprintf(local, ap)` inside a `va_list` function is reported again.
+- CC002 (unbounded copy/write, MEDIUM, CWE-120) for `strcpy`/`strcat` keeps suppressing the finding only when `strlen`/`strnlen` on that same source appears in the three statements before the call; a check on another source or a check older than that window no longer suppresses it, and removing the check restores the report.
+- CC004 (command injection, HIGH, CWE-78) now treats adjacent literal concatenation (`"ls " "-l"`), ALL-CAPS macro names, gettext-style wrappers (`_("ls")`, `gettext("ls")`) and ternaries of constant strings as constant commands, so they are not reported. A variable or a concatenation expression such as `"ls " + s` is reported. `"lit" + n` with an integer parameter stays constant; a pointer or array parameter makes the concatenation runtime-built and reported. All four rules still read only the syntax tree, so text inside string literals and comments never matches, and rule id, severity and CWE metadata are unchanged.
+
 ## [4.22.0] - 2026-11-11
 
 ### Upgrade notes — read first if you use the GitHub Action on `@v4`

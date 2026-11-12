@@ -46,9 +46,14 @@ The generic analyzers that run on every tree-sitter language: complexity
 (`HIGH_COMPLEXITY`, `VERY_HIGH_COMPLEXITY`), size (`LONG_FUNCTION`,
 `LONG_PARAMETER_LIST`, `GOD_CLASS`) and nesting (`DEEP_NESTING`). With `--experimental c-cpp,lang-security`, the
 C/C++ security rules CC001-CC004 also run: `gets`, unbounded copies
-(`strcpy`/`strcat`, `sprintf` with `%s`, `scanf` `%s`), a non-constant format with
-no arguments after it (`printf(buf)`), and `system`/`popen` with a non-literal command. See the rule
-table in `docs/ANALYSIS_RULES.md`. They are experimental.
+(`strcpy`/`strcat` unless `strlen`/`strnlen` checked the source in the three
+statements before, `sprintf` with `%s`, `scanf` `%s`), a non-constant format
+with no safe forwarding (`printf(buf)`, but a `...`/`va_list` wrapper passing
+its own format parameter is skipped), and `system`/`popen` with a non-constant
+command (variables and concatenations are reported; literals, adjacent literal
+concatenation, ALL-CAPS macros and gettext wrappers are not). The rules read
+only the syntax tree, so text inside string literals and comments never
+matches. See the rule table in `docs/ANALYSIS_RULES.md`. They are experimental.
 
 Functions are named as declared: `alloc_buf`, `Widget::size`,
 `Widget::~Widget`, `operator+`. Structs, unions, enums and classes use their
