@@ -81,9 +81,11 @@ pub struct Progress {
     /// The exact model each alias (opus, sonnet, ...) last turned out to be, as reported
     /// by Claude Code, e.g. "opus" -> "claude-opus-5-5". Names the model cards.
     pub models: BTreeMap<String, String>,
-    /// How many times each level was replayed while the game has been running. A run
-    /// that started before a replay must not count, so it checks this didn't change.
-    #[serde(skip)]
+    /// How many times each level was replayed. Persisted with the save so that after a
+    /// restart the game still knows how many fresh attempts a level has had. A compile
+    /// that started before a replay (or before a restart that replayed the level) carries
+    /// an older count, which marks its result as stale (see [`Progress::is_stale_attempt`]).
+    #[serde(default)]
     pub replays: BTreeMap<String, u64>,
 }
 
@@ -192,6 +194,20 @@ impl Progress {
         self.drafts.remove(level_id);
         *self.replays.entry(level_id.to_string()).or_default() += 1;
         xp
+    }
+
+    /// How many times a level has been replayed (0 for a level never replayed).
+    pub fn replay_count(&self, level_id: &str) -> u64 {
+        self.replays.get(level_id).copied().unwrap_or(0)
+    }
+
+    /// Whether a compile that recorded `generation` replays when it started belongs to an
+    /// older attempt. The replay count only ever goes up, so a different (smaller) count
+    /// means the level was replayed after the compile began — possibly in a previous run of
+    /// the game, since the count is part of the save. A stale result must not clear the
+    /// level, award XP or record error codes.
+    pub fn is_stale_attempt(&self, level_id: &str, generation: u64) -> bool {
+        self.replay_count(level_id) != generation
     }
 
     pub fn record_errors(&mut self, level_id: &str, codes: &[String]) {
@@ -362,14 +378,90 @@ mod tests {
         assert!(p.has_reached("1.1"));
         assert_eq!(p.xp_for("1.1", 100), 100, "hint penalty is gone");
         assert_eq!(
-            p.replays.get("1.1"),
-            Some(&1),
+            p.replay_count("1.1"),
+            1,
             "runs started before this are stale"
         );
         assert!(
-            !serde_json::to_string(&p).unwrap().contains("replays"),
-            "not saved"
+            serde_json::to_string(&p).unwrap().contains("replays"),
+            "replay counts travel with the save"
         );
+    }
+
+    #[test]
+    fn replay_counts_persist_and_stay_stale_after_a_restart() {
+        let path = temp_save("replay-persist");
+        let mut p = Progress::default();
+        p.completed.insert(
+            "1.1".into(),
+            Completion {
+                xp: 30,
+                hints_used: 0,
+                attempts: 1,
+            },
+        );
+        p.reached.insert("1.1".into());
+        assert_eq!(p.replay("1.1"), 30);
+        assert_eq!(p.replay_count("1.1"), 1);
+        p.save(&path).unwrap();
+
+        // Simulate restarting the game: a fresh Progress loaded from the same save file
+        // still remembers the replay, so a compile begun before the replay is stale.
+        let (loaded, note) = Progress::load(&path).unwrap();
+        assert!(note.is_none());
+        assert_eq!(loaded.replay_count("1.1"), 1);
+        let generation_from_before_replay = 0u64;
+        assert!(loaded.is_stale_attempt("1.1", generation_from_before_replay));
+        assert!(
+            !loaded.is_stale_attempt("1.1", 1),
+            "a fresh attempt is current"
+        );
+
+        // A second replay after the restart increments the persisted counter again.
+        let mut loaded = loaded;
+        loaded.replay("1.1");
+        loaded.save(&path).unwrap();
+        let (again, _) = Progress::load(&path).unwrap();
+        assert_eq!(again.replay_count("1.1"), 2);
+        assert!(again.is_stale_attempt("1.1", 1));
+    }
+
+    #[test]
+    fn replay_stale_detection_tracks_each_level_separately() {
+        let mut p = Progress::default();
+        assert_eq!(p.replay_count("1.1"), 0);
+        p.replay("1.1");
+        assert!(p.is_stale_attempt("1.1", 0));
+        assert!(!p.is_stale_attempt("1.1", 1));
+        // Another level's attempt is untouched.
+        assert!(!p.is_stale_attempt("1.2", 0));
+    }
+
+    #[test]
+    fn replaying_twice_cannot_take_xp_below_zero() {
+        let mut p = Progress {
+            xp: 30,
+            ..Default::default()
+        };
+        p.completed.insert(
+            "1.1".into(),
+            Completion {
+                xp: 30,
+                hints_used: 0,
+                attempts: 1,
+            },
+        );
+        assert_eq!(
+            p.replay("1.1"),
+            30,
+            "the first replay returns the earned XP"
+        );
+        assert_eq!(p.xp, 0);
+        // The completion is already gone: another replay returns nothing and must not
+        // wrap the total XP around into a huge number or go negative.
+        assert_eq!(p.replay("1.1"), 0);
+        assert_eq!(p.xp, 0);
+        assert_eq!(p.replay_count("1.1"), 2);
     }
 
     #[test]

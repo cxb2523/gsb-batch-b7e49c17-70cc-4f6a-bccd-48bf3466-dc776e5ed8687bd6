@@ -296,7 +296,24 @@ canvas.sprite, canvas.pixel-bg, #map-canvas { image-rendering: pixelated; }
 .il-chip.done { background: var(--gold); }
 .il-chip.locked { background: #e9c27e; }
 .il-chip.soon { background: #cfc6bc; color: #4d4237; }
+.il-chip.skipped { background: #cdb5f5; color: #3a2a5a; }
+.il-chip.replay { background: #a9dcff; color: #143a5a; }
 .map-ferris { position: absolute; transform: translate(-50%, -100%); pointer-events: none; transition: left .8s steps(8), top .8s steps(8); }
+
+/* Level status strip: where the level stands and how often it was replayed. */
+.level-status-strip {
+  justify-self: center; max-width: 720px; width: calc(100% - 24px);
+  margin: 2px auto 0; padding: 6px 14px; text-align: center;
+  font-family: var(--font-talk); font-size: 18px; line-height: 1.25;
+  border: 2px solid var(--wood-dark); box-shadow: inset 0 -3px 0 rgba(0,0,0,.12);
+}
+.level-status-strip.hidden { display: none; }
+.level-status-strip b { font-family: var(--font-talk); font-weight: 700; }
+.level-status-strip.lss-done { background: #d8f2c6; border-color: #4e8a32; color: #234d12; }
+.level-status-strip.lss-skipped { background: #e7dcfb; border-color: #7a5ab8; color: #3a2a5a; }
+.level-status-strip.lss-open { background: #d9edfb; border-color: #4a86b8; color: #143a5a; }
+.level-status-strip.lss-locked { background: #e9e2d8; border-color: #8a7a66; color: #4d4237; }
+.level-status-strip .px-icon { vertical-align: -2px; }
 
 /* Level board (modal content) */
 .board-list { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow: auto; padding: 4px; }
@@ -308,6 +325,14 @@ canvas.sprite, canvas.pixel-bg, #map-canvas { image-rendering: pixelated; }
 .board-item:hover:not(:disabled) { background: #fff8e4; transform: translateX(4px); }
 .board-item:disabled { opacity: .55; cursor: not-allowed; }
 .board-item.locked { opacity: .6; }
+.board-item.skipped { border-color: #7a5ab8; background: #f0e8fc; }
+.board-item.skipped .bi-status { color: #5a3a9a; }
+.bi-replay {
+  display: inline-flex; align-items: center; gap: 2px; white-space: nowrap;
+  font-size: 13px; padding: 0 5px; margin-left: 4px;
+  background: #a9dcff; color: #143a5a; border: 1px solid #4a86b8;
+}
+.bi-replay .px-icon { display: inline-block; }
 .board-row { display: flex; gap: 6px; align-items: stretch; }
 .board-row .board-item { flex: 1; min-width: 0; }
 .bi-lesson {
@@ -347,9 +372,10 @@ canvas.sprite, canvas.pixel-bg, #map-canvas { image-rendering: pixelated; }
   height: 100%; padding: 10px; gap: 10px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) clamp(320px, 28vw, 420px);
-  grid-template-rows: minmax(0, 1fr) auto;
-  grid-template-areas: "left right" "bar right";
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "status status" "left right" "bar right";
 }
+.level-status-strip { grid-area: status; }
 /* The level's title lives in the top bar (only on level screens). */
 .level-header { display: none; flex: 1 1 auto; min-width: 0; height: 64px; align-items: center; gap: 12px; padding: 6px 12px; }
 body[data-screen="level"] .level-header { display: flex; }

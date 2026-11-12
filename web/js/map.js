@@ -199,7 +199,12 @@ export class WorldMap {
       btn.style.top = `${(y / H) * 100}%`;
       btn.style.width = `${(70 / W) * 100}%`;
       btn.style.height = `${(46 / H) * 100}%`;
-      btn.title = !w.available ? `${w.name} — coming soon: ${w.blurb}` : w.unlocked ? `${w.name} — ${w.blurb} (${w.done}/${levelCount(w)} cleared)` : `${w.name} — locked: clear the previous island first (you can read its lessons)`;
+      const cleared = Number(w.cleared) || 0;
+      const skipped = Number(w.skipped) || 0;
+      const progressText = skipped
+        ? `${cleared} cleared, ${skipped} skipped (${w.done}/${levelCount(w)})`
+        : `${w.done}/${levelCount(w)} cleared`;
+      btn.title = !w.available ? `${w.name} — coming soon: ${w.blurb}` : w.unlocked ? `${w.name} — ${w.blurb} (${progressText})` : `${w.name} — locked: clear the previous island first (you can read its lessons)`;
       btn.setAttribute("aria-label", btn.title);
       btn.addEventListener("click", () => this.onSelect(w));
       this.overlay.appendChild(btn);
@@ -209,14 +214,21 @@ export class WorldMap {
       label.style.left = `${(x / W) * 100}%`;
       label.style.top = `${((y + 21) / H) * 100}%`;
       const total = w.levels.length;
-      // A small chip: progress for playable islands, "locked" or "soon" for the rest.
+      // Small chips: progress for playable islands, "locked" or "soon" for the rest.
+      // Cleared and skipped levels are shown separately so the map tells them apart.
+      const cleared = Number(w.cleared) || 0;
+      const skipped = Number(w.skipped) || 0;
       let chip;
       if (!w.available) chip = `<span class="il-chip soon">soon</span>`;
       else if (!w.unlocked) chip = `<span class="il-chip locked">locked</span>`;
-      else if (w.done === total) chip = `<span class="il-chip done">★ ${w.done}/${total}</span>`;
+      else if (w.done === total && !skipped) chip = `<span class="il-chip done">★ ${cleared}/${total}</span>`;
+      else if (w.done === total) chip = `<span class="il-chip done">★ ${cleared}/${total}</span> <span class="il-chip skipped">⏭ ${skipped}</span>`;
+      else if (skipped) chip = `<span class="il-chip">${cleared}/${total}</span> <span class="il-chip skipped">⏭ ${skipped}</span>`;
       else chip = `<span class="il-chip">${w.done}/${total}</span>`;
+      const replayed = Number(w.replayed) || 0;
+      const replayChip = replayed && w.unlocked ? ` <span class="il-chip replay" title="${replayed} level replay(s) on this island">↻${replayed}</span>` : "";
       const tag = w.tag === "project" ? " 🛠" : w.tag === "bonus" ? " 📚" : "";
-      label.innerHTML = `${w.id}. ${w.name}${tag}${chip}`;
+      label.innerHTML = `${w.id}. ${w.name}${tag}${chip}${replayChip}`;
       this.overlay.appendChild(label);
     });
     this.overlay.appendChild(this.ferrisCanvas);

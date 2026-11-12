@@ -243,9 +243,17 @@ function openRanks() {
     list.append(row);
   });
   body.append(el("p", "rank-total", `${escapeHtml(p.name || "Adventurer")} has <b>${p.xp.toLocaleString()} XP</b>.`), list);
-  // How far the islands built so far can take you.
-  const left = S.game.worlds.flatMap(w => w.levels).filter(l => l.status !== "done").reduce((sum, l) => sum + l.xp, 0);
-  if (left) body.append(el("p", "muted", `${left.toLocaleString()} XP is still waiting in the levels built so far (before hint costs), plus +15 for each idiomatic code review.`));
+  // How far the islands built so far can take you. Only cleared levels have paid out;
+  // skipped and open levels still hold their full XP.
+  const allLevels = S.game.worlds.flatMap(w => w.levels);
+  const left = allLevels.filter(l => l.status !== "done").reduce((sum, l) => sum + l.xp, 0);
+  const skippedXp = allLevels.filter(l => l.status === "skipped").reduce((sum, l) => sum + l.xp, 0);
+  if (left) {
+    const note = skippedXp
+      ? ` (${skippedXp.toLocaleString()} of it in skipped levels — clear them to collect)`
+      : "";
+    body.append(el("p", "muted", `${left.toLocaleString()} XP is still waiting in the levels built so far (before hint costs)${note}, plus +15 for each idiomatic code review.`));
+  }
   openModal({ title: "🏅 Ranks", body });
 }
 
@@ -383,16 +391,26 @@ function openWorldBoard(world) {
   const list = el("div", "board-list");
   for (const l of world.levels) {
     const row = el("div", "board-row");
-    const b = el("button", `board-item${l.kind === "boss" ? " boss" : ""}${l.status === "locked" ? " locked" : ""}`);
+    const b = el("button", `board-item ${l.status}${l.kind === "boss" ? " boss" : ""}`);
+    // A replay marker shows how often the level was reset from scratch; the current state
+    // (done / skipped / open / locked) is always shown alongside it.
+    const replays = Number(l.replays) || 0;
+    const replayTag = replays ? ` <span class="bi-replay" title="Replayed ${replays} time${replays === 1 ? "" : "s"}">${pixelIcon("replay", 1)}×${replays}</span>` : "";
     let status = "";
-    if (l.status === "done") status = `${sym("✔")}${l.earned} XP`;
-    else if (l.status === "skipped") status = `${sym("⏭")}skipped`;
-    else if (l.status === "locked") status = "🔒";
-    else status = `${l.xp} XP`;
+    if (l.status === "done") status = `${sym("✔")}${l.earned} XP${replayTag}`;
+    else if (l.status === "skipped") status = `${sym("⏭")}skipped${replayTag}`;
+    else if (l.status === "locked") status = `🔒${replayTag}`;
+    else status = `${l.xp} XP${replayTag}`;
     b.innerHTML = `<span class="bi-icon">${pixelIcon(l.kind, 2)}</span><span class="bi-id">${l.num}</span><span class="bi-title">${escapeHtml(l.title)}</span><span class="bi-status">${status}</span>`;
     const read = () => { m.close(); previewLesson(l, world); };
     b.onclick = l.status === "locked" ? read : () => { m.close(); openLevel(l.id); };
-    if (l.status === "locked") b.title = "Locked: click to read the lesson";
+    b.title = l.status === "locked"
+      ? "Locked: click to read the lesson"
+      : l.status === "skipped"
+        ? "Skipped: no XP earned, but it unlocked the next level — come back any time"
+        : replays
+          ? `Replayed ${replays} time${replays === 1 ? "" : "s"} — later levels stayed unlocked`
+          : "";
     const lesson = el("button", "bi-lesson", "📜");
     lesson.title = "Read the lesson";
     lesson.setAttribute("aria-label", `Read the lesson for ${l.num} ${l.title}`);
@@ -436,6 +454,7 @@ async function openLevel(id) {
   const xp = $("#lv-xp");
   xp.className = `badge xp${lv.done ? " done" : ""}`;
   xp.innerHTML = lv.done ? `${sym("✔")}Cleared` : `${lv.xp} XP`;
+  renderLevelStatus(lv);
 
   const goalBox = $("#lv-goal");
   goalBox.textContent = lv.goal;
@@ -474,6 +493,38 @@ async function openLevel(id) {
 
 function seenLessons() {
   try { return new Set(JSON.parse(localStorage.getItem("ff-seen-lessons") || "[]")); } catch { return new Set(); }
+}
+
+/** The status strip under the level header: where this level stands, and how many times it
+ *  has been replayed. `overrides` lets skip/replay refresh it without reloading the level. */
+function renderLevelStatus(lv, overrides = {}) {
+  const strip = $("#lv-status-strip");
+  if (!strip) return;
+  const status = overrides.status || lv.status || (lv.done ? "done" : lv.skipped ? "skipped" : "open");
+  const replays = Number(overrides.replays ?? lv.replays ?? 0);
+  const replayText = replays
+    ? ` · ${pixelIcon("replay", 1)} replayed ${replays} time${replays === 1 ? "" : "s"} (later levels stay unlocked)`
+    : "";
+  let text, cls;
+  if (status === "done") {
+    cls = "lss-done";
+    text = `${sym("✔")} <b>Cleared</b> — XP is in the bank. Replay it to earn the XP again.${replayText}`;
+  } else if (status === "skipped") {
+    cls = "lss-skipped";
+    text = `${sym("⏭")} <b>Skipped</b> — no XP, but the next level is unlocked. Solve it any time to turn this into a clear.${replayText}`;
+  } else if (status === "locked") {
+    cls = "lss-locked";
+    text = `🔒 <b>Locked</b> — clear the level before this one first.`;
+  } else {
+    cls = "lss-open";
+    text = replays
+      ? `${pixelIcon("replay", 1)} <b>Fresh attempt ${replays + 1}</b> — this level was replayed ${replays} time${replays === 1 ? "" : "s"}; old compile results are ignored.`
+      : `<b>Ready to play</b> — clear it to earn ${lv.xp} XP.`;
+  }
+  strip.className = `level-status-strip ${cls}`;
+  strip.innerHTML = text;
+  lv.status = status;
+  lv.replays = replays;
 }
 
 function markLessonSeen(id) {
@@ -755,10 +806,14 @@ async function runCode() {
     // Replay may have started while Neovim caught up: this code is the old attempt's now.
     if (S.level !== lv || replaying.has(lv.id)) return;
     const res = await api.run(lv.id, editor.value);
-    S.game.player = res.player;
-    updateHUD();
-    // The level was replayed while this compiled: the result belongs to the old attempt.
-    if (res.stale) return;
+    if (res.player) { S.game.player = res.player; updateHUD(); }
+    // The level was replayed while this compiled: the result belongs to the old attempt,
+    // so it neither clears the fresh attempt nor awards XP — say so instead of going quiet.
+    if (res.stale) {
+      toast(pixelIcon("replay", 2), "That result is from before the replay — it was ignored. Run the fresh code to make progress.");
+      ferris.setMood("idle");
+      return;
+    }
     // The player may have switched levels while this was compiling: then only report it.
     if (S.level !== lv) {
       if (res.first_clear) toast("⭐", `Level ${lv.num} cleared! +${res.xp_gained} XP`);
@@ -805,6 +860,7 @@ async function onPass(res, lv) {
     lv.done = true;
     $("#lv-xp").className = "badge xp done";
     $("#lv-xp").innerHTML = `${sym("✔")}Cleared`;
+    renderLevelStatus(lv, { status: "done" });
     confetti();
     floatXP(res.xp_gained, $("#lv-xp"));
     sound.coin();
@@ -891,6 +947,7 @@ async function answerQuiz(i, btn) {
       toast("🔮", `Correct! +${res.xp_gained} XP`);
       $("#lv-xp").className = "badge xp done";
       $("#lv-xp").innerHTML = `${sym("✔")}Cleared`;
+      renderLevelStatus(lv, { status: "done" });
     }
     if (res.world_cleared) setTimeout(() => worldClearedBanner(lv, res.next_id), 700);
     lv.next_id = res.next_id;
@@ -917,9 +974,21 @@ async function goNext() {
 async function skipLevel() {
   const lv = S.level;
   if (lv.kind === "boss") { toast("👹", "Bosses can't be skipped. You've got this!"); return; }
-  if (!(await confirmModal("Skip level?", "Skip this level for now? You won't get XP, but you can come back any time."))) return;
-  const res = await api.skip(lv.id);
-  if (res.next_id) openLevel(res.next_id); else showMap();
+  if (!(await confirmModal("Skip level?", "Skip this level for now? You won't get XP, but the next level unlocks — you can come back any time."))) return;
+  try {
+    const res = await api.skip(lv.id);
+    if (res.player) { S.game.player = res.player; updateHUD(); }
+    // Trust the server's status: a completed level stays "done" rather than being skipped.
+    lv.skipped = res.status === "skipped";
+    lv.done = res.status === "done";
+    renderLevelStatus(lv, { status: res.status || "skipped", replays: res.replays });
+    if (res.next_status === "open") {
+      toast(sym("⏭"), "Skipped — the next level is unlocked now.");
+    }
+    if (res.next_id) openLevel(res.next_id); else showMap();
+  } catch (e) {
+    toast("⚠", escapeHtml(e.message));
+  }
 }
 
 /** Reset menu: start the code over, or replay the whole level from scratch. */
@@ -977,9 +1046,14 @@ async function replayLevel(lv) {
       localStorage.setItem("ff-seen-lessons", JSON.stringify([...seen]));
     } catch { /* ignore */ }
     updateHUD();
-    toast(pixelIcon("replay", 2), res.xp_returned ? `Level ${lv.num} reset. ${res.xp_returned} XP returned; earn it again!` : `Level ${lv.num} reset. Fresh start!`);
+    const keepsOpen = res.next_status === "open" ? " Later levels stay playable." : "";
+    toast(pixelIcon("replay", 2), res.xp_returned
+      ? `Level ${lv.num} reset. ${res.xp_returned} XP returned; earn it again!${keepsOpen}`
+      : `Level ${lv.num} reset. Fresh start!${keepsOpen}`);
     // Still blocked while it reopens: in Vim mode, keys Neovim is still applying arrive then.
     await openLevel(lv.id);
+    // openLevel rebuilt the strip from the server response; make the replay count explicit.
+    renderLevelStatus(S.level, { status: res.status, replays: res.replays });
   } catch (e) {
     toast("⚠", escapeHtml(e.message));
   } finally {
@@ -1134,7 +1208,9 @@ function slotTitle(id) {
     case "explain": return "Ask Ferris to explain the last error";
     case "review": return "Ask Ferris to review your passing code (+15 bonus XP if it's idiomatic)";
     case "reset": return "Reset the code, or replay the whole level from scratch";
-    case "skip": return lv.kind === "boss" ? "Bosses can't be skipped" : "Skip this level (no XP)";
+    case "skip":
+      if (lv.kind === "boss") return "Bosses can't be skipped";
+      return lv.skipped ? "Already skipped — solve it to earn its XP" : "Skip this level (no XP, but the next level unlocks)";
     case "map": return "Back to the world map";
     case "next": return "Go to the next level";
   }

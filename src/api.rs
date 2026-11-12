@@ -90,6 +90,22 @@ impl AppState {
             && (level_idx == 0 || p.has_reached(&self.worlds[world_idx].levels[level_idx - 1].id))
     }
 
+    /// The player-visible state of a level: "done" (cleared), "skipped", "open" (playable
+    /// now) or "locked". Skipping and replaying never re-lock a level, because unlocking
+    /// looks at `reached`, not at the current completion state.
+    fn level_status(&self, p: &Progress, world_idx: usize, level_idx: usize) -> &'static str {
+        let id = &self.worlds[world_idx].levels[level_idx].id;
+        if p.completed.contains_key(id) {
+            "done"
+        } else if p.skipped.contains(id) {
+            "skipped"
+        } else if self.level_unlocked(p, world_idx, level_idx) {
+            "open"
+        } else {
+            "locked"
+        }
+    }
+
     /// The first unfinished level that is open to play.
     fn next_level(&self, p: &Progress) -> Option<String> {
         for (wi, w) in self.worlds.iter().enumerate() {
@@ -122,6 +138,57 @@ impl AppState {
         true
     }
 
+    /// Apply a finished compile to the save. `generation` is the replay count the level had
+    /// when the compile started: if the level was replayed since (including in a previous
+    /// run of the game, because the count is persisted), the result is stale — it neither
+    /// clears the level, awards XP nor records error codes, and the response says so.
+    fn finish_run(
+        &self,
+        level: &Level,
+        level_idx: usize,
+        result: runner::RunResult,
+        generation: u64,
+    ) -> Value {
+        let world_idx = self
+            .worlds
+            .iter()
+            .position(|w| w.levels.iter().any(|l| l.id == level.id))
+            .unwrap_or(0);
+        let mut p = self.progress.lock().unwrap();
+        if p.is_stale_attempt(&level.id, generation) {
+            return json!({
+                "result": result, "xp_gained": 0, "first_clear": false, "world_cleared": false,
+                "stale": true, "player": self.player(&p), "next_id": self.level_after(&level.id),
+            });
+        }
+        p.days_played.insert(today());
+        p.record_errors(&level.id, &result.error_codes);
+        let first_clear = result.passed && !p.completed.contains_key(&level.id);
+        let mut xp_gained = 0;
+        if !p.completed.contains_key(&level.id) {
+            *p.attempts.entry(level.id.clone()).or_default() += 1;
+        }
+        if first_clear {
+            xp_gained = p.xp_for(&level.id, level.xp);
+            p.xp += xp_gained;
+            let completion = Completion {
+                xp: xp_gained,
+                hints_used: p.hint_tier.get(&level.id).copied().unwrap_or(0),
+                attempts: p.attempts.get(&level.id).copied().unwrap_or(1),
+            };
+            p.completed.insert(level.id.clone(), completion);
+            p.skipped.remove(&level.id);
+            p.reached.insert(level.id.clone());
+        }
+        let world_cleared = first_clear && level_idx + 1 == self.worlds[world_idx].levels.len();
+        self.save(&p);
+        json!({
+            "result": result, "xp_gained": xp_gained, "first_clear": first_clear,
+            "world_cleared": world_cleared, "stale": false,
+            "player": self.player(&p), "next_id": self.level_after(&level.id),
+        })
+    }
+
     fn player(&self, p: &Progress) -> Value {
         let (rank, next) = p.rank();
         let total: usize = self.worlds.iter().map(|w| w.levels.len()).sum();
@@ -140,6 +207,7 @@ impl AppState {
     }
 }
 
+#[derive(Debug)]
 pub struct ApiError(StatusCode, String);
 
 /// The longest code the game accepts to save or run (far more than any level needs).
@@ -198,23 +266,24 @@ async fn get_state(State(s): State<Shared>) -> Json<Value> {
                 .iter()
                 .enumerate()
                 .map(|(li, l)| {
-                    let status = if p.completed.contains_key(&l.id) {
-                        "done"
-                    } else if p.skipped.contains(&l.id) {
-                        "skipped"
-                    } else if s.level_unlocked(&p, wi, li) {
-                        "open"
-                    } else {
-                        "locked"
-                    };
+                    let status = s.level_status(&p, wi, li);
                     json!({
                         "id": l.id, "num": format!("{}.{}", w.id, li + 1),
                         "title": l.title, "kind": l.kind, "xp": l.xp, "status": status,
                         "earned": p.completed.get(&l.id).map(|c| c.xp),
+                        "replays": p.replay_count(&l.id),
                     })
                 })
                 .collect();
             let done = w.levels.iter().filter(|l| p.is_done(&l.id)).count();
+            let cleared = w.levels.iter().filter(|l| p.completed.contains_key(&l.id)).count();
+            let skipped = w.levels.iter().filter(|l| p.skipped.contains(&l.id)).count();
+            let replayed = w
+                .levels
+                .iter()
+                .map(|l| p.replay_count(&l.id))
+                .filter(|n| *n > 0)
+                .sum::<u64>();
             let planned: Vec<Value> = w
                 .planned
                 .iter()
@@ -224,7 +293,8 @@ async fn get_state(State(s): State<Shared>) -> Json<Value> {
                 "id": w.id, "name": w.name, "blurb": w.blurb, "tag": w.tag,
                 "available": !w.levels.is_empty(),
                 "unlocked": !w.levels.is_empty() && s.world_unlocked(&p, wi),
-                "done": done, "levels": levels, "planned": planned,
+                "done": done, "cleared": cleared, "skipped": skipped, "replayed": replayed,
+                "levels": levels, "planned": planned,
                 "chapters": world_chapters(&s.book, w),
             })
         })
@@ -282,6 +352,7 @@ async fn get_level(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let (world, li, level) = s.playable(&id)?;
+    let wi = s.worlds.iter().position(|w| w.id == world.id).unwrap_or(0);
     let p = s.progress.lock().unwrap();
     let done = p.completed.contains_key(&id);
     Ok(Json(json!({
@@ -295,6 +366,8 @@ async fn get_level(
         "choices": level.choices, "xp": level.xp,
         "hint_count": level.hints.len().max(3), "hint_tier": p.hint_tier.get(&id).copied().unwrap_or(0),
         "done": done, "skipped": p.skipped.contains(&id),
+        "status": s.level_status(&p, wi, li),
+        "replays": p.replay_count(&id),
         "explanation": if done { level.explanation.clone() } else { String::new() },
         "world": {"id": world.id, "name": world.name},
         "index": li + 1, "count": world.levels.len(),
@@ -328,7 +401,7 @@ async fn run_level(
     Json(req): Json<CodeReq>,
 ) -> Result<Json<Value>, ApiError> {
     check_code_size(&req.code)?;
-    let (world, li, level) = s.playable(&req.id)?;
+    let (_, li, level) = s.playable(&req.id)?;
     if matches!(level.kind, Kind::Predict | Kind::Quiz) {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
@@ -341,44 +414,10 @@ async fn run_level(
         let mut p = s.progress.lock().unwrap();
         p.drafts.insert(req.id.clone(), req.code.clone());
         s.save(&p);
-        p.replays.get(&req.id).copied().unwrap_or(0)
+        p.replay_count(&req.id)
     };
     let result = runner::check_level(level, &req.code, &s.work_dir()).await;
-
-    let mut p = s.progress.lock().unwrap();
-    // The level was replayed while this compiled: the run belongs to the old attempt,
-    // so it must not clear (or count against) the fresh one.
-    if p.replays.get(&req.id).copied().unwrap_or(0) != generation {
-        return Ok(Json(json!({
-            "result": result, "xp_gained": 0, "first_clear": false, "world_cleared": false,
-            "stale": true, "player": s.player(&p), "next_id": s.level_after(&req.id),
-        })));
-    }
-    p.days_played.insert(today());
-    p.record_errors(&req.id, &result.error_codes);
-    let first_clear = result.passed && !p.completed.contains_key(&req.id);
-    let mut xp_gained = 0;
-    if !p.completed.contains_key(&req.id) {
-        *p.attempts.entry(req.id.clone()).or_default() += 1;
-    }
-    if first_clear {
-        xp_gained = p.xp_for(&req.id, level.xp);
-        p.xp += xp_gained;
-        let completion = Completion {
-            xp: xp_gained,
-            hints_used: p.hint_tier.get(&req.id).copied().unwrap_or(0),
-            attempts: p.attempts.get(&req.id).copied().unwrap_or(1),
-        };
-        p.completed.insert(req.id.clone(), completion);
-        p.skipped.remove(&req.id);
-        p.reached.insert(req.id.clone());
-    }
-    let world_cleared = first_clear && li + 1 == world.levels.len();
-    s.save(&p);
-    Ok(Json(json!({
-        "result": result, "xp_gained": xp_gained, "first_clear": first_clear,
-        "world_cleared": world_cleared, "player": s.player(&p), "next_id": s.level_after(&req.id),
-    })))
+    Ok(Json(s.finish_run(level, li, result, generation)))
 }
 
 #[derive(Deserialize)]
@@ -448,31 +487,63 @@ struct IdReq {
 }
 
 async fn skip(State(s): State<Shared>, Json(req): Json<IdReq>) -> Result<Json<Value>, ApiError> {
-    let (_, _, level) = s.playable(&req.id)?;
+    let (world, li, level) = s.playable(&req.id)?;
     if level.kind == Kind::Boss {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             "Bosses can't be skipped — you've got this!".into(),
         ));
     }
+    let wi = s.worlds.iter().position(|w| w.id == world.id).unwrap_or(0);
     let mut p = s.progress.lock().unwrap();
-    if !p.completed.contains_key(&req.id) {
+    let already_done = p.completed.contains_key(&req.id);
+    if !already_done {
         p.skipped.insert(req.id.clone());
         p.reached.insert(req.id.clone());
     }
     s.save(&p);
-    Ok(Json(json!({ "next_id": s.level_after(&req.id) })))
+    let status = s.level_status(&p, wi, li);
+    // Skipping marks the level as reached, so the level right after it must now be open.
+    let next_status = s
+        .level_after(&req.id)
+        .and_then(|id| World::find(&s.worlds, &id))
+        .map(|(nw, nli, _)| {
+            let nwi = s.worlds.iter().position(|w| w.id == nw.id).unwrap_or(0);
+            s.level_status(&p, nwi, nli)
+        });
+    Ok(Json(json!({
+        "next_id": s.level_after(&req.id),
+        "status": status,
+        "next_status": next_status,
+        "replays": p.replay_count(&req.id),
+        "player": s.player(&p),
+    })))
 }
 
 /// Play a level again from scratch (its XP is taken back and can be earned again).
 async fn replay(State(s): State<Shared>, Json(req): Json<IdReq>) -> Result<Json<Value>, ApiError> {
-    s.playable(&req.id)?;
+    let (world, li, _) = s.playable(&req.id)?;
+    let wi = s.worlds.iter().position(|w| w.id == world.id).unwrap_or(0);
     let mut p = s.progress.lock().unwrap();
     let xp_returned = p.replay(&req.id);
     s.save(&p);
-    Ok(Json(
-        json!({ "xp_returned": xp_returned, "player": s.player(&p) }),
-    ))
+    let status = s.level_status(&p, wi, li);
+    // Replaying never re-locks later levels: report the following level's state so the UI
+    // can show it is still playable.
+    let next_status = s
+        .level_after(&req.id)
+        .and_then(|id| World::find(&s.worlds, &id))
+        .map(|(nw, nli, _)| {
+            let nwi = s.worlds.iter().position(|w| w.id == nw.id).unwrap_or(0);
+            s.level_status(&p, nwi, nli)
+        });
+    Ok(Json(json!({
+        "xp_returned": xp_returned,
+        "replays": p.replay_count(&req.id),
+        "status": status,
+        "next_status": next_status,
+        "player": s.player(&p),
+    })))
 }
 
 /// Autosave. Fails loudly (500) when the save file can't be written, so the page can say so.
@@ -902,5 +973,258 @@ mod tests {
         assert!(!verdict_is_idiomatic(
             "No verdict at all, but idiomatic code"
         ));
+    }
+
+    use super::*;
+    use crate::levels::Kind;
+    use crate::progress::{Completion, Progress};
+    use serde_json::Value;
+
+    /// An AppState backed by the real curriculum but a throwaway save folder, so the
+    /// skip/replay/run rules can be exercised through the same handlers the UI uses.
+    fn test_state(name: &str) -> Shared {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let worlds = crate::levels::load_worlds(&root.join("levels")).unwrap();
+        let book = crate::levels::Book::load(&root.join("levels").join("book.toml")).unwrap();
+        let save_dir = std::env::temp_dir().join(format!(
+            "ferris-forge-api-test-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&save_dir);
+        std::fs::create_dir_all(save_dir.join("tmp")).unwrap();
+        let save_dir = save_dir.canonicalize().unwrap();
+        Arc::new(AppState {
+            save_dir,
+            worlds,
+            book,
+            progress: Mutex::new(Progress::default()),
+            usage: Arc::new(Mutex::new(None)),
+            save_error: Mutex::new(None),
+            notice: Mutex::new(None),
+            rustc: None,
+        })
+    }
+
+    fn id_req(id: &str) -> Json<IdReq> {
+        Json(IdReq { id: id.to_string() })
+    }
+
+    fn find_level<'a>(s: &'a AppState, id: &str) -> (&'a World, usize, &'a Level) {
+        World::find(&s.worlds, id).unwrap()
+    }
+
+    fn level_json(s: &AppState) -> Value {
+        let p = s.progress.lock().unwrap();
+        let mut out = serde_json::Map::new();
+        for (wi, w) in s.worlds.iter().enumerate() {
+            for (li, l) in w.levels.iter().enumerate() {
+                out.insert(l.id.clone(), json!(s.level_status(&p, wi, li)));
+            }
+        }
+        Value::Object(out)
+    }
+
+    fn assert_status(s: &AppState, id: &str, expected: &str) {
+        assert_eq!(
+            level_json(s).get(id).and_then(Value::as_str),
+            Some(expected),
+            "level {id} should be {expected}, full state: {}",
+            level_json(s)
+        );
+    }
+
+    fn complete(s: &Shared, id: &str, xp: u32) {
+        let mut p = s.progress.lock().unwrap();
+        p.xp += xp;
+        p.completed.insert(
+            id.to_string(),
+            Completion {
+                xp,
+                hints_used: 0,
+                attempts: 1,
+            },
+        );
+        p.reached.insert(id.to_string());
+    }
+
+    #[tokio::test]
+    async fn skip_marks_the_level_and_unlocks_the_next_one() {
+        let s = test_state("skip");
+        assert_status(&s, "0.1", "open");
+        assert_status(&s, "0.2", "locked");
+
+        let res = skip(State(s.clone()), id_req("0.1")).await.unwrap().0;
+        assert_eq!(res["status"], "skipped");
+        assert_eq!(res["next_id"], json!("0.2"));
+        assert_eq!(
+            res["next_status"], "open",
+            "skipping unlocks the next level"
+        );
+
+        let p = s.progress.lock().unwrap();
+        assert!(p.skipped.contains("0.1"));
+        assert!(p.has_reached("0.1"));
+        drop(p);
+        assert_status(&s, "0.1", "skipped");
+        assert_status(&s, "0.2", "open");
+    }
+
+    #[tokio::test]
+    async fn boss_levels_cannot_be_skipped() {
+        let s = test_state("boss");
+        // Mark every level before the boss as reached, so the boss is playable rather than
+        // merely locked (the 403 path is covered separately).
+        let all: Vec<&Level> = s.worlds.iter().flat_map(|w| &w.levels).collect();
+        let boss_at = all.iter().position(|l| l.id == "1.8").unwrap();
+        assert_eq!(all[boss_at].kind, Kind::Boss);
+        for l in &all[..boss_at] {
+            s.progress.lock().unwrap().reached.insert(l.id.clone());
+        }
+
+        let err = skip(State(s.clone()), id_req("1.8")).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(
+            !s.progress.lock().unwrap().skipped.contains("1.8"),
+            "a refused skip changes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn locked_levels_reject_skip_and_replay_with_403() {
+        let s = test_state("locked");
+        // Nothing has been reached, so every level after the first is locked.
+        let err = skip(State(s.clone()), id_req("0.2")).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        let err = replay(State(s.clone()), id_req("0.2")).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn replay_returns_xp_persists_and_keeps_later_levels_open() {
+        let s = test_state("replay");
+        complete(&s, "0.1", 20);
+        // The level after it is open thanks to `reached`, even before it is finished too.
+        assert_status(&s, "0.1", "done");
+        assert_status(&s, "0.2", "open");
+
+        let before = s.progress.lock().unwrap().xp;
+        let res = replay(State(s.clone()), id_req("0.1")).await.unwrap().0;
+        assert_eq!(res["xp_returned"], 20);
+        assert_eq!(res["replays"], 1);
+        assert_eq!(res["status"], "open", "a replayed level is playable again");
+        assert_eq!(
+            res["next_status"], "open",
+            "replaying never re-locks what came after"
+        );
+
+        let p = s.progress.lock().unwrap();
+        assert_eq!(p.xp, before - 20, "the returned XP left the player total");
+        assert!(!p.is_done("0.1"));
+        assert!(p.has_reached("0.1"), "the level stays reached");
+        assert_eq!(p.replay_count("0.1"), 1);
+        // Persisted to disk: a freshly loaded save still carries the replay count.
+        s.save(&p);
+        drop(p);
+        let (loaded, _) = Progress::load(&s.save_path()).unwrap();
+        assert_eq!(loaded.replay_count("0.1"), 1);
+        assert!(loaded.has_reached("0.1"));
+        assert_status(&s, "0.2", "open");
+    }
+
+    #[tokio::test]
+    async fn replaying_a_cleared_level_twice_never_drives_xp_negative() {
+        let s = test_state("replay-twice");
+        complete(&s, "0.1", 20);
+        let first = replay(State(s.clone()), id_req("0.1")).await.unwrap().0;
+        assert_eq!(first["xp_returned"], 20);
+        let second = replay(State(s.clone()), id_req("0.1")).await.unwrap().0;
+        assert_eq!(second["xp_returned"], 0, "nothing left to take back");
+        assert_eq!(second["replays"], 2);
+        assert_eq!(s.progress.lock().unwrap().xp, 0);
+    }
+
+    #[tokio::test]
+    async fn stale_compile_results_are_flagged_and_change_nothing() {
+        let s = test_state("stale");
+        let (_, li, level) = find_level(&s, "0.1");
+        complete(&s, "0.1", level.xp);
+
+        // A compile began in the old attempt (generation 0); the replay bumps the count and
+        // takes the earned XP back.
+        s.progress.lock().unwrap().replay("0.1");
+        let xp_after_replay = s.progress.lock().unwrap().xp;
+        assert_eq!(xp_after_replay, 0);
+
+        // A failing result from the old attempt: stale, so its error codes aren't recorded.
+        let failing = runner::RunResult {
+            compiled: false,
+            error_codes: vec!["E0384".to_string()],
+            ..Default::default()
+        };
+        let res = s.finish_run(level, li, failing, 0);
+        assert_eq!(res["stale"], json!(true));
+        assert_eq!(res["xp_gained"], 0);
+        assert_eq!(res["first_clear"], false);
+
+        // A passing result from the same old attempt: stale too, so it must not clear.
+        let passing = runner::RunResult {
+            passed: true,
+            ..Default::default()
+        };
+        let res = s.finish_run(level, li, passing, 0);
+        assert_eq!(res["stale"], json!(true));
+        assert_eq!(res["first_clear"], false);
+
+        let p = s.progress.lock().unwrap();
+        assert_eq!(p.xp, xp_after_replay, "a stale result awards no XP");
+        assert!(!p.completed.contains_key("0.1"), "the replay still stands");
+        assert!(p.codex.is_empty(), "a stale result records no error codes");
+        assert!(
+            p.attempts.get("0.1").is_none(),
+            "a stale result adds no attempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn current_compile_results_clear_the_level_and_pay_xp() {
+        let s = test_state("current");
+        let (_, li, level) = find_level(&s, "0.1");
+        let passing = runner::RunResult {
+            passed: true,
+            ..Default::default()
+        };
+        let generation = s.progress.lock().unwrap().replay_count("0.1");
+        let res = s.finish_run(level, li, passing, generation);
+        assert_eq!(res["stale"], json!(false));
+        assert_eq!(res["first_clear"], true);
+        assert_eq!(res["xp_gained"], json!(level.xp));
+        let p = s.progress.lock().unwrap();
+        assert!(p.completed.contains_key("0.1"));
+        assert_eq!(p.xp, level.xp);
+    }
+
+    #[tokio::test]
+    async fn stale_after_a_simulated_restart_still_blocks_the_old_result() {
+        let s = test_state("restart");
+        let (_, li, level) = find_level(&s, "0.1");
+        complete(&s, "0.1", level.xp);
+        s.progress.lock().unwrap().replay("0.1");
+        // Write the save, then reload it the way `main` does on startup.
+        {
+            let p = s.progress.lock().unwrap();
+            s.save(&p);
+        }
+        let (loaded, _) = Progress::load(&s.save_path()).unwrap();
+        assert_eq!(loaded.replay_count("0.1"), 1);
+        *s.progress.lock().unwrap() = loaded;
+
+        // The old compile's generation (0) is now stale even though the process "restarted".
+        let passing = runner::RunResult {
+            passed: true,
+            ..Default::default()
+        };
+        let res = s.finish_run(level, li, passing, 0);
+        assert_eq!(res["stale"], json!(true));
+        assert!(!s.progress.lock().unwrap().completed.contains_key("0.1"));
     }
 }
