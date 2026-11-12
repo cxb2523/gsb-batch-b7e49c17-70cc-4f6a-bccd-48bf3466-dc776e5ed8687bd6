@@ -81,6 +81,8 @@ def render(s, t, path, gradients=True):
 
     rows_top, rows_bot = btop + 66, bbot - 33
     n_rows = len(s.langs)
+    if not n_rows:
+        c.text(lx, (rows_top + rows_bot) / 2, "No language data yet", 13, color=t["muted"])
     bar_x = lx + 170 + 14
     bar_w = lw_ - 170 - 40 - 44 - 3 * 14
     bar_h = 8 if gradients else 6

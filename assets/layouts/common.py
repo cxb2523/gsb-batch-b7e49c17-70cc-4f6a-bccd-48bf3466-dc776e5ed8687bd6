@@ -125,10 +125,11 @@ def top_languages(df):
 def snapshot(df, now=None):
     df = df.copy()
     now = now or pd.Timestamp.now(tz="UTC")
-    created = pd.to_datetime(df["created_at"], utc=True)
-    pushed = pd.to_datetime(df["pushed_at"], utc=True)
+    created = pd.to_datetime(df["created_at"], utc=True, errors="coerce")
+    pushed = pd.to_datetime(df["pushed_at"], utc=True, errors="coerce")
     private = df["private"].fillna(True).astype(bool)  # unknown counts as private
-    df["active"] = (now - pushed).dt.days < 90           # pushed in the last 90 days
+    # NaT (never pushed) is not active and stays out of the monthly push stats
+    df["active"] = ((now - pushed).dt.days < 90).fillna(False)
 
     stars = int(df["stars"].sum())
     langs, other, classified = top_languages(df)

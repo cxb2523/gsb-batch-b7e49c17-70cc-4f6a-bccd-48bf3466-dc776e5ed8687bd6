@@ -58,6 +58,8 @@ def render(s, t, path, gradients=True):
     ry = area_top + (area_bot - area_top - block) / 2
     bw = w - 48 - 2 * 46 - 2 * 12
     peak = s.langs[0]["n"] if s.langs else 1
+    if not s.langs:
+        c.text(x + 24, (area_top + area_bot) / 2, "No language data yet", 13, color=t["muted"])
     for i, l in enumerate(s.langs):
         yy = ry + i * (row_hgt + row_gap)
         c.text(x + 24, yy + 12, l["name"], 13, "semibold", t["text"])

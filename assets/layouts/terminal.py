@@ -62,6 +62,9 @@ def render(s, t, path, gradients=True):
         rows.append((f"other ({s.other['count']})", "░" * max(1, round(s.other["n"] / peak * 24)),
                      t["muted"], s.other["n"], s.other["pct"], t["muted"]))
     y = ctop + 16 + LINE + 6
+    if not rows:
+        c.text(lx, y, "no language data yet", 14, color=t["muted"])
+        y += LINE + 4
     for name, blocks, color, n, p, name_color in rows:
         c.text(lx, y, name, 14, color=name_color)
         c.text(lx + 180, y, blocks, 14, color=color)

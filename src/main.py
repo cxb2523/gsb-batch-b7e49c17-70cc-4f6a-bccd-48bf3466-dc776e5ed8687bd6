@@ -19,8 +19,9 @@ def main():
     repos = get_repositories()
     
     if not repos:
-        logger.warning("No repositories found")
-        return
+        # Still write the (header-only) CSV and render an empty-state
+        # dashboard, so the profile board never goes stale or missing.
+        logger.warning("No repositories found; rendering empty dashboard")
     
     logger.info("Transforming data...")
     df = repos_to_dataframe(repos)
