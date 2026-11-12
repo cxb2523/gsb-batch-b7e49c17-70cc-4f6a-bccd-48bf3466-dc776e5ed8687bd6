@@ -16,9 +16,9 @@ from pandora import clientbuilder
 
 from .audio_backend import (
     MPG123Player,
+    PlayerException,
     PlayerUnusable,
     RemoteVLC,
-    UnsupportedEncoding,
     VLCPlayer,
 )
 from .utils import Colors, Screen
@@ -149,6 +149,10 @@ class PlayerApp:
         self.player.end_station()
 
     def dislike_song(self, song):
+        if song.is_ad:
+            self.screen.print_error("Cannot dislike advertisements")
+            return
+
         try:
             if song.thumbs_down():
                 self.screen.print_success("Track disliked")
@@ -159,6 +163,10 @@ class PlayerApp:
             self.screen.print_error("Cannot dislike this type of track")
 
     def like_song(self, song):
+        if song.is_ad:
+            self.screen.print_error("Cannot like advertisements")
+            return
+
         try:
             if song.thumbs_up():
                 self.screen.print_success("Track liked")
@@ -168,6 +176,10 @@ class PlayerApp:
             self.screen.print_error("Cannot like this type of track")
 
     def bookmark_song(self, song):
+        if song.is_ad:
+            self.screen.print_error("Cannot bookmark advertisements")
+            return
+
         try:
             if song.bookmark_song():
                 self.screen.print_success("Bookmarked song")
@@ -177,6 +189,10 @@ class PlayerApp:
             self.screen.print_error("Cannot bookmark this type of track")
 
     def bookmark_artist(self, song):
+        if song.is_ad:
+            self.screen.print_error("Cannot bookmark advertisements")
+            return
+
         try:
             if song.bookmark_artist():
                 self.screen.print_success("Bookmarked artist")
@@ -188,6 +204,10 @@ class PlayerApp:
             )
 
     def sleep_song(self, song):
+        if song.is_ad:
+            self.screen.print_error("Cannot sleep advertisements")
+            return
+
         try:
             if song.sleep():
                 self.screen.print_success(
@@ -296,7 +316,9 @@ class PlayerApp:
 
             try:
                 self.player.play_station(station)
-            except UnsupportedEncoding as ex:
+            except PlayerException as ex:
+                # Backend exited, connection dropped or playback otherwise
+                # failed: report the error and return to the station menu.
                 error = str(ex)
             except KeyboardInterrupt:
                 self.player.stop()

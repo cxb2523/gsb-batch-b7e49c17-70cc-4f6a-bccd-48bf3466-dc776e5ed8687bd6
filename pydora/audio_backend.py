@@ -1,10 +1,14 @@
-import fcntl
 import logging
 import os
 import select
 import socket
 import time
 from shutil import which
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - fcntl is not available on Windows
+    fcntl = None
 
 from .utils import SilentPopen, iterate_forever
 
@@ -25,6 +29,18 @@ class UnsupportedEncoding(PlayerException):
 
 class PlayerUnusable(PlayerException):
     """Player can not be used on this system"""
+
+    pass
+
+
+class PlayerProcessError(PlayerException):
+    """The audio backend process exited while playing"""
+
+    pass
+
+
+class PlayerConnectionError(PlayerException):
+    """The connection to an audio backend was lost"""
 
     pass
 
@@ -100,12 +116,57 @@ class BasePlayer:
         Different audio backends return text in different formats so provides a
         hook for each subclass to customize reader behaviour.
         """
-        return handle.readline().strip()
+        try:
+            return handle.readline().strip()
+        except (OSError, ValueError) as ex:
+            raise PlayerProcessError(
+                "Audio backend process exited unexpectedly"
+            ) from ex
 
     def _send_cmd(self, cmd):
         """Write command to remote process"""
-        self._process.stdin.write(f"{cmd}\n".encode())
-        self._process.stdin.flush()
+        process = self._process
+        if process is None or process.poll() is not None:
+            raise PlayerProcessError(
+                "Audio backend process exited unexpectedly"
+            )
+
+        try:
+            process.stdin.write(f"{cmd}\n".encode())
+            process.stdin.flush()
+        except (OSError, ValueError) as ex:
+            raise PlayerProcessError(
+                "Audio backend process exited unexpectedly"
+            ) from ex
+
+    def _check_process_alive(self):
+        """Raise if the audio backend process exited while playing"""
+        if self._process is not None and self._process.poll() is not None:
+            raise PlayerProcessError(
+                "Audio backend process exited unexpectedly"
+            )
+
+    def _handle_input(self, handle, song):
+        """Read and dispatch a line from the user control channel"""
+        try:
+            value = handle.readline()
+        except (OSError, ValueError) as ex:
+            raise PlayerProcessError(
+                "Control channel closed unexpectedly"
+            ) from ex
+
+        # An empty read means the control channel reached end of file. Without
+        # this check select keeps reporting the channel as readable and the
+        # playback loop spins forever.
+        if not value:
+            raise PlayerProcessError("Control channel closed unexpectedly")
+
+        self._callbacks.input(value.strip(), song)
+
+    def _handle_process_output(self, handle):
+        """Read backend output and report whether playback stopped"""
+        value = self._read_from_process(handle)
+        return self._player_stopped(value)
 
     def stop(self):
         """Stop the currently playing song"""
@@ -159,6 +220,7 @@ class BasePlayer:
         while True:
             try:
                 self._callbacks.pre_poll()
+                self._check_process_alive()
                 self._ensure_started()
                 self._loop_hook()
 
@@ -168,11 +230,9 @@ class BasePlayer:
 
                 for handle in readers:
                     if handle.fileno() == self._control_fd:
-                        self._callbacks.input(handle.readline().strip(), song)
-                    else:
-                        value = self._read_from_process(handle)
-                        if self._player_stopped(value):
-                            return
+                        self._handle_input(handle, song)
+                    elif self._handle_process_output(handle):
+                        return
             finally:
                 self._callbacks.post_poll()
 
@@ -220,7 +280,7 @@ class MPG123Player(BasePlayer):
         self._send_cmd("silence")
 
     def _player_stopped(self, value):
-        return value.startswith(b"@P") and value.decode("utf-8")[3] == "0"
+        return value.startswith(b"@P") and value.decode("utf-8")[3:4] == "0"
 
     def raise_volume(self):
         return
@@ -266,11 +326,19 @@ class VLCPlayer(BasePlayer):
         caring about how much output there is we switch stdout to nonblocking
         mode and just read a large chunk of data.
         """
+        if fcntl is None:  # pragma: no cover - Windows does not support it
+            return
+
         flags = fcntl.fcntl(self._process.stdout, fcntl.F_GETFL)
         fcntl.fcntl(self._process.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
     def _read_from_process(self, handle):
-        return handle.read(self.CHUNK_SIZE).strip()
+        try:
+            return handle.read(self.CHUNK_SIZE).strip()
+        except (OSError, ValueError) as ex:
+            raise PlayerProcessError(
+                "Audio backend process exited unexpectedly"
+            ) from ex
 
     def _load_track(self, song):
         self._send_cmd(f"add {song.audio_url}")
@@ -293,22 +361,59 @@ class RemoteVLC(VLCPlayer):
     def _get_select_readers(self):
         return [self._control_channel, self._control_sock]
 
+    def _close_socket(self):
+        """Drop the current connection so it can be re-established later"""
+        if self._control_sock is not None:
+            try:
+                self._control_sock.close()
+            except OSError:
+                pass
+            self._control_sock = None
+
     def _send_cmd(self, cmd):
-        self._control_sock.sendall(f"{cmd}\n".encode())
+        if self._control_sock is None:
+            raise PlayerConnectionError("Not connected to remote VLC")
+
+        try:
+            self._control_sock.sendall(f"{cmd}\n".encode())
+        except OSError as ex:
+            self._close_socket()
+            raise PlayerConnectionError(
+                "Lost connection to remote VLC"
+            ) from ex
 
     def _read_from_process(self, handle):
-        return handle.recv(self.CHUNK_SIZE).strip()
+        try:
+            value = handle.recv(self.CHUNK_SIZE)
+        except OSError as ex:
+            self._close_socket()
+            raise PlayerConnectionError(
+                "Lost connection to remote VLC"
+            ) from ex
+
+        # recv returning no data means the remote end closed the connection
+        if not value:
+            self._close_socket()
+            raise PlayerConnectionError("Connection to remote VLC closed")
+
+        return value.strip()
 
     def _ensure_started(self):
         if not self._control_sock:
             log.debug("Connecting to remote VLC at %r", self._connect_to)
-            self._control_sock = socket.create_connection(self._connect_to)
-            self._control_sock.setblocking(False)
+            try:
+                self._control_sock = socket.create_connection(self._connect_to)
+                self._control_sock.setblocking(False)
+            except OSError as ex:
+                self._control_sock = None
+                raise PlayerConnectionError(
+                    "Unable to connect to remote VLC"
+                ) from ex
 
     def _find_path(self):
         try:
             self._ensure_started()
-        except OSError:
+        except PlayerException:
             raise PlayerUnusable("Unable to connect to VLC")
 
     def _post_start(self):
