@@ -1,8 +1,10 @@
+import json
+import re
 import subprocess
 from typing import IO, Any
 
 from ._core import BINARY, CDP, MCP, Command, Result
-from ._errors import reraise
+from ._errors import Error, reraise
 from ._types import (
     DumpFormat,
     Effort,
@@ -14,6 +16,85 @@ from ._types import (
     Verbosity,
     WaitUntil,
 )
+
+# The browser logs per-URL failures on stderr, e.g.
+#   ... $msg="page http error" url=http://host/missing status=404
+#   ... $msg="page failed" url=http://host/slow err=OperationTimedout
+_STDERR_ERROR_RE = re.compile(
+    r'url=(?P<url>\S+?)(?:\s+status=(?P<status>\d+))?'
+    r'(?:\s+err=(?P<err>\S+))?\s*$'
+)
+
+
+def _stderr_errors(stderr: bytes) -> dict[str, str]:
+    """Map each failed URL to an error message, parsed from the browser's stderr."""
+    messages: dict[str, str] = {}
+    for line in stderr.decode("utf-8", errors="replace").splitlines():
+        if "$level=error" not in line:
+            continue
+        match = _STDERR_ERROR_RE.search(line)
+        if not match:
+            continue
+        detail = match.group("err") or match.group("status") or line.strip()
+        messages[match.group("url")] = detail
+    return messages
+
+
+def _normalize_batch(urls: list[str], payload: Any, stderr: bytes) -> Result:
+    """Normalize a batch fetch payload into one entry per input URL, in input order.
+
+    Successes are returned as the browser emitted them, minus the browser's
+    ``error: null`` field. Failures carry the HTTP status (0 when the browser gave
+    none), an empty ``content`` and a non-empty ``error`` string describing that
+    URL's failure.
+    """
+    browser_results = payload.get("results", []) if isinstance(payload, dict) else []
+    by_url: dict[str, dict[str, Any]] = {}
+    for item in browser_results:
+        if isinstance(item, dict) and item.get("url") is not None:
+            by_url[str(item["url"])] = item
+    stderr_errors = _stderr_errors(stderr)
+
+    results: list[dict[str, Any]] = []
+    for requested in urls:
+        item = by_url.get(requested)
+        if item is None:
+            # The browser stopped before emitting this URL: synthesize a failure.
+            results.append(
+                {
+                    "url": requested,
+                    "http_status": 0,
+                    "content": "",
+                    "error": stderr_errors.get(requested) or "fetch failed",
+                }
+            )
+            continue
+
+        status = item.get("http_status") or 0
+        browser_error = item.get("error")
+        failed = bool(browser_error) or status >= 400
+        if not failed:
+            # Success: keep the browser's item untouched, without an error field.
+            item.pop("error", None)
+            results.append(item)
+            continue
+
+        message = (
+            browser_error
+            or stderr_errors.get(requested)
+            or stderr_errors.get(str(item.get("url")))
+            or f"HTTP {status}"
+        )
+        results.append(
+            {
+                "url": item.get("url", requested),
+                "http_status": status,
+                "content": "",
+                "error": str(message),
+            }
+        )
+
+    return Result(json.dumps({"results": results}).encode(), stderr)
 
 
 @reraise
@@ -57,7 +138,11 @@ def fetch(
         wait_script: Wait for this JavaScript expression to return truthy (optional)
         inject_script: JavaScript to run before any page script, a string or a list (optional)
         terminate_ms: Hard deadline in milliseconds after which JavaScript is terminated (optional)
-        fail_on_http_error: Raise when the page's HTTP status is 400 or above (default: False)
+        fail_on_http_error: Raise when the page's HTTP status is 400 or above (default: False).
+            With a list of URLs, failures are tolerated instead: every URL is returned in
+            "results" in input order — failed entries keep their url and http_status (0 when
+            unavailable), have an empty content and a non-empty error string, while successful
+            entries have no error field. The call does not raise.
         log_level: Logging level (default: "error")
         http_proxy: HTTP proxy URL (optional)
         http_timeout: HTTP request timeout in milliseconds (optional)
@@ -69,13 +154,16 @@ def fetch(
         Result: The output; read it with .text, .bytes or .json()
 
     Raises:
-        lightpanda.Error: If the browser exits with a non-zero status; .code is the exit status
+        lightpanda.Error: If the browser exits with a non-zero status; .code is the exit status.
+            A single-URL fetch with fail_on_http_error=True raises on HTTP 4xx/5xx; a list fetch
+            with fail_on_http_error=True never raises and reports each failure in "results".
 
     Example:
         >>> result = lightpanda.fetch("http://example.com")
         >>> result.text
     """
     urls = [url] if isinstance(url, str) else list(url)
+    tolerant_batch = len(urls) > 1 and fail_on_http_error
     cmd = Command(
         BINARY,
         "fetch",
@@ -99,6 +187,15 @@ def fetch(
         http_timeout=http_timeout,
         **kwargs,
     )
+    if tolerant_batch:
+        # The browser still emits every fetched page on stdout before exiting non-zero,
+        # so run without check=True and normalize the partial output ourselves.
+        proc = subprocess.run(cmd.argv, env=cmd.env, capture_output=True)
+        try:
+            payload = json.loads(proc.stdout.decode("utf-8", errors="replace").strip() or "{}")
+        except json.JSONDecodeError as e:
+            raise Error(proc.stderr, proc.returncode) from e
+        return _normalize_batch(urls, payload, proc.stderr)
     proc = subprocess.run(cmd.argv, env=cmd.env, capture_output=True, check=True)
     return Result(proc.stdout, proc.stderr)
 

@@ -1,6 +1,9 @@
+import functools
+import http.server
 import json
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -66,6 +69,122 @@ def test_fetch_http_error(url):
     with pytest.raises(lightpanda.Error) as exc_info:
         lightpanda.fetch(f"{url}/missing", fail_on_http_error=True)
     assert exc_info.value.code == 22
+
+
+class _SlowHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        time.sleep(30)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"slow")
+
+
+@pytest.fixture
+def slow_url():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}/slow"
+    server.shutdown()
+
+
+def test_fetch_multiple_mixed_http_errors(url):
+    ok = f"{url}/index.html"
+    missing = f"{url}/missing"
+    result = lightpanda.fetch([ok, missing], fail_on_http_error=True)
+    results = result.json()["results"]
+
+    assert len(results) == 2
+    assert [item["url"] for item in results] == [ok, missing]
+
+    success, failure = results
+    assert success["http_status"] == 200
+    assert "Hello" in success["content"]
+    assert "error" not in success
+
+    assert failure["http_status"] == 404
+    assert failure["content"] == ""
+    assert isinstance(failure["error"], str) and failure["error"]
+    assert "404" in failure["error"]
+
+    # A successful page fetched in a batch is identical to a single-URL fetch.
+    single = lightpanda.fetch(ok, json=True).json()
+    single.pop("error", None)
+    assert success == single
+
+
+def test_fetch_multiple_all_fail(url):
+    first = f"{url}/missing-1"
+    second = f"{url}/missing-2"
+    result = lightpanda.fetch([first, second], fail_on_http_error=True)
+    results = result.json()["results"]
+
+    assert len(results) == 2
+    assert [item["url"] for item in results] == [first, second]
+    for item in results:
+        assert item["http_status"] == 404
+        assert item["content"] == ""
+        assert isinstance(item["error"], str) and item["error"]
+
+
+def test_fetch_multiple_preserves_order_with_failures(url):
+    ok = f"{url}/index.html"
+    missing = f"{url}/missing"
+    requested = [missing, ok, missing, ok]
+    results = lightpanda.fetch(requested, fail_on_http_error=True).json()["results"]
+
+    assert len(results) == len(requested)
+    assert [item["url"] for item in results] == requested
+    assert [item["http_status"] for item in results] == [404, 200, 404, 200]
+    assert ["error" in item for item in results] == [True, False, True, False]
+
+
+def test_fetch_multiple_without_fail_flag_unchanged(url):
+    ok = f"{url}/index.html"
+    missing = f"{url}/missing"
+    result = lightpanda.fetch([ok, missing])
+    results = result.json()["results"]
+
+    assert len(results) == 2
+    assert [item["url"] for item in results] == [ok, missing]
+    # Without fail_on_http_error the browser's payload is passed through untouched.
+    assert "error" in results[0]
+    assert "error" in results[1]
+    assert results[1]["http_status"] == 404
+    assert results[1]["content"]  # the 404 error page content is still delivered
+
+
+def test_fetch_multiple_all_success_has_no_error_fields(url):
+    ok = f"{url}/index.html"
+    results = lightpanda.fetch([ok, ok], dump="markdown", fail_on_http_error=True).json()["results"]
+
+    assert len(results) == 2
+    for item in results:
+        assert item["http_status"] == 200
+        assert "error" not in item
+
+    # Each successful batch entry matches the equivalent single-URL fetch.
+    single = lightpanda.fetch(ok, dump="markdown", json=True).json()
+    single.pop("error", None)
+    assert results[0] == single
+
+
+def test_fetch_multiple_timeout_reports_zero_status_and_error(url, slow_url):
+    results = lightpanda.fetch(
+        [f"{url}/index.html", slow_url],
+        fail_on_http_error=True,
+        http_timeout=1000,
+    ).json()["results"]
+
+    assert len(results) == 2
+    success, timed_out = results
+    assert success["http_status"] == 200
+    assert "error" not in success
+    assert timed_out["http_status"] == 0
+    assert timed_out["content"] == ""
+    assert isinstance(timed_out["error"], str) and timed_out["error"]
 
 
 def test_serve(port):

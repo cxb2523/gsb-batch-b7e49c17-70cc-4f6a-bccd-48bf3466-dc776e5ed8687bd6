@@ -93,6 +93,20 @@ result = lightpanda.fetch(
 
 Errors raise `lightpanda.Error`; its message is the browser's stderr and `.code` the exit status. Pass `fail_on_http_error=True` to also raise on HTTP 4xx/5xx.
 
+With a list of URLs and `fail_on_http_error=True`, fetching is fault-tolerant: the call never raises and every input URL gets one entry in `results`, in input order. Successful entries are returned as usual without an `error` field; failed entries keep `url` and `http_status` (0 when the browser got no status, e.g. timeouts), have an empty `content` and a non-empty `error` string describing that URL.
+
+```python
+results = lightpanda.fetch(
+    ["https://example.com", "https://example.com/missing"],
+    fail_on_http_error=True,
+).json()["results"]
+for result in results:
+    if "error" in result:
+        print(result["url"], result["http_status"], result["error"])
+    else:
+        print(result["url"], result["content"])
+```
+
 ### Using Playwright or Puppeteer
 
 ```python
