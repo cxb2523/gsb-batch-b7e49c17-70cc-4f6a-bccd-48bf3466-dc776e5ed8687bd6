@@ -29,13 +29,16 @@ try {
   if (process.env.GITHUB_OUTPUT) {
     fs.appendFileSync(
       process.env.GITHUB_OUTPUT,
-      `score=${report.score}\nrisk=${report.risk}\nfindings=${report.findings.length}\nsarif-file=${sarifFile}\n`,
+      `score=${report.score}\nrisk=${report.risk}\nfindings=${report.findings.length}\ndefensive-findings=${report.defensiveCount}\nsarif-file=${sarifFile}\n`,
     );
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
+    const defensiveLine = report.defensiveCount
+      ? `  \n**Defensive (unscored, review only):** ${report.defensiveCount}`
+      : '';
     fs.appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
-      `## SkillHawk\n\n**Security score:** ${report.score}/100 (${report.grade})  \n**Risk:** ${report.risk.toUpperCase()}  \n**Findings:** ${report.findings.length}${sarifFile ? `  \n**SARIF:** \`${sarifFile}\`` : ''}\n`,
+      `## SkillHawk\n\n**Security score:** ${report.score}/100 (${report.grade})  \n**Risk:** ${report.risk.toUpperCase()}  \n**Findings:** ${report.findings.length}${defensiveLine}${sarifFile ? `  \n**SARIF:** \`${sarifFile}\`` : ''}\n`,
     );
   }
 

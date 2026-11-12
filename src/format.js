@@ -41,6 +41,16 @@ export function formatHuman(report, { color = true } = {}) {
     out.push(colorize('✓ No suspicious patterns found.', 'green', color));
   } else {
     for (const item of report.findings) {
+      if (item.defensive) {
+        out.push(colorize('🛡 DEFENSIVE', 'cyan', color) + colorize(` (review only — not scored): ${item.ruleId} ${item.severity.toUpperCase()}`, 'dim', color));
+        out.push(colorize(`  ${item.title}`, 'dim', color));
+        out.push(`  ${item.file}:${item.line}`);
+        if (item.snippet) out.push(colorize(`  ${item.snippet}`, 'dim', color));
+        if (item.defensiveReason) out.push(colorize(`  Context: ${item.defensiveReason}`, 'dim', color));
+        out.push(colorize(`  Fix: ${item.advice}`, 'dim', color));
+        out.push('');
+        continue;
+      }
       const label = `${ICONS[item.severity]} ${item.severity.toUpperCase()} ${item.ruleId}`;
       out.push(`${colorize(label, severityColor(item.severity), color)}  ${item.title}`);
       out.push(`  ${item.file}:${item.line}`);
@@ -52,6 +62,9 @@ export function formatHuman(report, { color = true } = {}) {
 
   const scoreColor = report.score >= 90 ? 'green' : report.score >= 70 ? 'yellow' : 'red';
   out.push(`${colorize(`Security score: ${report.score}/100 (${report.grade})`, scoreColor, color)}  Risk: ${report.risk.toUpperCase()}`);
-  out.push(`Findings: ${report.counts.critical} critical · ${report.counts.high} high · ${report.counts.medium} medium · ${report.counts.low} low`);
+  const countsLine = `Findings: ${report.counts.critical} critical · ${report.counts.high} high · ${report.counts.medium} medium · ${report.counts.low} low`;
+  out.push(report.defensiveCount
+    ? `${countsLine} · ${colorize(`${report.defensiveCount} defensive (unscored)`, 'cyan', color)}`
+    : countsLine);
   return out.join('\n');
 }

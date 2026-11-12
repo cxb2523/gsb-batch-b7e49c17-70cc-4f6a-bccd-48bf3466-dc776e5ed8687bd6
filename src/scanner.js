@@ -4,6 +4,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RULES, SEVERITY_RANK, SEVERITY_WEIGHT } from './rules.js';
+import { classifyLineContext } from './context.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -98,6 +99,14 @@ export function scanTextContent(content, file = '<memory>') {
     for (const rule of RULES) {
       const match = line.match(rule.pattern);
       if (!match) continue;
+      let { defensive, defensiveReason } = classifyLineContext(line, lines[i - 1] || '');
+      // SH009 matches prompt-injection language whose intent is itself hostile:
+      // phrases like "do not tell the user" or "hide these actions" are
+      // concealment instructions to the agent, not defensive documentation.
+      if (rule.id === 'SH009') {
+        defensive = false;
+        defensiveReason = null;
+      }
       findings.push({
         ruleId: rule.id,
         severity: rule.severity,
@@ -106,6 +115,11 @@ export function scanTextContent(content, file = '<memory>') {
         file,
         line: i + 1,
         snippet: line.trim().slice(0, 220),
+        // Explainable context flag: defensive matches (counter-examples,
+        // negations, security-rule descriptions) are still listed for manual
+        // review but never count towards the score, risk level or fail gate.
+        defensive,
+        defensiveReason,
       });
     }
   }
@@ -113,8 +127,13 @@ export function scanTextContent(content, file = '<memory>') {
 }
 
 function summarize(findings, filesScanned, skippedFiles, targetLabel) {
+  // Defensive findings remain in the report for manual review but never affect
+  // the score, severity counts or risk level.
+  const actionable = findings.filter((finding) => !finding.defensive);
+  const defensiveCount = findings.length - actionable.length;
+
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-  for (const finding of findings) counts[finding.severity] += 1;
+  for (const finding of actionable) counts[finding.severity] += 1;
 
   const deductions = Object.entries(counts).reduce(
     (sum, [severity, count]) => sum + Math.min(count, 3) * SEVERITY_WEIGHT[severity],
@@ -122,7 +141,7 @@ function summarize(findings, filesScanned, skippedFiles, targetLabel) {
   );
   const score = Math.max(0, 100 - deductions);
   const grade = score >= 95 ? 'A+' : score >= 90 ? 'A' : score >= 80 ? 'B' : score >= 70 ? 'C' : score >= 60 ? 'D' : 'F';
-  const risk = findings.reduce(
+  const risk = actionable.reduce(
     (max, item) => SEVERITY_RANK[item.severity] > SEVERITY_RANK[max] ? item.severity : max,
     'clean',
   );
@@ -137,6 +156,7 @@ function summarize(findings, filesScanned, skippedFiles, targetLabel) {
     grade,
     risk,
     counts,
+    defensiveCount,
     findings,
   };
 }

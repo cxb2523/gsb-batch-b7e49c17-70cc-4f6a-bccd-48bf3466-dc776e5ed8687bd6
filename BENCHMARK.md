@@ -8,21 +8,28 @@ The benchmark is intentionally transparent: it includes easy positives, benign n
 
 | Metric | Result |
 |---|---:|
-| Fixtures | **48** |
-| Malicious / suspicious fixtures | **32** |
-| Safe fixtures | **16** |
-| Detection rules | **12** |
-| True positives | **30** |
-| False positives | **2** |
-| True negatives | **14** |
-| False negatives | **2** |
-| Precision | **93.75%** |
-| Recall | **93.75%** |
-| F1 | **93.75%** |
-| Specificity | **87.50%** |
-| Accuracy | **91.67%** |
+| Fixtures | **50** |
+| Malicious / suspicious fixtures | **33** |
+| Safe fixtures | **17** |
+| Detection rules | **15** |
+| True positives | **32** |
+| False positives | **0** |
+| True negatives | **17** |
+| False negatives | **1** |
+| Precision | **100%** |
+| Recall | **96.97%** |
+| F1 | **96.88%** |
+| Specificity | **100%** |
+| Accuracy | **98%** |
 
 This snapshot is reproduced by the repository CI benchmark job, not hand-entered from an unverified local run.
+
+### Defensive-context handling
+
+The benchmark treats a fixture as detected ("malicious" prediction) only when it
+produces a non-defensive finding. Matches inside defensive prose are still
+recorded on each fixture as `defensiveMatches` for review, but they do not count
+as detections because they quote dangerous patterns rather than request them.
 
 ## Reproduce it
 
@@ -42,28 +49,31 @@ The benchmark runs in CI as a regression gate. It currently requires at least 40
 
 The fixtures live in [`benchmark/fixtures.js`](benchmark/fixtures.js). They are synthetic and contain no live credentials or active harmful payloads.
 
-The positive set covers all 12 current SkillHawk rules, including remote script execution, encoded commands, destructive filesystem operations, credential access, persistence, privilege escalation, outbound uploads, broad permissions, prompt-injection patterns, dynamic shell execution, unpinned `npx`, and recursive access.
+The positive set covers all 15 current SkillHawk rules, including remote script execution, encoded commands, destructive filesystem operations, credential access, persistence, privilege escalation, outbound uploads, broad permissions, prompt-injection patterns, dynamic shell execution, unpinned `npx`, and recursive access.
 
 The negative set contains normal agent instructions and hard negatives that mention dangerous strings in defensive documentation.
 
-## Known false positives
+## Defensive documentation (formerly false positives)
 
-Two safe fixtures deliberately document a current limitation of regex-only line scanning:
+Two safe fixtures deliberately document the limitation of regex-only line
+scanning and now exercise SkillHawk's defensive-context classifier:
 
-- **S15:** defensive documentation quotes a `curl ... | bash` command, which triggers `SH001`.
-- **S16:** defensive documentation mentions `~/.ssh/id_rsa`, which triggers `SH004`.
+- **S15:** defensive documentation quotes a `curl ... | bash` command, which matches `SH001`.
+- **S16:** defensive documentation mentions `~/.ssh/id_rsa`, which matches `SH004`.
 
-These are useful regression targets for future context-aware suppression.
+Both still produce findings — nothing is silently dropped — but each is flagged
+`defensive: true` with an explainable reason, excluded from scoring and risk,
+and downgraded to `note` in SARIF. They are therefore counted as true negatives
+rather than false positives. A line that combines defensive wording with an
+explicit instruction to run the command remains an actionable finding.
 
 ## Known false negatives
 
 Suspicious fixtures document coverage gaps:
 
-- **M31:** PowerShell `iwr ... | iex` download-and-execute chain.
-- **M32:** Python `requests.get(...); exec(...)` remote execution chain.
 - **M33:** MCP configuration launching a shell with elevated privileges (`{"command":"sudo","args":["bash","./server.sh"]}`). Expected rule: `SH006`; observed result: no finding / clean (false negative) because command and arguments are separate JSON fields.
 
-These are intentionally retained so benchmark improvements represent real rule improvements rather than deleting difficult cases.
+This case is intentionally retained so benchmark improvements represent real rule improvements rather than deleting difficult cases.
 
 ## Metric definitions
 

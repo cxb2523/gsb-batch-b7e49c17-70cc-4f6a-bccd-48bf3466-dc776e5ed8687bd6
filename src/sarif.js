@@ -30,9 +30,14 @@ export function toSarif(report) {
 
   const results = report.findings.map((finding) => ({
     ruleId: finding.ruleId,
-    level: LEVEL[finding.severity] || 'warning',
+    // Defensive matches (counter-examples, negations, security-rule prose) are
+    // downgraded to notes for manual review; real matches keep the severity's
+    // default level. The original ruleId and severity are preserved either way.
+    level: finding.defensive ? 'note' : (LEVEL[finding.severity] || 'warning'),
     message: {
-      text: `${finding.title}. ${finding.advice}`,
+      text: finding.defensive
+        ? `Defensive context — review only, not scored. ${finding.defensiveReason || 'Quoted as documentation rather than requested as an action.'}. ${finding.title}. ${finding.advice}`
+        : `${finding.title}. ${finding.advice}`,
     },
     locations: [
       {
@@ -48,6 +53,8 @@ export function toSarif(report) {
     properties: {
       severity: finding.severity,
       snippet: finding.snippet,
+      defensive: Boolean(finding.defensive),
+      ...(finding.defensiveReason ? { 'defensive-reason': finding.defensiveReason } : {}),
     },
   }));
 

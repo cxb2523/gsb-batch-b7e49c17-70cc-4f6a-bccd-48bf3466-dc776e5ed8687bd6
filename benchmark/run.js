@@ -5,11 +5,17 @@ import { FIXTURES } from './fixtures.js';
 
 const rows = FIXTURES.map((fixture) => {
   const findings = scanTextContent(fixture.text, `${fixture.id}.md`);
-  const predicted = findings.length > 0 ? 'malicious' : 'safe';
+  // Defensive-context matches quote dangerous patterns as documentation rather
+  // than requesting execution, so they are review notes, not detections.
+  const actionableFindings = findings.filter((finding) => !finding.defensive);
+  const predicted = actionableFindings.length > 0 ? 'malicious' : 'safe';
   return {
     ...fixture,
     predicted,
-    matchedRules: [...new Set(findings.map((finding) => finding.ruleId))],
+    matchedRules: [...new Set(actionableFindings.map((finding) => finding.ruleId))],
+    defensiveMatches: findings
+      .filter((finding) => finding.defensive)
+      .map((finding) => finding.ruleId),
   };
 });
 

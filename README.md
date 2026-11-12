@@ -149,23 +149,23 @@ Every push and pull request can now be checked by SkillHawk.
 
 ## Benchmark snapshot
 
-> **48 fixtures** · **93.75% precision** · **93.75% recall** · **93.75% F1**
+> **50 fixtures** · **100% precision** · **96.97% recall** · **96.88% F1**
 
-The benchmark intentionally contains both malicious/suspicious and safe synthetic fixtures, including known false positives and false negatives. Results are reproduced automatically in CI.
+The benchmark intentionally contains both malicious/suspicious and safe synthetic fixtures, including known false negatives. Results are reproduced automatically in CI.
 
 | Metric | Result |
 |---|---:|
-| Fixtures | **48** |
-| Malicious / suspicious | **32** |
-| Safe | **16** |
-| True positives | **30** |
-| False positives | **2** |
-| True negatives | **14** |
-| False negatives | **2** |
-| Precision | **93.75%** |
-| Recall | **93.75%** |
-| F1 | **93.75%** |
-| Accuracy | **91.67%** |
+| Fixtures | **50** |
+| Malicious / suspicious | **33** |
+| Safe | **17** |
+| True positives | **32** |
+| False positives | **0** |
+| True negatives | **17** |
+| False negatives | **1** |
+| Precision | **100%** |
+| Recall | **96.97%** |
+| F1 | **96.88%** |
+| Accuracy | **98%** |
 
 Reproduce it locally:
 
@@ -197,6 +197,33 @@ See **[BENCHMARK.md](BENCHMARK.md)** for methodology and limitations.
 | `SH015` | Critical | Curl-style download piped to `Invoke-Expression` |
 
 Every finding includes severity, rule ID, source file, source line, matched instruction and remediation guidance.
+
+### Defensive context: quoted dangers vs. real instructions
+
+Security writing often quotes dangerous commands as counter-examples. A
+line-oriented regex cannot tell a quoted warning from an instruction by itself,
+so SkillHawk classifies every match with an explainable context flag:
+
+- **Actionable match** — the line directs the agent to perform the work. It
+  keeps its normal severity, score deduction, risk level and SARIF level.
+- **Defensive match** (`defensive: true`) — the match appears in a negation
+  ("do not run …", "never execute …"), a counter-example / bad-practice note,
+  a security-rule description, or an illustrative "for example" sentence (both
+  English and Chinese markers are supported). It is still listed in every
+  output for manual review, with a `defensiveReason`, but it does not lower the
+  score, raise the risk level, or affect the `--fail-on` exit code; in SARIF it
+  is downgraded to `note` while keeping its original `ruleId` and severity.
+
+A line that contains both defensive wording and an explicit execution request
+("Do not run unverified scripts, but run the following command: …") is treated
+as actionable — execution intent wins. Prompt-injection concealment phrases
+(`SH009`, e.g. "do not tell the user") are always actionable because the
+concealment instruction itself is the hostile behavior.
+
+Text reports label these entries `🛡 DEFENSIVE (review only — not scored)`;
+JSON reports carry `defensive` and `defensiveReason` on each finding plus a
+top-level `defensiveCount`; SARIF results carry the same data in
+`properties` and use level `note`.
 
 ---
 
