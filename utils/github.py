@@ -1,24 +1,22 @@
 """GitHub API utilities for fetching repository data."""
 
-import re
 from datetime import datetime
 
 import requests
 
+from utils.urlutils import parse_github_repo
+
 
 def extract_repo_info(url: str) -> tuple[str, str] | None:
     """Extract owner and repo name from GitHub URL.
-    
+
     Args:
         url: GitHub repository URL
-        
+
     Returns:
         Tuple of (owner, repo) or None if URL is invalid
     """
-    match = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?", url)
-    if match:
-        return match.group(1), match.group(2)
-    return None
+    return parse_github_repo(url)
 
 
 def fetch_repo_data(owner: str, repo: str, token: str | None = None) -> dict | None:

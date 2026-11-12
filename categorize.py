@@ -255,7 +255,7 @@ def load_existing_categories(path: Path) -> tuple[dict, set[str]]:
     if not path.exists():
         return output, categorized_names
     
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         existing = json.load(f)
     
     # Merge existing repos into output structure
@@ -276,7 +276,7 @@ def save_categories(output: dict, path: Path) -> None:
     for cat_id in output:
         output[cat_id]["repos"].sort(key=lambda x: x.get("stars", 0), reverse=True)
     
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
 
@@ -287,7 +287,7 @@ def main():
     
     # Load repos
     urls_path = Path(__file__).parent / "urls.json"
-    with open(urls_path, "r") as f:
+    with open(urls_path, "r", encoding="utf-8") as f:
         repos = json.load(f)
     
     print(f"Loaded {len(repos)} repos from urls.json")

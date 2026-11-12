@@ -11,4 +11,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
