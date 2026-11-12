@@ -1,14 +1,21 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  RATE_LIMIT_ANON_BATCH_PER_WINDOW,
   RATE_LIMIT_ANON_CONVERT_PER_WINDOW,
   RATE_LIMIT_ANON_PER_DAY,
+  RATE_LIMIT_ANON_STREAM_PER_WINDOW,
   RATE_LIMIT_CONVERT_PER_WINDOW,
+  RATE_LIMIT_WINDOW_SECONDS,
 } from "../config";
 import { handleUsageForAccount } from "../handlers/usage";
 import { clearAuthLru, resolveAuth } from "../middleware/auth-d1";
 import { ensureMonthlyQuota } from "../middleware/quota";
-import { consumeRateLimit, rateLimitedResponse } from "../middleware/rate-limit";
+import {
+  consumeRateLimit,
+  rateLimitedResponse,
+  secondsUntilNextUtcMidnight,
+} from "../middleware/rate-limit";
 import { localRateCounters } from "../runtime-state";
 import type { Env } from "../types";
 
@@ -127,6 +134,24 @@ function ipRequest(ip: string): Request {
   return new Request("https://md.example.com/https://example.com", {
     headers: { "cf-connecting-ip": ip },
   });
+}
+
+/** D1 rate-limit key of the current fixed minute window for a route/IP pair. */
+function minuteKey(route: string, ip: string, at: Date = NOW): string {
+  const bucket = Math.floor(at.getTime() / 1000 / RATE_LIMIT_WINDOW_SECONDS);
+  return `anon-rl:${route}:${ip}:${bucket}`;
+}
+
+/** UTC date key used by the shared daily counter. */
+function dailyKey(ip: string, at: Date = NOW): string {
+  return `anon-daily:${ip}:${at.toISOString().slice(0, 10)}`;
+}
+
+function storedCount(raw: DatabaseSync, key: string): number {
+  const row = raw.prepare("SELECT count FROM rate_limits WHERE key = ?").get(key) as
+    | { count: number }
+    | undefined;
+  return row?.count ?? 0;
 }
 
 describe("monthly quota roll", () => {
@@ -362,8 +387,14 @@ describe("monthly quota roll", () => {
   });
 });
 
-describe("anonymous durable rate limit", () => {
+describe("anonymous shared rate limit", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     localRateCounters.clear();
   });
 
@@ -372,22 +403,129 @@ describe("anonymous durable rate limit", () => {
     const env = { AUTH_DB: db } as Env;
     const ip = "203.0.113.10";
 
+    // Every request lands on a brand-new isolate: the in-memory counter starts
+    // at zero each time, so only the shared D1 counter can enforce the cap.
     for (let i = 0; i < RATE_LIMIT_ANON_CONVERT_PER_WINDOW; i++) {
       localRateCounters.clear();
       const decision = await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true });
       expect(decision?.exceeded, `request ${i + 1}`).toBe(false);
     }
 
+    expect(storedCount(raw, minuteKey("convert", ip))).toBe(RATE_LIMIT_ANON_CONVERT_PER_WINDOW);
+
     localRateCounters.clear();
     const blocked = await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true });
-    const row = raw.prepare("SELECT count FROM rate_limits WHERE key = ?").get(`anon-rl:convert:${ip}`) as { count: number };
 
     expect(blocked?.exceeded).toBe(true);
+    expect(blocked?.anonDaily).toBeUndefined();
     expect(blocked?.limit).toBe(RATE_LIMIT_ANON_CONVERT_PER_WINDOW);
-    expect(row.count).toBe(RATE_LIMIT_ANON_CONVERT_PER_WINDOW + 1);
+    expect(blocked?.retryAfterSeconds).toBeGreaterThan(0);
+    expect(blocked?.retryAfterSeconds).toBeLessThanOrEqual(RATE_LIMIT_WINDOW_SECONDS);
+    expect(storedCount(raw, minuteKey("convert", ip)))
+      .toBe(RATE_LIMIT_ANON_CONVERT_PER_WINDOW + 1);
   });
 
-  it("keeps authenticated callers on the local limit and does not write D1", async () => {
+  it("keeps separate minute windows per route while sharing one daily cap per IP", async () => {
+    const { raw, db } = createSqliteAuthDb();
+    const env = { AUTH_DB: db } as Env;
+    const ip = "203.0.113.20";
+
+    // Exhaust the convert minute window; stream and batch still have theirs.
+    for (let i = 0; i < RATE_LIMIT_ANON_CONVERT_PER_WINDOW; i++) {
+      localRateCounters.clear();
+      expect(
+        (await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true }))?.exceeded,
+      ).toBe(false);
+    }
+    localRateCounters.clear();
+    expect(
+      (await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true }))?.exceeded,
+    ).toBe(true);
+
+    localRateCounters.clear();
+    const streamDecision = await consumeRateLimit(ipRequest(ip), env, "stream", { anonymous: true });
+    expect(streamDecision?.exceeded).toBe(false);
+    expect(streamDecision?.limit).toBe(RATE_LIMIT_ANON_STREAM_PER_WINDOW);
+
+    localRateCounters.clear();
+    const batchDecision = await consumeRateLimit(ipRequest(ip), env, "batch", { anonymous: true });
+    expect(batchDecision?.exceeded).toBe(false);
+    expect(batchDecision?.limit).toBe(RATE_LIMIT_ANON_BATCH_PER_WINDOW);
+
+    // Separate minute keys per route, one shared daily key for the whole IP.
+    expect(storedCount(raw, minuteKey("convert", ip))).toBe(RATE_LIMIT_ANON_CONVERT_PER_WINDOW + 1);
+    expect(storedCount(raw, minuteKey("stream", ip))).toBe(1);
+    expect(storedCount(raw, minuteKey("batch", ip))).toBe(1);
+    expect(storedCount(raw, dailyKey(ip)))
+      .toBe(RATE_LIMIT_ANON_CONVERT_PER_WINDOW + 2);
+  });
+
+  it("caps one anonymous IP per UTC day across routes and points to a free key", async () => {
+    const { raw, db } = createSqliteAuthDb();
+    const env = { AUTH_DB: db } as Env;
+    const ip = "203.0.113.13";
+    // 99 requests earlier today; the per-minute window is fresh.
+    raw.prepare("INSERT INTO rate_limits (key, count, expires_at) VALUES (?, ?, ?)")
+      .run(dailyKey(ip), RATE_LIMIT_ANON_PER_DAY - 1, "2026-09-30T00:00:00.000Z");
+
+    const last = await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true });
+    expect(last?.exceeded).toBe(false);
+
+    // Request 101 of the day is blocked even on another route, until 00:00 UTC.
+    localRateCounters.clear();
+    const blocked = await consumeRateLimit(ipRequest(ip), env, "stream", { anonymous: true });
+    expect(blocked).toMatchObject({
+      exceeded: true,
+      anonDaily: true,
+      limit: RATE_LIMIT_ANON_PER_DAY,
+    });
+    expect(blocked?.retryAfterSeconds).toBe(secondsUntilNextUtcMidnight(NOW.getTime()));
+    expect(blocked?.retryAfterSeconds).toBe(12 * 3600);
+
+    const response = rateLimitedResponse("stream", blocked!, true);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe(String(blocked?.retryAfterSeconds));
+    const body = await response.text();
+    expect(body).toContain("daily");
+    expect(body).toContain(String(RATE_LIMIT_ANON_PER_DAY));
+    expect(body).toContain("/portal/");
+    expect(body).toContain("free API key");
+
+    // The minute counter for the second route was still written before the
+    // daily cap rejected the request; the daily row records the 101st request.
+    expect(storedCount(raw, dailyKey(ip))).toBe(RATE_LIMIT_ANON_PER_DAY + 1);
+  });
+
+  it("leaves another IP and signed-in callers untouched by the shared counters", async () => {
+    const { raw, db } = createSqliteAuthDb();
+    const env = { AUTH_DB: db } as Env;
+    const ip = "203.0.113.30";
+
+    // Exhaust the daily cap for one IP across routes.
+    raw.prepare("INSERT INTO rate_limits (key, count, expires_at) VALUES (?, ?, ?)")
+      .run(dailyKey(ip), RATE_LIMIT_ANON_PER_DAY, "2026-09-30T00:00:00.000Z");
+
+    localRateCounters.clear();
+    expect(
+      (await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true }))?.anonDaily,
+    ).toBe(true);
+
+    // A different IP still converts, and gets its own daily row.
+    localRateCounters.clear();
+    const otherIp = "203.0.113.31";
+    const other = await consumeRateLimit(ipRequest(otherIp), env, "convert", { anonymous: true });
+    expect(other?.exceeded).toBe(false);
+    expect(storedCount(raw, dailyKey(otherIp))).toBe(1);
+
+    // A signed-in caller from the blocked IP uses the local budget only.
+    localRateCounters.clear();
+    const authed = await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: false });
+    expect(authed?.exceeded).toBe(false);
+    expect(authed?.limit).toBe(RATE_LIMIT_CONVERT_PER_WINDOW);
+    expect(storedCount(raw, dailyKey(ip))).toBe(RATE_LIMIT_ANON_PER_DAY + 1);
+  });
+
+  it("keeps authenticated callers on the local limit and never writes D1", async () => {
     const { db, sql } = createSqliteAuthDb();
     const env = { AUTH_DB: db } as Env;
     const ip = "203.0.113.11";
@@ -400,6 +538,7 @@ describe("anonymous durable rate limit", () => {
 
     expect(blocked?.exceeded).toBe(true);
     expect(blocked?.limit).toBe(RATE_LIMIT_CONVERT_PER_WINDOW);
+    expect(blocked?.anonDaily).toBeUndefined();
     expect(sql).toEqual([]);
   });
 
@@ -419,39 +558,8 @@ describe("anonymous durable rate limit", () => {
     expect(decision?.limit).toBe(RATE_LIMIT_CONVERT_PER_WINDOW);
   });
 
-  it("caps one anonymous IP per UTC day across routes and points to a free key", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-    try {
-      const { raw, db } = createSqliteAuthDb();
-      const env = { AUTH_DB: db } as Env;
-      const ip = "203.0.113.13";
-      // 99 requests earlier today; the per-minute window is fresh.
-      raw.prepare("INSERT INTO rate_limits (key, count, expires_at) VALUES (?, ?, ?)")
-        .run(`anon-daily:${ip}:2026-09-29`, RATE_LIMIT_ANON_PER_DAY - 1, "2026-09-30T12:00:00.000Z");
-
-      const last = await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true });
-      expect(last?.exceeded).toBe(false);
-
-      // Request 101 of the day is blocked even on another route, until 00:00 UTC.
-      localRateCounters.clear();
-      const blocked = await consumeRateLimit(ipRequest(ip), env, "stream", { anonymous: true });
-      expect(blocked).toMatchObject({ exceeded: true, anonDaily: true, limit: RATE_LIMIT_ANON_PER_DAY });
-      expect(blocked?.retryAfterSeconds).toBe(12 * 3600);
-      const body = await rateLimitedResponse("stream", blocked!, true).text();
-      expect(body).toContain("/portal/");
-      expect(body).toContain("free API key");
-
-      // Another IP and signed-in callers are untouched.
-      expect((await consumeRateLimit(ipRequest("203.0.113.14"), env, "convert", { anonymous: true }))?.exceeded).toBe(false);
-      expect((await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: false }))?.exceeded).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("returns null when the client IP is missing", async () => {
-    const { db } = createSqliteAuthDb();
+    const { db, sql } = createSqliteAuthDb();
     const decision = await consumeRateLimit(
       new Request("https://md.example.com/https://example.com"),
       { AUTH_DB: db } as Env,
@@ -459,5 +567,53 @@ describe("anonymous durable rate limit", () => {
       { anonymous: true },
     );
     expect(decision).toBeNull();
+    expect(sql).toEqual([]);
+  });
+
+  it("fails open when the counter store errors, keeping the warning log", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const env = {
+      AUTH_DB: {
+        prepare: () => {
+          throw new Error("d1 unavailable");
+        },
+      },
+    } as unknown as Env;
+    const ip = "203.0.113.40";
+
+    for (let i = 0; i < RATE_LIMIT_ANON_CONVERT_PER_WINDOW + 5; i++) {
+      localRateCounters.clear();
+      const decision = await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true });
+      expect(decision?.exceeded, `request ${i + 1}`).toBe(false);
+    }
+    expect(warn).toHaveBeenCalled();
+
+    // Without any D1 binding at all the same fail-open path applies.
+    warn.mockClear();
+    const noDb = {} as Env;
+    const decision = await consumeRateLimit(ipRequest(ip), noDb, "convert", { anonymous: true });
+    expect(decision?.exceeded).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("explains the minute limit with Retry-After but without portal guidance", async () => {
+    const { db } = createSqliteAuthDb();
+    const env = { AUTH_DB: db } as Env;
+    const ip = "203.0.113.50";
+
+    let blocked: Awaited<ReturnType<typeof consumeRateLimit>> = null;
+    for (let i = 0; i < RATE_LIMIT_ANON_CONVERT_PER_WINDOW + 1; i++) {
+      localRateCounters.clear();
+      blocked = await consumeRateLimit(ipRequest(ip), env, "convert", { anonymous: true });
+    }
+
+    expect(blocked?.exceeded).toBe(true);
+    expect(blocked?.anonDaily).toBeUndefined();
+    const response = rateLimitedResponse("convert", blocked!, true);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe(String(blocked?.retryAfterSeconds));
+    const body = await response.text();
+    expect(body).toContain("Too many requests");
+    expect(body).not.toContain("/portal/");
   });
 });
