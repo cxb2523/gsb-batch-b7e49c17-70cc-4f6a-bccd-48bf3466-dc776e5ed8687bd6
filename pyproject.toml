@@ -1,0 +1,96 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pydora"
+dynamic = ["version"]
+description = "Python wrapper for Pandora API"
+readme = "README.rst"
+authors = [
+    { name = "Mike Crute", email = "mike@crute.us" },
+]
+license = "MIT"
+license-files = ["LICENSE.txt"]
+requires-python = ">=3.11"
+dependencies = [
+    "requests >=2, <3",
+    "blowfish >=0.6.1, <1.0",
+]
+classifiers = [
+    "Development Status :: 6 - Mature",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/mcrute/pydora"
+Source = "https://github.com/mcrute/pydora"
+Issues = "https://github.com/mcrute/pydora/issues"
+
+[project.scripts]
+pydora = "pydora.player:main"
+pydora-configure = "pydora.configure:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pandora.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["pandora*", "pydora*"]
+
+[dependency-groups]
+test = ["pytest", "coverage >=7"]
+lint = ["ruff ==0.17.4"]
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["pandora", "pydora"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.tox]
+requires = ["tox>=4.22"]
+env_list = ["tests"]
+
+[tool.tox.env.format]
+skip_install = true
+dependency_groups = ["lint"]
+commands = [
+    ["ruff", "format"],
+]
+
+[tool.tox.env.tests]
+dependency_groups = ["test", "lint"]
+commands = [
+    ["ruff", "format", "--check"],
+    ["ruff", "check", "--statistics"],
+    ["coverage", "run", "-m", "pytest"],
+    ["coverage", "report", "--fail-under", "100", "--include=pandora/*"],
+    ["coverage", "report", "--include=pydora/*"],
+    ["coverage", "html"],
+]
+
+[tool.tox.env.release]
+deps = ["build"]
+commands = [
+    ["python", "-m", "build"],
+]

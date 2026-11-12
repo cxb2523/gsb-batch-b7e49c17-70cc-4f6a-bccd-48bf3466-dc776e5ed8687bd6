@@ -1,0 +1,9 @@
+*.pyc
+.coverage/
+.eggs/
+.py3/
+.tox/
+build/
+dist/
+htmlcov/
+pydora.egg-info/
