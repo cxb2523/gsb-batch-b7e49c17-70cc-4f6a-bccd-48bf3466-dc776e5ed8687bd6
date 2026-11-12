@@ -63,8 +63,11 @@ The base duration is about 4 ms per captured point, with a minimum of 0.5 s, div
 
 - Methods that return `void` do nothing if the native view is not mounted yet.
 - Methods that return a Promise reject with `SignatureInk: native view is not mounted yet` if you call them before mount.
-- If the component unmounts while a Promise is pending, it rejects with `SignatureInk unmounted`.
+- `toBase64`, `toFile` and `saveToPhotoLibrary` reject with `SignatureInk: unsupported export format …` when `format` is neither `png` nor `jpeg`/`jpg` — before anything is sent to the native side.
+- If the component unmounts while a Promise is pending, it rejects with `SignatureInk unmounted before <method> completed`.
+- If the native side answers with neither a value nor an error, the Promise rejects with `… returned an empty result` instead of resolving with an empty payload.
 - Native failures reject with the native message, for example `Failed to encode image` (iOS) or `Failed to render bitmap` (Android, when the view has not been laid out yet).
+- `getStrokeData()` resolves with `[]` when the native payload cannot be parsed; `saveToPhotoLibrary()` rejects in that case, so a broken payload is never reported as the user denying permission.
 
 So wrap exports in `try`/`catch`, especially in lists where rows can unmount at any time:
 

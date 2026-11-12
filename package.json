@@ -35,6 +35,7 @@
     "example": "yarn workspace react-native-signature-ink-example",
     "clean": "del-cli android/build example/android/build example/android/app/build example/ios/build lib",
     "prepare": "bob build",
+    "test": "node --test \"src/__tests__/*.test.ts\"",
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "docs:dev": "yarn workspace react-native-signature-ink-docs dev",

@@ -9,6 +9,13 @@ import SignatureInkNativeView, {
   Commands,
   type NativeProps,
 } from './SignatureInkViewNativeComponent';
+import {
+  PendingRequests,
+  normalizeExportFormat,
+  parseMaybeJson,
+  parsePhotoLibraryResult,
+  type ResultPayload,
+} from './resultRouter';
 import type {
   ChangeEvent,
   ExportImageOptions,
@@ -22,12 +29,6 @@ import type { ToolbarItem } from './toolbar';
 
 type NativeRef = React.ComponentRef<typeof SignatureInkNativeView>;
 
-type PendingResolver = {
-  resolve: (value: any) => void;
-  reject: (error: Error) => void;
-  type: string;
-};
-
 // Unique-per-call request id. Native echoes it back on `onResult`
 // so the wrapper can route the value to the right pending Promise.
 let requestCounter = 0;
@@ -36,12 +37,17 @@ const nextRequestId = (): string => {
   return `req-${Date.now().toString(36)}-${requestCounter.toString(36)}`;
 };
 
-const parseMaybeJson = <T,>(value: string | undefined, fallback: T): T => {
-  if (value == null || value === '') return fallback;
+// Reject unsupported export formats in JS, before any native command is
+// dispatched — so the pending table never sees the request and the caller
+// gets a readable Error instead of a silent native-side fallback to PNG.
+const withValidFormat = <T,>(
+  format: string | undefined,
+  run: (format: 'png' | 'jpeg') => Promise<T>
+): Promise<T> => {
   try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
+    return run(normalizeExportFormat(format));
+  } catch (e) {
+    return Promise.reject(e instanceof Error ? e : new Error(String(e)));
   }
 };
 
@@ -170,15 +176,14 @@ export const SignatureInk = React.forwardRef<
   );
 
   const nativeRef = React.useRef<NativeRef>(null);
-  const pending = React.useRef<Map<string, PendingResolver>>(new Map());
+  const pending = React.useRef<PendingRequests>(new PendingRequests());
 
   React.useEffect(() => {
     const current = pending.current;
     return () => {
-      current.forEach(({ reject }) =>
-        reject(new Error('SignatureInk unmounted'))
-      );
-      current.clear();
+      // Reject every in-flight command; any `onResult` that arrives
+      // afterwards finds no pending entry and is dropped.
+      current.rejectAll();
     };
   }, []);
 
@@ -186,7 +191,7 @@ export const SignatureInk = React.forwardRef<
     <T,>(
       type: string,
       dispatch: (id: string) => void,
-      transform?: (value: string | undefined) => T
+      transform?: (value: string) => T
     ): Promise<T> => {
       return new Promise<T>((resolve, reject) => {
         const node = nativeRef.current;
@@ -195,17 +200,27 @@ export const SignatureInk = React.forwardRef<
           return;
         }
         const id = nextRequestId();
-        pending.current.set(id, {
+        pending.current.add(id, {
           type,
-          resolve: (raw: string | undefined) => {
-            resolve(transform ? transform(raw) : (raw as unknown as T));
+          resolve: (raw: string) => {
+            if (!transform) {
+              resolve(raw as unknown as T);
+              return;
+            }
+            // A throwing transform (e.g. malformed JSON from native) must
+            // reject the command Promise, not blow up the event handler.
+            try {
+              resolve(transform(raw));
+            } catch (e) {
+              reject(e instanceof Error ? e : new Error(String(e)));
+            }
           },
           reject,
         });
         try {
           dispatch(id);
         } catch (e) {
-          pending.current.delete(id);
+          pending.current.remove(id);
           reject(e instanceof Error ? e : new Error(String(e)));
         }
       });
@@ -246,23 +261,27 @@ export const SignatureInk = React.forwardRef<
           (raw) => raw === 'true'
         ),
       toBase64: (options?: ExportImageOptions) =>
-        send<string>('toBase64', (id) =>
-          Commands.toBase64(
-            nativeRef.current!,
-            id,
-            options?.format ?? 'png',
-            options?.quality ?? 1,
-            options?.trim ?? false
+        withValidFormat(options?.format, (format) =>
+          send<string>('toBase64', (id) =>
+            Commands.toBase64(
+              nativeRef.current!,
+              id,
+              format,
+              options?.quality ?? 1,
+              options?.trim ?? false
+            )
           )
         ),
       toFile: (options?: ExportImageOptions) =>
-        send<string>('toFile', (id) =>
-          Commands.toFile(
-            nativeRef.current!,
-            id,
-            options?.format ?? 'png',
-            options?.quality ?? 1,
-            options?.trim ?? false
+        withValidFormat(options?.format, (format) =>
+          send<string>('toFile', (id) =>
+            Commands.toFile(
+              nativeRef.current!,
+              id,
+              format,
+              options?.quality ?? 1,
+              options?.trim ?? false
+            )
           )
         ),
       toSvg: () =>
@@ -271,21 +290,26 @@ export const SignatureInk = React.forwardRef<
         send<StrokeData>(
           'getStrokeData',
           (id) => Commands.getStrokeData(nativeRef.current!, id),
+          // Keep the historical fallback: an unparseable payload reads as
+          // an empty drawing rather than a failure.
           (raw) => parseMaybeJson<StrokeData>(raw, [])
         ),
       saveToPhotoLibrary: (options?: ExportImageOptions) =>
-        send<SavedToPhotoLibraryResult>(
-          'saveToPhotoLibrary',
-          (id) =>
-            Commands.saveToPhotoLibrary(
-              nativeRef.current!,
-              id,
-              options?.format ?? 'png',
-              options?.quality ?? 1,
-              options?.trim ?? true
-            ),
-          (raw) =>
-            parseMaybeJson<SavedToPhotoLibraryResult>(raw, { granted: false })
+        withValidFormat(options?.format, (format) =>
+          send<SavedToPhotoLibraryResult>(
+            'saveToPhotoLibrary',
+            (id) =>
+              Commands.saveToPhotoLibrary(
+                nativeRef.current!,
+                id,
+                format,
+                options?.quality ?? 1,
+                options?.trim ?? true
+              ),
+            // No fallback here: a parse failure rejects instead of
+            // masquerading as a denied permission.
+            (raw) => parsePhotoLibraryResult(raw)
+          )
         ),
     }),
     [send]
@@ -294,23 +318,10 @@ export const SignatureInk = React.forwardRef<
   React.useImperativeHandle(ref, () => handle, [handle]);
 
   const handleResult = React.useCallback(
-    (event: {
-      nativeEvent: {
-        requestId: string;
-        type: string;
-        value?: string;
-        error?: string;
-      };
-    }) => {
-      const { requestId, value, error } = event.nativeEvent;
-      const resolver = pending.current.get(requestId);
-      if (!resolver) return;
-      pending.current.delete(requestId);
-      if (error) {
-        resolver.reject(new Error(error));
-      } else {
-        resolver.resolve(value);
-      }
+    (event: { nativeEvent: ResultPayload }) => {
+      // An unknown requestId (late or duplicate event, e.g. arriving after
+      // unmount) is dropped inside `settle` without resolving anything.
+      pending.current.settle(event.nativeEvent);
     },
     []
   );

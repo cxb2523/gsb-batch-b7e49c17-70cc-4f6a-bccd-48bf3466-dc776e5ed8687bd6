@@ -63,8 +63,11 @@ Thời lượng gốc khoảng 4 ms cho mỗi điểm đã ghi, tối thiểu 0.
 
 - Phương thức trả về `void` sẽ không làm gì nếu native view chưa được mount.
 - Phương thức trả về Promise sẽ reject với `SignatureInk: native view is not mounted yet` nếu bạn gọi trước khi mount.
-- Nếu component unmount khi Promise còn đang chờ, nó reject với `SignatureInk unmounted`.
+- `toBase64`, `toFile` và `saveToPhotoLibrary` reject với `SignatureInk: unsupported export format …` khi `format` không phải `png` hay `jpeg`/`jpg` — trước cả khi gửi lệnh xuống phía native.
+- Nếu component unmount khi Promise còn đang chờ, nó reject với `SignatureInk unmounted before <method> completed`.
+- Nếu phía native trả về không có giá trị lẫn lỗi, Promise reject với `… returned an empty result` thay vì resolve với payload rỗng.
 - Lỗi phía native reject với thông điệp của native, ví dụ `Failed to encode image` (iOS) hoặc `Failed to render bitmap` (Android, khi view chưa được layout).
+- `getStrokeData()` resolve với `[]` khi payload native không parse được; `saveToPhotoLibrary()` thì reject trong trường hợp đó, nên payload hỏng không bao giờ bị báo nhầm thành người dùng từ chối quyền.
 
 Vì vậy hãy bọc các lệnh xuất trong `try`/`catch`, nhất là trong list nơi row có thể unmount bất cứ lúc nào:
 

@@ -63,8 +63,11 @@ ref.current?.replay({ speed: 2 });   // 两倍速
 
 - 返回 `void` 的方法在原生视图挂载前调用时不做任何事。
 - 返回 Promise 的方法在挂载前调用时会以 `SignatureInk: native view is not mounted yet` reject。
-- 如果组件在 Promise 尚未完成时卸载，会以 `SignatureInk unmounted` reject。
+- 当 `format` 既不是 `png` 也不是 `jpeg`/`jpg` 时，`toBase64`、`toFile` 和 `saveToPhotoLibrary` 会以 `SignatureInk: unsupported export format …` reject——在派发到原生端之前。
+- 如果组件在 Promise 尚未完成时卸载，会以 `SignatureInk unmounted before <method> completed` reject。
+- 如果原生端既未返回值也未返回错误，Promise 会以 `… returned an empty result` reject，而不是 resolve 成空数据。
 - 原生端失败时会以原生错误信息 reject，例如 `Failed to encode image`（iOS）或 `Failed to render bitmap`（Android，视图尚未完成布局时）。
+- `getStrokeData()` 在原生数据无法解析时 resolve 为 `[]`；而 `saveToPhotoLibrary()` 在这种情况下会 reject，因此损坏的数据绝不会被误报为用户拒绝授权。
 
 因此请用 `try`/`catch` 包裹导出调用，尤其是在列表中，因为行随时可能被卸载：
 

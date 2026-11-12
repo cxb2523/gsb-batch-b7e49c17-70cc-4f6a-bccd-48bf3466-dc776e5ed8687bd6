@@ -133,7 +133,11 @@ export interface ToolbarActionEvent {
  * Options shared by `toBase64`, `toFile`, and `saveToPhotoLibrary`.
  */
 export interface ExportImageOptions {
-  /** Defaults to `'png'`. */
+  /**
+   * Defaults to `'png'`. Case-insensitive; `'jpg'` is accepted as an
+   * alias for `'jpeg'`. Any other value makes the returned Promise
+   * reject immediately, before anything is dispatched to the native side.
+   */
   format?: ExportFormat;
   /**
    * 0..1 quality applied to JPEG encoding only. Ignored for PNG (always
@@ -349,6 +353,11 @@ export interface SignatureInkProps {
 /**
  * Imperative API exposed via `ref`. All async methods resolve once the
  * native side has finished its work.
+ *
+ * Every Promise-returning method rejects when the component unmounts
+ * before the native side answers, and when the native side answers with
+ * neither a value nor an error — pending callers are never left hanging
+ * and never resolved with an empty/undefined payload.
  */
 export interface SignatureInkHandle {
   /**
@@ -393,11 +402,16 @@ export interface SignatureInkHandle {
   /**
    * Resolves with a base64-encoded image of the canvas.
    * The returned string is the raw payload (no `data:` URI prefix).
+   *
+   * Rejects with an `Error` when `format` is unsupported, when the
+   * native side reports an error, or when it returns no result at all —
+   * an empty/undefined payload is never resolved as if it were data.
    */
   toBase64: (options?: ExportImageOptions) => Promise<string>;
   /**
    * Writes the rendered image to a file in the app's temporary directory
-   * and resolves with the `file://` URI.
+   * and resolves with the `file://` URI. Rejects under the same
+   * conditions as {@link SignatureInkHandle.toBase64}.
    */
   toFile: (options?: ExportImageOptions) => Promise<string>;
   /**
@@ -418,6 +432,10 @@ export interface SignatureInkHandle {
    *   under `Pictures/Signatures/` with no runtime permission needed.
    *   On API 28 and below, declare `WRITE_EXTERNAL_STORAGE` in the host
    *   `AndroidManifest.xml`.
+   *
+   * A resolved `{ granted: false }` always means the user denied the
+   * permission prompt: if the native result cannot be parsed, the
+   * Promise rejects instead of falling back to a fake denial.
    */
   saveToPhotoLibrary: (
     options?: ExportImageOptions

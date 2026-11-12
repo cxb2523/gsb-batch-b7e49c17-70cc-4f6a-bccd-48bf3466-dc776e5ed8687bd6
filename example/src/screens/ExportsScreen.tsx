@@ -1,12 +1,14 @@
 import * as React from 'react';
 import { Alert, Image, Text, View } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
   SignatureInk,
   type ExportFormat,
   type SignatureInkHandle,
 } from 'react-native-signature-ink';
 
+import type { RootStackParamList } from '../App';
 import {
   Action,
   Screen,
@@ -15,7 +17,9 @@ import {
   useScreenStyles,
 } from '../ui/ScreenShell';
 
-export default function ExportsScreen() {
+type Props = NativeStackScreenProps<RootStackParamList, 'Exports'>;
+
+export default function ExportsScreen({ navigation }: Props) {
   const styles = useScreenStyles();
   const ref = React.useRef<SignatureInkHandle>(null);
 
@@ -79,6 +83,52 @@ export default function ExportsScreen() {
       return r?.uri ?? 'saved to Photos';
     });
 
+  // Fires two exports back to back: a valid one that must resolve, and one
+  // with an unsupported format that must reject in JS with a readable
+  // error — without crashing the screen or disturbing the valid request.
+  const onVerifyFormats = async () => {
+    const handle = ref.current;
+    if (!handle) {
+      Alert.alert('Canvas not mounted yet');
+      return;
+    }
+    const describe = (r: PromiseSettledResult<unknown>) =>
+      r.status === 'fulfilled'
+        ? `resolved (${typeof r.value === 'string' ? `${r.value.length} chars` : String(r.value)})`
+        : `rejected: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`;
+    const [valid, invalid] = await Promise.allSettled([
+      handle.toBase64({ format: 'png', trim }),
+      // Intentionally unsupported — must reject before any native dispatch.
+      handle.toFile({ format: 'gif' as unknown as ExportFormat, trim }),
+    ]);
+    Alert.alert(
+      'Async result verification',
+      `valid format → ${describe(valid)}\n\ninvalid format → ${describe(invalid)}`
+    );
+  };
+
+  // Starts an export and immediately pops the screen. The pending request
+  // must reject with an "unmounted" error (see the Metro console) and no
+  // unhandled-promise warning may appear.
+  const onVerifyUnmount = () => {
+    const handle = ref.current;
+    if (!handle) return;
+    handle
+      .toBase64({ format: 'png' })
+      .then((r) =>
+        console.log(
+          `[SignatureInk verify] resolved before unmount (${r.length} chars) — rerun and leave faster`
+        )
+      )
+      .catch((e: unknown) =>
+        console.log(
+          '[SignatureInk verify] rejected after unmount:',
+          e instanceof Error ? e.message : String(e)
+        )
+      );
+    navigation.goBack();
+  };
+
   return (
     <Screen>
       <Text style={styles.title}>Export the signature</Text>
@@ -124,6 +174,28 @@ export default function ExportsScreen() {
               setPreview(null);
             }}
           />
+        </View>
+      </Section>
+
+      <Section label="Async result contract">
+        <Text style={styles.description}>
+          Fires two exports back to back — one valid, one with an unsupported
+          format. The first must resolve normally, the second must reject with a
+          readable error, and the screen must not crash.
+        </Text>
+        <View style={styles.row}>
+          <Action
+            label="Verify valid + invalid format"
+            onPress={onVerifyFormats}
+          />
+        </View>
+        <Text style={styles.description}>
+          "Export, then leave page" starts an export and immediately pops this
+          screen. Watch the Metro console: the pending request must reject with
+          an "unmounted" error and no unhandled-promise warning may appear.
+        </Text>
+        <View style={styles.row}>
+          <Action label="Export, then leave page" onPress={onVerifyUnmount} />
         </View>
       </Section>
 

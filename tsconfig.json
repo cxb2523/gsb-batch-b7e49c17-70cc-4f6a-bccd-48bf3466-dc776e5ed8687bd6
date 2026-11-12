@@ -2,10 +2,13 @@
   "compilerOptions": {
     "rootDir": ".",
     "paths": {
-      "react-native-signature-ink": ["./src/index"]
+      "react-native-signature-ink": ["./src/index"],
+      "node:test": ["./node_modules/@types/node/test.d.ts"],
+      "node:assert/strict": ["./node_modules/@types/node/assert/strict.d.ts"]
     },
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
+    "allowImportingTsExtensions": true,
     "customConditions": ["react-native-strict-api"],
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
