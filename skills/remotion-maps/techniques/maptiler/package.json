@@ -1,0 +1,13 @@
+{
+	"name": "remotion-maps-maptiler-technique",
+	"private": true,
+	"type": "module",
+	"description": "Geo prep for the map-explainer (river draw-on + per-country reveal meta).",
+	"scripts": {
+		"prep": "node scripts/prep-geo.mjs",
+		"test": "node scripts/test-prep-geo.mjs"
+	},
+	"dependencies": {
+		"@turf/turf": "^7.1.0"
+	}
+}
