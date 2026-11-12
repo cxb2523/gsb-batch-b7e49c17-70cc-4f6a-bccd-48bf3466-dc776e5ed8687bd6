@@ -127,57 +127,8 @@
   <div id="unity-mobile-warning">WebGL not supported on mobile</div>
   <div class="toolbar" id="toolbar"></div>
   <canvas id="unity-canvas"></canvas>
-<!-- SPEEDRUN TIMER -->
-<div id="speedrun-timer" style="
-  position: fixed;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0,0,0,.72);
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: 12px;
-  padding: 10px 14px;
-  color: white;
-  font-family: monospace;
-  z-index: 99999;
-  display: none;
-  user-select: none;
-  text-align: center;
-">
-  <div style="
-    font-size:10px;
-    opacity:.7;
-    letter-spacing:2px;
-    margin-bottom:4px;
-  ">
-    SPEEDRUN
-  </div>
-
-  <div id="timer-display" style="
-    font-size:26px;
-    font-weight:bold;
-  ">
-    00:00:00.000
-  </div>
-<!-- Splits -->
-<div id="splits" style="
-  margin-top:8px;
-  max-height:160px;
-  overflow-y:auto;
-  font-size:13px;
-  text-align:left;
-  border-top:1px solid rgba(255,255,255,.1);
-  padding-top:6px;
-"></div>
-
-<div style="
-  font-size:10px;
-  opacity:.5;
-  margin-top:6px;
-">
-  T = Start/Pause • R = Reset • E = Split
-</div>
-</div>
+<!-- SPEEDRUN TIMER: persistent split panel, implemented in speedrun-timer.js
+     (loaded below, relative to this file so <base href> does not break it) -->
   <div id="fps-graph" class="hidden"><canvas id="fps-canvas"></canvas></div>
   
 <script>
@@ -185,41 +136,12 @@ const lt=document.getElementById("loading-text"),
       cv=document.getElementById("unity-canvas"),
       mw=document.getElementById("unity-mobile-warning"),
       tb=document.getElementById("toolbar");
-// -------- SPEEDRUN TIMER --------
-const timerBox =
-  document.getElementById("speedrun-timer");
-
-const timerDisplay =
-  document.getElementById("timer-display");
-const splitsContainer =
-  document.getElementById("splits");
-
-const hkSplits = [
-  "Vengeful Spirit",
-  "Enter Greenpath",
-  "Mothwing Cloak",
-  "Mantis Claw",
-  "Gruz Mother",
-  "Dream Nail",
-  "Gorgeous Husk",
-  "Lumafly Lantern",
-  "Crystal Heart",
-  "Watcher Knights",
-  "Lurien",
-  "Uumuu",
-  "Monomon",
-  "Queen's Gardens Acid Skip",
-  "Beast's Den Bench",
-  "Herrah",
-  "The Hollow Knight"
-];
-
-let splitCount = 0;
-
+// -------- SPEEDRUN TIMER (persistent split panel) --------
+// Logic lives in speedrun-timer.js next to this file so the game page and
+// the test page (speedrun-timer.test.html) share one implementation.
+// Splits, per-split bests and the total best persist in localStorage.
+let timerPanel = null;
 let timerEnabled = false;
-let timerRunning = false;
-let timerElapsed = 0;
-let timerStart = 0;
 
 // Lightweight toolbar button
 const timerBtn =
@@ -231,120 +153,30 @@ timerBtn.textContent = "Timer: OFF";
 timerBtn.onclick = () => {
   timerEnabled = !timerEnabled;
 
-  timerBox.style.display =
-    timerEnabled ? "block" : "none";
-
   timerBtn.textContent =
     timerEnabled
       ? "Timer: ON"
       : "Timer: OFF";
 
-  if (!timerEnabled) {
-    timerRunning = false;
+  if (timerPanel) {
+    timerPanel.setEnabled(timerEnabled);
   }
 };
 
 tb.appendChild(timerBtn);
 
-function formatTimer(ms) {
-  const h = Math.floor(ms / 3600000);
-  const m = Math.floor((ms % 3600000) / 60000);
-  const s = Math.floor((ms % 60000) / 1000);
-  const msPart = Math.floor(ms % 1000);
-
-  return (
-    String(h).padStart(2,"0") + ":" +
-    String(m).padStart(2,"0") + ":" +
-    String(s).padStart(2,"0") + "." +
-    String(msPart).padStart(3,"0")
-  );
-}
-
-// Efficient Chromebook update loop
-setInterval(() => {
-  if (
-    !timerEnabled ||
-    !timerRunning
-  ) return;
-
-  timerElapsed =
-    performance.now() - timerStart;
-
-  timerDisplay.textContent =
-    formatTimer(timerElapsed);
-}, 33);
-
-// Hotkeys
-document.addEventListener(
-  "keydown",
-  e => {
-    if (
-      !timerEnabled ||
-      e.repeat
-    ) return;
-
-    const key =
-      e.key.toLowerCase();
-
-    // T = Start/Pause
-    if (key === "t") {
-      if (timerRunning) {
-        timerRunning = false;
-      } else {
-        timerRunning = true;
-        timerStart =
-          performance.now()
-          - timerElapsed;
-      }
-    }
-
-    // R = Reset
-    if (key === "r") {
-      timerRunning = false;
-      timerElapsed = 0;
-      splitCount = 0;
-
-      timerDisplay.textContent =
-        "00:00:00.000";
-
-      splitsContainer.innerHTML = "";
-    }
-
-    // E = Split
-    if (
-      key === "e" &&
-      timerRunning
-    ) {
-      splitCount++;
-
-      const split =
-        document.createElement("div");
-
-      split.style = `
-        display:flex;
-        justify-content:space-between;
-        gap:12px;
-        padding:2px 0;
-        border-bottom:
-          1px solid rgba(255,255,255,.06);
-      `;
-
-      split.innerHTML = `
-        <span>${
-  hkSplits[splitCount - 1] ||
-  `Split ${splitCount}`
-}</span>
-        <span>${formatTimer(timerElapsed)}</span>
-      `;
-
-      splitsContainer.appendChild(split);
-
-      // Auto-scroll
-      splitsContainer.scrollTop =
-        splitsContainer.scrollHeight;
-    }
-  }
-);
+// Resolve relative to the page URL, NOT <base href> (which points at a CDN).
+const stScript = document.createElement("script");
+stScript.src = new URL("speedrun-timer.js", window.location.href).href;
+stScript.onload = () => {
+  timerPanel = window.HKSpeedrunTimer.createPanel();
+  document.body.appendChild(timerPanel.element);
+  timerPanel.setEnabled(timerEnabled);
+};
+stScript.onerror = () => {
+  console.warn("speedrun-timer.js failed to load; timer panel unavailable.");
+};
+document.head.appendChild(stScript);
 let lb=0;
 const tm='912.81';
 

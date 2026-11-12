@@ -8,6 +8,8 @@ Original port by bog, who's github has been taken down. Here is their new accoun
 
 # General Information About Ports
 
+speedrun-timer.js - Shared persistent split-timer panel used by "speedrun splits fixed dreamers" ports. Splits, per-split bests and total best persist in localStorage. Open speedrun-timer.test.html in a browser to run its test suite.
+
 808 mb hk by bog.html- The original Hollow Knight web port when it first came out ( Does not work )
 
 Import saves hk by horiza.html- Dreamers fixed, and you can import saves. Use this one to mod off of.

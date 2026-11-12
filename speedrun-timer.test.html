@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HK speedrun timer — tests</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #101014; color: #eee; margin: 24px; }
+    h1 { font-size: 1.2rem; }
+    #summary { font-weight: 700; margin: 12px 0; }
+    #summary.pass { color: #3ddc84; }
+    #summary.fail { color: #ef5350; }
+    li { margin: 3px 0; font-family: monospace; font-size: 13px; }
+    li.ok { color: #3ddc84; }
+    li.bad { color: #ef5350; }
+    /* Panels under test are rendered off-screen but stay laid out. */
+    #sandbox { position: absolute; left: -10000px; top: 0; }
+  </style>
+</head>
+<body>
+  <h1>Hollow Knight speedrun timer — local test suite</h1>
+  <p>
+    Drives <code>speedrun-timer.js</code> with an injected fake clock and an
+    in-memory localStorage replacement. Open this file directly in a browser
+    (file:// works). All tests must pass.
+  </p>
+  <div id="summary">Running…</div>
+  <ul id="results"></ul>
+  <div id="sandbox"></div>
+
+  <script src="speedrun-timer.js"></script>
+  <script>
+  (function () {
+    "use strict";
+
+    var resultsEl = document.getElementById("results");
+    var summaryEl = document.getElementById("summary");
+    var sandbox = document.getElementById("sandbox");
+    var panels = []; // for cleanup
+
+    // ── Test harness ──────────────────────────────────────────────────
+    var results = [];
+    function test(name, fn) {
+      try {
+        fn();
+        results.push({ name: name, ok: true });
+      } catch (err) {
+        results.push({ name: name, ok: false, err: err && err.message });
+      }
+    }
+    function assert(cond, msg) {
+      if (!cond) throw new Error(msg || "assertion failed");
+    }
+    function assertEq(actual, expected, msg) {
+      if (actual !== expected) {
+        throw new Error(
+          (msg ? msg + " — " : "") + "expected " + expected + ", got " + actual
+        );
+      }
+    }
+
+    // ── Injectable fakes ──────────────────────────────────────────────
+    function makeEnv() {
+      var clock = { t: 0 };
+      var map = {};
+      var storage = {
+        getItem: function (k) { return k in map ? map[k] : null; },
+        setItem: function (k, v) { map[k] = String(v); },
+        removeItem: function (k) { delete map[k]; },
+        _map: map
+      };
+      return {
+        clock: clock,
+        now: function () { return clock.t; },
+        advance: function (ms) { clock.t += ms; },
+        storage: storage
+      };
+    }
+
+    function makePanel(env, extra) {
+      var opts = { now: env.now, storage: env.storage, hotkeys: false };
+      if (extra) for (var k in extra) opts[k] = extra[k];
+      var p = window.HKSpeedrunTimer.createPanel(opts);
+      sandbox.appendChild(p.element);
+      panels.push(p);
+      return p;
+    }
+
+    var KEY = window.HKSpeedrunTimer.STORAGE_KEY;
+    var N_DEFAULT = window.HKSpeedrunTimer.DEFAULT_SPLIT_NAMES.length;
+    var PH = window.HKSpeedrunTimer.PLACEHOLDER;
+
+    function twoSplitStorage(env) {
+      env.storage.setItem(KEY, JSON.stringify([
+        { name: "A", bestSeg: null, bestCum: null },
+        { name: "B", bestSeg: null, bestCum: null }
+      ]));
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────
+
+    test("fresh storage loads default splits and shows placeholders", function () {
+      var env = makeEnv();
+      var p = makePanel(env);
+      assertEq(p.getSplits().length, N_DEFAULT, "default split count");
+      assertEq(p.getSplits()[0].name, "Vengeful Spirit", "first default name");
+      assertEq(p.getBestTotal(), null, "no total best yet");
+      assert(
+        p.element.querySelector(".hkst-total").textContent.indexOf(PH) !== -1,
+        "total best shows placeholder, not 0"
+      );
+      assertEq(p.getElapsed(), 0, "clock starts at 0");
+    });
+
+    test("split is a no-op before the timer is started", function () {
+      var env = makeEnv();
+      var p = makePanel(env);
+      p.split();
+      p.split();
+      assertEq(p.getRunSegments().length, 0, "no splits recorded");
+      var btn = p.element.querySelectorAll(".hkst-controls button")[2];
+      assert(btn.disabled, "split button disabled while not running");
+    });
+
+    test("paused time is not counted; resume continues from the same time", function () {
+      var env = makeEnv();
+      var p = makePanel(env);
+      p.start();
+      env.advance(1000);
+      p.pause();
+      assertEq(p.getElapsed(), 1000, "elapsed at pause");
+      env.advance(5000); // paused — must not count
+      assertEq(p.getElapsed(), 1000, "paused time excluded");
+      p.start(); // resume
+      env.advance(250);
+      assertEq(p.getElapsed(), 1250, "resume continues from paused time");
+    });
+
+    test("each split records segment time and cumulative time", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p = makePanel(env);
+      p.start();
+      env.advance(1000);
+      p.split();
+      env.advance(2000);
+      p.split();
+      var segs = p.getRunSegments();
+      assertEq(segs.length, 2, "two splits recorded");
+      assertEq(segs[0].seg, 1000, "first segment");
+      assertEq(segs[0].cum, 1000, "first cumulative");
+      assertEq(segs[1].seg, 2000, "second segment");
+      assertEq(segs[1].cum, 3000, "second cumulative");
+    });
+
+    test("timer stops automatically after the last split", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p = makePanel(env);
+      p.start();
+      env.advance(1000);
+      p.split();
+      env.advance(1000);
+      assert(p.isRunning(), "still running before final split");
+      p.split();
+      assert(!p.isRunning(), "auto-stopped after final split");
+      assert(p.isFinished(), "run marked finished");
+      env.advance(5000);
+      assertEq(p.getElapsed(), 2000, "clock frozen after auto-stop");
+      p.split(); // no splits left — must stay a no-op
+      assertEq(p.getRunSegments().length, 2, "no extra split recorded");
+    });
+
+    test("delta vs best: faster is negative, slower is positive", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p = makePanel(env);
+
+      p.start(); env.advance(1000); p.split(); // run 1: seg 1000 (sets best)
+      p.reset();
+      p.start(); env.advance(800); p.split(); // run 2: faster
+      assertEq(p.getRunSegments()[0].delta, -200, "faster → negative delta");
+      p.reset();
+      p.start(); env.advance(1200); p.split(); // run 3: slower
+      assertEq(p.getRunSegments()[0].delta, 400, "slower → positive delta");
+      assertEq(p.getSplits()[0].bestSeg, 800, "best segment kept at fastest");
+    });
+
+    test("reset clears the current run but keeps historical bests", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p = makePanel(env);
+      p.start();
+      env.advance(1000);
+      p.split();
+      p.reset();
+      assertEq(p.getElapsed(), 0, "elapsed cleared");
+      assertEq(p.getRunSegments().length, 0, "run segments cleared");
+      assert(!p.isRunning(), "timer stopped");
+      assertEq(p.getSplits()[0].bestSeg, 1000, "best segment survives reset");
+      assertEq(p.getSplits()[0].bestCum, 1000, "best cumulative survives reset");
+    });
+
+    test("bests and total best persist across a simulated refresh", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p1 = makePanel(env);
+      p1.start();
+      env.advance(1000);
+      p1.split();
+      env.advance(2000);
+      p1.split(); // finishes run: total 3000
+
+      // "Refresh": brand-new panel over the same storage.
+      var p2 = makePanel(env);
+      var s = p2.getSplits();
+      assertEq(s[0].bestSeg, 1000, "split 1 best restored");
+      assertEq(s[1].bestSeg, 2000, "split 2 best restored");
+      assertEq(s[1].bestCum, 3000, "split 2 best cumulative restored");
+      assertEq(p2.getBestTotal(), 3000, "total best restored");
+      assert(
+        p2.element.querySelector(".hkst-total").textContent.indexOf("00:00:03.000") !== -1,
+        "total best rendered at bottom"
+      );
+      assertEq(p2.getRunSegments().length, 0, "new page starts a fresh run");
+    });
+
+    test("corrupted JSON in storage falls back to default splits", function () {
+      var env = makeEnv();
+      env.storage.setItem(KEY, "{not valid json");
+      var p = makePanel(env); // must not throw
+      assertEq(p.getSplits().length, N_DEFAULT, "defaults after corrupt JSON");
+      assertEq(p.getBestTotal(), null, "no bests after fallback");
+    });
+
+    test("non-array stored data falls back to default splits", function () {
+      ["42", "\"text\"", "{\"name\":\"x\"}", "null", "true"].forEach(function (bad) {
+        var env = makeEnv();
+        env.storage.setItem(KEY, bad);
+        var p = makePanel(env); // must not throw
+        assertEq(
+          p.getSplits().length, N_DEFAULT,
+          "defaults for stored value " + bad
+        );
+      });
+    });
+
+    test("malformed entries inside a valid array are sanitized", function () {
+      var env = makeEnv();
+      env.storage.setItem(KEY, JSON.stringify([
+        { name: "Good", bestSeg: 500, bestCum: 500 },
+        { name: 123, bestSeg: "fast", bestCum: -4 },
+        null
+      ]));
+      var p = makePanel(env);
+      var s = p.getSplits();
+      assertEq(s.length, 3, "array length preserved");
+      assertEq(s[0].bestSeg, 500, "valid best kept");
+      assertEq(s[1].name, "Split 2", "bad name replaced");
+      assertEq(s[1].bestSeg, null, "bad bestSeg nulled");
+      assertEq(s[1].bestCum, null, "negative bestCum nulled");
+      assertEq(s[2].name, "Split 3", "null entry replaced");
+    });
+
+    test("splits can be added, renamed and deleted; changes persist", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p = makePanel(env);
+      p.addSplit("City of Tears");
+      p.renameSplit(0, "Forgotten Crossroads");
+      p.removeSplit(1);
+      var s = p.getSplits();
+      assertEq(s.length, 2, "count after add+delete");
+      assertEq(s[0].name, "Forgotten Crossroads", "rename applied");
+      assertEq(s[1].name, "City of Tears", "add applied");
+
+      var p2 = makePanel(env); // simulated refresh
+      var s2 = p2.getSplits();
+      assertEq(s2.length, 2, "edits persist");
+      assertEq(s2[0].name, "Forgotten Crossroads", "renamed name persists");
+    });
+
+    test("current split row is highlighted, done rows show time and delta", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p = makePanel(env);
+      p.start();
+      var rows = p.element.querySelectorAll(".hkst-row");
+      assert(rows[0].classList.contains("hkst-current"), "first row current");
+      assert(!rows[1].classList.contains("hkst-current"), "second row not current");
+      env.advance(1000);
+      p.split();
+      rows = p.element.querySelectorAll(".hkst-row");
+      assert(!rows[0].classList.contains("hkst-current"), "done row not current");
+      assert(rows[1].classList.contains("hkst-current"), "highlight moved on");
+      assertEq(
+        rows[0].querySelector(".hkst-seg").textContent, "00:00:01.000",
+        "done row shows segment time"
+      );
+      assertEq(
+        rows[0].querySelector(".hkst-delta").textContent, PH,
+        "no best yet → placeholder delta"
+      );
+    });
+
+    test("T/R/E hotkeys drive the timer", function () {
+      var env = makeEnv();
+      twoSplitStorage(env);
+      var p = makePanel(env, { hotkeys: true });
+      function key(k) {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: k }));
+      }
+      key("e"); // before start: ignored
+      assertEq(p.getRunSegments().length, 0, "E before start ignored");
+      key("t");
+      assert(p.isRunning(), "T starts");
+      env.advance(700);
+      key("e");
+      assertEq(p.getRunSegments().length, 1, "E records a split");
+      key("t"); // pause
+      env.advance(300);
+      assertEq(p.getElapsed(), 700, "T pauses");
+      key("r");
+      assertEq(p.getElapsed(), 0, "R resets");
+      assertEq(p.getSplits()[0].bestSeg, 700, "R keeps the best");
+      p.dispose();
+    });
+
+    // ── Report ────────────────────────────────────────────────────────
+    var failed = 0;
+    results.forEach(function (r) {
+      var li = document.createElement("li");
+      li.className = r.ok ? "ok" : "bad";
+      li.textContent = (r.ok ? "PASS " : "FAIL ") + r.name + (r.ok ? "" : " — " + r.err);
+      resultsEl.appendChild(li);
+      if (!r.ok) failed++;
+    });
+    summaryEl.textContent =
+      results.length - failed + "/" + results.length + " tests passed";
+    summaryEl.className = failed ? "fail" : "pass";
+    document.title = (failed ? "FAIL" : "PASS") + " — speedrun timer tests";
+    window.__TEST_RESULTS__ = results;
+  })();
+  </script>
+</body>
+</html>
