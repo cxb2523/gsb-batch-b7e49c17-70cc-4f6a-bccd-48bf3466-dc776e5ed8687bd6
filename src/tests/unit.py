@@ -27,6 +27,7 @@ markers =
 )
 """
 import os
+import sys
 
 import numpy as np
 import pytest
@@ -255,6 +256,11 @@ class TestEstimatorsBitDepth:
 		from axiom._core.helpers.iterables import snap
 		assert snap(estimated, DEPTHS_BIT) == nearest
 
+@pytest.fixture
+def no_pydub(monkeypatch):
+	"""Simulate an environment where pydub is not installed."""
+	monkeypatch.setitem(sys.modules, "pydub", None)
+
 # Estimators.channels
 
 class TestEstimatorsChannels:
@@ -266,14 +272,14 @@ class TestEstimatorsChannels:
 		multi = white_noise(20000, channels = 4)
 		assert Estimators.channels(multi) == 4
 
-	def test_stereo_fallback_without_pydub_raises_nameerror(self):
-		"""Documents bug #1 (_channels_chunking called as a bare name)."""
-		if PYDUB_AVAILABLE:
-			pytest.skip("pydub is installed; the buggy fallback path isn't reached")
+	def test_stereo_fallback_without_pydub_returns_channel_count(self, no_pydub):
+		"""Fallback path (no pydub) must return 1 or 2, never raise NameError."""
+		stereo = white_noise(20000, channels = 2) # independent L/R noise
+		assert Estimators.channels(stereo) == 2
 
-		stereo = white_noise(20000, channels = 2)
-		with pytest.raises(NameError, match = "_channels_chunking"):
-			Estimators.channels(stereo)
+		mono = white_noise(20000, channels = 1)
+		duplicated = np.stack([mono, mono], axis = 1)
+		assert Estimators.channels(duplicated) == 1
 
 	@pytest.mark.skipif(not PYDUB_AVAILABLE, reason = "requires pydub for phase-cancellation detection")
 	def test_stereo_independent_channels_detected_as_stereo(self):
@@ -285,6 +291,119 @@ class TestEstimatorsChannels:
 		mono = white_noise(44100, channels = 1)
 		duplicated = np.stack([mono, mono], axis = 1)
 		assert Estimators.channels(duplicated) == 1
+
+# estimator safe paths (silence / very short signals / local wav samples)
+
+class TestEstimatorSafePaths:
+	SR = 44100
+
+	@pytest.fixture
+	def sample_wavs(self, tmp_path):
+		"""Self-made local wav samples covering the estimator edge cases."""
+		import soundfile as sf
+
+		sr = self.SR
+		rng = np.random.default_rng(42)
+
+		mono = rng.uniform(-1, 1, sr).astype(np.float32)
+
+		samples = {
+			"noise": mono,
+			"stereo": rng.uniform(-1, 1, (sr, 2)).astype(np.float32),
+			"dup_mono": np.stack([mono, mono], axis = 1),
+			"silence": np.zeros(sr, dtype = np.float32),
+			"short": rng.uniform(-1, 1, 5).astype(np.float32),
+		}
+
+		paths = {}
+
+		for name, data in samples.items():
+			path = tmp_path / f"{name}.wav"
+			sf.write(str(path), data, sr)
+			paths[name] = path
+
+		return paths
+
+	def test_white_noise_wav_samplerate_within_bounds(self, sample_wavs):
+		pytest.importorskip("librosa")
+		import soundfile as sf
+
+		sig, sr = sf.read(str(sample_wavs["noise"]), dtype = "float32")
+		estimated = Estimators.sample_rate(sig, sr, checkpoint_path = None)
+
+		assert estimated > 0
+		assert estimated >= sr * 0.5
+		assert estimated <= sr * 1.5
+
+	def test_silent_wav_returns_input_samplerate(self, sample_wavs):
+		pytest.importorskip("librosa")
+		import soundfile as sf
+
+		sig, sr = sf.read(str(sample_wavs["silence"]), dtype = "float32")
+		assert Estimators.sample_rate(sig, sr, checkpoint_path = None) == sr
+
+	def test_very_short_wav_returns_input_samplerate(self, sample_wavs):
+		pytest.importorskip("librosa")
+		import soundfile as sf
+
+		sig, sr = sf.read(str(sample_wavs["short"]), dtype = "float32")
+		assert Estimators.sample_rate(sig, sr, checkpoint_path = None) == sr
+
+	def test_stereo_independent_noise_wav_detected_as_2(self, sample_wavs, no_pydub):
+		import soundfile as sf
+
+		sig, _ = sf.read(str(sample_wavs["stereo"]), dtype = "float32")
+		assert Estimators.channels(sig) == 2
+
+	def test_duplicated_mono_wav_detected_as_1(self, sample_wavs, no_pydub):
+		import soundfile as sf
+
+		sig, _ = sf.read(str(sample_wavs["dup_mono"]), dtype = "float32")
+		assert Estimators.channels(sig) == 1
+
+	def test_bit_depth_silence_takes_safe_path(self, sample_wavs):
+		import soundfile as sf
+
+		sig, _ = sf.read(str(sample_wavs["silence"]), dtype = "float32")
+
+		assert Estimators.bit_depth(sig) is None
+
+		estimated, details = Estimators.bit_depth(sig, return_details = True)
+		assert estimated is None
+		for key in ("best_snr", "snr_error", "lsb_score", "all_results"):
+			assert key in details
+
+	def test_bit_depth_very_short_takes_safe_path(self, sample_wavs):
+		import soundfile as sf
+
+		sig, _ = sf.read(str(sample_wavs["short"]), dtype = "float32")
+
+		estimated, details = Estimators.bit_depth(sig, return_details = True)
+		assert 8 <= estimated <= 32
+		assert details["lsb_score"] == 0.0 # histogram skipped, no NaN
+
+	def test_bit_depth_empty_signal_takes_safe_path(self):
+		assert Estimators.bit_depth(np.array([])) is None
+
+	def test_silent_wav_estimate_end_to_end(self, sample_wavs):
+		pytest.importorskip("librosa")
+
+		ax = Axiom([sample_wavs["silence"]])
+		r = first_result(ax.estimate())
+
+		for key in ("samplerate", "cutoff", "bit depth", "bit depth snapped", "channels", "bitrate", "peak"):
+			assert key in r
+		assert r["samplerate"] == self.SR
+		assert r["channels"] == 1
+
+	def test_very_short_wav_estimate_end_to_end(self, sample_wavs):
+		pytest.importorskip("librosa")
+
+		ax = Axiom([sample_wavs["short"]])
+		r = first_result(ax.estimate())
+
+		assert r["samplerate"] > 0
+		assert r["channels"] == 1
 
 # Estimators.bit_rate
 

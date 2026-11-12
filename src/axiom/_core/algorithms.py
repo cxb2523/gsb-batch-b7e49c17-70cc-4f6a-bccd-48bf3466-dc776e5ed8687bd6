@@ -69,7 +69,13 @@ class Estimators:
 		if signal.ndim == 2:
 			signal = np.mean(signal, axis = 0)
 
-		if not checkpoint_path:
+		def _heuristic() -> float:
+			"""
+			Heuristic estimation with a guaranteed positive fallback.
+
+			When no cutoff can be found (silence, too-short signal, ...)
+			the input sample rate is returned instead of crashing.
+			"""
 			c = heuristic_cutoff(
 				signal,
 				sr,
@@ -80,7 +86,13 @@ class Estimators:
 				show = show_graph
 			)
 
-			return sr if not c else 2 * (int(c) if rounded else c)
+			if not c or c <= 0:
+				return sr
+
+			return 2 * (int(c) if rounded else c)
+
+		if not checkpoint_path:
+			return _heuristic()
 
 		# moved to fasten load times
 		from ..ai._core.core import predict
@@ -92,20 +104,12 @@ class Estimators:
 			if "logger" in globals():
 				logger.error(Fore.RED + "Model returned input sample rate, reverting to heuristic estimation." + Fore.RESET)
 
-			c = heuristic_cutoff(
-				signal,
-				sr,
-
-				p = freq_step,
-				n_fft = n_fft,
-
-				show = show_graph
-			)
-			retval = sr if not retval else 2 * (int(c) if rounded else c)
+			retval = _heuristic()
 		else:
 			retval = samplerate
 
-		if not retval:
+		# never return 0 or a negative estimate
+		if not retval or retval <= 0:
 			retval = sr
 
 		return retval
@@ -138,6 +142,20 @@ class Estimators:
 			signal = np.mean(signal, axis = 1)
 
 		signal = signal.astype(np.float64)
+
+		# safe path: empty or fully silent signals carry no bit-depth information
+		if signal.size == 0 or np.max(np.abs(signal)) == 0:
+			if return_details:
+				details = {
+					"best_snr": None,
+					"snr_error": None,
+					"lsb_score": 0.0,
+					"all_results": [],
+				}
+
+				return None, details
+
+			return None
 
 		# normalize (important for comparability)
 		peak = np.max(np.abs(signal)) + 1e-12
@@ -188,18 +206,19 @@ class Estimators:
 		signal_diff = np.diff(signal)
 
 		if len(signal_diff) < 10:
-			hist_score = 0
+			# safe path: too few samples for a meaningful histogram
+			hist_score = 0.0
+		else:
+			# histogram of step sizes
+			hist, _ = np.histogram(signal_diff, bins = 100, density = True)
 
-		# histogram of step sizes
-		hist, _ = np.histogram(signal_diff, bins = 100, density = True)
+			# entropy: low entropy => structured quantization
+			hist = hist + 1e-12
+			entropy = -np.sum(hist * np.log(hist))
 
-		# entropy: low entropy => structured quantization
-		hist = hist + 1e-12
-		entropy = -np.sum(hist * np.log(hist))
-
-		# normalize entropy into 0..1 score
-		hist_score = 1 - (entropy / np.log(len(hist)))
-		hist_score = float(np.clip(hist_score, 0, 1))
+			# normalize entropy into 0..1 score
+			hist_score = 1 - (entropy / np.log(len(hist)))
+			hist_score = float(np.clip(hist_score, 0, 1))
 
 		# adjust estimate slightly if strong quantization structure exists
 		if hist_score > 0.7:
@@ -602,6 +621,11 @@ def heuristic_cutoff(
 		Estimated cutoff frequency in Hz.
 	"""
 	n_fft = n_fft or DEFAULT_VALUE_FFT
+
+	# safe path: empty or fully silent signals have no detectable cutoff
+	signal = np.asarray(signal)
+	if signal.size == 0 or np.max(np.abs(signal)) == 0:
+		return None
 
 	# resolve step size parameter p
 	default_p = max(1, int(sr / STEP_CLAMP_VALUE) - 1)

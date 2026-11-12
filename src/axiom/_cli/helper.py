@@ -325,6 +325,7 @@ def process_file(
 		# Bit depth describes the actual selected signal, not the
 		# estimation-only extension.
 		estimated_bit_depth = Estimators.bit_depth(signal_trimmed_max)
+		estimated_bit_depth = estimated_bit_depth if estimated_bit_depth else bit_depth
 
 	if args.spectral_gate_cutoff is None:
 		estimated_bit_depth_snapped = snap(estimated_bit_depth, DEPTHS_BIT)
