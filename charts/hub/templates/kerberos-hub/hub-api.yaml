@@ -1,0 +1,630 @@
+{{- if or (eq .Values.mode "all") (eq .Values.mode "ui") -}}
+{{- $workflowConfiguration := include "hub.workflowConfiguration.settings" . | fromYaml -}}
+{{- $catalogReplacement := index $workflowConfiguration.replacements "catalogs/classifications.json" | default dict -}}
+{{- if .Values.kerberoshub.api.serviceEnabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-api-svc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: hub-api-svc
+spec:
+  ports:
+    - port: 80
+      targetPort: 80
+      name: frontend
+      protocol: TCP
+    - port: 8081
+      name: backend
+      targetPort: 8081
+      protocol: TCP
+  selector:
+    app: hub-api
+{{- end }}
+{{ if ne .Values.ingress "" }}
+---
+{{ if .Capabilities.APIVersions.Has "networking.k8s.io/v1" }}
+apiVersion: networking.k8s.io/v1
+{{ else }}
+apiVersion: networking.k8s.io/v1beta1
+{{ end }}
+kind: Ingress
+metadata:
+  name: hub-api-ingress
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- if eq .Values.ingress "nginx" }}
+    kubernetes.io/tls-acme: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 200m # This might throw a 413 Entity Too Large when uploading large recordings.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress }}
+  {{- with .Values.kerberoshub.api.tls }}
+  tls:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+
+  {{ if .Capabilities.APIVersions.Has "networking.k8s.io/v1" }}
+  rules:
+    - host: "{{ .Values.kerberoshub.api.url }}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-api-svc
+                port:
+                  number: 8081
+    {{- if .Values.kerberoshub.api.legacyUrl }}
+    - host: "{{ .Values.kerberoshub.api.legacyUrl }}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-api-svc
+                port:
+                  number: 8081
+    {{- end }}
+    - host: "admin.{{ .Values.kerberoshub.api.url }}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-api-svc
+                port:
+                  number: 80
+  {{ else }}
+    rules:
+    - host: "{{ .Values.kerberoshub.api.url }}"
+      http:
+        paths:
+          - path: /
+            backend:
+              serviceName: hub-api-svc
+              servicePort: 8081
+    {{- if .Values.kerberoshub.api.legacyUrl }}
+    - host: "{{ .Values.kerberoshub.api.legacyUrl }}"
+      http:
+        paths:
+          - path: /
+            backend:
+              serviceName: hub-api-svc
+              servicePort: 8081
+    {{- end }}
+  {{ end }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-api
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.kerberoshub.api.replicas }}
+  selector:
+    matchLabels:
+      app: hub-api
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      annotations:
+        checksum/config-mongodb: {{ include (print $.Template.BasePath "/configMaps/configmap-mongodb.yaml") . | sha256sum }}
+        {{- if and .Values.classificationCatalogEnabled (not .Values.classificationCatalogExistingConfigMap) (not $catalogReplacement) }}
+        checksum/classification-catalog: {{ include (print $.Template.BasePath "/configMaps/catalogs/classifications.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if include "kerberoshub.deviceTags.system.enabled" . }}
+        checksum/device-system-tags: {{ include (print $.Template.BasePath "/configMaps/catalogs/device-system-tags.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if and $workflowConfiguration.enabled $workflowConfiguration.includeDefaults (not (hasKey $workflowConfiguration.replacements "workflow-contracts/start.yaml")) }}
+        checksum/workflow-configuration: {{ include (print $.Template.BasePath "/configMaps/workflow-contracts/start.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if and $workflowConfiguration.enabled $workflowConfiguration.includeDefaults (not (hasKey $workflowConfiguration.replacements "workflow-contracts/anpr.yaml")) }}
+        checksum/workflow-contract-anpr: {{ include (print $.Template.BasePath "/configMaps/workflow-contracts/anpr.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if and $workflowConfiguration.enabled $workflowConfiguration.includeDefaults (not (hasKey $workflowConfiguration.replacements "workflow-contracts/forwarder.yaml")) }}
+        checksum/workflow-contract-forwarder: {{ include (print $.Template.BasePath "/configMaps/workflow-contracts/forwarder.yaml") . | sha256sum }}
+        {{- end }}
+      labels:
+        app: hub-api
+    spec:
+      {{- with .Values.kerberoshub.api.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.kerberoshub.serviceAccount.create }}
+      serviceAccountName: {{ default (printf "%s-%s-sa" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-") .Values.kerberoshub.serviceAccount.name }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $serverTLS := .Values.kerberoshub.api.serverTLS }}
+      {{- $mongodbTLS := .Values.mongodb.tls }}
+      {{- $classificationCatalogEnabled := .Values.classificationCatalogEnabled }}
+      {{- $deviceSystemTagsEnabled := include "kerberoshub.deviceTags.system.enabled" . }}
+      {{- if or $workflowConfiguration.enabled $classificationCatalogEnabled $deviceSystemTagsEnabled .Values.kerberoshub.api.volumes (and $serverTLS.enabled $serverTLS.secretName) (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+      volumes:
+      {{- if $workflowConfiguration.enabled }}
+        - name: workflow-configuration
+          projected:
+            sources:
+              {{- if $workflowConfiguration.includeDefaults }}
+              {{- if not (hasKey $workflowConfiguration.replacements "workflow-contracts/start.yaml") }}
+              - configMap:
+                  name: {{ printf "%s-workflow-configuration" .Release.Name | trunc 63 | trimSuffix "-" }}
+                  items:
+                    - key: start.yaml
+                      path: workflow-contracts/start.yaml
+              {{- end }}
+              {{- if not (hasKey $workflowConfiguration.replacements "workflow-contracts/anpr.yaml") }}
+              - configMap:
+                  name: {{ include "hub.workflowConfiguration.anpr.configMapName" . }}
+                  items:
+                    - key: anpr.yaml
+                      path: workflow-contracts/anpr.yaml
+              {{- end }}
+              {{- if not (hasKey $workflowConfiguration.replacements "workflow-contracts/forwarder.yaml") }}
+              - configMap:
+                  name: {{ include "hub.workflowConfiguration.forwarder.configMapName" . }}
+                  items:
+                    - key: forwarder.yaml
+                      path: workflow-contracts/forwarder.yaml
+              {{- end }}
+              {{- if not $catalogReplacement }}
+              - configMap:
+                  name: {{ include "hub.classificationCatalog.configMapName" . }}
+                  items:
+                    - key: classifications.json
+                      path: catalogs/classifications.json
+              {{- end }}
+              {{- end }}
+              {{- range $workflowConfiguration.configMaps }}
+              - configMap:
+                  name: {{ .name | quote }}
+                  items:
+                    {{- toYaml .items | nindent 20 }}
+              {{- end }}
+      {{- end }}
+      {{- if $classificationCatalogEnabled }}
+        - name: classification-catalog
+          configMap:
+            name: {{ include "hub.classificationCatalog.configMapName" . }}
+            {{- if or .Values.classificationCatalogExistingConfigMap $catalogReplacement }}
+            items:
+              - key: {{ default "classifications.json" $catalogReplacement.key | quote }}
+                path: classifications.json
+            {{- end }}
+      {{- end }}
+      {{- if $deviceSystemTagsEnabled }}
+        - name: device-system-tags
+          configMap:
+            name: device-system-tags
+      {{- end }}
+      {{- with .Values.kerberoshub.api.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $serverTLS.enabled $serverTLS.secretName }}
+        - name: hub-api-server-tls
+          secret:
+            secretName: {{ $serverTLS.secretName }}
+      {{- end }}
+      {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+        {{- include "hub.mongodb.tlsVolume" . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.kerberoshub.api.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: hub-api
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.kerberoshub.api.repository }}:{{ .Values.kerberoshub.api.tag }}"
+          imagePullPolicy: {{ .Values.kerberoshub.api.pullPolicy }}
+          {{- with .Values.kerberoshub.api.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.kerberoshub.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: 80
+              name: http
+          {{- if or $workflowConfiguration.enabled $classificationCatalogEnabled $deviceSystemTagsEnabled .Values.kerberoshub.api.volumeMounts (and $serverTLS.enabled $serverTLS.secretName) (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+          volumeMounts:
+          {{- if $workflowConfiguration.enabled }}
+            - name: workflow-configuration
+              mountPath: /etc/kerberos/configuration
+              readOnly: true
+          {{- end }}
+          {{- if $classificationCatalogEnabled }}
+            - name: classification-catalog
+              mountPath: /etc/kerberos/classifications
+              readOnly: true
+          {{- end }}
+          {{- if $deviceSystemTagsEnabled }}
+            - name: device-system-tags
+              mountPath: /etc/kerberos/device-tags
+              readOnly: true
+          {{- end }}
+          {{- with .Values.kerberoshub.api.volumeMounts}}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if and $serverTLS.enabled $serverTLS.secretName }}
+            - name: hub-api-server-tls
+              mountPath: {{ $serverTLS.mountPath }}
+              readOnly: true
+          {{- end }}
+          {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+            {{- include "hub.mongodb.tlsVolumeMount" . | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          # Mongodb - loaded from ConfigMap
+          envFrom:
+            - configMapRef:
+                name: mongodb-config
+          env:
+            {{- include "hub.mongodb.appUriEnv" (dict "root" $ "app" "hub-api") | nindent 12 }}
+            {{- if $classificationCatalogEnabled }}
+            - name: CLASSIFICATION_CATALOG_FILE
+              value: /etc/kerberos/classifications/classifications.json
+            {{- end }}
+            {{- if $deviceSystemTagsEnabled }}
+            # System tag catalog (deviceTags.system.catalog): the only system
+            # tags owners can assign. Unset (disabled) disables system tags.
+            - name: DEVICE_SYSTEM_TAGS_FILE
+              value: /etc/kerberos/device-tags/system-tags.json
+            {{- end }}
+            - name: ENVIRONMENT
+              value: "{{ .Values.environment }}"
+            - name: READ_ONLY
+              value: "{{ .Values.readOnly }}"
+            - name: LOG_LEVEL
+              value: "{{ .Values.kerberoshub.api.logLevel }}"
+            - name: SUPPORT_ENABLED
+              value: "{{ .Values.kerberoshub.support.enabled }}"
+            - name: CLOUD_API_URL
+              value: "{{ .Values.kerberoshub.api.url }}"
+            - name: API_URL
+              value: "{{ .Values.kerberoshub.api.schema }}://{{ .Values.kerberoshub.api.url }}"
+            - name: PUBLIC_URL
+              value: "{{ .Values.kerberoshub.frontend.schema }}://{{ .Values.kerberoshub.frontend.url }}"
+            - name: REFRESH_COOKIE_SECURE
+              value: {{ eq .Values.kerberoshub.api.schema "https" | quote }}
+            {{- $corsOrigins := list (printf "%s://%s" .Values.kerberoshub.frontend.schema .Values.kerberoshub.frontend.url) }}
+            {{- with .Values.kerberoshub.frontend.legacyUrl }}
+            {{- $corsOrigins = append $corsOrigins (printf "%s://%s" $.Values.kerberoshub.frontend.schema .) }}
+            {{- end }}
+            {{- range .Values.kerberoshub.frontend.domains }}
+            {{- $corsOrigins = append $corsOrigins (printf "%s://%s" $.Values.kerberoshub.frontend.schema .) }}
+            {{- end }}
+            {{- if and .Values.kerberoshub.frontend.multiTenant .Values.kerberoshub.frontend.tenantBaseDomain }}
+            {{- $corsOrigins = append $corsOrigins (printf "%s://*.%s" .Values.kerberoshub.frontend.schema .Values.kerberoshub.frontend.tenantBaseDomain) }}
+            {{- end }}
+            {{- if and .Values.kerberoshub.frontend.demoEnabled .Values.kerberoshub.frontend.demoUrl }}
+            {{- $corsOrigins = append $corsOrigins (printf "%s://%s" .Values.kerberoshub.frontend.schema .Values.kerberoshub.frontend.demoUrl) }}
+            {{- end }}
+            {{- range .Values.kerberoshub.api.corsAllowedOrigins }}
+            {{- $corsOrigins = append $corsOrigins . }}
+            {{- end }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ join "," $corsOrigins | quote }}
+            {{- $mcp := .Values.kerberoshub.api.mcp | default dict }}
+            - name: MCP_ENABLED
+              value: {{ $mcp.enabled | default false | quote }}
+            - name: MCP_ALLOWED_ORIGINS
+              value: {{ join "," ($mcp.allowedOrigins | default list) | quote }}
+            {{ if .Values.isPrivate }}
+            - name: KERBEROS_PRIVATE_CLOUD
+              value: "true"
+            {{ else }}
+            - name: KERBEROS_PRIVATE_CLOUD
+              value: "false"
+            {{ end }}
+            - name: KERBEROS_LANGUAGE
+              value: "{{ .Values.kerberoshub.api.language }}"
+            - name: KERBEROS_FALLBACK_LANGUAGE
+              value: "{{ .Values.kerberoshub.api.fallbackLanguage }}"
+            - name: API_KEY
+              value: "{{ .Values.kerberoshub.api.apiKey }}"
+
+            # MQTT credentials (served via /runtime/config to authenticated
+            # frontend clients; no longer exposed in the public env.js).
+            - name: MQTT_USERNAME
+              value: "{{ .Values.mqtt.username }}"
+            - name: MQTT_PASSWORD
+              value: "{{ .Values.mqtt.password }}"
+
+            # TURN credentials (served via /runtime/config to authenticated
+            # frontend clients; no longer exposed in the public env.js).
+            - name: TURN_USERNAME
+              value: "{{ .Values.turn.username }}"
+            - name: TURN_PASSWORD
+              value: "{{ .Values.turn.password }}"
+            {{- if .Values.kerberoshub.api.serverTLS.enabled }}
+            - name: TLS_CERT_FILE
+              value: "{{ .Values.kerberoshub.api.serverTLS.certFile }}"
+            - name: TLS_KEY_FILE
+              value: "{{ .Values.kerberoshub.api.serverTLS.keyFile }}"
+            {{- end }}
+
+            # Kerberos Hub
+            - name: LICENSE_KEY
+              value: "{{ .Values.license }}"
+            - name: LICENSE_API_URL
+              value: "{{ .Values.licenseServer.url }}"
+            - name: LICENSE_PUBLIC_API_TOKEN
+              value: "{{ .Values.licenseServer.token }}"
+
+            # Authorization - Authentication secret
+            - name: KERBEROS_JWT_SECRET
+              value: "{{ .Values.kerberoshub.api.jwtSecret }}"
+
+            # Temporarily stop serving the polled GET /devices list (204, no DB reads).
+            - name: DISABLE_AGENT_HEARTBEAT
+              value: {{ .Values.kerberoshub.api.disableAgentHeartbeat | default false | quote }}
+
+            # Media proxy: hide Vault/storage endpoints behind hub-api URLs.
+            {{- $mediaProxy := .Values.kerberoshub.api.mediaProxy | default dict }}
+            - name: MEDIA_PROXY_ENABLED
+              value: {{ $mediaProxy.enabled | default false | quote }}
+            {{- if $mediaProxy.publicUrl }}
+            - name: MEDIA_PROXY_PUBLIC_URL
+              value: {{ $mediaProxy.publicUrl | quote }}
+            {{- end }}
+            {{- if $mediaProxy.key }}
+            - name: MEDIA_PROXY_KEY
+              value: {{ $mediaProxy.key | quote }}
+            {{- end }}
+            {{- if $mediaProxy.ttl }}
+            - name: MEDIA_PROXY_TTL
+              value: {{ $mediaProxy.ttl | quote }}
+            {{- end }}
+
+            # SSO (OIDC) setup
+            - name: SSO_DOMAINS
+              value:  "{{- range .Values.kerberoshub.api.sso }}{{ .domain }};{{- end }}"
+            - name: SSO_REDIRECTURLS
+              value: "{{- range .Values.kerberoshub.api.sso }}{{ .redirectUrl }};{{- end }}"
+            - name: SSO_CLAIMIDS
+              value:  "{{- range .Values.kerberoshub.api.sso }}{{ .claimId }};{{- end }}"
+            - name: SSO_ISSUERS
+              value:  "{{- range .Values.kerberoshub.api.sso }}{{ .issuer }};{{- end }}"
+            - name: SSO_CLIENTIDS
+              value: "{{- range .Values.kerberoshub.api.sso }}{{ .clientId }};{{- end }}"
+            - name: SSO_CLIENTSECRETS
+              value: "{{- range .Values.kerberoshub.api.sso }}{{ .clientSecret }};{{- end }}"
+            - name: SSO_CLIENTVERIFICATIONIDS
+              value: "{{- range .Values.kerberoshub.api.sso }}{{ .clientVerificationId }};{{- end }}"
+            - name: SSO_FORCE_SSO
+              value: "{{- range .Values.kerberoshub.api.sso }}{{ .forceSSO }};{{- end }}"
+            - name: SSO_EXTRA_HEADERS
+              value: "{{- range .Values.kerberoshub.api.sso }}{{- if .extraHeaders }}{{- range .extraHeaders }}{{ .name }}:{{ .value }};{{- end }}{{- else }}{{- end }}*{{- end }}"
+
+            # Kerberos pipeline
+            - name: QUEUE_SYSTEM
+              value: "{{ .Values.queueProvider }}"
+            - name: QUEUE_NAME
+              value: "{{ .Values.queueName }}"
+
+            # Deployment-global workflow definitions (WORKFLOW_DEFINITIONS): the
+            # SAME set the workflows engine consumes, assembled from the enabled
+            # definitions under kerberoshub.workflows.definitions (see
+            # kerberos-pipeline/_workflows-helpers.tpl). hub-api reads these
+            # read-only to surface config workflows alongside the user workflows
+            # it stores in the database; the config workflows are never persisted.
+            - name: WORKFLOW_DEFINITIONS
+              value: {{ include "kerberoshub.workflows.workflowDefinitions" . | quote }}
+            # Deployment service routing catalog used by API-owned embedded
+            # workflows (for example the one-stage case redaction modal flow).
+            - name: WORKFLOW_STAGE_QUEUES
+              value: {{ include "kerberoshub.workflows.stageQueues" . | quote }}
+            # Stages tenants may place in the workflow editor (see workflows.editorStages).
+            - name: WORKFLOW_EDITOR_STAGES
+              value: {{ .Values.kerberoshub.workflows.editorStages | default list | toJson | quote }}
+
+            # Stripe for billing
+            - name: STRIPE_KEY
+              value: "{{ .Values.kerberoshub.api.stripe.privateKey }}"
+
+            # OpenAI
+            - name: OPENAI_API_KEY
+              value: "{{ .Values.openai.apikey }}"
+
+            # MFA Issuer name (Will be shown when scanning in)
+            - name: MFA_ISSUER
+              value: "{{ .Values.kerberoshub.api.mfaIssuer }}"
+
+            {{- if .Values.kerberoshub.api.passkeys.enabled }}
+            - name: FEATURE_PASSKEYS_ENABLED
+              value: "true"
+            - name: PASSKEY_RP_ID
+              value: {{ required "kerberoshub.api.passkeys.rpId is required when passkeys are enabled" .Values.kerberoshub.api.passkeys.rpId | quote }}
+            - name: PASSKEY_ORIGINS
+              value: {{ required "kerberoshub.api.passkeys.origins is required when passkeys are enabled" .Values.kerberoshub.api.passkeys.origins | join "," | quote }}
+            - name: PASSKEY_RP_NAME
+              value: {{ .Values.kerberoshub.api.passkeys.rpName | quote }}
+            {{- end }}
+
+            # AWS (Legacy, use Kerberos Vault instead)
+            - name: AWS_REGION
+              value: "{{ .Values.kerberoshub.api.aws.region }}"
+            - name: AWS_S3_BUCKET
+              value: "{{ .Values.kerberoshub.api.aws.bucket }}"
+            - name: AWS_ACCESS_KEY_ID
+              value: "{{ .Values.kerberoshub.api.aws.accessKey }}"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "{{ .Values.kerberoshub.api.aws.secretKey }}"
+
+            # Kerberos Vault (Main instance, within Kerberos Hub you can assign additional Vaults to sites).
+            - name: STORAGE_URI
+              value: "{{ .Values.kerberosvault.uri }}"
+            - name: STORAGE_ACCESS_KEY
+              value: "{{ .Values.kerberosvault.accesskey }}"
+            - name: STORAGE_SECRET_KEY
+              value: "{{ .Values.kerberosvault.secretkey }}"
+
+            # Kerberos Vault: archiving credentials. When creating a task, the underlying recording will be
+            # copied to this storage provider, using the specific account credentials, for deletion/retention.
+            - name: STORAGE_ARCHIVE_PROVIDER
+              value: "{{ .Values.kerberosvault.archive.provider }}"
+            - name: STORAGE_ARCHIVE_ACCESS_KEY
+              value: "{{ .Values.kerberosvault.archive.accesskey }}"
+            - name: STORAGE_ARCHIVE_SECRET_KEY
+              value: "{{ .Values.kerberosvault.archive.secretkey }}"
+
+            # Kafka settings
+            - name: KAFKA_BROKER
+              value: "{{ .Values.kafka.broker }}"
+            - name: KAFKA_USERNAME
+              value: "{{ .Values.kafka.username }}"
+            - name: KAFKA_PASSWORD
+              value: "{{ .Values.kafka.password }}"
+            - name: KAFKA_MECHANISM
+              value: "{{ .Values.kafka.mechanism }}"
+            - name: KAFKA_SECURITY
+              value: "{{ .Values.kafka.security }}"
+
+            # RabbitMQ settings
+            - name: RABBITMQ_HOST
+              value: "{{ .Values.rabbitmq.host }}"
+            - name: RABBITMQ_EXCHANGE
+              value: "{{ .Values.rabbitmq.exchange }}"
+            - name: RABBITMQ_USERNAME
+              value: "{{ .Values.rabbitmq.username }}"
+            - name: RABBITMQ_PASSWORD
+              value: "{{ .Values.rabbitmq.password }}"
+            - name: AUDIT_ENABLED
+              value: {{ and .Values.audit.enabled .Values.kerberoshub.api.audit.enabled | quote }}
+            {{- if and .Values.audit.enabled .Values.kerberoshub.api.audit.enabled }}
+            - name: AUDIT_QUEUE
+              value: {{ .Values.audit.intake.queue | quote }}
+            - name: AUDIT_DEADLETTER_QUEUE
+              value: {{ .Values.audit.intake.deadletterQueue | quote }}
+            {{- end }}
+
+            # Slack notifications (this will send events/logs to a specific channel).
+            - name: SLACK_ENABLED
+              value: "{{ .Values.kerberoshub.api.slack.enabled }}"
+            - name: SLACK_HOOK
+              value: "{{ .Values.kerberoshub.api.slack.hook }}"
+            - name: SLACK_USERNAME
+              value: "{{ .Values.kerberoshub.api.slack.username }}"
+
+            # Mail settings
+            - name: MAIL_PROVIDER
+              value: "{{ .Values.email.provider }}"
+            - name: EMAIL_FROM
+              value: "{{ .Values.email.from }}"
+            - name: EMAIL_FROM_DISPLAYNAME
+              value: "{{ .Values.email.displayName }}"
+
+            # Mail templates
+            - name: WELCOME_TEMPLATE
+              value: "{{ .Values.email.templates.welcome }}"
+            - name: WELCOME_TITLE
+              value: "{{ .Values.email.templates.welcomeTitle }}"
+            - name: ACTIVATE_TEMPLATE
+              value: "{{ .Values.email.templates.activate }}"
+            - name: ACTIVATE_TITLE
+              value: "{{ .Values.email.templates.activateTitle }}"
+            - name: FORGOT_TEMPLATE
+              value: "{{ .Values.email.templates.forgot }}"
+            - name: FORGOT_TITLE
+              value: "{{ .Values.email.templates.forgotTitle }}"
+            - name: SHARE_TEMPLATE
+              value: "{{ .Values.email.templates.share }}"
+            - name: SHARE_TITLE
+              value: "{{ .Values.email.templates.shareTitle }}"
+            - name: CASE_SHARE_TEMPLATE
+              value: "{{ .Values.email.templates.caseShare }}"
+            - name: CASE_SHARE_TITLE
+              value: "{{ .Values.email.templates.caseShareTitle }}"
+            - name: CASE_SHARE_OTP_TEMPLATE
+              value: "{{ .Values.email.templates.caseShareOtp }}"
+            - name: CASE_SHARE_OTP_TITLE
+              value: "{{ .Values.email.templates.caseShareOtpTitle }}"
+            - name: ASSIGN_TASK_TEMPLATE
+              value: "{{ .Values.email.templates.assignTask }}"
+            - name: ASSIGN_TASK_TITLE
+              value: "{{ .Values.email.templates.assignTaskTitle }}"
+            - name: DEFAULT_TASK_RETENTION_DAYS
+              value: "{{ .Values.kerberoshub.api.defaultTaskRetentionDays }}"
+            - name: CASES_MAX_RETENTION_DAYS
+              value: "{{ .Values.kerberoshub.api.casesMaxRetentionDays }}"
+            {{- with .Values.kerberoshub.api.auditExportMaxEventsPerFile }}
+            - name: AUDIT_EXPORT_MAX_EVENTS_PER_FILE
+              value: {{ . | int64 | toString | quote }}
+            {{- end }}
+
+            # SMTP
+            - name: SMTP_SERVER
+              value: "{{ .Values.email.smtp.server }}"
+            - name: SMTP_PORT
+              value: "{{ .Values.email.smtp.port }}"
+            - name: SMTP_USERNAME
+              value: "{{ .Values.email.smtp.username }}"
+            - name: SMTP_PASSWORD
+              value: "{{ .Values.email.smtp.password }}"
+
+            # Mailgun
+            - name: MAILGUN_DOMAIN
+              value: "{{ .Values.email.mailgun.domain }}"
+            - name: MAILGUN_API_KEY
+              value: "{{ .Values.email.mailgun.apikey }}"
+
+            # There is an option to store the thumbnails in a storage provider in Kerberos Vault.
+            # This will lower storage in mongodb.
+            - name: THUMBNAIL_VAULT_ENABLED
+              value: "{{ .Values.kerberospipeline.thumbnail.kerberosvault.enabled }}"
+            - name: VAULT_THUMBNAIL_PROVIDER
+              value: "{{ .Values.kerberosvault.thumbnail.provider }}"
+            - name: VAULT_THUMBNAIL_ACCESS_KEY
+              value: "{{ .Values.kerberosvault.thumbnail.accessKey }}"
+            - name: VAULT_THUMBNAIL_SECRET_KEY
+              value: "{{ .Values.kerberosvault.thumbnail.secretKey }}"
+
+            # There is an option to store the sprites in a storage provider in Kerberos Vault.
+            - name: VAULT_SPRITE_ENABLED
+              value: "{{ .Values.kerberospipeline.sprite.enabled }}"
+            - name: VAULT_SPRITE_PROVIDER
+              value: "{{ .Values.kerberosvault.sprite.provider }}"
+            - name: VAULT_SPRITE_ACCESS_KEY
+              value: "{{ .Values.kerberosvault.sprite.accessKey }}"
+            - name: VAULT_SPRITE_SECRET_KEY
+              value: "{{ .Values.kerberosvault.sprite.secretKey }}"
+            - name: VAULT_SPRITE_INTERVAL
+              value: "{{ .Values.kerberospipeline.sprite.interval }}"
+            - name: VAULT_SPRITE_WIDTH
+              value: "{{ .Values.kerberospipeline.sprite.width }}"
+            - name: VAULT_SPRITE_HEIGHT
+              value: "{{ .Values.kerberospipeline.sprite.height }}"
+            {{- if .Values.kerberoshub.extraEnv }}
+            {{- toYaml .Values.kerberoshub.extraEnv | nindent 12 }}
+            {{- end }}
+
+            {{- if .Values.opentelemetry.enabled }}
+            # Open Telemetry tracing
+            - name: OTEL_EXPORTED_OTLP_ENABLED
+              value: "{{ .Values.opentelemetry.enabled }}"
+            - name: OTEL_EXPORTED_OTLP_ROUTING_ENABLED
+              value: "{{ .Values.opentelemetry.routingEnabled }}"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "{{ .Values.opentelemetry.collector.endpoint }}"
+            {{- include "hub.opentelemetry.apiSamplerEnv" $ | trim | nindent 12 }}
+            {{- end }}
+{{- end }}

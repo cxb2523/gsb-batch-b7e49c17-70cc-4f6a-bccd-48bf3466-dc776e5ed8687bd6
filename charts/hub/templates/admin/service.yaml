@@ -1,0 +1,17 @@
+{{- if or (eq .Values.mode "all") (eq .Values.mode "ui") -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin-svc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: admin-svc
+spec:
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: http
+      name: http
+  selector:
+    app: admin
+{{- end }}

@@ -1,0 +1,144 @@
+{{- if or (eq .Values.mode "all") (eq .Values.mode "ui") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-cleanup
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.kerberoshub.cleanup.replicas }}
+  selector:
+    matchLabels:
+      app: hub-cleanup
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configMaps/configmap-mongodb.yaml") . | sha256sum }}
+      labels:
+        app: hub-cleanup
+    spec:
+      {{- with .Values.kerberoshub.cleanup.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.kerberoshub.serviceAccount.create }}
+      serviceAccountName: {{ default (printf "%s-%s-sa" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-") .Values.kerberoshub.serviceAccount.name }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $mongodbTLS := .Values.mongodb.tls }}
+      {{- if or .Values.kerberoshub.cleanup.volumes (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+      volumes:
+      {{- with .Values.kerberoshub.cleanup.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+        {{- include "hub.mongodb.tlsVolume" . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.kerberoshub.cleanup.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: hub-cleanup
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.kerberoshub.cleanup.repository }}:{{ .Values.kerberoshub.cleanup.tag }}"
+          imagePullPolicy: {{ .Values.kerberoshub.cleanup.pullPolicy }}
+          {{- with .Values.kerberoshub.cleanup.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.kerberoshub.cleanup.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if or .Values.kerberoshub.cleanup.volumeMounts (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+          volumeMounts:
+          {{- with .Values.kerberoshub.cleanup.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+            {{- include "hub.mongodb.tlsVolumeMount" . | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: mongodb-config
+          ports:
+            - containerPort: 8080
+          env:
+            {{- include "hub.mongodb.appUriEnv" (dict "root" $ "app" "hub-cleanup") | nindent 12 }}
+            - name: MODE
+              value: "{{ .Values.kerberoshub.cleanup.mode }}"
+            - name: LOG_LEVEL
+              value: "{{ .Values.kerberoshub.cleanup.logLevel }}"
+            - name: RUN_INTERVAL_MINUTES
+              value: "{{ .Values.kerberoshub.cleanup.runIntervalMinutes }}"
+            - name: CLEANUP_USERNAMES
+              value: "{{ .Values.kerberoshub.cleanup.cleanupUsernames }}"
+            - name: READ_ONLY
+              value: "{{ .Values.readOnly }}"
+            - name: MAX_DAYS
+              value: "{{ .Values.kerberoshub.cleanup.maxDays }}"
+            - name: BATCH_SIZE
+              value: "{{ .Values.kerberoshub.cleanup.batchSize }}"
+            - name: USER_BATCH_SIZE
+              value: "{{ .Values.kerberoshub.cleanup.userBatchSize }}"
+            - name: MAX_USERS_PER_RUN
+              value: "{{ .Values.kerberoshub.cleanup.maxUsersPerRun }}"
+            - name: PROGRESS_EVERY
+              value: "{{ .Values.kerberoshub.cleanup.progressEvery }}"
+            - name: ACTIVE_USER_RESCAN_HOURS
+              value: "{{ .Values.kerberoshub.cleanup.activeUserRescanHours }}"
+            - name: INACTIVE_USER_RESCAN_HOURS
+              value: "{{ .Values.kerberoshub.cleanup.inactiveUserRescanHours }}"
+            - name: READ_TIMEOUT_SECONDS
+              value: "{{ .Values.kerberoshub.cleanup.readTimeoutSeconds }}"
+            - name: DELETE_TIMEOUT_SECONDS
+              value: "{{ .Values.kerberoshub.cleanup.deleteTimeoutSeconds }}"
+            - name: REPORT_INCLUDE_STATS
+              value: "{{ .Values.kerberoshub.cleanup.reportIncludeStats }}"
+            - name: DRY_RUN
+              value: "{{ .Values.kerberoshub.cleanup.dryRun }}"
+            - name: DEBUG
+              value: "{{ .Values.kerberoshub.cleanup.debug }}"
+            - name: GLOBAL_PASS_ENABLED
+              value: "{{ .Values.kerberoshub.cleanup.globalPassEnabled }}"
+            - name: GLOBAL_PASS_INTERVAL_HOURS
+              value: "{{ .Values.kerberoshub.cleanup.globalPassIntervalHours }}"
+            - name: GLOBAL_PASS_DELETE_BUDGET
+              value: "{{ .Values.kerberoshub.cleanup.globalPassDeleteBudget }}"
+            - name: DEFAULT_TASK_RETENTION_DAYS
+              value: "{{ .Values.kerberoshub.cleanup.defaultTaskRetentionDays }}"
+            - name: AUDIT_EVENT_RETENTION_DAYS
+              value: "{{ .Values.kerberoshub.cleanup.auditEventRetentionDays }}"
+            - name: WORKFLOW_RUN_RETENTION_DAYS
+              value: "{{ .Values.kerberoshub.cleanup.workflowRunRetentionDays | default "0" }}"
+          {{- if .Values.kerberoshub.extraEnv }}
+          {{- toYaml .Values.kerberoshub.extraEnv | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: hub-cleanup
+    service: hub-cleanup
+spec:
+  ports:
+    - name: hub-metrics
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: hub-cleanup
+{{- end }}

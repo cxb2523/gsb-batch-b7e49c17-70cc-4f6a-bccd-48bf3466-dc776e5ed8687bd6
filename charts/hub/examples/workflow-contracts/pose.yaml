@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=../../schemas/workflow-contract.schema.json
+# Hypothetical custom worker output; not an installed stage or universal pose schema.
+schemaVersion: 1
+stage: pose
+contractVersion: 1
+presentation:
+  name: Detect poses
+  description: Estimate body keypoints and posture for people in the recording.
+  icon: person
+  color: teal
+# Settings authors enter per node; the worker receives them as node data.
+params:
+  - name: minConfidence
+    label: Minimum keypoint confidence
+    type: number
+    default: 0.5
+  - name: model
+    label: Model
+    type: select
+    options: [fast, accurate]
+    optionLabels: {fast: Fast, accurate: Accurate}
+    default: fast
+fields:
+  - id: keypoint
+    label: Keypoint
+    path: people.*.keypoints.*.name
+    type: string
+    operators: [in]
+    choices:
+      file: ../catalogs/pose-keypoints.json
+  - id: posture
+    label: Posture
+    path: people.*.posture
+    type: string
+    operators: [in]
+    choices:
+      values: [standing, sitting, lying]
+  - id: confidence
+    label: Keypoint confidence
+    path: people.*.keypoints.*.confidence
+    type: number
+    operators: [gt, gte, lt, lte]
+    minimum: 0
+    maximum: 1
+# Connections leaving this stage: one section with fixed inputs, then the
+# Extra conditions catch-all (appended collapsed when not placed explicitly).
+panel:
+  sections:
+    - id: posture
+      label: Posture
+      fields:
+        - {field: posture, widget: multiselect}
+        - {field: confidence, widget: number, operator: gte, label: Minimum confidence}

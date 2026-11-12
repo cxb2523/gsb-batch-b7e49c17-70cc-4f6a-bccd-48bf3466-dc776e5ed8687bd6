@@ -1,0 +1,152 @@
+{{- if or (eq .Values.mode "all") (eq .Values.mode "pipeline") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pipe-notify-test
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.kerberospipeline.notifyTest.replicas }}
+  selector:
+    matchLabels:
+      app: pipe-notify-test
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configMaps/configmap-mongodb.yaml") . | sha256sum }}
+      labels:
+        app: pipe-notify-test
+    spec:
+      {{- if .Values.kerberoshub.serviceAccount.create }}
+      serviceAccountName: {{ default (printf "%s-%s-sa" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-") .Values.kerberoshub.serviceAccount.name }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $mongodbTLS := .Values.mongodb.tls }}
+      {{- if or .Values.kerberospipeline.notifyTest.volumes (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+      volumes:
+      {{- with .Values.kerberospipeline.notifyTest.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+        {{- include "hub.mongodb.tlsVolume" . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.kerberospipeline.notifyTest.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: pipe-notify-test
+        image: "{{ .Values.global.imageRegistry }}{{ .Values.kerberospipeline.notifyTest.repository }}:{{ .Values.kerberospipeline.notifyTest.tag }}"
+        imagePullPolicy: {{ .Values.kerberospipeline.notifyTest.pullPolicy }}
+        {{- with .Values.kerberospipeline.notifyTest.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if or .Values.kerberospipeline.notifyTest.volumeMounts (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+        volumeMounts:
+        {{- with .Values.kerberospipeline.notifyTest.volumeMounts}}
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+          {{- include "hub.mongodb.tlsVolumeMount" . | nindent 12 }}
+        {{- end }}
+        {{- end }}
+        envFrom:
+        - configMapRef:
+            name: mongodb-config
+        env:
+        {{- include "hub.mongodb.appUriEnv" (dict "root" $ "app" "hub-pipeline-notification-test") | nindent 8 }}
+        - name: QUEUE_SYSTEM
+          value: "{{ .Values.queueProvider }}"
+
+        # Kerberos Vault
+        - name: STORAGE_URI
+          value: "{{ .Values.kerberosvault.uri }}"
+        - name: STORAGE_ACCESS_KEY
+          value: "{{ .Values.kerberosvault.accesskey }}"
+        - name: STORAGE_SECRET_KEY
+          value: "{{ .Values.kerberosvault.secretkey }}"
+
+        # Kafka settings
+        - name: KAFKA_BROKER
+          value: "{{ .Values.kafka.broker }}"
+        - name: KAFKA_USERNAME
+          value: "{{ .Values.kafka.username }}"
+        - name: KAFKA_PASSWORD
+          value: "{{ .Values.kafka.password }}"
+        - name: KAFKA_MECHANISM
+          value: "{{ .Values.kafka.mechanism }}"
+        - name: KAFKA_SECURITY
+          value: "{{ .Values.kafka.security }}"
+
+        # RabbitMQ settings
+        - name: RABBITMQ_HOST
+          value: "{{ .Values.rabbitmq.host }}"
+        - name: RABBITMQ_EXCHANGE
+          value: "{{ .Values.rabbitmq.exchange }}"
+        - name: RABBITMQ_USERNAME
+          value: "{{ .Values.rabbitmq.username }}"
+        - name: RABBITMQ_PASSWORD
+          value: "{{ .Values.rabbitmq.password }}"
+
+        # Mail settings
+        - name: MAIL_PROVIDER
+          value: "{{ .Values.email.provider }}"
+        - name: EMAIL_FROM
+          value: "{{ .Values.email.from }}"
+        - name: EMAIL_FROM_DISPLAYNAME
+          value: "{{ .Values.email.displayName }}"
+        - name: PUBLIC_URL
+          value: "{{ .Values.kerberoshub.frontend.schema }}://{{ .Values.kerberoshub.frontend.url }}"
+          
+        # Mail templates
+        - name: DETECT_TEMPLATE
+          value: "{{ .Values.email.templates.detection }}"
+
+        # SMTP
+        - name: SMTP_SERVER
+          value: "{{ .Values.email.smtp.server }}"
+        - name: SMTP_PORT
+          value: "{{ .Values.email.smtp.port }}"
+        - name: SMTP_USERNAME
+          value: "{{ .Values.email.smtp.username }}"
+        - name: SMTP_PASSWORD
+          value: "{{ .Values.email.smtp.password }}"
+        
+        {{- if .Values.opentelemetry.enabled }}
+        # Open Telemetry tracing
+        - name: OTEL_EXPORTED_OTLP_ENABLED
+          value: "{{ .Values.opentelemetry.enabled }}"
+        - name: OTEL_EXPORTED_OTLP_ROUTING_ENABLED
+          value: "{{ .Values.opentelemetry.routingEnabled }}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{{ .Values.opentelemetry.collector.endpoint }}"
+        {{- include "hub.opentelemetry.samplerEnv" $ | trim | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pipe-notify-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: pipe-notify-test
+    service: pipe
+spec:
+  ports:
+    - name: hub-metrics
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: pipe-notify-test
+{{- end }}

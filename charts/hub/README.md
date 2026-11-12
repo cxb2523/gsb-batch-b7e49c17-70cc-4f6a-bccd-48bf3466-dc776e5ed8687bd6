@@ -1,0 +1,2072 @@
+# Kerberos Hub
+
+Kerberos Hub is the single pane of glass for your Kerberos agents. It comes with a best of breed open source technology stack, modular and scale first mindset, and allows you to build and maintain an everless growing video surveillance and video analytics landscape.
+
+![Kerberos Hub Interface](assets/images/hub-dashboard.png)
+
+## License
+
+To use Kerberos Hub a license is required. This license will grant access the Kerberos Hub API, and allow to connect a number of cameras and Kerberos Vaults.
+
+## Add helm repos
+
+The Kerberos Hub installation makes use of this Helm chart. Therefore, we will add those repos to our Kubernetes cluster.
+
+    helm repo add kerberos https://charts.kerberos.io
+    helm repo update
+
+## Prerequisites
+
+Go and follow the Kerberos Hub installation at the [hub repository](https://github.com/kerberos-io/hub). Once you have [installed all prerequisites](https://github.com/kerberos-io/helm-charts/tree/main/charts/hub#lets-give-it-a-try) come back here.
+
+## Kerberos Hub
+
+So once you hit this step, you should have installed all required dependencies. Hopefully you didn't had too much pain with the certificates. Before starting, it's important to have a look at the `values.yaml` file. This includes the different parameters to configure the different deployments. Reach out to us if you would need any help with this.
+
+Install the Kerberos Hub chart in a specific namespace and take into the values.yaml file.
+
+    helm install hub kerberos/hub --values values.yaml -n kerberos-hub --create-namespace
+
+Uninstall the Kerberos Hub chart
+
+    helm uninstall hub -n kerberos-hub
+
+### Hardened Hub API
+
+Starting with chart **`0.170.1`**, `kerberoshub.api.securityContext` is rendered
+on the Hub API container and `kerberoshub.api.podSecurityContext` on its pod.
+The current image runs as `65532:65532` with a read-only root filesystem,
+privilege escalation disabled, all capabilities dropped and `RuntimeDefault`
+seccomp. A disk-backed `hub-api-tmp` emptyDir mounted at `/tmp`, with pod
+`fsGroup: 65532`, keeps attachment uploads and multipart parsing writable.
+API Service, ingress and port settings are unchanged.
+
+Append custom mounts and volumes to the default lists rather than replacing
+`hub-api-tmp`. Helm replaces lists in overrides. Existing MongoDB TLS, API TLS,
+catalog and workflow-configuration mounts remain supported.
+
+For a legacy image that requires its original identity or writable root
+filesystem, explicitly set both `kerberoshub.api.securityContext: null` and
+`kerberoshub.api.podSecurityContext: null`. Custom security settings are
+per-API; other workloads do not inherit them. When upgrading, check retained
+values (`--reuse-values` or GitOps overrides) so the security context and
+writable scratch mount stay aligned.
+
+Run `bash scripts/check-hub-api-runtime.sh` to validate defaults, overrides,
+legacy opt-out, TLS/configuration mounts and deployment modes.
+
+### Hardened frontend images
+
+Starting with chart **`0.170.0`**, both frontends default to shell-free
+`ghcr.io/uug-ai/hub-frontend:v1.19.35`, running as `65532:65532` on port `8080`
+with a read-only root filesystem and writable `/tmp`. The Service and ingress
+remain on port `80`. Admin retains its legacy image and port `80`; its hardened
+runtime remains opt-in.
+
+The following frontend runtime settings are now the defaults. When upgrading,
+remove stale port `80` overrides and coordinate image/runtime values; Helm
+`--reuse-values` and GitOps overrides may retain the old settings.
+Use chart `0.167.2` or newer when the demo frontend is enabled; `0.167.1`
+supports these settings only on the primary frontend.
+
+```yaml
+kerberoshub:
+    frontend:
+        containerPort: 8080
+        securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+                drop: ["ALL"]
+            seccompProfile:
+                type: RuntimeDefault
+        volumes:
+            - name: frontend-tmp
+              emptyDir:
+                  medium: Memory
+                  sizeLimit: 16Mi
+        volumeMounts:
+            - name: frontend-tmp
+              mountPath: /tmp
+```
+
+Merge the temporary volume into any existing branding/translation mounts rather
+than replacing them. Custom files must be readable by UID `65532`; mount them
+read-only. Only `/tmp` needs writes for generated public runtime configuration
+and nginx's PID/temp files. The web root stays read-only. Health checks can use
+`GET /healthz` on the named `http` container port. These settings apply to both
+the primary and demo frontends, which share the frontend image tag. Update the
+live Argo CD Application's chart pin as well as its values: an image-only
+upgrade leaves older charts forwarding to port `80` and causes gateway errors.
+
+For legacy frontend images or a rollback, explicitly restore **all** runtime
+settings together (including removing inherited security defaults):
+
+```yaml
+kerberoshub:
+    frontend:
+        tag: v1.13.9
+        containerPort: 80
+        securityContext: null
+        volumes: []
+        volumeMounts: []
+```
+
+Keep any application-specific branding mounts when adjusting these lists.
+Chart upgrades do not rewrite separately managed NodePort Services: ensure they
+target the named `http` port, not numeric `80`. Follow the duplicate-port recovery
+instructions below if the existing Deployment cannot be patched to `8080`.
+Run `bash scripts/check-frontend-runtime.sh` for default, demo, legacy override,
+and deployment-values regression coverage.
+
+### Hardened Admin image (default since chart 0.184.0)
+
+`charts/hub` deploys Admin in `all` and `ui` modes. Since chart **`0.184.0`** the
+default is the signed, shell-free `ghcr.io/uug-ai/admin` (`v1.4.5`): it runs as
+`65532:65532` on `8080` with a read-only root filesystem, a memory-backed `/tmp`
+(`admin-tmp`, the only writable path) and `/healthz` probes. These settings are
+the defaults in `values.yaml`; keep them together with the image. Append extra
+volumes and mounts to the `admin.volumes` / `admin.volumeMounts` lists (Helm
+replaces lists in overrides). Memory-backed scratch counts against the pod memory
+limit. The `admin-svc` Service and Admin ingress use port `80`; the Service
+targets the named `http` container port. OAuth2-proxy is unchanged.
+
+Only `ghcr.io/uug-ai` images are trusted (see *Image signature verification*).
+To run a legacy image on port `80` instead, restore all of these together:
+
+```yaml
+admin:
+    repository: uugai/admin
+    tag: v1.3.0
+    containerPort: 80
+    securityContext: null
+    readinessProbe: null
+    livenessProbe: null
+    volumes: null
+    volumeMounts: null
+```
+
+Run `bash scripts/check-admin-runtime.sh` from the repository root to verify the
+hardened defaults, the legacy opt-out and unchanged OAuth2 routing.
+### Recovering a duplicate HTTP port during upgrades
+
+Chart `0.169.1` publishes this recovery guidance. The helper is available in the
+repository's `scripts/` directory, not in the chart archive. This release does
+not automatically migrate live container ports or change runtime defaults.
+
+An upgrade changing a container's HTTP port from `80` to `8080` can fail with
+`spec.template.spec.containers[0].ports[1].name: Duplicate value: "http"`.
+Kubernetes strategic merges identify container ports by number, not name:
+depending on the live state and apply mechanism, the old `80` entry can survive
+beside the new `8080` entry. Fresh chart renders contain only one HTTP port.
+This is not a reason to rename `http`: Services and probes reference that name.
+
+Inspect the failing Deployment and confirm the image's listening port first:
+
+```sh
+kubectl -n kerberos-hub get deployment hub-frontend -o yaml
+```
+
+In a checkout of this repository, use the targeted migration helper to replace
+the named HTTP entry (not strategically merge it). It supports `admin`,
+`hub-frontend` and `hub-frontend-demo`, preserves unrelated ports and containers,
+and rejects unfamiliar HTTP configurations. It requires `kubectl` and `jq` and
+uses the current kubeconfig context. The default is a **server dry run**:
+
+```sh
+bash scripts/migrate-http-port.sh kerberos-hub hub-frontend 8080
+# Apply only after inspecting the dry run and confirming the target/context.
+bash scripts/migrate-http-port.sh kerberos-hub hub-frontend 8080 --apply
+```
+
+Run this only for affected Deployments, using the port selected in your upgrade
+values. Then retry the Helm upgrade or GitOps sync with the coordinated image,
+port, security context and scratch-volume settings above. Pause GitOps auto-sync
+during manual recovery so it cannot race or undo the patch, and resume it after
+the desired state has synced. The helper uses resource-version/name tests to
+reject concurrent changes; re-inspect and retry if those tests fail.
+
+Changing the pod template triggers a rollout, and setting `8080` while the old
+image still listens on `80` can temporarily interrupt Service traffic. Schedule
+the recovery in a maintenance window and complete the matching image upgrade
+immediately. The helper does not change images, mount scratch volumes, or repair
+unrelated readiness failures. For a legacy-image rollback use port `80` instead,
+restore the matching runtime settings, and retry the rollback. Do not use blanket
+`helm upgrade --force` or resource replacement for unrelated workloads.
+
+Run `bash scripts/check-http-port-migration.sh` to reproduce the strategic-merge
+failure and test targeted replacement, idempotency, and reverse migration for all
+three Deployments. CI also checks API rejection of duplicate names and acceptance
+of the repaired spec against a disposable Kind cluster.
+
+### Hardened Hub workers (opt-in, chart 0.167.3)
+
+The worker templates accept **per-component** `securityContext` (container) and
+`podSecurityContext` (pod) maps. Both default to `{}` and are omitted from the
+rendered Deployment. Image tags, ports, existing mounts and legacy permissions
+are unchanged. Support covers:
+
+| Values path | Deployment |
+| --- | --- |
+| `kerberospipeline.counting` | `pipe-counting` |
+| `kerberospipeline.throttler` | `pipe-throttler` |
+| `kerberospipeline.notify` | `pipe-notify` |
+| `kerberospipeline.thumbnail` | `pipe-thumbnail` |
+| `kerberospipeline.dominantColor` | `pipe-dominantcolor` |
+| `kerberoshub.cleanup` | `hub-cleanup` |
+| `kerberoshub.monitordevice` | `hub-monitor-device` |
+| `kerberoshub.services.workflows` | `hub-workflows` |
+| `kerberoshub.services.<stage>` | Enabled generic workflow workers, e.g. loitering, ANPR or forwarder |
+
+These application hardening changes are proposed in draft PRs, not release
+clearance. First select and validate a compatible hardened image for each
+component, then deploy a chart revision containing this support and its matching
+values together. Published chart `0.167.2` does not contain these worker settings.
+Do not enable these settings for an unverified legacy, Python/GPU or custom image.
+There is no global switch that hardens every worker.
+
+For a verified `65532:65532` Go worker, explicitly configure its own values path:
+
+```yaml
+kerberospipeline:
+    counting:
+        securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+                drop: ["ALL"]
+            seccompProfile:
+                type: RuntimeDefault
+```
+
+Apply that same container map independently to other verified workers; it is not
+inherited by them. The confirmed loitering image processes trajectories entirely
+in memory and needs no writable mount. Worker metrics Services remain on `8080`;
+`GET /metrics` is process liveness, not RabbitMQ/dependency readiness.
+
+The notification image proposed by `uug-ai/hub-pipeline-notification#149` retains
+its existing worker/provider/FFmpeg behavior. Configure its own
+`kerberospipeline.notify` security maps only after selecting that compatible
+image; retain provider settings and merge existing mounts/resources. Mount
+workload-sized writable scratch at `/tmp` (the default temporary directory);
+the worker creates `/tmp/hub-pipeline-thumbnail` for generated media. Keep
+`/mail/templates` override mounts read-only and custom CA mounts readable by UID
+`65532`. The application working directory need not be writable. MongoDB TLS
+secret mounts remain read-only. Final native image proof is still required.
+
+Thumbnail and dominant-colour workers need writable **`/tmp`**, including legacy
+debug image output. Merge a disk-backed `emptyDir` and its mount into each
+component's existing `volumes`/`volumeMounts`. For example, after sizing for the
+workload:
+
+```yaml
+kerberospipeline:
+    thumbnail:
+        # Also configure the container securityContext above for this worker.
+        podSecurityContext:
+            fsGroup: 65532
+        volumes:
+            - name: media-scratch
+              emptyDir:
+                  sizeLimit: 4Gi # Illustrative only, NOT a safe universal limit.
+        volumeMounts:
+            - name: media-scratch
+              mountPath: /tmp
+        resources:
+            requests:
+                ephemeral-storage: 4Gi
+            limits:
+                ephemeral-storage: 6Gi
+```
+
+Size scratch for the sum of concurrently downloaded full recordings, extracted
+JPEG/PNG frames, debug files and headroom. Align ephemeral-storage requests/limits
+with scratch and other pod usage; retain suitable CPU/memory resources.
+Memory-backed scratch counts against the pod memory limit and can double-count
+media already buffered in Go. Small CI fixture volumes are not production sizing.
+Only opt in to `fsGroup` after reviewing **all** mounts on that pod: persistent
+volumes can be affected by Kubernetes/CSI ownership handling. Do not add a
+recursive chmod/chown init container or mount over the root-owned application.
+
+The proposed ANPR image uses a workload-sized writable directory such as `/work`
+with `kerberoshub.services.anpr.env.TMPDIR: /work`; configure matching
+`volumes`/`volumeMounts` and container security settings on that stage only.
+Optional dataset mode also requires its own writable `ANPR_DATASET_DIR` mount.
+Models and application directories stay read-only.
+
+This repository has **no Vault server or design-system chart**. The files named
+### Image signature verification (Kyverno)
+
+Starting with chart **`0.179.0`**, the chart can verify that UUG.AI images are
+signed by UUG.AI. It is **opt-in** from chart **`0.179.1`** (in `0.179.0` it was
+on by default):
+
+```yaml
+imageVerification:
+  enabled: true
+```
+
+When enabled and [Kyverno](https://kyverno.io) is installed in the cluster, it
+creates Kyverno policies in the release namespace. Without Kyverno (no
+`kyverno.io/v1` API), nothing is created even when enabled.
+
+Signature policies use the Kyverno category **`Image signing`** and hardening
+policies **`Image hardening`** (chart `0.182.1`), so Policy Reporter and its
+dashboards can filter on each check separately.
+
+Each policy is a plain, namespaced Kyverno `Policy` in its own file in
+`templates/kyverno/`, so it applies only to the release namespace. There is one
+per `ghcr.io/uug-ai` image the chart can deploy; each requires the image to be
+signed for its own `uug-ai/<image>` repository. "Mode" is the
+`validationFailureAction` the policy uses:
+
+| Template | Image | Releases signed | Mode |
+|---|---|---|---|
+| `hub-api-signed-images.yaml` | `ghcr.io/uug-ai/hub-api` | ✅ signed | value |
+| `hub-cleanup-signed-images.yaml` | `ghcr.io/uug-ai/hub-cleanup` | ✅ signed | value |
+| `hub-frontend-signed-images.yaml` | `ghcr.io/uug-ai/hub-frontend` | ✅ signed | value |
+| `hub-loitering-signed-images.yaml` | `ghcr.io/uug-ai/hub-loitering` | ✅ signed | value |
+| `hub-monitor-device-signed-images.yaml` | `ghcr.io/uug-ai/hub-monitor-device` | ✅ signed | value |
+| `hub-workflows-signed-images.yaml` | `ghcr.io/uug-ai/hub-workflows` | ✅ signed | value |
+| `hub-pipeline-analysis-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-analysis` | ✅ signed | value |
+| `hub-pipeline-counting-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-counting` | ✅ signed | value |
+| `hub-pipeline-monitor-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-monitor` | ✅ signed | value |
+| `hub-pipeline-sequence-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-sequence` | ✅ signed | value |
+| `hub-pipeline-throttler-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-throttler` | ✅ signed | value |
+| `hub-audit-signed-images.yaml` | `ghcr.io/uug-ai/hub-audit` | ✅ signed (from v1.0.11) | value |
+| `hub-objecttracking-signed-images.yaml` | `ghcr.io/uug-ai/hub-objecttracking` | ✅ signed (from v1.0.10); `-gpu` image not yet | always `Audit` |
+| `hub-vlm-signed-images.yaml` | `ghcr.io/uug-ai/hub-vlm` | ✅ signed (from v1.0.8) | value |
+| `hub-pipeline-dominantcolors-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-dominantcolors` | ✅ signed (from v2.0.10) | value |
+| `hub-pipeline-event-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-event` | ✅ signed (from v1.3.10) | value |
+| `hub-pipeline-export-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-export` | ✅ signed (from v1.2.22) | value |
+| `hub-pipeline-notification-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-notification` | ✅ signed (from v1.3.48) | value |
+| `hub-pipeline-notification-test-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-notification-test` | ✅ signed (from v1.2.7) | value |
+| `hub-pipeline-sprite-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-sprite` | ✅ signed (from v1.1.28) | value |
+| `hub-pipeline-thumbnail-signed-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-thumbnail` | ✅ signed (from v1.3.24) | value |
+| `admin-signed-images.yaml` | `ghcr.io/uug-ai/admin` | ✅ signed (from v1.4.5) | always `Audit` |
+| `hub-reactivatesubscriptions-signed-images.yaml` | `ghcr.io/uug-ai/hub-reactivatesubscriptions` | ❌ not on GHCR yet; the chart uses Docker Hub `uugai/hub-reactivatesubscriptions` | always `Audit` |
+
+Since chart **`0.182.0`** every `ghcr.io/uug-ai` image's releases are signed, so
+every policy follows `imageVerification.validationFailureAction`, except
+`hub-objecttracking`: its GPU image (`<tag>-gpu`) is not signed yet, so that
+policy stays in `Audit` and enabling `Enforce` never blocks it. Images are signed
+from the release noted in the table; **older tags are unsigned and are rejected
+in `Enforce`**, so check the tags you run before enforcing. Since chart
+**`0.183.0`** the default image tags are signed releases, and since **`0.183.1`** hardened
+releases (with the attestation) for every image that has a hardening policy.
+
+Since chart **`0.184.0`** only `ghcr.io/uug-ai` images are trusted:
+
+- every UUG.AI image has a signature and a hardening policy, matching its
+  `ghcr.io/uug-ai/<image>` repository only. Images that are not signed or
+  hardened yet stay in `Audit` (the tables mark them), so they show up as
+  failures in Policy Reporter without ever being blocked;
+- `trusted-registry.yaml` (category **`Image registry`**, `Audit`) reports every
+  container image from any other registry or organisation. The chart can still
+  deploy two: `uugai/hub-reactivatesubscriptions` (Docker Hub; not released to
+  GHCR yet) and the third-party `quay.io/oauth2-proxy/oauth2-proxy` (pin it to
+  a version or digest rather than `:latest`).
+
+To change a policy, edit its file. To add an image, copy a policy file and
+change the image and repository.
+
+Every image is released with a keyless [cosign](https://docs.sigstore.dev)
+signature recorded in the public Rekor transparency log. A policy accepts an
+image only when its signature was:
+
+- issued by GitHub Actions (`https://token.actions.githubusercontent.com`),
+- made by the UUG.AI release workflow
+  (`uug-ai/workflows/.github/workflows/release-create.yml`), and
+- made **for the image's own repository** (for `hub-api`: `uug-ai/hub-api`).
+  The release workflow is shared by all UUG.AI repositories, so this repository
+  claim is what stops an image of one repository passing as another.
+
+Signed means the image's releases are signed now; older tags of the same image
+can still be unsigned (for example `hub-api` `v1.11.38`) and are rejected in
+`Enforce`. Check the tags you run before enforcing.
+
+By default the policies run in **`Audit`** mode: unsigned images are reported in
+Kyverno PolicyReports (for example in Policy Reporter) but still run. Once the
+reports are clean, block them:
+
+```yaml
+imageVerification:
+  enabled: true
+  validationFailureAction: Enforce   # Audit (default) or Enforce
+```
+
+In both modes `failurePolicy: Ignore` keeps pods starting if Kyverno itself is
+unavailable, and `mutateDigest`/`verifyDigest: false` leave pod images as they
+are; those are set in the policy files.
+
+The policies verify the images at `ghcr.io/uug-ai`. If you mirror the images to
+another registry, disable the chart's policies and apply your own copy with
+your registry in `imageReferences` (the mirror must also copy the cosign `.sig`
+artifacts). To check an image yourself:
+
+```bash
+cosign verify ghcr.io/uug-ai/hub-api:v1.11.40 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/uug-ai/workflows/\.github/workflows/release-create\.yml@' \
+  --certificate-github-workflow-repository uug-ai/hub-api
+```
+
+### Image hardening verification (Kyverno)
+
+Starting with chart **`0.181.0`**, the chart can also require images to come
+from a **hardened** UUG.AI release. A hardened release runs extra gates (tests,
+non-root runtime contract, read-only smoke test, vulnerability and secret scans,
+SBOM checks) and, only when all pass, adds a signed in-toto attestation of type
+`https://github.com/uug-ai/workflows/attestations/image-hardening/v1` with
+`result: passed` and the image's repository. This is separate from (and
+stricter than) the signature check above, and opt-in on its own:
+
+```yaml
+imageHardening:
+  enabled: true
+  validationFailureAction: Audit   # Audit (default) or Enforce
+```
+
+When enabled and Kyverno is installed, it creates one namespaced `Policy` per
+image whose repository makes hardened releases, in `templates/kyverno/`:
+
+| Template | Image |
+|---|---|
+| `hub-api-hardened-images.yaml` | `ghcr.io/uug-ai/hub-api` |
+| `hub-cleanup-hardened-images.yaml` | `ghcr.io/uug-ai/hub-cleanup` |
+| `hub-frontend-hardened-images.yaml` | `ghcr.io/uug-ai/hub-frontend` |
+| `hub-loitering-hardened-images.yaml` | `ghcr.io/uug-ai/hub-loitering` |
+| `hub-monitor-device-hardened-images.yaml` | `ghcr.io/uug-ai/hub-monitor-device` |
+| `hub-workflows-hardened-images.yaml` | `ghcr.io/uug-ai/hub-workflows` |
+| `hub-pipeline-analysis-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-analysis` |
+| `hub-pipeline-counting-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-counting` |
+| `hub-pipeline-monitor-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-monitor` |
+| `hub-pipeline-sequence-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-sequence` |
+| `hub-pipeline-throttler-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-throttler` |
+| `hub-audit-hardened-images.yaml` | `ghcr.io/uug-ai/hub-audit` (not hardened yet; always `Audit`) |
+| `hub-objecttracking-hardened-images.yaml` | `ghcr.io/uug-ai/hub-objecttracking` (not hardened yet; always `Audit`) |
+| `hub-vlm-hardened-images.yaml` | `ghcr.io/uug-ai/hub-vlm` (not hardened yet; always `Audit`) |
+| `hub-pipeline-dominantcolors-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-dominantcolors` (not hardened yet; always `Audit`) |
+| `hub-pipeline-event-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-event` (not hardened yet; always `Audit`) |
+| `hub-pipeline-export-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-export` (not hardened yet; always `Audit`) |
+| `hub-pipeline-notification-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-notification` (not hardened yet; always `Audit`) |
+| `hub-pipeline-notification-test-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-notification-test` (not hardened yet; always `Audit`) |
+| `hub-pipeline-sprite-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-sprite` (not hardened yet; always `Audit`) |
+| `hub-pipeline-thumbnail-hardened-images.yaml` | `ghcr.io/uug-ai/hub-pipeline-thumbnail` (not hardened yet; always `Audit`) |
+| `admin-hardened-images.yaml` | `ghcr.io/uug-ai/admin` (not hardened yet; always `Audit`) |
+| `hub-reactivatesubscriptions-hardened-images.yaml` | `ghcr.io/uug-ai/hub-reactivatesubscriptions` (not hardened yet; always `Audit`) |
+
+Each requires the attestation to be signed by the UUG.AI release workflow for
+the image's own repository, and its `result` and `repository` to be `passed`
+and `uug-ai/<image>`. Images whose repositories do not make hardened releases
+have no hardening policy.
+
+Only releases made with hardening enabled after the attestation was introduced
+(November 2026) carry it, so most currently running versions fail this policy
+until their next hardened release. Keep it in `Audit` until the reports are
+clean.
+
+### MCP
+
+Deploy a Hub API image supporting MCP, then enable the read-only Streamable HTTP
+endpoint at `/mcp`:
+
+```yaml
+kerberoshub:
+    api:
+        mcp:
+            enabled: true
+            allowedOrigins: []
+```
+
+After upgrading the Helm release, an unauthenticated request to `/mcp` should
+return `401` instead of `404`. Connect using HTTPS and an existing Hub access
+token in `Authorization: Bearer <token>`; browser-session JWTs and cookies cannot
+authenticate MCP. Recording tools require `media.read`, device tools require
+`devices.read`, and both require effective resource grants.
+
+VS Code and other clients without an `Origin` header need no `allowedOrigins`.
+For browser MCP clients, list exact origins such as `https://agent.example.com`.
+Wildcards and trailing slashes are not supported. These origins are independent
+of REST CORS; frontend and REST origins are not automatically copied into MCP.
+MCP stays disabled by default, and these settings apply only to Hub API pods
+in `all` and `ui` modes. The chart does not change the API image tag.
+
+Validate rendering with `bash scripts/check-hub-mcp.sh` from the repository root.
+
+### Passkeys
+
+Users and sub-users can create and manage their own passkeys in **Profile >
+Passkeys**, then use **Sign in with a passkey** for passwordless authentication
+with device PIN/biometric verification. Existing password/MFA sign-in remains
+available. Enrollment and removal require the current password and an
+authenticator-app code when MFA is enabled.
+
+Deploy Hub API and frontend images that support passkeys before enabling this
+configuration; the chart version alone does not update the service image tags.
+Passkeys are disabled by default. Configure their trust explicitly:
+
+```yaml
+kerberoshub:
+    api:
+        passkeys:
+            enabled: true
+            rpId: "hub.example.com"
+            origins:
+                - "https://hub.example.com"
+            rpName: "Kerberos Hub"
+```
+
+| Value | Default | Purpose |
+| --- | --- | --- |
+| `kerberoshub.api.passkeys.enabled` | `false` | Turns passkeys on: sets `FEATURE_PASSKEYS_ENABLED` on Hub API and the frontend, and injects the passkey configuration into Hub API pods |
+| `kerberoshub.api.passkeys.rpId` | `""` | Required when enabled; sets `PASSKEY_RP_ID` |
+| `kerberoshub.api.passkeys.origins` | `[]` | Required when enabled; exact trusted frontend origins, joined with commas into `PASSKEY_ORIGINS` |
+| `kerberoshub.api.passkeys.rpName` | `"Kerberos Hub"` | Display name; sets `PASSKEY_RP_NAME` |
+
+Use the **frontend's public hostname and origins**, not the API URL. Origins
+must have no path or trailing slash. Each origin hostname must equal the RP ID
+or be its subdomain. Include only trusted origins, especially when sharing an
+RP ID across tenant subdomains. Keep the RP ID stable: changing it makes
+existing passkeys unusable. The API validates the RP/origin relationship at
+runtime; missing/invalid configuration makes passkeys unavailable without
+affecting password/MFA sign-in.
+
+HTTPS and a compatible browser are required. Local development may use
+`rpId: "localhost"` with `origins: ["http://localhost:4200"]`.
+The frontend displays translated cancellation, verification and unavailable
+messages when a ceremony cannot complete.
+
+Since chart `0.168.1`, Hub API and frontend images that include the passkey
+feature flag also require `FEATURE_PASSKEYS_ENABLED=true`. `enabled` sets it on
+both, so the API answers `501 FEATURE_NOT_SUPPORTED` and the frontend hides
+passkeys when it is `false`. If you configure passkeys through
+`kerberoshub.extraEnv` instead, add `FEATURE_PASSKEYS_ENABLED=true` there and in
+the frontend environment too.
+
+Apply values with a Helm upgrade or GitOps sync; changes trigger an API and frontend rollout.
+If these variables were previously configured through `kerberoshub.extraEnv`,
+remove those entries when enabling the dedicated settings to avoid duplicate
+environment variables. Setting `enabled: false` omits the chart-managed
+variables; any passkey variables supplied through `extraEnv` still take effect.
+
+The API's MongoDB identity needs reads on `users`, CRUD on `passkeys`, and
+insert/find-and-delete on `passkey_challenges`. It attempts to create the
+`passkey_challenge_expiry_ttl` index on `expiresAt` with
+`expireAfterSeconds: 0`; expiration and single-use enforcement work without the
+index, but the index is needed for automatic expired-challenge cleanup.
+
+### Sequence logging
+
+Set `kerberospipeline.sequence.logLevel` to control the Sequence service's
+`LOG_LEVEL` environment variable. The default is `info`; supported values are
+`debug`, `info`, `warn`, and `error` (lowercase).
+
+```yaml
+kerberospipeline:
+    sequence:
+        logLevel: "debug"
+```
+
+Apply the values with a Helm upgrade or GitOps sync. Changing the value updates
+the pod template and triggers a rollout. Debug logging includes Sequence
+processing checkpoints when supported by the deployed service image.
+
+### Sprite Resolution
+
+`kerberospipeline.sprite.width` and `height` set the pixel dimensions of each
+sprite tile, not the complete sheet. Preserve a **16:9 aspect ratio**: for
+example, `240x135` (default), `480x270`, or `640x360`.
+
+Deploy the dimension-aware Hub frontend, Hub API, analysis worker, sprite worker,
+notification worker, and export worker before increasing resolution. Release the updated shared Go
+models and update the Hub API/export worker dependency pins before building those
+services. Newly generated sprites carry their own tile dimensions; existing
+sprites without dimensions retain the `240x135` fallback and need no migration.
+Do not change a global fallback to match the new size. Increasing both dimensions
+by two produces four times as many pixels, increasing decoded memory and usually
+storage and bandwidth. Hover previews retain their display size; fullscreen
+scrubbing uses the higher-resolution tiles.
+
+```yaml
+kerberospipeline:
+    sprite:
+        width: "480"
+        height: "270"
+```
+
+### Optional Argo CD pipeline ordering
+
+Each listed pipeline service accepts `deploymentAnnotations` in its existing
+values section. The default is `{}`, so installing or upgrading the chart alone
+does not enable ordering. Commented examples appear beside the service settings
+in `values.yaml`; replace the empty map rather than adding duplicate YAML keys.
+Annotations render on Deployment `metadata`, not on pod templates or Services.
+
+The inline examples use the following order, leaving gaps of ten:
+
+| Wave | `kerberospipeline` keys |
+| --- | --- |
+| 10 | `event` |
+| 20 | `notify` |
+| 30 | `throttler` |
+| 40 | `analysis` |
+| 50 | `thumbnail`, `sprite`, `dominantColor`, `counting` |
+| 60 | `sequence` |
+| 70 | `monitor` |
+
+Enable the annotation in each service's existing environment values section.
+No separate example values file is required. These annotations do not change
+image tags or enable disabled services such as sprite or dominantColor.
+Deploy the compatible analysis bridge before replying workers, and select the
+fixed counting release; waves do not enforce minimum compatible image versions.
+The chart's default image tags are not a compatibility-tested rollout bundle.
+
+Argo CD applies lower waves first and waits for sync/health before proceeding
+within the same Application. Unannotated resources remain at wave zero. A
+single-service image update does not restart earlier services, but an unhealthy
+earlier wave can block it. Separate Applications and external classifier/workflow
+workers require their own coordination. Helm itself does not enforce these waves.
+
+Waves are not a substitute for message compatibility, readiness checks, or
+stopping old RabbitMQ consumers. This example does not add health probes or
+change the Deployment rolling-update strategy.
+
+### Deployment-global workflow identity
+
+`kerberoshub.workflows.definitions` is a map keyed by workflow name. Enabled
+definitions are passed as the same `WORKFLOW_DEFINITIONS` JSON to Hub API and the
+workflow engine. These deployment-global, ops-managed workflows are read-only
+through the API; manage them in Helm values. There are no per-project on/off
+overrides.
+
+To run a global workflow on specific devices across organisations, select them
+by system tag. Enable `deviceTags.system` and define the tags in its catalog;
+owners assign them to devices in Hub (only catalog tags can be assigned):
+
+```yaml
+deviceTags:
+  system:
+    enabled: true
+    catalog:
+      - key: anpr-pilot
+        label: ANPR pilot
+        description: Runs licence plate recognition on this camera
+
+kerberoshub:
+  workflows:
+    definitions:
+      anpr-pilot:
+        id: "6720f3a1c2d4e5f60718293a"
+        enabled: true
+        triggers:
+          - type: automatic
+            systemTags: ["anpr-pilot"]
+        stages:
+          - operation: anpr
+```
+
+Every tag a trigger selects must be in the catalog; otherwise rendering fails,
+so a typo cannot silently match no device. Because owners set system tags, any
+owner could enroll devices into such a workflow, so `deviceTags.system.enabled`
+is `false` by default. When it is on, the catalog is rendered into the
+`device-system-tags` ConfigMap and mounted into Hub API
+(`DEVICE_SYSTEM_TAGS_FILE`), like the classification catalog. While it is off,
+Hub API gets no catalog (system tags cannot be set) and rendering fails on any workflow that mentions system
+tags anywhere (trigger `systemTags`, or a `device.systemTags` condition at any
+depth, in any key casing). Enable it only on deployments whose owners are
+trusted administrators (self-hosted), never on multi-tenant SaaS.
+
+The engine reads keys case-insensitively and ignores unknown ones, so a typo
+could silently widen a workflow to every device. Workflow definitions may
+therefore only use the keys `id`, `enabled`, `triggers` and `stages`, and
+triggers only the trigger fields the engine knows, spelled exactly; anything
+else fails rendering. System-tag workflows also need a hub-workflows image
+that understands `systemTags` (uug-ai/hub-workflows#87 or later): an older
+engine drops the field and would run the workflow on every device.
+
+Supply an explicit, stable `id` for new definitions:
+
+```yaml
+kerberoshub:
+    workflows:
+        enabled: true
+        definitions:
+            tracking-workflow:
+                id: "ec7e72bc4cedd32018e1f92a"
+                enabled: true
+                stages:
+                    - operation: objecttracking
+```
+
+The worker and its queue must also be configured under
+`kerberoshub.services.objecttracking`. As before, omitted triggers default to a
+single automatic trigger and disabled definitions are not sent to either service.
+
+Identity is separate from mutable names and content versions. Keep an explicit
+ID unchanged when renaming or revising a workflow; changing it creates an
+independent identity, not a new version of the existing workflow. The chart
+does not generate random IDs or introduce a version field.
+
+For compatibility, an omitted `id` remains omitted from the rendered JSON. The
+backend derives the effective ID as the first 24 hexadecimal characters of
+SHA-256 over the **exact map key**, including case and whitespace. Before
+renaming an existing ID-less definition, pin its current derived ID explicitly
+to preserve references and history. For example:
+
+```sh
+printf '%s' 'tracking-workflow' | sha256sum | cut -c1-24
+# ec7e72bc4cedd32018e1f92a
+```
+
+The chart ships an empty definitions map. Its commented `tracking-workflow` and
+`vlm-workflow` examples pin their current name-derived IDs for compatibility.
+
+Explicit IDs must be quoted, non-zero, 24-character hexadecimal strings (Mongo
+ObjectIDs); uppercase is accepted and normalized to lowercase in JSON. Empty,
+null, all-zero, malformed, and non-string IDs fail Helm rendering with the
+definition name and validation requirement. Duplicate effective IDs also fail,
+naming both definitions and the colliding ID, whether explicit/explicit or
+explicit/name-derived. Validation includes disabled definitions and runs even
+when the engine is disabled, so identities remain reserved. Omit the `id` key
+entirely to use the legacy fallback; invalid explicit IDs never fall back.
+
+### Parameters
+
+Below all configuration options and parameters are listed.
+
+When upgrading to `0.144.0`, move `kerberoshub.audit.enabled` and
+`kerberoshub.audit.intake` to `audit.enabled` and `audit.intake`. Consumer
+workload settings remain under `kerberoshub.audit`.
+
+Auditing is globally disabled by default. Setting `audit.enabled: true` deploys
+the audit consumer and enables every supported producer by default. A producer
+is enabled only when both the global switch and its service switch are true; set
+the service's `audit.enabled` value to `false` only when that service must opt
+out.
+
+```yaml
+audit:
+    enabled: true
+
+kerberospipeline:
+    notify:
+        audit:
+            enabled: false # Optional per-service opt-out.
+```
+
+| Name                                        | Description                                                                                                                | Value |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `license` | The license key you received from support@kerberos.io. If not available request one. | `"L/+DAwEBB2xpY2Vuc2UB/4QAAQIBB1BheWxvYWQBCgABCVNpZ25hdHVyZQEKAAAA/gMk/4QB/gEZ/8sQACxnaXRodWIuY29tL3V1Zy1haS9odWItbGljZW5zZS9tb2RlbHMuTGljZW5zZX8DAQEHTGljZW5zZQH/gAABDAECSWQB/4IAAQNLZXkBDAABB0NvbXBhbnkBDAABB0V4cFRpbWUBBAABBERheXMBBAABB0NhbWVyYXMBBAABBVNpdGVzAQQAAQZWYXVsdHMBBAABCk1lZGlhTGltaXQBBAABCVBlcnBldHVhbAECAAEGQWN0aXZlAQIAAQlJcEFkZHJlc3MBDAAAABj/gQEBAQhPYmplY3RJRAH/ggABBgEYAAAy/4AvAQwAAAAAAAAAAAAAAAACDGZyZWUtbGljZW5zZQH81iZi6gH+AtoBEAEUARQDAQAB/gIAfeXxQb6kaPfAgOWeSAE6qEiQviFD6sciNmNfMel1mEL53FeV0GQe4cYBip9wyJag35az8A1yppxSymZD5V4my2FckyN2zmEW4E2sO/v+8eKepiAGYEzrKtfNCLxdWLmrHd0zjYQ3qk+PNfoPyzCOefeulw3aFsqBlzg9wDkF8cRx6tUW0qNTzki6sFGOuLoxS49cWqsftAvZmt+CRWa8u0VArIAjOpywN0RIZCkEYzp5RYF3LSVyWYEyvVhjE19DDnevzpJyCHRsIHTRcpTQkhboeapOdlEz8cx+PaOvxktN8hBWceTAH+nw96FARG7y6Cpjw3xo+NV1xb0tvRXGaGoK77JnErKLhd/haXji98rGvMakDt18WSbQfTVS84+Fw+/gKGsW3uS3fROAaZw1kZj4PgsEPZDvbVkCVyuS0O87UoYqpxH8S4by8cTF3wDP7FwyIRZbEbYjN2wzHSmlADYOBtdsdb1VGm7wvtB85vML9n7ZSlIpJdqfci06mGks102mDyG2LRMhUEvpUW3D/weErIvj2WiAwf6r0EUj+LO8VmAsYkME9da7FXEN6Vg/5f1u485LOpYki332RaDOhDn2eMG9DVb/HnmQSFagX+XXc/QwfsWiehCgKYGk4jQpyklTqoGu8BAt6Sm8CaoH8ngZ3cHLQT5DcZElV36/N/wA"` |
+| `licenseServer.url` | The license server for validating the license of your Kerberos Hub, by default `'"https://license.kerberos.io/verify"'`. | `""` |
+| `licenseServer.token` | The license server API token to sign the license validation by default `'214%ˆ#ddfsf@#3rfdsgl_)23sffeqasSwefDSFNBM'`. | `""` |
+| `environment` | A colored banner will be shown on top of the application to illustrate a non-production environment: `staging`, `demo`, .. | `"production"` |
+| `isPrivate` | Global StorageClass for Persistent Volume(s) | `true` |
+| `readOnly` | This will stop any write process to mongodb or any processing done in the Kerberos Hub pipeline. | `false` |
+| `mode` | Deployment mode: `all`, `pipeline`, or `ui`. `all` renders everything, `pipeline` only pipeline services, `ui` only hub services. | `"all"` |
+| `global.imageRegistry` | Global container registry override used for all images. | `""` |
+| `ingress` | The ingress being used for `kerberoshub.api.url` and `kerberoshub.frontend.url`. | `"nginx"` |
+| `mongodb.host` | MongoDB hostname (`'mongodb:27017'`) or mongodb replicas (`'mongodb-0:27017,mongodb-1:27017'`). | `"mongodb.mongodb"` |
+| `mongodb.adminDatabase` | MongoDB admin database, this is named `admin` by default. | `"admin"` |
+| `mongodb.authenticationMechanism` | MongoDB authentication mechanism (for example `SCRAM-SHA-256`). | `"SCRAM-SHA-256"` |
+| `mongodb.username` | MongoDB user account, we are using in the hub installation `'root'`. | `"yourusername"` |
+| `mongodb.password` | MongoDB user password, by default `'yourmongodbpassword'` | `"yourpassword"` |
+| `mongodb.appNamePerService` | When `mongodb.uri` is set, override its `appName` per workload with the service name (for example `hub-api`, `hub-pipeline-monitor`), so the MongoDB Atlas query profiler shows which service issued each operation. | `true` |
+| `mongodb.retryWrites` | Enable or disable MongoDB retryable writes. | `"true"` |
+| `mongodb.flavor` | Backend engine flavor: `"mongodb"` (native MongoDB / Atlas) or `"documentdb"` (AWS DocumentDB). The `documentdb` flavor disables features DocumentDB does not support (geospatial queries/indexes, complex `$lookup` pipelines). When set to `documentdb`, also set `mongodb.retryWrites: "false"`. | `"mongodb"` |
+| `mongodb.tls.enabled` | Enable TLS for MongoDB connections. When `mongodb.uri` is set, the chart appends missing `tls=true` and `tlsCAFile` query parameters. | `false` |
+| `mongodb.tls.existingSecret` | Existing Kubernetes Secret containing the MongoDB CA bundle. The Secret is mounted into every workload that consumes `mongodb-config`. | `""` |
+| `mongodb.tls.caFileName` | Key and filename of the CA bundle in `mongodb.tls.existingSecret` (for AWS DocumentDB, typically `global-bundle.pem`). | `""` |
+| `mongodb.tls.mountPath` | Read-only directory where the MongoDB CA Secret is mounted. | `"/etc/mongodb/tls"` |
+| `mongodb.tls.insecureSkipVerify` | Skip MongoDB certificate and hostname verification. This is insecure and intended only for local testing. | `false` |
+| `mqtt.host` | MQTT (Vernemq) hostname. | `"mqtt.yourdomain.com"` |
+| `mqtt.port` | MQTT (Vernemq) port for WSS (secure sockets), by default `'8443'`. | `"8443"` |
+| `mqtt.protocol` | MQTT (Vernemq) protocol, by default `'wss'`. | `"wss"` |
+| `mqtt.username` | MQTT (Vernemq) username, by default `'yourusername'`. | `"yourusername"` |
+| `mqtt.password` | MQTT (Vernemq) password, by default `'yourpassword'`. | `"yourpassword"` |
+| `mqtt.legacy.host` | Legacy MQTT broker host used for backward-compatible clients. | `""` |
+| `mqtt.legacy.port` | Legacy MQTT broker port used for backward-compatible clients. | `""` |
+| `queueProvider` | The queue we are using for the [pipeline](https://doc.kerberos.io/hub/pipeline/): 'SQS', 'KAFKA' or `RABBITMQ`. | `"RABBITMQ"` |
+| `queueName` | The event queue which is propagating messages in the [Kerberos Hub pipeline](https://doc.kerberos.io/hub/pipeline/). | `"kcloud-event-queue"` |
+| `rabbitmq.host` | RabbitMQ host, by default `'rabbitmq.yourdomain.com:5671'` | `"rabbitmq.rabbitmq:5672"` |
+| `rabbitmq.username` | RabbitMQ username, by default `'yourusername'` | `"yourusername"` |
+| `rabbitmq.password` | RabbitMQ password, by default `'yourpassword'` | `"yourpassword"` |
+| `rabbitmq.exchange` | RabbitMQ exchange, by default `''` | `""` |
+| `audit.enabled` | Deploy the Hub audit consumer and act as the master switch for all audit producers. | `false` |
+| `audit.intake.queue` | Shared durable RabbitMQ queue used by audit producers and the audit consumer. | `"hub-audit-events"` |
+| `audit.intake.deadletterQueue` | Shared RabbitMQ queue used for invalid audit events and exhausted persistence retries. | `"hub-audit-dead-letter"` |
+| `audit.intake.maxRetries` | Maximum MongoDB persistence retries before an intake event is dead-lettered. | `10` |
+| `audit.intake.prefetchCount` | Maximum unacknowledged intake events per audit replica. | `20` |
+| `audit.intake.persistTimeout` | Timeout for one MongoDB persistence attempt. | `"10s"` |
+| `kafka.broker` | Kafka brokers, by default `'kafka1.yourdomain.com:9094,kafka2.yourdomain.com:9094'` | `"kafka1.yourdomain.com:9094"` |
+| `kafka.username` | Kafka username, by default `'yourusername'` | `"yourusername"` |
+| `kafka.password` | Kafka password, by default `'yourpassword'` | `"yourpassword"` |
+| `kafka.mechanism` | Kafka mechanism, by default `'PLAIN'` | `"PLAIN"` |
+| `kafka.security` | Kafka security, by default `'SASL_PLAINTEXT'` | `"SASL_PLAINTEXT"` |
+| `turn.host` | TURN/STUN hostname, by default `'turn:turn.yourdomain.com:8443'` | `"turn:turn.yourdomain.com:8443"` |
+| `turn.username` | TURN/STUN username, by default `'username1'` | `"username1"` |
+| `turn.password` | TURN/STUN password, by default `'password1'` | `"password1"` |
+| `opentelemetry.enabled` | Enable or disable OpenTelemetry instrumentation. | `false` |
+| `opentelemetry.routingEnabled` | Enable or disable OpenTelemetry routing/export behavior. | `false` |
+| `opentelemetry.collector.endpoint` | OpenTelemetry collector endpoint used for trace export. | `"http://otel-collector:4317"` |
+| `opentelemetry.apiSamplingRatios.operator` | hub-api: share of user and API-client requests traced (0–1), rendered as `TRACE_SAMPLER_RATIO_OPERATOR` (hub-api on trace v1.2.6+). With no ratio set, hub-api records every trace. hub-workflows, the `pipe-*` services and the workflow stages always follow the trace they continue (`parentbased_always_off`); uploads are sampled at the Vault. | `""` |
+| `opentelemetry.apiSamplingRatios.other` | hub-api: share of everything else traced (device heartbeats, agent uploads and live segments, background work), rendered as `TRACE_SAMPLER_RATIO_OTHER`; `0` turns it off. | `""` |
+| `openai.enabled` | Enable or disable OpenAI-backed semantic features. | `false` |
+| `openai.apikey` | OpenAI API key used when OpenAI integration is enabled. | `"xxx"` |
+| `kerberosvault.uri` | The default Kerberos Vault uri (you can add multiple within the app), by default `'https://api.storage.yourdomain.com'` | `"https://api.vault.yourdomain.com"` |
+| `kerberosvault.provider` | The default Kerberos Vault provider`'a-provider'` | `"a-provider"` |
+| `kerberosvault.accesskey` | The default Kerberos Vault access key, by default `'xxx'` | `"xxx"` |
+| `kerberosvault.secretkey` | The default Kerberos Vault secret key, by default `'xxx'` | `"xxx"` |
+| `kerberosvault.archive.provider` | When a task is created, the relevant recording is moved to this provider `'an-archive-provider'` | `"an-archive-provider"` |
+| `kerberosvault.archive.accesskey` | When a task is created, the relevant recording is moved to another provider, using this access key `'xxx'` | `"xxx"` |
+| `kerberosvault.archive.secretkey` | When a task is created, the relevant recording is moved to another provider, using this secret key`'xxx'` | `"xxx"` |
+| `kerberosvault.thumbnail.provider` | Configuration value for `kerberosvault.thumbnail.provider`. | `"a-thumbnail-provider"` |
+| `kerberosvault.thumbnail.accessKey` | Access key for `kerberosvault.thumbnail`. | `"xxx"` |
+| `kerberosvault.thumbnail.secretKey` | Secret key for `kerberosvault.thumbnail`. | `"xxx"` |
+| `kerberosvault.sprite.provider` | Configuration value for `kerberosvault.sprite.provider`. | `"a-sprite-provider"` |
+| `kerberosvault.sprite.accessKey` | Access key for `kerberosvault.sprite`. | `"xxx"` |
+| `kerberosvault.sprite.secretKey` | Secret key for `kerberosvault.sprite`. | `"xxx"` |
+| `admin.repository` | Container image repository for `admin`. | `"ghcr.io/uug-ai/admin"` |
+| `admin.pullPolicy` | Image pull policy for `admin`. | `"IfNotPresent"` |
+| `admin.tag` | Container image tag/version for `admin`. | `"v1.4.5"` |
+| `admin.replicas` | Number of replicas for `admin`. | `2` |
+| `admin.logLevel` | Log verbosity level for `admin`. | `"info"` |
+| `admin.resources.requests.memory` | Memory request for `admin`. | `"100Mi"` |
+| `admin.resources.requests.cpu` | CPU request for `admin`. | `"250m"` |
+| `admin.url` | URL for `admin`. | `"admin.yourdomain.com"` |
+| `admin.tls.secretName` | Kubernetes Secret name used by `admin.tls`. | `""` |
+| `admin.oauth2Proxy.enabled` | Enable or disable `admin.oauth2Proxy`. | `false` |
+| `admin.oauth2Proxy.github.clientId` | Client ID used by `admin.oauth2Proxy.github`. | `"github-client-id"` |
+| `admin.oauth2Proxy.github.clientSecret` | Client secret used by `admin.oauth2Proxy.github`. | `"github-client-secret"` |
+| `admin.oauth2Proxy.github.cookieSecret` | Cookie secret used by `admin.oauth2Proxy.github`. | `"generate-a-random-cookie-secret"` |
+| `admin.oauth2Proxy.github.organization` | Organization value used by `admin.oauth2Proxy.github`. | `"github-organization"` |
+| `admin.oauth2Proxy.github.team` | Team value used by `admin.oauth2Proxy.github`. | `"github-team"` |
+| `kerberoshub.extraEnv` | Additional environment variables injected into Kerberos Hub pods. | `[]` |
+| `kerberoshub.serviceAccount.create` | Create or manage `kerberoshub.serviceAccount` resources. | `false` |
+| `kerberoshub.serviceAccount.name` | Name value for `kerberoshub.serviceAccount`. | `""` |
+| `kerberoshub.serviceAccount.annotations` | Annotations applied to `kerberoshub.serviceAccount` resources. | `""` |
+| `kerberoshub.serviceAccount.labels` | Labels applied to `kerberoshub.serviceAccount` resources. | `""` |
+| `kerberoshub.api.repository` | The Docker registry where the Kerberos Hub API container is hosted. | `"ghcr.io/uug-ai/hub-api"` |
+| `kerberoshub.api.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberoshub.api.tag` | The Docker image tag/version. | `"v1.11.41"` |
+| `kerberoshub.api.replicas` | The number of pods/replicas running for the Kerberos Hub API deployment. | `2` |
+| `kerberoshub.api.audit.enabled` | Enable audit publishing from Hub API when global auditing is enabled. | `true` |
+| `kerberoshub.api.logLevel` | Log verbosity level for `kerberoshub.api`. | `"info"` |
+| `kerberoshub.api.jwtSecret` | A secret that is for generating JWT tokens. | `"this-is-a-secret-please-change-to-random-string"` |
+| `kerberoshub.api.schema` | The protocol to serve the Kerberos Hub API, `'http'` or `'https'`. | `"https"` |
+| `kerberoshub.api.url` | The Kerberos Hub API ingress to access the API. | `"api.yourdomain.com"` |
+| `kerberoshub.api.corsAllowedOrigins` | Additional complete HTTP(S) origins allowed to call the Hub API. Configured frontend origins remain allowed automatically. | `[]` |
+| `kerberoshub.api.mcp.enabled` | Expose the read-only `/mcp` endpoint; sets `MCP_ENABLED`. Requires a compatible Hub API image. | `false` |
+| `kerberoshub.api.mcp.allowedOrigins` | Exact HTTP(S) origins for browser MCP clients, joined into `MCP_ALLOWED_ORIGINS`. Independent of REST CORS; no wildcards or trailing slash. | `[]` |
+| `kerberoshub.api.disableAgentHeartbeat` | Temporarily stop serving the polled `GET /devices` list (hub-api returns `204` without database reads). Devices still load once through `/session/bootstrap`; online/offline status stops refreshing. | `false` |
+| `kerberoshub.api.mediaProxy.enabled` | Serve media through hub-api (`/media/proxy`) instead of handing out Vault/storage URLs, hiding the storage endpoint from clients. | `false` |
+| `kerberoshub.api.mediaProxy.publicUrl` | Public hub-api base URL used in proxied media URLs. Defaults to `{schema}://{url}`. | `""` |
+| `kerberoshub.api.mediaProxy.key` | Key used to encrypt proxied media URLs (`openssl rand -hex 32`). Defaults to a key derived from `jwtSecret`. | `""` |
+| `kerberoshub.api.mediaProxy.ttl` | Lifetime of proxied media URLs (Go duration, max `168h`). | `"24h"` |
+| `kerberoshub.api.resources.requests.memory` | Memory request for `kerberoshub.api`. | `"100Mi"` |
+| `kerberoshub.api.resources.requests.cpu` | CPU request for `kerberoshub.api`. | `"250m"` |
+| `kerberoshub.api.resources.limits.memory` | Memory limit for `kerberoshub.api`. | `"100Mi"` |
+| `kerberoshub.api.resources.limits.cpu` | CPU limit for `kerberoshub.api`. | `"250m"` |
+| `kerberoshub.api.serverTLS.enabled` | Enable or disable `kerberoshub.api.serverTLS`. | `false` |
+| `kerberoshub.api.serverTLS.secretName` | Kubernetes Secret name used by `kerberoshub.api.serverTLS`. | `""` |
+| `kerberoshub.api.serverTLS.mountPath` | Filesystem path where the Hub API TLS secret is mounted. | `"/etc/hub-api/tls"` |
+| `kerberoshub.api.serverTLS.certFile` | Path to the TLS certificate file used by Hub API server-side TLS. | `"/etc/hub-api/tls/tls.crt"` |
+| `kerberoshub.api.serverTLS.keyFile` | Path to the TLS private key file used by Hub API server-side TLS. | `"/etc/hub-api/tls/tls.key"` |
+| `kerberoshub.api.mfaIssuer` | When enabling the MFA access, this is the name that will be shown in the MFA app. | `"yourdomain.com"` |
+| `kerberoshub.api.apiKey` | API key for `kerberoshub.api`. | `"a-random-admin-api-key"` |
+| `kerberoshub.api.defaultTaskRetentionDays` | Default retention (in days) applied to tasks without an explicit `retention_days`. New tasks are stamped with this value. Set to `"0"` or a negative value to keep tasks indefinitely. Must match `kerberoshub.cleanup.defaultTaskRetentionDays`. | `"0"` |
+| `kerberoshub.api.auditExportMaxEventsPerFile` | Most audit events one export file holds (`AUDIT_EXPORT_MAX_EVENTS_PER_FILE`). It does not refuse larger exports: the Audit page downloads them as several files of at most this size. An integer from 1 to 1000000; empty uses the API default of 100000. | `""` |
+| `kerberoshub.api.tls` | Bring your own TLS certificates for Kerberos Hub API ingress. | `<list>` |
+| `kerberoshub.api.tls.secretName` | Kubernetes Secret name used by `kerberoshub.api.tls`. | `""` |
+| `kerberoshub.api.language` | The language of Kerberos Hub API responses, error messages will be communicated in the specified language. | `"english"` |
+| `kerberoshub.api.fallbackLanguage` | The fallback language, if a specific translation is not available. | `"english"` |
+| `kerberoshub.api.aws.region` | AWS region used by the Hub API legacy S3 integration. | `"xxx"` |
+| `kerberoshub.api.aws.bucket` | AWS S3 bucket used by the Hub API legacy S3 integration. | `"xxx"` |
+| `kerberoshub.api.aws.accessKey` | Access key for `kerberoshub.api.aws`. | `"xxx"` |
+| `kerberoshub.api.aws.secretKey` | Secret key for `kerberoshub.api.aws`. | `"xxx"` |
+| `kerberoshub.api.stripe.privateKey` | Private key for `kerberoshub.api.stripe`. | `"xxx"` |
+| `kerberoshub.api.slack.enabled` | Slack integration for sending events and notifications coming from the Kerberos Hub API, `'true'` or `'false'`. | `"true"` |
+| `kerberoshub.api.slack.hook` | Slack integration hook url. | `"yourslackhook"` |
+| `kerberoshub.api.slack.username` | Slack integration username. | `"Kerberos Hub"` |
+| `kerberoshub.api.elasticsearch.enabled` | Elasticsearch for storing events coming from the Kerberos Hub API, `'true'` or `'false'` | `"false"` |
+| `kerberoshub.api.elasticsearch.protocol` | Elasticsearch protocol, `'http'` or `'https'`. | `"http"` |
+| `kerberoshub.api.elasticsearch.host` | Elasticsearch host. | `"yourelasticsearchinstance.com"` |
+| `kerberoshub.api.elasticsearch.port` | Elasticsearch port. | `"9200"` |
+| `kerberoshub.api.elasticsearch.index` | Elasticsearch index which is used to store the events. | `"kerberos-cloud"` |
+| `kerberoshub.api.elasticsearch.username` | Elasticsearch username. | `""` |
+| `kerberoshub.api.elasticsearch.password` | Elasticsearch password. | `""` |
+| `kerberoshub.api.sso.redirectUrl` | The OIC redirectUrl, once the authentication is validated. | `""` |
+| `kerberoshub.api.sso.forceSSO` | Force SSO login for users of the configured domain. | `""` |
+| `kerberoshub.api.sso.issuer` | Kerberos Hub can be linked to OpenID Connect for SSO. Specify the OIC issuer. | `""` |
+| `kerberoshub.api.sso.claimId` | OIDC claim used to uniquely identify the authenticated user. | `""` |
+| `kerberoshub.api.sso.clientId` | The OIC client id. | `""` |
+| `kerberoshub.api.sso.clientSecret` | The OIC client secret. | `""` |
+| `kerberoshub.api.sso.clientVerificationId` | Optional client verification ID used for SSO chaining scenarios. | `""` |
+| `kerberoshub.api.sso.extraHeaders` | Additional headers appended to outbound SSO provider requests. | `""` |
+| `kerberoshub.api.sso.extraHeaders.value` | Header value for each configured SSO extra header entry. | `""` |
+| `kerberoshub.frontend.repository` | The Docker registry where the Kerberos Hub frontend is hosted. | `"ghcr.io/uug-ai/hub-frontend"` |
+| `kerberoshub.frontend.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberoshub.frontend.tag` | The Docker image tag/version. | `"v1.19.35"` |
+| `kerberoshub.frontend.replicas` | The number of pods/replicas running for the Kerberos Hub frontend deployment. | `2` |
+| `kerberoshub.frontend.logLevel` | Log verbosity level for `kerberoshub.frontend`. | `"info"` |
+| `kerberoshub.frontend.schema` | The protocol to serve the Kerberos Hub frontend, `'http'` or `'https'`. | `"https"` |
+| `kerberoshub.frontend.url` | The Kerberos Hub frontend ingress to access the frontend. | `"yourdomain.com"` |
+| `kerberoshub.frontend.resources.requests.memory` | Memory request for `kerberoshub.frontend`. | `"50Mi"` |
+| `kerberoshub.frontend.resources.requests.cpu` | CPU request for `kerberoshub.frontend`. | `"50m"` |
+| `kerberoshub.frontend.resources.limits.memory` | Memory limit for `kerberoshub.frontend`. | `"50Mi"` |
+| `kerberoshub.frontend.resources.limits.cpu` | CPU limit for `kerberoshub.frontend`. | `"50m"` |
+| `kerberoshub.frontend.tls` | Bring your own TLS certificates for Kerberos Hub frontend ingress. | `<list>` |
+| `kerberoshub.frontend.tls.secretName` | Kubernetes Secret name used by `kerberoshub.frontend.tls`. | `""` |
+| `kerberoshub.frontend.mixpanel.apikey` | No longer used. | `"xxx"` |
+| `kerberoshub.frontend.sentry.url` | No longer used. | `"https://xxx@sentry.io/xxx"` |
+| `kerberoshub.frontend.stripe.publicKey` | Public key for `kerberoshub.frontend.stripe`. | `""` |
+| `kerberoshub.frontend.googlemaps.apikey` | Within Kerberos Hub frontend a couple of maps are being used, the google maps is leveraged for that. | `"xxxx"` |
+| `kerberoshub.frontend.googlemaps.placesApi` | Google Places API used for address autocomplete with the same `apikey`: `"legacy"` (Places API) or `"new"` (Places API (New), required for keys that cannot enable the legacy Places API). | `"legacy"` |
+| `kerberoshub.frontend.zendesk.url` | No longer used. | `"yourdomain.zendesk.com"` |
+| `kerberoshub.frontend.posthog.key` | The API key retrieved from the Posthog instance. | `"xxx"` |
+| `kerberoshub.frontend.posthog.url` | Posthog's endpoint (http/https). | `"https://posthog.domain.com"` |
+| `kerberoshub.frontend.hideAddAgent` | Configuration value for `kerberoshub.frontend.hideAddAgent`. | `"false"` |
+| `kerberoshub.frontend.multiTenant` | Configuration value for `kerberoshub.frontend.multiTenant`. | `false` |
+| `kerberoshub.frontend.title` | Title text used for `kerberoshub.frontend`. | `"Kerberos Hub - Video surveillance as it should be"` |
+| `kerberoshub.frontend.logo` | The logo being used in the Kerberos Hub frontend, set to 'custom' if you want to mount your own stylesheet. | `"custom"` |
+| `kerberoshub.frontend.navigationLinkTitle1` | Custom navigation item (title 1) | `""` |
+| `kerberoshub.frontend.navigationLinkUrl1` | Custom navigation item (url 1) | `""` |
+| `kerberoshub.frontend.navigationLinkTitle2` | Custom navigation item (title 2) | `""` |
+| `kerberoshub.frontend.navigationLinkUrl2` | Custom navigation item (url 2) | `""` |
+| `kerberoshub.frontend.navigationLinkTitle3` | Custom navigation item (title 3) | `""` |
+| `kerberoshub.frontend.navigationLinkUrl3` | Custom navigation item (url 3) | `""` |
+| `kerberoshub.frontend.navigationLinkTitle4` | Custom navigation item (title 4) | `""` |
+| `kerberoshub.frontend.navigationLinkUrl4` | Custom navigation item (url 4) | `""` |
+| `kerberoshub.frontend.navigationLinkTitle5` | Custom navigation item (title 5) | `""` |
+| `kerberoshub.frontend.navigationLinkUrl5` | Custom navigation item (url 5) | `""` |
+| `kerberoshub.frontend.caseFilterAssigneesDefault` | Default assignee filter behavior for cases in the frontend. | `"false"` |
+| `kerberoshub.frontend.features.case.enabled` | Enable or disable the case feature in the frontend. | `"true"` |
+| `kerberoshub.frontend.features.darkModeEnabled` | Enable or disable dark mode in the frontend. | `"true"` |
+| `kerberoshub.frontend.features.splashScreen.enabled` | Enable or disable the pre-bootstrap splash screen and reveal delay. | `"true"` |
+| `kerberoshub.frontend.features.landingPage` | Frontend landing page configuration. | `"/dashboard"` |
+| `kerberoshub.frontend.features.i18n.enabled` | Enable or disable the runtime language switcher in the front-end. When `"false"`, `defaultLanguage` is forced and users cannot change it. | `"true"` |
+| `kerberoshub.frontend.features.i18n.defaultLanguage` | Default language code used by the front-end (e.g. `en`, `nl`, `pl`, `tr`, `fr`, `sv`, `de`). | `"en"` |
+| `kerberoshub.frontend.features.workflows.enabled` | Enable or disable the workflows feature in the frontend. | `"false"` |
+| `kerberoshub.frontend.features.audit.enabled` | Enable or disable the owner/admin Audit events page and navigation link. | `"true"` |
+| `kerberoshub.frontend.features.dayOverview.enabled` | Enable or disable the Day overview page and navigation menu. Role page permissions still apply. | `"true"` |
+| `kerberoshub.frontend.features.organisations.enabled` | Enable or disable the organisation feature family, including projects. When empty, child groups apply independently. | `""` |
+| `kerberoshub.frontend.features.organisations.switcherEnabled` | Enable or disable the organisation dropdown and switching. The current organisation remains visible when disabled. | `"false"` |
+| `kerberoshub.frontend.features.organisations.creationEnabled` | Enable or disable organisation creation. Requires organisation switching to be enabled. | `"false"` |
+| `kerberoshub.frontend.features.organisations.settingsEnabled` | Enable or disable the organisation identity link to organisation settings. | `"false"` |
+| `kerberoshub.frontend.features.organisations.membersAccessPreviewEnabled` | Show the "Users (preview)" tab in organisation settings to organisation owners: a mockup of project, role and resource assignments with mocked users and data, nothing saved. Sets `FEATURE_MEMBERS_ACCESS_PREVIEW_ENABLED`. | `"false"` |
+| `kerberoshub.frontend.features.projects.enabled` | Fallback project group switch used when the organisations umbrella is unset. | `""` |
+| `kerberoshub.frontend.features.projects.switcherEnabled` | Enable or disable the read-only project dropdown. | `"false"` |
+| `kerberoshub.frontend.features.projects.creationEnabled` | Reserved for the project creation UI. | `"false"` |
+| `kerberoshub.frontend.features.projects.settingsEnabled` | Reserved for the project settings UI. | `"false"` |
+| `kerberoshub.frontend.features.map.tileUrlLight` | Tile URL used by the map in light mode. | `"https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"` |
+| `kerberoshub.frontend.features.map.tileUrlDark` | Tile URL used by the map in dark mode. | `"https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"` |
+| `kerberoshub.frontend.features.map.attribution` | Attribution text displayed on the map tiles. | `"&copy; <a href='https://www.openstreetmap.org/copyright' target='_blank'>OpenStreetMap</a>"` |
+| `kerberoshub.frontend.features.map.overlayTileUrl` | Optional XYZ overlay URL supporting `{z}`, `{x}`, `{y}`, and `{apiKey}`. Empty disables the overlay. | `""` |
+| `kerberoshub.frontend.features.map.overlayApiKey` | Optional browser-visible API key substituted for `{apiKey}` in the overlay URL. | `""` |
+| `kerberoshub.frontend.features.map.overlayAttribution` | Attribution text displayed when the overlay is enabled. | `""` |
+| `kerberoshub.frontend.features.map.overlayMinZoom` | Minimum zoom level for overlay tiles. | `"0"` |
+| `kerberoshub.frontend.features.map.overlayMaxZoom` | Maximum zoom level for overlay tiles. | `"19"` |
+| `kerberoshub.frontend.features.map.overlayOpacity` | Overlay opacity from `0` to `1`. | `"1"` |
+| `kerberoshub.frontend.features.liveview.defaultStreamMode` | Liveview behavior setting: `defaultStreamMode`. | `"SD"` |
+| `kerberoshub.frontend.features.liveview.liveStreamMode` | Transport backing LIVE mode: `webrtc`, `hls`, or `moq`. | `"webrtc"` |
+| `kerberoshub.frontend.features.liveview.hlsEnabled` | Offer HLS as a selectable LIVE transport. | `"true"` |
+| `kerberoshub.frontend.features.liveview.moqEnabled` | Offer MoQ as a selectable LIVE transport. | `"false"` |
+| `kerberoshub.frontend.features.liveview.remoteRecordingEnabled` | Show the manual REC control and recording-state overlay in live views. | `"true"` |
+| `kerberoshub.frontend.features.liveview.deviceStatusEnabled` | Show connectivity and recent-motion status in live view tile headers. | `"true"` |
+| `kerberoshub.frontend.features.liveview.moqRelayUrl` | WebTransport URL of the MoQ relay. | `"https://relay.uug.ai/anon"` |
+| `kerberoshub.frontend.features.liveview.moqBroadcastPrefix` | Prefix used to build MoQ broadcast names. | `"devices"` |
+| `kerberoshub.frontend.features.liveview.paginationMode` | Liveview behavior setting: `paginationMode` (`scroll`, `numbered` or `maxStreams`). | `"scroll"` |
+| `kerberoshub.frontend.features.liveview.pageSize` | Liveview behavior setting: `pageSize` (max streams shown per page in `numbered` mode). | `"6"` |
+| `kerberoshub.frontend.features.liveview.maxStreams` | Liveview behavior setting: `maxStreams`. | `"-1"` |
+| `kerberoshub.frontend.features.chart.colors` | Ordered colors shared by chart series and marker detection overlays. | `["#84569f", "#3ba7ff", "#ff5c8a", "#4ad991", "#ffb84d", "#ff7043"]` |
+| `kerberoshub.frontend.features.chart.colorChartSelectionFill` | Fill color for chart selection regions. | `"rgba(132, 86, 159, 0.07)"` |
+| `kerberoshub.frontend.features.chart.colorChartSelectionStroke` | Stroke color for chart selection regions. | `"rgba(132, 86, 159, 0.4)"` |
+| `kerberoshub.frontend.features.chart.colorChartGridStroke` | Stroke color for chart grid lines. | `"rgba(0, 106, 255, 0.18)"` |
+| `kerberoshub.frontend.features.devices.hideAgent` | Hide agent controls in the devices section of the frontend. | `"false"` |
+| `kerberoshub.frontend.features.devices.analyticsEnabled` | Enable or disable the Analytics tab on device detail pages. | `"true"` |
+| `kerberoshub.frontend.features.devices.developerToolsEnabled` | Enable or disable owner-only live Agent logs and terminal access on device detail pages. | `"true"` |
+| `kerberoshub.frontend.features.dashboard.sitesFullscreenEnabled` | Enable or disable the fullscreen Sites map on the Dashboard. | `"true"` |
+| `kerberoshub.frontend.features.media.forward.enabled` | Enable or disable the bulk Forward media action in the Recordings Actions menu. | `"true"` |
+| `kerberoshub.frontend.features.media.detail.analysis.enabled` | Enable or disable the Analysis block (dominant colors, thumbnail, sprite, motion) on the media detail page. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.date.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.date`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.sites.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.sites`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.groups.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.groups`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.devices.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.devices`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.objectDetection.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.objectDetection`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.star.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.star`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.analysis.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.analysis`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.region.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.region`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.sort.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.sort`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.category.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.category`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.markers.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.markers`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.markerOptionsByDate.enabled` | Limit marker, category, event, and tag filter options to the selected recordings day. | `"false"` |
+| `kerberoshub.frontend.features.media.filter.markerCategoryPriority.enabled` | Order marker filter options from configured categories before other markers. | `"false"` |
+| `kerberoshub.frontend.features.media.filter.markerCategoryPriority.categories` | Ordered exact, case-sensitive marker category names to prioritize. | `[]` |
+| `kerberoshub.frontend.features.media.filter.events.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.events`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.tags.enabled` | Enable or disable `kerberoshub.frontend.features.media.filter.tags`. | `"true"` |
+| `kerberoshub.frontend.features.media.filter.defaultView` | Default view for the media page: `timeline` or `grid`. | `"timeline"` |
+| `kerberoshub.frontend.features.floorplan.enabled` | Enable or disable `kerberoshub.frontend.features.floorplan`. | `"true"` |
+| `kerberoshub.frontend.features.floorplan.colorDeviceActive` | Color customization for `floorplan` in the frontend. | `"hsla(131, 31%, 52%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorDeviceInactive` | Color customization for `floorplan` in the frontend. | `"hsla(0, 3%, 41%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorDeviceIdle` | Color customization for `floorplan` in the frontend. | `"hsla(47, 86%, 47%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorDeviceMotion` | Color customization for `floorplan` in the frontend. | `"hsla(2, 58%, 48%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorLiveViewControlActive` | Color customization for `floorplan` in the frontend. | `"hsla(131, 31%, 52%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorLiveViewControlMotion` | Color customization for `floorplan` in the frontend. | `"hsla(2, 58%, 48%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorFloorPlanLabelText` | Color customization for `floorplan` in the frontend. | `"hsla(0, 0%, 100%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorFloorPlanLabelBackground` | Color customization for `floorplan` in the frontend. | `"hsla(0, 0%, 0%, 0.8)"` |
+| `kerberoshub.frontend.features.floorplan.colorDeviceMarkerBorder` | Color customization for `floorplan` in the frontend. | `"hsla(0, 0%, 100%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorTrackBox` | Color customization for `floorplan` in the frontend. | `"hsla(278, 30%, 48%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorTrackBoxHover` | Color customization for `floorplan` in the frontend. | `"hsla(47, 86%, 47%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorTrackBoxDrawing` | Color customization for `floorplan` in the frontend. | `"hsla(204, 100%, 50%, 1)"` |
+| `kerberoshub.frontend.features.floorplan.colorTrackBoxControlsDelete` | Color customization for `floorplan` in the frontend. | `"hsla(219, 100%, 94%, 1)"` |
+| `kerberoshub.frontend.features.faceRedaction.enabled` | Enable or disable `kerberoshub.frontend.features.faceRedaction`. | `"false"` |
+| `kerberoshub.frontend.features.faceRedaction.classifierTracksEnabled` | Make classifier-generated tracks available in the redaction modal. | `"true"` |
+| `kerberoshub.support.enabled` | Enable or disable in-app support features. | `false` |
+| `kerberoshub.oauth2Proxy.enabled` | Enable or disable `kerberoshub.oauth2Proxy`. | `false` |
+| `kerberoshub.oauth2Proxy.github.clientId` | Client ID used by `kerberoshub.oauth2Proxy.github`. | `"github-client-id"` |
+| `kerberoshub.oauth2Proxy.github.clientSecret` | Client secret used by `kerberoshub.oauth2Proxy.github`. | `"github-client-secret"` |
+| `kerberoshub.oauth2Proxy.github.cookieSecret` | Cookie secret used by `kerberoshub.oauth2Proxy.github`. | `"generate-a-random-cookie-secret"` |
+| `kerberoshub.oauth2Proxy.github.organization` | Organization value used by `kerberoshub.oauth2Proxy.github`. | `"github-organization"` |
+| `kerberoshub.oauth2Proxy.github.team` | Team value used by `kerberoshub.oauth2Proxy.github`. | `"github-team"` |
+| `kerberoshub.cleanup.repository` | The Docker container that is responsible for cleaning up the Kerberos Hub API content and related MongoDB collections. | `"ghcr.io/uug-ai/hub-cleanup"` |
+| `kerberoshub.cleanup.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberoshub.cleanup.tag` | The Docker image tag/version. | `"v1.4.27"` |
+| `kerberoshub.cleanup.replicas` | Number of replicas for `kerberoshub.cleanup`. | `1` |
+| `kerberoshub.cleanup.mode` | Cleanup service mode: `serve`, `dry-run`, or `version`. | `"serve"` |
+| `kerberoshub.cleanup.logLevel` | Log verbosity level for `kerberoshub.cleanup`. | `"info"` |
+| `kerberoshub.cleanup.maxDays` | Hard maximum age (in days) used by the optional global cleanup pass. | `"365"` |
+| `kerberoshub.cleanup.runIntervalMinutes` | Minutes between cleanup cycles. | `"10"` |
+| `kerberoshub.cleanup.cleanupUsernames` | Optional comma-separated usernames to target. | `""` |
+| `kerberoshub.cleanup.batchSize` | Delete batch size per collection operation. | `"250"` |
+| `kerberoshub.cleanup.userBatchSize` | Number of users processed per inner batch. | `"100"` |
+| `kerberoshub.cleanup.maxUsersPerRun` | Maximum users processed per run. | `"100"` |
+| `kerberoshub.cleanup.progressEvery` | Print progress every N processed users. | `"100"` |
+| `kerberoshub.cleanup.activeUserRescanHours` | Rescan interval for active users. | `"6"` |
+| `kerberoshub.cleanup.inactiveUserRescanHours` | Rescan interval for inactive users. | `"24"` |
+| `kerberoshub.cleanup.readTimeoutSeconds` | Timeout for MongoDB read operations. | `"30"` |
+| `kerberoshub.cleanup.deleteTimeoutSeconds` | Timeout for delete operations. | `"120"` |
+| `kerberoshub.cleanup.reportIncludeStats` | Include richer per-user dry-run summary stats. | `"false"` |
+| `kerberoshub.cleanup.dryRun` | Force dry-run behavior through env var. | `"false"` |
+| `kerberoshub.cleanup.debug` | Enable extra cleanup debug logging. | `"false"` |
+| `kerberoshub.cleanup.globalPassEnabled` | Enable optional global orphan cleanup pass. | `"false"` |
+| `kerberoshub.cleanup.globalPassIntervalHours` | Minimum hours between global cleanup passes. | `"0"` |
+| `kerberoshub.cleanup.globalPassDeleteBudget` | Max documents deleted during a global pass. | `"0"` |
+| `kerberoshub.cleanup.defaultTaskRetentionDays` | Default retention (in days) applied to tasks without an explicit `retention_days`. Tasks older than this (anchored on `creation_date`) are deleted with their `case_media` rows. Set to `"0"` or a negative value to keep tasks forever. Must match `kerberoshub.api.defaultTaskRetentionDays`. | `"0"` |
+| `kerberoshub.cleanup.auditEventRetentionDays` | Deployment-wide audit-event retention in days, independent of recording plans, inactive-account cleanup, and the optional global pass. Set to `"0"` or a negative value to keep audit events indefinitely. | `"400"` |
+| `kerberoshub.cleanup.workflowRunRetentionDays` | Deployment-wide workflow run retention in days, anchored on run execution time (`start`). Applied on top of media-linked retention (the stricter cutoff wins) and independent of the optional global pass. Set to `"0"` or a negative value to let runs expire only with their media. | `"0"` |
+| `kerberoshub.cleanup.resources.requests.memory` | Memory request for `kerberoshub.cleanup`. | `"10Mi"` |
+| `kerberoshub.cleanup.resources.requests.cpu` | CPU request for `kerberoshub.cleanup`. | `"10m"` |
+| `kerberoshub.audit.repository` | Hub audit service container image repository. | `"ghcr.io/uug-ai/hub-audit"` |
+| `kerberoshub.audit.pullPolicy` | Hub audit service image pull policy. | `"IfNotPresent"` |
+| `kerberoshub.audit.tag` | Hub audit service image tag. S3 destinations need v1.0.9 or later, and `s3.allowUnlockedBucket` needs v1.0.10. | `"v1.0.11"` |
+| `kerberoshub.audit.replicas` | Number of audit service replicas. Per-destination MongoDB leases prevent concurrent delivery. | `1` |
+| `kerberoshub.audit.dispatchInterval` | How often the mounted destination configuration is reloaded and eligible destinations are polled. | `"5s"` |
+| `kerberoshub.audit.leaseDuration` | Per-destination lease duration. It must exceed every destination timeout by at least 30 seconds. | `"2m"` |
+| `kerberoshub.audit.terminationGracePeriodSeconds` | Pod termination grace period. Keep this longer than `leaseDuration` so an in-flight cycle can finish. | `150` |
+| `kerberoshub.audit.destinations` | Audit destinations: webhooks that receive batches as JSON, or S3 buckets that archive them. Every entry is validated when the chart renders. Credentials (`bearerToken`, `secretHeaders.<name>.value`, `s3.accessKey` / `s3.secretKey`) are set inline; the chart stores them in Secret `hub-audit-<id>-credentials`, and changes take effect within a few minutes without a restart. Delivery semantics and per-provider S3 settings: https://learn.uug.ai/docs/hub/audit-events/#export-audit-events. | `[]` |
+| `kerberoshub.audit.destinations[].id` | Required. Unique name, `^[a-z][a-z0-9-]{0,62}$`. The delivery checkpoint is stored under it, so renaming starts a new destination. | |
+| `kerberoshub.audit.destinations[].type` | Optional. `webhook` or `s3`. | `webhook` |
+| `kerberoshub.audit.destinations[].enabled` | Optional. `false` pauses delivery and keeps the checkpoint. | `true` |
+| `kerberoshub.audit.destinations[].timeoutSeconds` | Optional. Timeout for one delivery, at most 60. | `10` |
+| `kerberoshub.audit.destinations[].batchSize` | Optional. Events per batch, at most 1000. | `100` |
+| `kerberoshub.audit.destinations[].maxAttempts` | Optional. Attempts before a batch is dead-lettered. Keep it high for S3 archives. | `10` |
+| `kerberoshub.audit.destinations[].startAt` | Optional. `latest` or `beginning`; only applies to a new `id`. | `latest` |
+| `kerberoshub.audit.destinations[].filters` | Optional. Lists `organisationIds`, `projectIds` (ObjectIds), `actions`, `categories` and `outcomes` (`success`, `failure`). An event must match every list that is set. | all events |
+| `kerberoshub.audit.destinations[].url` | Required for webhooks. `http` or `https` endpoint that receives each batch. | |
+| `kerberoshub.audit.destinations[].headers` | Optional, webhooks. Public request headers. `Authorization` and `Idempotency-Key` are reserved. | `{}` |
+| `kerberoshub.audit.destinations[].bearerToken` | Optional, webhooks. Sent as `Authorization: Bearer <token>`. | |
+| `kerberoshub.audit.destinations[].secretHeaders.<name>.value` | Optional, webhooks. Header with a secret value, such as an API key. | |
+| `kerberoshub.audit.destinations[].s3.bucket` | Required for S3. Bucket with versioning, Object Lock and a `COMPLIANCE` default retention. | |
+| `kerberoshub.audit.destinations[].s3.region` | Required for S3, also for S3-compatible stores. | |
+| `kerberoshub.audit.destinations[].s3.prefix` | Optional. Key prefix; objects are written as `<prefix>/<id>/yyyy/mm/dd/<firstId>-<lastId>.ndjson.gz`. | |
+| `kerberoshub.audit.destinations[].s3.endpoint` | Optional. Base URL of an S3-compatible store, without the bucket. Omit for AWS S3. | |
+| `kerberoshub.audit.destinations[].s3.forcePathStyle` | Optional. Path-style URLs, usually needed for Ceph RGW, MinIO and Garage. | `false` |
+| `kerberoshub.audit.destinations[].s3.allowUnlockedBucket` | Optional. Skips the Object Lock check for stores without Object Lock, such as Garage; archived batches are then deletable. | `false` |
+| `kerberoshub.audit.destinations[].s3.accessKey` / `kerberoshub.audit.destinations[].s3.secretKey` | Optional, both or neither, not empty. Without them the pod's AWS identity is used (AWS S3 only). | |
+| `kerberoshub.audit.serviceAccount.create` | Create a ServiceAccount used only by hub-audit, for example for S3 access through IRSA. | `false` |
+| `kerberoshub.audit.serviceAccount.name` | Name of the hub-audit ServiceAccount; with `create: false`, an existing ServiceAccount to use. Defaults to `hub-audit` when created; when empty and not created, `kerberoshub.serviceAccount` applies. | `""` |
+| `kerberoshub.audit.serviceAccount.annotations` | Annotations for the hub-audit ServiceAccount, such as `eks.amazonaws.com/role-arn`. | `{}` |
+| `kerberoshub.audit.serviceAccount.labels` | Labels for the hub-audit ServiceAccount. | `{}` |
+| `kerberoshub.audit.serviceMonitor.enabled` | Create a Prometheus `ServiceMonitor` for audit service metrics. | `true` |
+| `kerberoshub.audit.serviceMonitor.interval` | Audit service metrics scrape interval. | `"15s"` |
+| `kerberoshub.audit.volumes` | Additional pod volumes, for example a private webhook CA bundle. | `[]` |
+| `kerberoshub.audit.volumeMounts` | Additional audit service container volume mounts. | `[]` |
+| `kerberoshub.audit.extraEnv` | Additional audit service environment variables. | `[]` |
+| `kerberoshub.audit.resources` | Resource requests and limits for the audit service container. | `{}` |
+| `kerberoshub.audit.topologySpreadConstraints` | Topology spread constraints for audit service pods. | `[]` |
+| `kerberoshub.monitordevice.repository` | The monitoring microservice, following up the status of your cameras and Kerberos Agents. | `"ghcr.io/uug-ai/hub-monitor-device"` |
+| `kerberoshub.monitordevice.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberoshub.monitordevice.tag` | The Docker image tag/version. | `"v1.4.15"` |
+| `kerberoshub.monitordevice.replicas` | Number of replicas for `kerberoshub.monitordevice`. | `1` |
+| `kerberoshub.monitordevice.logLevel` | Log verbosity level for `kerberoshub.monitordevice`. | `"info"` |
+| `kerberoshub.monitordevice.scanIntervalSeconds` | Seconds between device status scans. Sets how quickly a camera going offline or online is detected. For accounts with "Group notifications" on, `hub-monitor-device` v1.4.10 and later then hold a change 20 seconds (`DEVICE_GROUPING_HOLD_SECONDS`) to collect other cameras that change status at the same time; older releases hold it one scan. | `60` |
+| `kerberoshub.monitordevice.resources.requests.memory` | Memory request for `kerberoshub.monitordevice`. | `"10Mi"` |
+| `kerberoshub.monitordevice.resources.requests.cpu` | CPU request for `kerberoshub.monitordevice`. | `"10m"` |
+| `kerberoshub.reactivate.repository` | Container image repository for `kerberoshub.reactivate`. | `"uugai/hub-reactivatesubscriptions"` |
+| `kerberoshub.reactivate.pullPolicy` | Image pull policy for `kerberoshub.reactivate`. | `"IfNotPresent"` |
+| `kerberoshub.reactivate.tag` | Container image tag/version for `kerberoshub.reactivate`. | `"v1.0.2"` |
+| `kerberoshub.reactivate.replicas` | Number of replicas for `kerberoshub.reactivate`. Set to `0` to disable. | `0` |
+| `kerberoshub.reactivate.logLevel` | Log verbosity level for `kerberoshub.reactivate`. | `"info"` |
+| `kerberoshub.reactivate.resources.requests.memory` | Memory request for `kerberoshub.reactivate`. | `"10Mi"` |
+| `kerberoshub.reactivate.resources.requests.cpu` | CPU request for `kerberoshub.reactivate`. | `"10m"` |
+| `kerberospipeline.event.repository` | The [event orchestration](https://doc.kerberos.io/hub/pipeline/#orchestrator) microservice. | `"ghcr.io/uug-ai/hub-pipeline-event"` |
+| `kerberospipeline.event.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.event.tag` | The Docker image tag/version. | `"v1.3.10"` |
+| `kerberospipeline.event.replicas` | Number of replicas for `kerberospipeline.event`. | `1` |
+| `kerberospipeline.event.logLevel` | Log verbosity level for `kerberospipeline.event`. | `"info"` |
+| `kerberospipeline.event.resources.requests.memory` | Memory request for `kerberospipeline.event`. | `"10Mi"` |
+| `kerberospipeline.event.resources.requests.cpu` | CPU request for `kerberospipeline.event`. | `"10m"` |
+| `kerberospipeline.monitor.repository` | The [monitoring microservice](https://doc.kerberos.io/hub/pipeline/#monitoring), calculating metrics of incoming messages. | `"ghcr.io/uug-ai/hub-pipeline-monitor"` |
+| `kerberospipeline.monitor.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.monitor.tag` | The Docker image tag/version. | `"v1.3.30"` |
+| `kerberospipeline.monitor.replicas` | Number of replicas for `kerberospipeline.monitor`. | `1` |
+| `kerberospipeline.monitor.logLevel` | Monitor log level. Set to `debug` for per-event processing checkpoints. | `"info"` |
+| `kerberospipeline.monitor.resources.requests.memory` | Memory request for `kerberospipeline.monitor`. | `"10Mi"` |
+| `kerberospipeline.monitor.resources.requests.cpu` | CPU request for `kerberospipeline.monitor`. | `"10m"` |
+| `kerberospipeline.sequence.repository` | The [sequencer microservice](https://doc.kerberos.io/hub/pipeline/#sequencer), grouping recordings in chunks/groups. | `"ghcr.io/uug-ai/hub-pipeline-sequence"` |
+| `kerberospipeline.sequence.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.sequence.tag` | The Docker image tag/version. | `"v1.7.15"` |
+| `kerberospipeline.sequence.replicas` | Number of replicas for `kerberospipeline.sequence`. | `1` |
+| `kerberospipeline.sequence.resources.requests.memory` | Memory request for `kerberospipeline.sequence`. | `"10Mi"` |
+| `kerberospipeline.sequence.resources.requests.cpu` | CPU request for `kerberospipeline.sequence`. | `"10m"` |
+| `kerberospipeline.throttler.repository` | The [throttler microservice](https://doc.kerberos.io/hub/pipeline/#throttler), throttling events. | `"uugai/hub-pipeline-throttler"` |
+| `kerberospipeline.throttler.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.throttler.tag` | The Docker image tag/version. | `"v1.2.11"` |
+| `kerberospipeline.throttler.replicas` | Number of replicas for `kerberospipeline.throttler`. | `1` |
+| `kerberospipeline.throttler.logLevel` | Log verbosity level for `kerberospipeline.throttler`. | `"info"` |
+| `kerberospipeline.throttler.resources.requests.memory` | Memory request for `kerberospipeline.throttler`. | `"10Mi"` |
+| `kerberospipeline.throttler.resources.requests.cpu` | CPU request for `kerberospipeline.throttler`. | `"10m"` |
+| `kerberospipeline.notify.repository` | The [notification microservice](https://doc.kerberos.io/hub/pipeline/#notification), sending notifications on events. | `"ghcr.io/uug-ai/hub-pipeline-notification"` |
+| `kerberospipeline.notify.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.notify.tag` | The Docker image tag/version. | `"v1.3.48"` |
+| `kerberospipeline.notify.replicas` | Number of replicas for `kerberospipeline.notify`. | `1` |
+| `kerberospipeline.notify.audit.enabled` | Enable audit publishing from the notification worker when global auditing is enabled. | `true` |
+| `kerberospipeline.notify.logLevel` | Log verbosity level for `kerberospipeline.notify`. | `"info"` |
+| `kerberospipeline.notify.notificationExpiryMinutes` | Maximum recording age in minutes before notification delivery. Set to `"0"` to disable the freshness cutoff. | `"15"` |
+| `kerberospipeline.notify.resources.requests.memory` | Memory request for `kerberospipeline.notify`. | `"10Mi"` |
+| `kerberospipeline.notify.resources.requests.cpu` | CPU request for `kerberospipeline.notify`. | `"10m"` |
+| `kerberospipeline.notifyTest.repository` | The notification service for testing, the different channels. | `"uugai/hub-pipeline-notification-test"` |
+| `kerberospipeline.notifyTest.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.notifyTest.tag` | The Docker image tag/version. | `"v1.2.7"` |
+| `kerberospipeline.notifyTest.replicas` | Number of replicas for `kerberospipeline.notifyTest`. | `1` |
+| `kerberospipeline.notifyTest.resources.requests.memory` | Memory request for `kerberospipeline.notifyTest`. | `"10Mi"` |
+| `kerberospipeline.notifyTest.resources.requests.cpu` | CPU request for `kerberospipeline.notifyTest`. | `"10m"` |
+| `kerberospipeline.analysis.repository` | The [analysis microservices](https://doc.kerberos.io/hub/pipeline/#analyser) which executed specific analysis in parallel. | `"ghcr.io/uug-ai/hub-pipeline-analysis"` |
+| `kerberospipeline.analysis.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.analysis.tag` | The Docker image tag/version. | `"v1.8.31"` |
+| `kerberospipeline.analysis.replicas` | Number of replicas for `kerberospipeline.analysis`. | `1` |
+| `kerberospipeline.analysis.logLevel` | Log verbosity level for `kerberospipeline.analysis`. | `"info"` |
+| `kerberospipeline.analysis.thumbnailRegeneration.enabled` | Regenerate thumbnails from the first frame of a classified moving object (`THUMBNAIL_REGENERATION_ENABLED`). Adds up to one thumbnail job per classified recording. Requires an analysis image that reads the flag. | `false` |
+| `kerberospipeline.analysis.thumbnailRegeneration.minSeconds` | Only regenerate when the classified object first appears at least this many seconds into the recording (`THUMBNAIL_REGENERATION_MIN_SECONDS`); earlier objects are already in the original thumbnail. `0` regenerates for every object. Requires an analysis image that reads the variable. | `3` |
+| `kerberospipeline.analysis.dbCache.enabled` | Cache hot-path MongoDB lookups (site vault per device) in memory. Site changes apply after at most one TTL. | `false` |
+| `kerberospipeline.analysis.dbCache.ttl` | Lifetime of a cached lookup, as a Go duration (e.g. `"30s"`, `"5m"`). | `"5m"` |
+| `kerberospipeline.analysis.resources.requests.memory` | Memory request for `kerberospipeline.analysis`. | `"10Mi"` |
+| `kerberospipeline.analysis.resources.requests.cpu` | CPU request for `kerberospipeline.analysis`. | `"10m"` |
+| `kerberospipeline.dominantColor.enabled` | Deploy `pipe-dominantcolor` and let the analysis stage schedule it (`DOMINANTCOLOR_ENABLED`). Requires an analysis image that reads the flag. | `false` |
+| `kerberospipeline.dominantColor.repository` | The dominant color microservices is computing a top 3 color histogram. | `"ghcr.io/uug-ai/hub-pipeline-dominantcolors"` |
+| `kerberospipeline.dominantColor.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.dominantColor.tag` | The Docker image tag/version. | `"v2.0.10"` |
+| `kerberospipeline.dominantColor.replicas` | Number of replicas for `kerberospipeline.dominantColor`. | `3` |
+| `kerberospipeline.dominantColor.logLevel` | Log verbosity level for `kerberospipeline.dominantColor`. | `"info"` |
+| `kerberospipeline.dominantColor.resources.requests.memory` | Memory request for `kerberospipeline.dominantColor`. | `"512Mi"` |
+| `kerberospipeline.dominantColor.resources.requests.cpu` | CPU request for `kerberospipeline.dominantColor`. | `"500m"` |
+| `kerberospipeline.dominantColor.resources.limits.memory` | Memory limit for `kerberospipeline.dominantColor`. | `"2Gi"` |
+| `kerberospipeline.dominantColor.resources.limits.cpu` | CPU limit for `kerberospipeline.dominantColor`. | `"1000m"` |
+| `kerberospipeline.thumbnail.repository` | The thumbnail microservices generated a thumbnail for a recordings. | `"ghcr.io/uug-ai/hub-pipeline-thumbnail"` |
+| `kerberospipeline.thumbnail.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.thumbnail.tag` | The Docker image tag/version. | `"v1.3.24"` |
+| `kerberospipeline.thumbnail.replicas` | Number of replicas for `kerberospipeline.thumbnail`. | `2` |
+| `kerberospipeline.thumbnail.prefetchCount` | Max unacknowledged RabbitMQ messages per pod (`RABBITMQ_PREFETCH_COUNT`); `0` keeps the service default of 5. Requires hub-pipeline-thumbnail ≥ v1.3.15. | `0` |
+| `kerberospipeline.sprite.prefetchCount` | Max unacknowledged RabbitMQ messages per pod (`RABBITMQ_PREFETCH_COUNT`); `0` keeps the service default of 5. Requires hub-pipeline-sprite ≥ v1.1.21. | `0` |
+| `kerberospipeline.thumbnail.logLevel` | Log verbosity level for `kerberospipeline.thumbnail`. | `"info"` |
+| `kerberospipeline.thumbnail.quality` | Configuration value for `kerberospipeline.thumbnail.quality`. | `"1"` |
+| `kerberospipeline.thumbnail.width` | Configuration value for `kerberospipeline.thumbnail.width`. | `"600"` |
+| `kerberospipeline.thumbnail.height` | Configuration value for `kerberospipeline.thumbnail.height`. | `"-1"` |
+| `kerberospipeline.thumbnail.kerberosvault.enabled` | Enable or disable `kerberospipeline.thumbnail.kerberosvault`. | `true` |
+| `kerberospipeline.thumbnail.resources.requests.memory` | Memory request for `kerberospipeline.thumbnail`. | `"512Mi"` |
+| `kerberospipeline.thumbnail.resources.requests.cpu` | CPU request for `kerberospipeline.thumbnail`. | `"500m"` |
+| `kerberospipeline.thumbnail.resources.limits.memory` | Memory limit for `kerberospipeline.thumbnail`. | `"2Gi"` |
+| `kerberospipeline.thumbnail.resources.limits.cpu` | CPU limit for `kerberospipeline.thumbnail`. | `"1000m"` |
+| `kerberospipeline.counting.repository` | The counting microservices computes objects passing different line segments. | `"uugai/hub-pipeline-counting"` |
+| `kerberospipeline.counting.pullPolicy` | The Docker registry pull policy. | `"IfNotPresent"` |
+| `kerberospipeline.counting.tag` | The Docker image tag/version. | `"v2.0.7"` |
+| `kerberospipeline.counting.replicas` | Number of replicas for `kerberospipeline.counting`. | `1` |
+| `kerberospipeline.counting.logLevel` | Log verbosity level for `kerberospipeline.counting`. | `"info"` |
+| `kerberospipeline.counting.resources.requests.memory` | Memory request for `kerberospipeline.counting`. | `"10Mi"` |
+| `kerberospipeline.counting.resources.requests.cpu` | CPU request for `kerberospipeline.counting`. | `"10m"` |
+| `kerberospipeline.sprite.enabled` | Enable or disable `kerberospipeline.sprite`. | `false` |
+| `kerberospipeline.sprite.repository` | Container image repository for `kerberospipeline.sprite`. | `"ghcr.io/uug-ai/hub-pipeline-sprite"` |
+| `kerberospipeline.sprite.pullPolicy` | Image pull policy for `kerberospipeline.sprite`. | `"IfNotPresent"` |
+| `kerberospipeline.sprite.tag` | Container image tag/version for `kerberospipeline.sprite`. | `"v1.1.28"` |
+| `kerberospipeline.sprite.replicas` | Number of replicas for `kerberospipeline.sprite`. | `5` |
+| `kerberospipeline.sprite.logLevel` | Log verbosity level for `kerberospipeline.sprite`. | `"info"` |
+| `kerberospipeline.sprite.interval` | Configuration value for `kerberospipeline.sprite.interval`. | `"1"` |
+| `kerberospipeline.sprite.width` | Tile width in pixels; preserve width:height = 16:9. | `"240"` |
+| `kerberospipeline.sprite.height` | Tile height in pixels; preserve width:height = 16:9. | `"135"` |
+| `kerberospipeline.sprite.resources.requests.memory` | Memory request for `kerberospipeline.sprite`. | `"512Mi"` |
+| `kerberospipeline.sprite.resources.requests.cpu` | CPU request for `kerberospipeline.sprite`. | `"500m"` |
+| `kerberospipeline.sprite.resources.limits.memory` | Memory limit for `kerberospipeline.sprite`. | `"2Gi"` |
+| `kerberospipeline.sprite.resources.limits.cpu` | CPU limit for `kerberospipeline.sprite`. | `"1000m"` |
+| `kerberospipeline.export.repository` | Container image repository for `kerberospipeline.export`. | `"ghcr.io/uug-ai/hub-pipeline-export"` |
+| `kerberospipeline.export.pullPolicy` | Image pull policy for `kerberospipeline.export`. | `"IfNotPresent"` |
+| `kerberospipeline.export.tag` | Container image tag/version for `kerberospipeline.export`. | `"v1.2.22"` |
+| `kerberospipeline.export.replicas` | Number of replicas for `kerberospipeline.export`. | `2` |
+| `kerberospipeline.export.logLevel` | Log verbosity level for `kerberospipeline.export`. | `"info"` |
+| `kerberospipeline.export.resources.requests.memory` | Memory request for `kerberospipeline.export`. | `"10Mi"` |
+| `kerberospipeline.export.resources.requests.cpu` | CPU request for `kerberospipeline.export`. | `"10m"` |
+| `email.provider` | The email service provider for sending out messages over email , use `'mailgun'` or `'smtp'`. | `"mailgun"` |
+| `email.from` | The email address that is sending messages in name of, by default `'support@yourdomain.com'`. | `"support@yourdomain.com"` |
+| `email.displayName` | The display name that is sending messages in name of, by default `'yourdomain.com'` | `"yourdomain.com"` |
+| `email.mailgun.domain` | While using `mailgun` as email service provider, you will need to provide your Mailgun domain. | `"mg.yourdomain.com"` |
+| `email.mailgun.apikey` | Mailgun API key (lowercase variant) used when provider is `mailgun`. | `"xxxx"` |
+| `email.smtp.server` | While using `smtp` as email service provider, use the SMTP server. | `"smtp.yourdomain.com"` |
+| `email.smtp.port` | SMTP port specified by your SMTP server, by default `'456'`. | `"465"` |
+| `email.smtp.username` | SMTP username. | `"yourusername"` |
+| `email.smtp.password` | SMTP password. | `"yourpassword"` |
+| `email.templates.welcome` | The template which is send when a new user registered on the platform (`IS_PRIVATE='false'`), by default `'disabled'`. | `"welcome"` |
+| `email.templates.welcomeTitle` | The welcome title use in the subject of the email. | `"Welcome to Kerberos Hub"` |
+| `email.templates.activate` | The template which is send when a user is required to activate his account , by default `'activate'`. | `"activate"` |
+| `email.templates.activateTitle` | The activation title use in the subject of the email. | `"Wonderful! Your Kerberos Hub is now active"` |
+| `email.templates.forgot` | The template which is send when an account is requesting a forgot password, by default `'forgot'`. | `"forgot"` |
+| `email.templates.forgotTitle` | The forgot title use in the subject of the email. | `"Password reset Kerberos Hub. You forgot your password"` |
+| `email.templates.share` | Email template name/key for `share` notifications. | `"share"` |
+| `email.templates.shareTitle` | Email subject title for the `share` template. | `"[Action] You received a recording from Kerberos Hub"` |
+| `email.templates.assignTask` | Email template name/key for `assign task` notifications. | `"assign_task"` |
+| `email.templates.assignTaskTitle` | Email subject title for the `assign task` template. | `"[Action] You've been assigned to a task"` |
+| `email.templates.detection` | We use templates to send notifications, this allow you to bring your own `Mailgun` templates, by default `'detection'`. | `"detection"` |
+| `email.templates.disabled` | The template which is send when an account is disabled due to reaching its upload limit, by default `'disabled'`. | `"disabled"` |
+| `email.templates.highupload` | The template which is send when an account is reaching a specific upload threshold, by default `'threshold'`. | `"highupload"` |
+| `email.templates.device` | The template which is send when a camera goes online or offline, by default `'device'`. | `"device"` |
+| `email.templates.alertTitle` | Email subject title for the `alert` template. | `"[Alert] Kerberos Hub detected something an event"` |
+| `email.templates.deviceTitle` | Email subject title for the `device` template. | `"[Device] A Kerberos Agent's status has been changed"` |
+| `email.templates.deviceGroup` | The template sent instead of `device` when several cameras of an account change status in the same scan and the account groups device notifications ("Group notifications"). SMTP only; see *Grouped camera status* below. | `"device_group"` |
+| `email.templates.deviceGroupTitle` | Email subject title for the `device_group` template. | `"[Device] Several cameras changed status"` |
+| `email.templates.recording` | The template for recording check alerts (a continuously recording camera that is online but uploads no recordings, and again when it records). Empty uses `recording` with SMTP; for SendGrid or Mailgun set the template id, otherwise they use `device`. See *Camera recordings* below. | `""` |
+| `email.templates.recordingTitle` | Email subject for recording check alerts. Empty uses "[Device] A camera stopped recording", "[Device] A camera is recording again" and their forms for several cameras. | `""` |
+| `email.mailgun.apiKey` | The Mailgun API key linked to your Mailgun domain. | `""` |
+| `imagePullSecrets.name` | Docker registry secret name, which is also granted with the license. This allows you to download the Docker images. | `""` |
+| `kerberoshub.frontend.ssoDomain` | The domain that's being used to activate SSO from the login page. | `""` |
+| `kerberoshub.frontend.stripe.apikey` | If using the public version, `stripe` can be used for automated billing and subscriptions. | `""` |
+
+### Email templates and variables
+
+Every email Hub sends is a template: an HTML file, plus a plain-text `.txt` version, containing `{{variable}}` placeholders that are filled in just before sending. This section lists which value each placeholder gets.
+
+#### Which template is used
+
+- `email.templates.<name>` sets the template name for each email (for example `email.templates.detection: "detection"`).
+- With `email.provider: smtp`, Hub reads `/mail/templates/<name>.html` and `/mail/templates/<name>.txt` from the container. If the files are not there, it uses its built-in template with that name. To use your own, mount a volume at `/mail` (see the commented `custom-email-templates` volume in `values.yaml`). The [`custom-layout/templates`](custom-layout/templates) folder holds a complete set to start from.
+- With `email.provider: mailgun`, `<name>` is a template stored in your Mailgun account. Mailgun receives `user`, `text`, `link`, `numberOfMedia`, `dataUsage` and the email-specific values below as template variables. The computed values (dates, camera, sites, groups, thumbnail) are only filled in with `smtp`.
+- Alert emails (`detection`) are only sent when `email.provider` is `smtp`.
+- A placeholder that has no value for that email stays in the email as literal text, so only use the placeholders listed for it. The bundled templates contain `{{tab1_href}}`, `{{tab1_title}}`, `{{tab2_href}}` and `{{tab2_title}}`; these are not filled in.
+
+#### Links
+
+- The **base URL** is `kerberoshub.frontend.schema` + `://` + `kerberoshub.frontend.url` (the `PUBLIC_URL` environment variable), for example `https://app.example.com`.
+- A **tenant URL** is the base URL with the first part of the host replaced by the recipient account's domain. With base URL `https://app.example.com` and account domain `acme`, the tenant URL is `https://acme.example.com`. Accounts without a domain use the base URL. Only the last two parts of the host are kept, so a base URL on `app.example.co.uk` becomes `acme.co.uk`.
+
+#### Alerts: `detection`
+
+Sent by the notification pipeline (`kerberospipeline.notify`) when a custom alert or the generic detection alert fires. The subject is `email.templates.alertTitle`; for a custom alert it is prefixed with the alert's name in brackets, for example `[Front door] Hub detected an event.`
+
+| Placeholder | Value |
+|---|---|
+| `{{user}}` | Name of the account that receives the alert: first and last name, or the username when both are empty. This is the account the camera belongs to, not the user who created the alert. |
+| `{{title}}` | The email subject. |
+| `{{text}}` | The alert message: what was detected, on which camera and when. |
+| `{{link}}` | **Custom alerts**: a signed link to the recording file. It stops working when the storage link expires. **Generic detection alert**: the recording's page in Hub, `<tenant URL>/media/<id>`. |
+| `{{medialink}}` | `https://app.kerberos.io/media/<id>`. Always this host; it does not follow `kerberoshub.frontend.url`. |
+| `{{thumbnail}}` | An `<img>` of the recording: embedded in the email for custom alerts, a signed thumbnail URL for the generic detection alert. |
+| `{{date}}`, `{{time}}`, `{{datetime}}` | Start of the recording, in the account's timezone. |
+| `{{eventdate}}`, `{{eventtime}}`, `{{eventdatetime}}` | When the alert was sent, in the account's timezone. |
+| `{{timezone}}` | The account's timezone. |
+| `{{devicename}}`, `{{deviceid}}` | Camera name and camera key. |
+| `{{sites}}`, `{{groups}}` | Comma-separated names of the sites and groups the camera belongs to. |
+| `{{classifications}}` | Comma-separated objects detected in the recording. |
+
+#### Camera status: `device`
+
+Sent by `hub-monitor-device` when a camera goes online, offline or idle. The subject is `email.templates.deviceTitle`.
+
+| Placeholder | Value |
+|---|---|
+| `{{user}}` | Username of the account the camera belongs to. |
+| `{{title}}` | The email subject. |
+| `{{text}}` | The change, worded from the previous status (see below). |
+| `{{status}}` | `active` (online), `inactive` (offline) or `idle` (online, camera stream not connected). |
+| `{{devicename}}`, `{{deviceid}}` | Camera name and camera key. |
+| `{{eventdate}}`, `{{eventtime}}`, `{{eventdatetime}}` | When the status changed, in the server's timezone (normally UTC), not the account's. |
+| `{{link}}` | Not set; replaced with an empty value. |
+
+`{{text}}` per change (webhooks and IFTTT get the same text):
+
+| Change | `{{text}}` |
+|---|---|
+| Goes offline | "`<camera>` is offline, it hasn't responded for 5 minutes." |
+| Loses its camera stream while online | "`<camera>` is online, but the camera stream is not connected." |
+| Comes back from offline without its camera stream | "`<camera>` is back online, but the camera stream is not connected." |
+| Gets its camera stream back | "`<camera>`'s camera stream is connected again." |
+| Comes back from offline | "`<camera>` is back online." |
+
+
+#### Grouped camera status: `device_group`
+
+Sent by `hub-monitor-device` instead of `device` when an account has **Group notifications** switched on (Alerts → Devices, stored as `notificationSettings.devices.groupNotifications`) and **several** of its cameras change status at the same time. Changes are detected on every scan (`kerberoshub.monitordevice.scanIntervalSeconds`, default 60 seconds); a change is then held 20 seconds and the account checked again, so that cameras of the same outage arrive in one email. The hold is the monitor's `DEVICE_GROUPING_HOLD_SECONDS` (default `20`; `0`, or at least the scan interval, holds until the next scan, which is also what releases before v1.4.10 do). When only one camera changed, the usual `device` email is sent. The subject is `email.templates.deviceGroupTitle`; the template name is `email.templates.deviceGroup` (default `device_group`, so custom files are `device_group.html` and `device_group.txt`).
+
+| Placeholder | Value |
+|---|---|
+| `{{user}}` | Name of the account the cameras belong to: first and last name, or the username when both are empty. |
+| `{{title}}` | The email subject. |
+| `{{text}}` | One-line summary, for example "6 cameras changed status: 4 offline, 1 lost their camera stream, 1 back online." The other changes read "back online without camera stream" and "camera stream reconnected". |
+| `{{count}}` | Number of cameras in the email. |
+| `{{status}}` | `active`, `inactive` or `idle` when all cameras have the same new status, otherwise `mixed`. |
+| `{{sections}}` | The cameras as HTML, one section per status and site, group or "Other cameras" (see below). |
+| `{{sectionsText}}` | The same sections as plain text, for `device_group.txt`. |
+| `{{link}}` | The cameras page, `<tenant URL>/devices`, built from `kerberoshub.frontend.schema` and `kerberoshub.frontend.url` (see *Links* above). |
+| `{{eventdate}}`, `{{eventtime}}`, `{{eventdatetime}}` | When the email was sent, in the server's timezone (normally UTC). |
+
+**Sections.** There is one section per change and per site, group or "Other cameras". Sections are ordered by change (offline, camera stream lost, back online without camera stream, camera stream back, back online), then sites, groups and "Other cameras". Each camera is listed once: under the site or group that holds the most cameras of the email with the same change (a site wins a tie), or under "Other cameras" when it is in no site or group. A section title reads `Site Gate · Offline · all 3 cameras`, `Group Perimeter · Back online without camera stream · 2 cameras` or `Other cameras · Camera stream back · 1 camera`; the change labels are `Offline`, `Camera stream lost`, `Back online without camera stream`, `Camera stream back` and `Back online`, and "all" is added when a section of two or more cameras holds every camera of the site or group. Each camera line has its name and a detail: `no response for 12 min`, `agent online, camera stream not connected`, `agent back online, camera stream not connected`, `camera stream connected` or `online`. A camera that changes again during the hold keeps the status from before its first change: one that went offline and came back reads `back online after a brief interruption`, the other reversals `offline again after briefly coming back, no response for 4 min` and `camera stream lost again after briefly reconnecting`.
+
+`{{sections}}` is generated HTML with inline styles (email clients ignore stylesheets): per section a `<p>` with the title, followed by a `<table role="presentation" width="100%">` with one row per camera (name left, detail right). Place it where the camera list should appear; its look can't be changed from the template. For full control over the layout, use `{{sectionsText}}`. Camera, site and group names are HTML-escaped.
+
+`{{sectionsText}}` example:
+
+```text
+Site Gate · Offline · all 3 cameras
+- Gate camera 1 (no response for 4 min)
+- Gate camera 2 (no response for 4 min)
+- Gate camera 3 (no response for 4 min)
+
+Other cameras · Camera stream lost · 1 camera
+- Lobby camera (agent online, camera stream not connected)
+```
+
+**Custom templates** for this email are read by `hub-monitor-device`, so mount the `custom-email-templates` volume on `kerberoshub.monitordevice` as well (see the commented example in `values.yaml`).
+
+**Which channels are grouped.** Grouping applies to the channels people read: email, Slack, Telegram, Pushover, Pushbullet, SMS and Alexa. Webhooks, IFTTT and the real-time feed are never grouped: they keep receiving one notification per camera, with the same fields and at the same moment as without grouping, so existing integrations keep working.
+
+**When email stays per camera.** The grouped email is only sent with the SMTP mail provider. With SendGrid or Mailgun the template name is a template id in that account, so those keep one `device` email per camera. With SMTP, a deployment that mounts its own `device` template but no `device_group` template also keeps one email per camera, so a white-labelled device email never falls back to the default layout. Add a `device_group` template next to your `device` template to get grouped emails.
+
+#### Camera recordings: `recording`
+
+Sent by `hub-monitor-device` for the **recording check** (Alerts → Devices → Recording check, stored as `notificationSettings.devices.recordingCheck` and `recordingCheckHours`). It alerts when a selected camera that records continuously is online but has not uploaded a recording for the account's period (1 to 72 hours, default 2), and again once it records. Cameras that record on motion only, cameras whose Agent does not report its recording mode, and offline cameras are not checked. The check uses the device alert channels, cameras and **Group notifications**: with grouping on, cameras that stop recording at the same time arrive in one email. The same template is used for one camera and for several.
+
+The template name is `email.templates.recording` (default `recording`, so custom files are `recording.html` and `recording.txt`); the subject is `email.templates.recordingTitle`.
+
+| Placeholder | Value |
+|---|---|
+| `{{user}}` | Name of the account the cameras belong to: first and last name, or the username when both are empty. |
+| `{{title}}` | The email subject. |
+| `{{text}}` | For one camera, "`<camera>` is online, but hasn't uploaded a recording for 2 hours." (with "The account reached its upload limit, so new recordings are not stored." when it has) or "`<camera>` is recording again."; for several, "3 cameras stopped recording.", "2 cameras are recording again." or "3 cameras: 2 stopped recording, 1 recording again." |
+| `{{count}}` | Number of cameras in the email. |
+| `{{status}}` | `no_recordings` or `recording` when all cameras have the same change, otherwise `mixed`. |
+| `{{sections}}` | The cameras as HTML, as for `device_group`. The change labels are `No recordings` and `Recording again`, and the details `online, no recording for 3 hours` (plus `, upload limit reached`) and `recording again`. |
+| `{{sectionsText}}` | The same sections as plain text, for `recording.txt`. |
+| `{{link}}` | The cameras page, `<tenant URL>/devices` (see *Links* above). |
+| `{{eventdate}}`, `{{eventtime}}`, `{{eventdatetime}}` | When the email was sent, in the server's timezone (normally UTC). |
+
+`{{sectionsText}}` example:
+
+```text
+Site Gate · No recordings · all 2 cameras
+- Gate camera 1 (online, no recording for 2 hours)
+- Gate camera 2 (online, no recording for 2 hours)
+```
+
+**Custom templates** for this email are read by `hub-monitor-device`; mount the `custom-email-templates` volume on `kerberoshub.monitordevice`. With SMTP, a deployment that mounts its own `device` template but no `recording` template keeps getting its `device` template (one email per camera), so a white-labelled email never falls back to the default layout. Add a `recording` template next to your `device` template to get the recording email. [`custom-layout/templates`](custom-layout/templates) has one to start from.
+
+**Integrations.** Webhooks, IFTTT and the real-time feed get one message per camera with `data.status` set to `no_recordings` or `recording`, also with grouping on.
+
+#### Account and sharing emails
+
+Sent by the API (`kerberoshub.api`). The subject of each email is the matching `email.templates.<name>Title` value.
+
+| Email (`email.templates.*`) | Placeholder | Value |
+|---|---|---|
+| Registration (`welcome`) | `{{user}}` | New user's first and last name, or username. |
+| | `{{link}}` | Activation link: `<base URL>/login/activate/<token>`. |
+| | `{{token}}` | The activation token. |
+| Account activated (`activate`) | `{{user}}` | User's first and last name, or username. |
+| | `{{link}}` | `<base URL>/login`. |
+| Password reset (`forgot`) | `{{user}}` | User's first and last name, or username. |
+| | `{{password}}` | The newly generated password. |
+| | `{{ipaddress}}` | IP address the reset was requested from. |
+| Recording shared (`share`) | `{{user}}` | Sender's first and last name, or username. |
+| | `{{url}}` | Signed link to the recording file. |
+| | `{{title}}` | The email subject (`email.templates.shareTitle`). The share's own title is only used when that value is empty. |
+| | `{{body}}` | The notes the sender added to the share. |
+| Case shared (`share_case`) | `{{user}}` | Sender's first and last name, or email address. |
+| | `{{firstname}}`, `{{lastname}}` | Sender's first and last name. |
+| | `{{url}}` | `<base URL>/share/<token>`. |
+| | `{{expiry}}` | How long the share stays valid, for example "2 days" or "1 week". |
+| Case share code (`share_case_otp`) | `{{code}}` | One-time code to open the shared case. |
+| | `{{expiry}}` | How long the code stays valid. |
+| Task assigned (`assign_task`) | `{{assignee}}` | Assigned user's first and last name, or username. |
+| | `{{user}}` | Name of the user who assigned the task. |
+| | `{{task_name}}` | The task title. |
+| | `{{link}}` | `<tenant URL>/tasks/`, using the assigned user's domain. |
+
+The `newip`, `disable` and `highupload` templates are included, but no service currently sends them.
+
+### Post installation
+
+After the installation you'll need to initialise the Mongodb with some objects. Have a look at the `mongodb/` folder, you'll find three files available:
+
+- settings.nosql
+- subscriptions.nosql
+- users.nosql
+
+Open your favourite Mongodb client (or cli) and connect to your Mongodb database as previously created (or have already installed). Import the previous mentioned `.nosql` files into a new database called `Kerberos`.
+
+![Open the Mongodb client](assets/images/mongodb-client.png)
+
+Once done you should be able to sign in with following credentials:
+
+- username: youruser
+- password: yourpassword
+
+Please note that the default username and password can be changed [by the changing the related username and password hash](https://github.com/kerberos-io/hub/blob/master/mongodb/users.nosql#L3-L5). The password hash is a bcrypt computed hash, which you can compute yourself [using a bcrypt client](https://bcrypt-generator.com/).
+
+### Subscription settings
+
+Once the collections are loaded in the Mongodb instance, you should see the `user`, `subscriptons` and `settings` collections. Those three collections will allow a user to login into the Kerberos Hub web interface, using the previously mentioned username and password.
+
+Next to that, in the `subscriptions` collection you will find a subscription for that specific user. The subscription specifies which kind of access the user has in terms of features and upload quota.
+
+Building further on those `subscriptions`, you will find a `settings` collection that contains the quota for each `subscription`.
+
+### Settings collection
+
+As mentioned during the Post installation step, you'll import some `.nosql` files. The `settings.nosql` file includes all the relevant configurations and parameters that allow you to tweak the Kerberos Hub deployment (dynamically).
+
+#### Classifications
+
+Within the Kerberos Hub front-end you'll see the option to filter through classifications. This filtered is stored in the `settings` collection. By changing the entries of the `classifications` object, you can add, edit or remove items from the filters.
+
+The default shared classification list lives in
+[`templates/configMaps/catalogs/classifications.yaml`](templates/configMaps/catalogs/classifications.yaml),
+independently of workflow contracts. The chart uses this bundled definition
+unless a deployer defines the catalog inline or provides a ConfigMap override. Each entry contains the stable classifier output
+`key`, the user-facing `label`, and an `icon` key. Hub API exposes this catalog
+to alerts and filters. When the mounted catalog is unavailable, compatible Hub
+API versions fall back to the legacy `settings` document and then the built-in
+classification list. Set `classificationCatalogEnabled: false` to omit the
+ConfigMap and make Hub API use that fallback directly.
+
+The simplest way to customize the catalog is to define the complete list inline
+in your values (restored in chart **0.162.0** after its removal in 0.155.0):
+
+```yaml
+classificationCatalog:
+  - key: car
+    label: Car
+    icon: car
+  - key: forklift
+    label: Forklift
+```
+
+The list replaces the bundled defaults entirely (entries are not merged) and is
+rendered into the chart's `classification-catalog` ConfigMap, so Hub API and the
+bundled `catalogs/classifications.json` of workflow packaging use the same list
+and a change rolls the API pod. Each entry needs a `key` and `label`, `icon` is
+optional, and keys must be unique. Omitting the key (or `null`) keeps the bundled
+defaults; `[]` is rejected, so use `classificationCatalogEnabled: false` for the
+API fallback. An inline list cannot be combined with
+`classificationCatalogEnabled: false`, `classificationCatalogExistingConfigMap` or
+a per-file catalog replacement.
+
+Alternatively, create a ConfigMap in the release namespace containing the complete
+JSON array, then use the per-file replacement interface:
+
+```yaml
+classificationCatalogEnabled: true
+workflowConfiguration:
+  enabled: true
+  includeDefaults: true
+  configMaps:
+    - name: hub-classification-catalog
+      items:
+        - key: classifications.json
+          path: catalogs/classifications.json
+          replace: true
+```
+
+Deploy that ConfigMap before the chart upgrade. The bundled list remains the
+default when no override is configured.
+
+The existing `classificationCatalogExistingConfigMap: hub-classification-catalog`
+option remains supported, including for deployments without workflow packaging.
+It requires the key `classifications.json`. Do not combine it with a per-file
+catalog replacement. Helm does not create or checksum either kind of external
+catalog. With bundled workflow packaging, the API mount and Start metadata
+reference the same effective ConfigMap. With `includeDefaults: false`, map any
+required catalog explicitly through `configMaps`; the API's catalog selection
+remains independent.
+Disabling `classificationCatalogEnabled` disables the API catalog mount regardless
+of this setting. The external ConfigMap and key must exist before the API pod can
+start. Manage updates and any required rollout/reload through deployment tooling;
+Helm cannot inspect or validate its contents. The catalog schema remains available
+for authoring validation.
+
+### Workflow editor contracts
+
+This chart defines the v1 contract format and opt-in file packaging.
+**Consuming contracts requires compatible Hub API and frontend versions.**
+Enabling packaging only mounts files; it neither enables an editor feature nor
+registers workers or changes execution. Compatible APIs use validated contracts
+to gate custom-editor node availability, together with worker routing.
+
+Deployers describe what a node exposes; Hub code owns what that means:
+
+| Contract controls | Code owns |
+| --- | --- |
+| `presentation`: name, description, approved icon, colour token | Widgets, layout and theme colours |
+| `params`: settings authors enter on a worker stage | Validation, secret masking and storage |
+| `fields`: Start selectors and typed stage outputs, labels, order, choices, bounds | Operator semantics, authorized resource lookups, Start's bindings |
+| Start `controls` and `triggerModes` offered for new authoring | Schedule, condition and trigger execution |
+
+Worker images, queues, resources and credentials stay in `kerberoshub.services`.
+No new loader environment variable is set.
+
+Conditions are not free-form: a new or changed predicate on a connection may
+only test a declared field of Start or of a stage upstream of that connection
+(stage outputs are addressed as `results.<stage>.<path>`), with one of its
+declared operators and a value of its type, within its bounds and, for equality
+on enumerated choices, one of its options. Predicates already stored keep
+running and can be removed, but not edited.
+
+The earlier device-bound workflow configurations were development fixtures, not
+a recommended deployment model. Charts describe capabilities, not selected
+devices, project IDs, concrete workflow edges, or user-authored conditions.
+Device filtering is optional. Saved selections belong in individual workflows.
+
+ConfigMap templates live together under `templates/configMaps/`, with bundled
+catalogs and workflow contracts in their own subdirectories:
+
+```text
+templates/configMaps/
+  configmap-mongodb.yaml
+  configmap-hub-audit.yaml
+  catalogs/
+    classifications.yaml
+  workflow-contracts/
+    start.yaml
+    anpr.yaml
+    forwarder.yaml
+schemas/
+  catalog.schema.json
+  workflow-contract.schema.json
+```
+
+- [Start contract ConfigMap](templates/configMaps/workflow-contracts/start.yaml): current device,
+  site, group and initial-classification presets, schedule/condition controls and
+  both trigger modes.
+- [ANPR contract ConfigMap](templates/configMaps/workflow-contracts/anpr.yaml):
+  presentation plus plate/read-status and OCR metadata from the ANPR worker; no
+  catalog required. It declares no `params`, so any settings come from
+  `kerberoshub.workflows.editorStages`.
+- [Forwarder contract ConfigMap](templates/configMaps/workflow-contracts/forwarder.yaml):
+  presentation and required per-node delivery and RabbitMQ destination settings
+  for custom workflows. Deployment-global workflows keep their deployment
+  bindings. No output fields are declared.
+- [Custom pose example](examples/workflow-contracts/pose.yaml): hypothetical
+  worker, demonstrating presentation, settings (`params`), a file catalog, inline
+  choices and a numeric field.
+  This example does not deploy a worker or claim a universal pose-model format.
+- [Contract schema](schemas/workflow-contract.schema.json): format, source-name
+  documentation and YAML editor completion for standalone contracts via the
+  `$schema` comment.
+- [Catalog schema](schemas/catalog.schema.json): shared JSON lists of
+  `{key, label, icon?}`, compatible with the current classification file format.
+
+The bundled contract and catalog templates define their payloads as named Helm
+templates and emit ConfigMaps when enabled. These are Kubernetes templates, not standalone contract
+files; Helm cannot access files under `templates/` through `.Files.Get`.
+Validate their rendered data against the schemas. The standalone custom examples
+remain plain YAML/JSON files.
+
+Do not associate the contract schema with an entire Helm template or ConfigMap:
+it describes only the contract document inside `data`. The schemas are included
+in the chart package, but are not mounted into pods. Helm validates
+`values.schema.json`, not these payload schemas. Unique field IDs/catalog keys
+and resolvable catalog references also require semantic checks; a JSON Schema
+pass alone does not establish runtime compatibility.
+
+#### Current bundled defaults
+
+Start, ANPR, the forwarder and the shared classification catalog are bundled. The pose files
+under `examples/` are illustrative, not installed presets.
+
+| Start field | Context path | Operators | Choices |
+| --- | --- | --- | --- |
+| `device` | `device.deviceKey` | `eq`, `in` | `project.devices` |
+| `sites` | `device.siteIds.*` | `in` | `project.sites` |
+| `groups` | `device.groupIds.*` | `in` | `project.groups` |
+| `classifications` | `inputs.classify.details.*.classified` | `in` | `../catalogs/classifications.json` |
+
+These are editor condition presets, not worker deployment settings. Only
+classifications are marked optional: initial classification data may be absent.
+The bundled Start contract also declares two condition-only context fields,
+`deviceName` (`device.deviceName`) and `objectClass` (the classification path
+with `eq`/`ne`/`in`/`exists`). Other Start field IDs are not selectors; they must
+use paths under `device.` or `inputs.` and only extend what advanced conditions
+may test.
+
+Site/group arrays can be empty. A contract may omit any of these fields, the
+`weeklySchedule`/`conditions` controls (omitted offers none) or a trigger mode
+(`triggerModes` omitted offers both). Omissions affect new authoring only:
+values already saved in workflows are kept, keep running and can be cleared.
+
+The catalog preserves the API/frontend compatibility defaults: `animal`,
+`pedestrian`, `cyclist`, `motorbike`, `lorry`, `car`, `handbag`, `suitcase` and
+`cell phone`. It is not an exhaustive vocabulary for every detector. Keys are
+literal output/comparison values, not aliases: `motorbike` does not match
+`motorcycle`. Deployments using a different detector vocabulary must supply the
+appropriate complete catalog rather than relabeling keys silently.
+
+##### ANPR: the stage result
+
+The ANPR contract describes `results.anpr` as `models.WorkflowAnprResult`
+defines it: the engine groups hub-anpr's ingest blocks into one detection run
+(`detections`) with one track per vehicle, and one marker per vehicle
+(`markers`). Paths are relative to that result.
+
+| ANPR field | Relative result path | Input |
+| --- | --- | --- |
+| `plate` | `detections.*.tracks.*.meta.plate` | Uppercase letters and digits without separators (`AB123CD`); empty when unread |
+| `unread` | `detections.*.tracks.*.meta.unread` | Boolean |
+| `vehicleClass` | `detections.*.tracks.*.meta.classifiedAs` | Classification label copied from classify (only `ANPR_PLATE_CLASSES`, by default `car`) |
+| `ocrConfidence` | `markers.*.metadata.confidence` | Number; only for read plates; about 0–1 for `fast`, 0.5 for `tesseract`, unclamped for `http` |
+| `ocrEngine` | `markers.*.metadata.engine` | `fast`, `tesseract`, `tesseract+opencv` or `http`; only for read plates |
+| `secondsVisible` | `markers.*.duration` | Whole seconds the vehicle was visible |
+
+The panel offers "Plate contains" and "Plate could not be read", plus a
+collapsed Recognition section (minimum OCR confidence, vehicle class, seconds
+visible). `exists` is not offered: plate, unread and class are present for every
+vehicle, so it would always match.
+
+Important output semantics:
+
+- Wildcards fan out independently. Plate, unread and class are on the same
+  track and can be tied to one vehicle with "Must match the same item"; OCR
+  confidence and engine are on the markers and cannot be tied to a plate.
+- Vehicles removed by the movement and jump gates produce neither a track nor a
+  marker, so the lists can be empty.
+- Track confidence is a constant 0.9 and is deliberately not offered.
+- Node settings (`params`) override the worker's `ANPR_*` environment variables
+  per run: vehicle classes to read (`plateClasses`, a multiselect from the
+  classification catalog), minimum movement, maximum jump, frames to read,
+  agreeing reads required and minimum OCR confidence. Their defaults equal the
+  worker's built-in defaults and are stored on nodes when a workflow is saved,
+  so a deployment that changes those environment variables should change the
+  contract defaults as well. Requires hub-anpr with node settings and an engine
+  that dispatches settings to every stage.
+
+ANPR metadata is bundled whenever default workflow packaging is enabled, even
+if its worker is disabled. It does not deploy the worker. Because a valid
+contract plus worker routing offers a stage, ANPR becomes authorable as soon as
+its worker queue is configured; replace or omit the bundled contract to prevent
+that.
+
+The forwarder contract follows the same rule: the forwarder becomes authorable
+wherever its worker queue is configured. Replace or omit the bundled contract to
+prevent that.
+
+Its nine required custom-workflow settings are `broker`,
+`mode`, `host`, `port` (whole number, 1-65535), `queue`, `vhost`, `tls`,
+`username` and `password`. The contract defaults `broker` to `rabbitmq`, `mode`
+to `delivered` and `tls` to `true`; those values are stored on save. Destination
+and credentials must be supplied before enabling a custom workflow. The password is a secret:
+the API masks it on reads and the engine includes it only in worker dispatches.
+Changing other node settings requires re-entering saved secrets.
+
+Custom workflows never inherit deployment connection settings or credentials.
+They use their own RabbitMQ connection, verified TLS with system trust roots
+when enabled, and their own `<queue>.forwarder-dead-letter` queue. Incomplete
+custom settings fail closed even if a replacement contract makes them optional.
+Shared destinations and custom HTTPS webhooks are not supported in this phase.
+Deployment-global workflows continue using their configured RabbitMQ or HTTPS
+bindings without node overrides. `mode: callback` requires a
+configured callback base URL (`FORWARDER_CALLBACK_BASE_URL` for the
+environment-backed worker); the external service supplies its own Hub token.
+Custom invocations carry the run's inputs and results, not deployment-specific
+field mappings. TLS certificate and queue declaration policies are not node
+settings.
+
+Deploy the engine that stamps the top-level `forwarderDestinationMode`
+(`deployment` or `custom`) before the enforcing worker. Missing or invalid mode
+is rejected; drain old unstamped dispatches before the worker upgrade. Update
+existing custom workflows with complete settings. The mode is engine-owned,
+not contract-defined, and the forwarder queue must accept trusted engine
+publishers only.
+
+This chart source layout does not change the mounted layout:
+
+```text
+/etc/kerberos/configuration/
+  catalogs/
+    classifications.json
+  workflow-contracts/
+    start.yaml
+    anpr.yaml
+    forwarder.yaml
+```
+
+Each contract defines a `stage` type, a `schemaVersion`, a `contractVersion`,
+optional `presentation` and (worker stages only) `params`, and its own `fields`.
+`controls` and `triggerModes` are Start-only. `fields: []` is valid for a node without exposed condition
+fields; omitting the `fields` property is invalid. A field declares `id`, `label`, `path`, scalar `type` and
+supported `operators`; `optional`, numeric bounds and `choices` are optional.
+The `type` describes each wildcard-selected candidate, not the containing array.
+IDs must be unique within a contract. Increment `contractVersion` when changing
+its meaning/output shape; the future runtime must bind workflows to compatible
+versions rather than silently reinterpreting saved conditions.
+
+#### Field paths and connection panels
+
+Every contract path addresses the workflow condition root
+(`models.WorkflowConditionRootSchema`): Start fields use absolute paths, stage
+fields are relative to `results.<stage>`. A compatible API rejects Start paths
+that are not in that schema (for example a typo such as `device.devicename`)
+and lists the valid alternatives; worker-defined `inputs.<operation>` data and
+stage outputs are accepted as declared.
+
+`panel` lays out the inputs on connections leaving a node. Sections place
+declared fields with an editor widget (`multiselect`, `select`, `text`,
+`number`, `toggle`), Start's weekly schedule (`controls: [weeklySchedule]`) or
+the Extra conditions catch-all (`picker: true`), which offers every declared
+field of Start and the stages before the connection. Connections also show the
+panels of earlier steps, collapsed. Contracts without a panel get a default one,
+so existing contracts keep working; on Start a panel replaces the top-level
+`controls` list. See the pose example and the contract schema for the full
+format.
+
+#### Contract-gated custom editor
+
+With a compatible API/frontend, adding or changing a custom-workflow stage node
+requires both of the following:
+
+- Its operation has configured worker routing (normally from
+  `kerberoshub.services.<operation>.queue`).
+- A valid supported contract for that operation is present under
+  `workflow-contracts/`, and any referenced catalogs are valid.
+
+The contract is the allow-list. `kerberoshub.workflows.editorStages` is optional
+metadata: a stage's name, description and params are used only where its
+contract omits `presentation` or `params`.
+
+This is a configuration check, not a live worker-health check. The chart's queue
+catalog does not prove that a worker pod is running; deployers still manage the
+worker's enabled state and deployment.
+
+Start is structural rather than a worker operation and always exists: every
+workflow has exactly one Start node and it needs no worker queue. Without a
+`workflow-contracts/start.yaml`, a compatible API applies a built-in default
+identical to the bundled one; a valid file replaces it entirely. An invalid or
+untrusted Start contract does not remove Start: it falls back to a restricted
+Start without selectors or controls and reports diagnostics in the editor, so a
+mistake never re-exposes fields the deployer meant to hide.
+
+Enable `workflowConfiguration.enabled` and provide stage contracts before using
+contract-gated stages. The chart currently bundles Start, ANPR and the forwarder; other
+editor operations need deployer-supplied contracts. Leaving configuration
+disabled does not stop existing workflows: Start remains authorable with its
+built-in default, but no new stage nodes can be added unless their contracts
+are supplied through another configuration mount.
+
+The contract-gating API currently supports schema and contract version 1. It
+reads configuration on demand, accepting direct YAML/JSON contract files and
+JSON catalogs inside the configured root, including Kubernetes projected-volume
+symlinks. Files are limited to 64 KiB, contracts to 128 fields and 64 params,
+inline choices to 256 values, and catalogs to 1024 entries. Unsupported versions,
+duplicate declarations, unreadable files and invalid references produce
+availability diagnostics, not implicit built-in replacements.
+
+Previously saved nodes whose contracts become unavailable remain visible and
+keep their stored settings. They can be removed or repositioned, but their
+settings and connections cannot be changed while unavailable. Other compatible
+edits to the workflow remain possible. Removing a node also removes its incident
+connections. This authoring rule does not disable existing workflows, change
+manual/automatic execution, or change deployment-global workflow definitions.
+
+The schemas describe data formats, not executable plugins. Contract availability
+does not yet provide a generic output-field editor for every stage.
+
+#### Choice origins
+
+Use exactly one of these, or omit `choices` for typed user input:
+
+```yaml
+choices:
+  source: project.devices
+```
+
+```yaml
+choices:
+  file: ../catalogs/classifications.json
+```
+
+```yaml
+choices:
+  values: [standing, sitting, lying]
+```
+
+The supported system-resource vocabulary for v1 is:
+
+| `choices.source` | User-facing labels | Stored comparison values |
+| --- | --- | --- |
+| `project.devices` | Authorized device names | Stable device keys |
+| `project.sites` | Authorized site names | Stable site IDs |
+| `project.groups` | Authorized group names | Stable group IDs |
+
+These are direct built-in API resolver identifiers, not database paths or
+deployer-selected authorization scopes. Consumers must reuse existing project/resource authorization and
+legacy-owner compatibility; metadata cannot grant access.
+
+File references resolve relative to the mounted contract, within the shared
+configuration root. V1 uses `../catalogs/<name>.json`; no URLs, arbitrary file
+access or recursive catalog references. Catalog keys are stable strings, with
+labels for display; inline lists may contain strings, numbers or booleans matching
+the field type. Catalogs are reusable by filters, alerts and other consumers,
+not owned by workflows. A library may ship a catalog without implementing an API.
+
+#### Bundled and external packaging
+
+`workflowConfiguration.enabled` defaults to `false`. With it enabled and
+`includeDefaults` omitted or `true`, the chart mounts the bundled Start/ANPR contracts and the
+**effective** classification list under `/etc/kerberos/configuration`, using
+the directory layout above. The projected volume reuses the existing
+classification ConfigMap, including `classificationCatalogExistingConfigMap`
+overrides, an inline `classificationCatalog` or explicit per-file replacements, rather
+than storing another copy in the workflow ConfigMap.
+
+The default classification ConfigMap name, mount path, `CLASSIFICATION_CATALOG_FILE`
+and API endpoint remain unchanged. An inline `classificationCatalog` list is
+rendered into that ConfigMap; `[]` is rejected. The current API
+still falls back to settings/built-in values for an empty/invalid mounted catalog. The preparatory
+bundle does not reproduce that runtime fallback and must not be treated as a
+resolved API catalog. The Start-specific loader shares the existing classification
+resolver; other consumers must preserve that consistency.
+Bundled packaging requires `classificationCatalogEnabled: true`; an
+external bundle can be packaged independently.
+
+Custom deployers can maintain files in their own repository, create ConfigMaps
+in the release namespace, and use the unchanged chart. `configMaps` adds
+their files alongside the bundled Start/ANPR contracts and effective classification
+catalog. Catalogs can be supplied separately from contracts and mounted into
+other consumers without copying their contents. For example, from this
+chart directory (replace the namespace):
+
+```sh
+kubectl -n YOUR_NAMESPACE create configmap custom-workflow-contracts \
+  --from-file=pose.yaml=examples/workflow-contracts/pose.yaml
+kubectl -n YOUR_NAMESPACE create configmap shared-pose-catalog \
+  --from-file=pose-keypoints.json=examples/catalogs/pose-keypoints.json
+```
+
+Then use [the example values overlay](examples/workflow-configuration-values.yaml).
+Each `configMaps` entry has a `name` and `items` mapping ConfigMap keys to
+files in `workflow-contracts/` and `catalogs/`. A single read-only projected
+volume combines these with the built-in sources, without `subPath`. Paths must
+be unique in the final projection. Unmarked collisions fail rendering instead
+of silently overriding data. ConfigMap size limits apply.
+
+##### Replacing individual bundled files
+
+Keep `includeDefaults: true` and set `replace: true` on a `configMaps` item to
+replace that entire bundled file while retaining all other defaults:
+
+```yaml
+workflowConfiguration:
+  enabled: true
+  includeDefaults: true
+  configMaps:
+    - name: deployment-start-contract
+      items:
+        - key: start.yaml
+          path: workflow-contracts/start.yaml
+          replace: true
+    - name: custom-workflow-contracts
+      items:
+        - key: pose.yaml
+          path: workflow-contracts/pose.yaml
+    - name: shared-pose-catalog
+      items:
+        - key: pose-keypoints.json
+          path: catalogs/pose-keypoints.json
+```
+
+Here the chart still provides the effective classification catalog, but the
+Start contract comes from the deployment. Non-replaced defaults follow the
+pinned chart version; replaced files are maintained by the deployer and are
+not automatically merged with later chart versions.
+
+Replacement targets must already be bundled paths: currently
+`workflow-contracts/start.yaml`, `workflow-contracts/anpr.yaml`,
+`workflow-contracts/forwarder.yaml` and `catalogs/classifications.json`. Unknown
+targets, repeated destinations, and replacements with `includeDefaults: false`
+or the legacy interface fail rendering. For a new custom path, omit `replace`.
+The flag is consumed by Helm and is not emitted into Kubernetes volume items.
+
+ANPR can be replaced independently, without adding any catalog:
+
+```yaml
+workflowConfiguration:
+  enabled: true
+  includeDefaults: true
+  configMaps:
+    - name: deployment-anpr-contract
+      items:
+        - key: anpr.yaml
+          path: workflow-contracts/anpr.yaml
+          replace: true
+```
+
+This suppresses the bundled ANPR ConfigMap and checksum while retaining the
+default Start contract and classification catalog.
+
+A replacement for `catalogs/classifications.json` also supplies the standalone
+classification API. Both mounts use that ConfigMap and key, even when its key
+is not named `classifications.json`. The chart does not generate or checksum the
+replaced ConfigMap. To avoid two competing sources, do not combine this
+replacement with a nonempty `classificationCatalogExistingConfigMap` or an inline
+`classificationCatalog`. Those options remain supported when no per-file catalog
+replacement is configured.
+`classificationCatalogEnabled` must remain true when including defaults.
+
+This is whole-file replacement, not field-level YAML merging or catalog-entry
+extension. See [the replacement example](examples/workflow-configuration-overrides-values.yaml)
+for replacing both built-in files while adding a custom contract and catalog.
+
+To manage the complete bundle yourself, set `includeDefaults: false` and supply
+a nonempty `configMaps` list. No Start ConfigMap is generated and no default files
+are projected. The standalone classification API remains independently configured:
+
+```yaml
+workflowConfiguration:
+  enabled: true
+  includeDefaults: false
+  configMaps:
+    - name: hub-start-contract
+      items:
+        - key: start.yaml
+          path: workflow-contracts/start.yaml
+    - name: hub-classification-catalog
+      items:
+        - key: classifications.json
+          path: catalogs/classifications.json
+```
+
+The older `existingConfigMap`, top-level `items`, and `extraConfigMaps` options
+retain their behavior: a nonempty `existingConfigMap` replaces the defaults,
+while `extraConfigMaps` extends either that replacement or the defaults.
+New deployments should use `includeDefaults` and `configMaps`. Do not mix the
+interfaces, even with empty legacy fields. Remove legacy keys from all values
+overlays when migrating. The chart omits both interfaces from its defaults so
+Helm's value merging does not create a mixed configuration.
+
+Migration: replace legacy extras with `configMaps` and keep `includeDefaults: true`
+for additive mode. For legacy replacement mode, set `includeDefaults: false`,
+move `existingConfigMap` and its `items` into the first `configMaps` entry, and
+append any legacy extras. This produces the same mounts without a special base
+ConfigMap. Duplicate destinations remain errors, never order-dependent overrides.
+
+The chart checks item paths and required options but cannot inspect an existing
+ConfigMap at render time. Validate its files against the supplied schemas.
+Bundled changes update the pod checksum. For externally managed ConfigMaps,
+manage rollout/reload in your deployment tooling; the chart cannot checksum
+their contents. Missing referenced ConfigMaps or keys prevent Kubernetes from
+mounting the volume: create them before syncing Hub (for example using an earlier
+Argo CD sync wave). This is distinct from invalid contract/catalog contents,
+which the contract-gating API reports as availability diagnostics without stopping
+Hub. Content diagnostics should be advisory in CI, while rendering/mount
+configuration errors and failing tests remain blocking. Unavailable sections
+must carry explicit errors, never become unrestricted choices or conditions.
+
+Helm validates `values.schema.json`, **not** arbitrary bundled YAML/JSON files.
+The standalone schemas support authoring validation. The contract-gating API
+also rejects duplicate field/catalog keys, unknown sources, missing/invalid
+files, incompatible bounds, unsupported contract versions and unsafe paths.
+Validation failures must be surfaced, not silently replaced with empty choices.
+
+#### Runtime semantics to preserve when wiring consumers
+
+Start paths refer to sanitized initial context, never credentials. Other stage
+paths are relative to that node instance's result. Conditions may use Start and
+all available upstream node outputs, not just the immediately preceding stage;
+future or unrelated parallel results are unavailable. Node instances remain
+distinct. Conditional branches and missing outputs require explicit availability
+handling, even for a field not marked `optional`.
+
+Wildcard positive comparisons match any candidate. Independent wildcard
+conditions can match different objects; use the existing same-element `anyMatch`
+semantics when predicates must match one detection/keypoint.
+
+The existing Start controls retain their behavior: alternatives within a scope
+category are OR; populated device/site/group/classification categories, schedule
+and advanced conditions are AND. `conditionMode` only combines the advanced
+conditions. Empty selections/schedules are unrestricted. Multiple automatic
+Start edges are OR for creating one run; only matched entry branches dispatch.
+Manual runs are created before continuation conditions are evaluated, and their
+automatic trigger settings remain dormant. Schedule uses recording time and an
+IANA timezone, not an invented output field. The advanced editor retains logical
+groups and existence checks; neither scheduling nor logical groups are scalar
+output fields. Contracts do not redefine the saved workflow wire format.
+
+### Indexing
+
+Following indexes should be executed on the MongoDB database (Kerberos) to improve future performance. Within Kerberos Hub several queries are executed, following indexes will improve the loading times. If not applied you might experience application timeouts or reduced performance when storing lots of data.
+
+#### Sequences collection
+
+    db.getCollection('sequences').createIndex({start:1})
+    db.getCollection('sequences').createIndex({user_id:1, "images.key":1})
+    db.getCollection('sequences').createIndex({user_id:1, end:1, start: -1, devices: 1})
+    db.getCollection('sequences').createIndex({user_id:1, end:1, start: 1, "images.instanceName": 1})
+
+#### Notifications collection
+
+    db.getCollection("notifications").createIndex({userid:1})
+    db.getCollection("notifications").createIndex({userid:1, timestamp:1})
+    db.getCollection("notifications").createIndex({alert_master_user:1, media_key: 1})
+
+#### Analysis collection
+
+    db.getCollection("analysis").createIndex({start:1})
+    db.getCollection("analysis").createIndex({organisationId:1, projectId:1, key:1}, {name:"analysis_org_project_key"})
+    db.getCollection("analysis").createIndex({userid:1, key:1})
+    db.getCollection("analysis").createIndex({userid:1, start:1})
+
+#### Heatmap collection
+
+    db.getCollection("heatmap").createIndex({timestamp:1})
+    db.getCollection("heatmap").createIndex({user_id:1, timestamp: 1})
+
+# Upgrade
+
+After installation, you might want to upgrade Kerberos Hub to the latest version, or change some settings. With Helm charts all settings are configured through the `values.yaml` file. After you made modifications to the `values.yaml` file, for example the version tag, or a new DNS name, you can run the `helm upgrade` command as following.
+
+    helm upgrade hub kerberos/hub -f values.yaml -n kerberos-hub
+
+The first argument is the helm project name, you could find this out by running `helm ls -n kerberos`. The following element is the helm chart name, and the last one is the `values.yaml` file with the new configuration.
+
+# Building
+
+To build a new release the following steps needs to be executed. Please note that this repository has a Github action which automatically releases new a Helm chart version.
+
+    cd hub
+    helm lint
+
+    cd ..
+    helm package hub
+    mv hub-*.tgz hub
+
+    helm repo index hub --url https://charts.kerberos.io/hub
+    cd hub
+    cat index.yaml

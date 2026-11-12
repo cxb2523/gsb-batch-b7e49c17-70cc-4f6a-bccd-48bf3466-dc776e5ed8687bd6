@@ -1,0 +1,18 @@
+{{- if or (eq .Values.mode "all") (eq .Values.mode "pipeline") -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: hub-metrics-servicemonitor
+  namespace: {{ .Release.Namespace }}
+  labels:
+    service: pipe
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      service: pipe
+  endpoints:
+    - port: hub-metrics
+      interval: 15s
+      path: /metrics
+{{- end }}

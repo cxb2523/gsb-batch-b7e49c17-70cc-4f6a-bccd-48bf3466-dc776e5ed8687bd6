@@ -1,0 +1,177 @@
+{{- /*
+  Generic workflow-stage worker.
+
+  Renders a Deployment + Service for every enabled worker under
+  kerberoshub.services.<name> other than the `workflows` engine itself. A custom
+  stage joins the pipeline by values alone — declare its worker here and route to
+  it from a kerberoshub.workflows.definitions stage of the same operation; no
+  per-stage template is needed.
+
+  Every stage worker receives the same connection contract; the only value that
+  varies by stage is the consume-queue variable name, <NAME>_QUEUE (a worker
+  named "loitering" gets LOITERING_QUEUE, "my-stage" gets MY_STAGE_QUEUE). To run
+  a worker outside the chart instead, leave services.<name>.enabled unset (or
+  false) and point its workflow stage at the queue you publish.
+
+  All stages receive the Vault read credentials (KERBEROS_STORAGE_URI /
+  ACCESS_KEY / SECRET). A stage that also writes an artefact back to Vault (e.g.
+  redaction) declares its destination provider with the named field
+  services.<name>.storageProvider, rendered as KERBEROS_STORAGE_PROVIDER; a
+  read-only stage omits it and gets no provider env.
+
+  Worker-specific settings go in services.<name>.env (plain values) and
+  services.<name>.secretEnv (references to keys in an existing Secret).
+*/ -}}
+{{- if and (or (eq .Values.mode "all") (eq .Values.mode "pipeline")) .Values.kerberoshub.workflows.enabled -}}
+{{- $root := . -}}
+{{- $services := .Values.kerberoshub.services | default dict -}}
+{{- range $name, $svc := $services -}}
+{{- if and (ne $name "workflows") $svc $svc.enabled -}}
+{{- $queueEnv := printf "%s_QUEUE" ($name | upper | replace "-" "_") -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-{{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: hub-{{ $name }}
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: hub-{{ $name }}
+    spec:
+      {{- with $svc.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $root.Values.kerberoshub.serviceAccount.create }}
+      serviceAccountName: {{ default (printf "%s-%s-sa" $root.Release.Name $root.Chart.Name | trunc 63 | trimSuffix "-") $root.Values.kerberoshub.serviceAccount.name }}
+      {{- end }}
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $svc.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $svc.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: hub-{{ $name }}
+        image: "{{ $root.Values.global.imageRegistry }}{{ $svc.repository }}:{{ $svc.tag }}"
+        imagePullPolicy: {{ $svc.pullPolicy | default "IfNotPresent" }}
+        {{- with $svc.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with $svc.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with $svc.volumeMounts }}
+        volumeMounts:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        env:
+        - name: LOG_LEVEL
+          value: "{{ $svc.logLevel | default "info" }}"
+        - name: QUEUE_SYSTEM
+          value: "{{ $root.Values.queueProvider }}"
+
+        # The queue this stage worker consumes dispatched "{{ $name }}" stages
+        # from ({{ $queueEnv }}) and the workflows engine queue it routes its
+        # result back to (WORKFLOWS_QUEUE, so the run records the resolution and
+        # any stage that needs "{{ $name }}" can fire).
+        - name: {{ $queueEnv }}
+          value: "{{ $svc.queue }}"
+        - name: WORKFLOWS_QUEUE
+          value: "{{ $root.Values.kerberoshub.services.workflows.queue }}"
+
+        # RabbitMQ settings
+        - name: RABBITMQ_HOST
+          value: "{{ $root.Values.rabbitmq.host }}"
+        - name: RABBITMQ_EXCHANGE
+          value: "{{ $root.Values.rabbitmq.exchange }}"
+        - name: RABBITMQ_USERNAME
+          value: "{{ $root.Values.rabbitmq.username }}"
+        - name: RABBITMQ_PASSWORD
+          value: "{{ $root.Values.rabbitmq.password }}"
+
+        # Kerberos Vault — global storage credentials this stage uses to fetch
+        # the media it operates on.
+        - name: KERBEROS_STORAGE_URI
+          value: "{{ $root.Values.kerberosvault.uri }}"
+        - name: KERBEROS_STORAGE_ACCESS_KEY
+          value: "{{ $root.Values.kerberosvault.accesskey }}"
+        - name: KERBEROS_STORAGE_SECRET
+          value: "{{ $root.Values.kerberosvault.secretkey }}"
+        {{- with $svc.storageProvider }}
+        # Destination Vault provider (KERBEROS_STORAGE_PROVIDER) — only stages
+        # that write an artefact back (e.g. redaction) set services.<name>.
+        # storageProvider; read-only stages omit it and get no provider env.
+        - name: KERBEROS_STORAGE_PROVIDER
+          value: {{ . | quote }}
+        {{- end }}
+        {{- if $root.Values.opentelemetry.enabled }}
+
+        # OpenTelemetry tracing: the stage continues the engine's dispatch span
+        # (the run's traceparent) and follows its sampling decision.
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{{ $root.Values.opentelemetry.collector.endpoint }}"
+        {{- include "hub.opentelemetry.samplerEnv" $root | trim | nindent 8 }}
+        {{- end }}
+
+        # Per-stage tuning knobs. Any key/value under services.<name>.env is
+        # rendered verbatim as container env, so a worker can be tuned from
+        # values without a per-stage template. These override the image's own
+        # ENV defaults; the fixed contract env above is not overridable here.
+        {{- range $key, $value := $svc.env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}        {{- with $svc.secretEnv }}
+
+        # Per-stage secret env. Each key under services.<name>.secretEnv maps a
+        # container env var to a key in an existing Kubernetes Secret
+        # ({name, key}), so credentials such as a model API key stay out of
+        # values. The Secret must exist in the release namespace.
+        {{- range $key, $ref := . }}
+        - name: {{ $key }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ required (printf "kerberoshub.services.%s.secretEnv.%s.name is required" $name $key) $ref.name | quote }}
+              key: {{ required (printf "kerberoshub.services.%s.secretEnv.%s.key is required" $name $key) $ref.key | quote }}
+        {{- end }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-{{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: hub-{{ $name }}
+    service: pipe
+spec:
+  ports:
+    - name: hub-metrics
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: hub-{{ $name }}
+{{ end -}}
+{{- end }}
+{{- end }}

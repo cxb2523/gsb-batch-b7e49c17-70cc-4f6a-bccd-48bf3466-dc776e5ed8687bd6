@@ -1,0 +1,412 @@
+{{- if and (or (eq .Values.mode "all") (eq .Values.mode "ui")) .Values.kerberoshub.frontend.demoEnabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-frontend-demo-svc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: hub-frontend-demo-svc
+spec:
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: http
+    name: http
+  selector:
+    app: hub-frontend-demo
+{{ if ne .Values.ingress "" }}
+---
+{{ if .Capabilities.APIVersions.Has "networking.k8s.io/v1" }}
+apiVersion: networking.k8s.io/v1
+{{ else }}
+apiVersion: networking.k8s.io/v1beta1
+{{ end }}
+kind: Ingress
+metadata:
+  name: hub-frontend-demo-ingress
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- if eq .Values.ingress "nginx" }}
+    kubernetes.io/tls-acme: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress }}
+  {{- with .Values.kerberoshub.frontend.demoTls }}
+  tls:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+  {{ if .Capabilities.APIVersions.Has "networking.k8s.io/v1" }}
+  rules:
+    - host: "{{ .Values.kerberoshub.frontend.demoUrl }}"
+      http:
+        paths:
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: hub-frontend-demo-svc
+              port:
+                number: 80
+  {{ else }}
+  rules:
+    - host: "{{ .Values.kerberoshub.frontend.demoUrl }}"
+      http:
+        paths:
+          - path: /
+            backend:
+              serviceName: hub-frontend-demo-svc
+              servicePort: 80
+  {{ end }}
+{{ end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-frontend-demo
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.kerberoshub.frontend.replicas }}
+  selector:
+    matchLabels:
+      app: hub-frontend-demo
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: hub-frontend-demo
+    spec:
+      {{- if .Values.kerberoshub.serviceAccount.create }}
+      serviceAccountName: {{ default (printf "%s-%s-sa" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-") .Values.kerberoshub.serviceAccount.name }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.kerberoshub.frontend.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.kerberoshub.frontend.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: hub-frontend-demo
+        image: "{{ .Values.global.imageRegistry }}{{ .Values.kerberoshub.frontend.repository }}:{{ .Values.kerberoshub.frontend.tag }}"
+        imagePullPolicy: {{ .Values.kerberoshub.frontend.pullPolicy }}
+        {{- with .Values.kerberoshub.frontend.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.kerberoshub.frontend.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        ports:
+        - containerPort: {{ .Values.kerberoshub.frontend.containerPort | default 8080 }}
+          name: http
+        {{- with .Values.kerberoshub.frontend.volumeMounts}}
+        volumeMounts:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        env:
+        - name: SSO_DOMAINS
+          # get the domain attribute from the list of sso domains
+          value: "{{- range .Values.kerberoshub.api.sso }}{{ .domain }};{{- end }}"
+        - name: SSO_FORCE_DOMAINS
+          # get the domain attribute from the list of sso domains
+          value: "{{- range .Values.kerberoshub.api.sso }}{{ .forceSSO }};{{- end }}"
+        - name: TITLE
+          value: "{{ .Values.kerberoshub.frontend.title }}"
+        - name: LOGO_NAME
+          value: "{{ .Values.kerberoshub.frontend.logo }}"
+        - name: ENVIRONMENT
+          value: "demo"
+        - name: API_URL
+          value: "" # legacy
+        - name: NEW_API_URL
+          value: "{{ .Values.kerberoshub.api.schema }}://{{ .Values.kerberoshub.api.url }}"
+        {{ if .Values.isPrivate }}
+        - name: PRIVATE_EDITION
+          value: "true"
+        {{ else }}
+        - name: PRIVATE_EDITION
+          value: "false"
+        {{ end }}
+        - name: PRODUCTION
+          value: "true"
+        - name: DEMO
+          value: "true"
+        - name: MULTI_TENANT
+          value: "{{ .Values.kerberoshub.frontend.multiTenant }}"
+        - name: TENANT_BASE_DOMAIN
+          value: "{{ .Values.kerberoshub.frontend.tenantBaseDomain }}"
+
+        # Mqtt (VERNEMQ)
+        - name: MQTT_PROTOCOL
+          value: "{{ .Values.mqtt.protocol }}"
+        - name: MQTT_SERVER
+          value: "{{ .Values.mqtt.host }}"
+        - name: MQTT_PORT
+          value: "{{ .Values.mqtt.port }}"
+        # MQTT_USERNAME / MQTT_PASSWORD are intentionally not exposed to the
+        # frontend. They are fetched from the authenticated hub-api endpoint
+        # /runtime/config after login. See hub-api deployment.
+        - name: MQTT_LEGACY_SERVER
+          value: "{{ .Values.mqtt.legacy.host }}"
+        - name: MQTT_LEGACY_PORT
+          value: "{{ .Values.mqtt.legacy.port }}"
+
+        # OpenAI
+        - name: OPENAI_ENABLED
+          value: "{{ .Values.openai.enabled }}"
+
+        # Turn (Pion)
+        - name: TURN_SERVER
+          value: "{{ .Values.turn.host }}"
+        # TURN_USERNAME / TURN_PASSWORD are intentionally not exposed to the
+        # frontend. They are fetched from the authenticated hub-api endpoint
+        # /runtime/config after login. See hub-api deployment.
+
+        # Mixpanel for monitoring
+        - name: MIXPANEL_KEY
+          value: "{{ .Values.kerberoshub.frontend.mixpanel.apikey }}"
+
+        # Sentry for fetching client side issues.
+        - name: SENTRY_URL
+          value: "{{ .Values.kerberoshub.frontend.sentry.url }}"
+
+        # PostHog credentials
+        - name: POSTHOG_KEY
+          value: "{{ .Values.kerberoshub.frontend.posthog.key }}"
+        - name: POSTHOG_URL
+          value: "{{ .Values.kerberoshub.frontend.posthog.url }}"
+
+        # Stripe for billing
+        - name: STRIPE_KEY
+          value: "{{ .Values.kerberoshub.frontend.stripe.publicKey }}"
+
+        # Google maps for using and displaying cameras, sites on a map
+        - name: GOOGLEMAPS_KEY
+          value: "{{ .Values.kerberoshub.frontend.googlemaps.apikey }}"
+        - name: GOOGLEMAPS_PLACES_API
+          value: "{{ .Values.kerberoshub.frontend.googlemaps.placesApi }}"
+
+        # features > chart
+        - name: CHART_COLORS
+          value: {{ .Values.kerberoshub.frontend.features.chart.colors | toJson | quote }}
+
+        # Zendesk for support
+        - name: ZENDESK_URL
+          value: "{{ .Values.kerberoshub.frontend.zendesk.url }}"
+
+        - name: HIDE_ADD_AGENT
+          value: "{{ .Values.kerberoshub.frontend.hideAddAgent }}"
+
+        # Navigation links
+        - name: NAVIGATION_LINK_TITLE_1
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkTitle1 }}"
+        - name: NAVIGATION_LINK_URL_1
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkUrl1 }}"
+        - name: NAVIGATION_LINK_TITLE_2
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkTitle2 }}"
+        - name: NAVIGATION_LINK_URL_2
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkUrl2 }}"
+        - name: NAVIGATION_LINK_TITLE_3
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkTitle3 }}"
+        - name: NAVIGATION_LINK_URL_3
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkUrl3 }}"
+        - name: NAVIGATION_LINK_TITLE_4
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkTitle4 }}"
+        - name: NAVIGATION_LINK_URL_4
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkUrl4 }}"
+        - name: NAVIGATION_LINK_TITLE_5
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkTitle5 }}"
+        - name: NAVIGATION_LINK_URL_5
+          value: "{{ .Values.kerberoshub.frontend.navigationLinkUrl5 }}"
+        - name: CASE_FILTER_ASSIGNEES_DEFAULT
+          value: "{{ .Values.kerberoshub.frontend.caseFilterAssigneesDefault }}"
+
+        # features > general
+        - name: FEATURE_CASE_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.case.enabled }}"
+        - name: FEATURE_WORKFLOWS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.workflows.enabled }}"
+        - name: FEATURE_AUDIT_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.audit.enabled }}"
+        - name: FEATURE_PASSKEYS_ENABLED
+          value: "{{ .Values.kerberoshub.api.passkeys.enabled }}"
+        - name: FEATURE_DAY_OVERVIEW_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.dayOverview.enabled }}"
+        - name: FEATURE_DEVICE_ANALYTICS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.devices.analyticsEnabled }}"
+        - name: FEATURE_DASHBOARD_SITES_FULLSCREEN_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.dashboard.sitesFullscreenEnabled }}"
+        - name: FEATURE_DEVICE_DEVELOPER_TOOLS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.devices.developerToolsEnabled }}"
+        - name: FEATURE_ORGANISATIONS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.organisations.enabled }}"
+        - name: FEATURE_ORGANISATION_SWITCHER_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.organisations.switcherEnabled }}"
+        - name: FEATURE_ORGANISATION_CREATION_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.organisations.creationEnabled }}"
+        - name: FEATURE_ORGANISATION_SETTINGS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.organisations.settingsEnabled }}"
+        - name: FEATURE_MEMBERS_ACCESS_PREVIEW_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.organisations.membersAccessPreviewEnabled }}"
+        - name: FEATURE_PROJECTS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.projects.enabled }}"
+        - name: FEATURE_PROJECT_SWITCHER_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.projects.switcherEnabled }}"
+        - name: FEATURE_PROJECT_CREATION_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.projects.creationEnabled }}"
+        - name: FEATURE_PROJECT_SETTINGS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.projects.settingsEnabled }}"
+        - name: FEATURE_DARK_MODE
+          value: "{{ .Values.kerberoshub.frontend.features.darkMode }}"
+        - name: FEATURE_SPLASH_SCREEN_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.splashScreen.enabled }}"
+        - name: FEATURE_LANDING_PAGE
+          value: "{{ .Values.kerberoshub.frontend.features.landingPage }}"
+
+        # features > internationalization (i18n)
+        - name: FEATURE_I18N_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.i18n.enabled }}"
+        - name: DEFAULT_LANGUAGE
+          value: "{{ .Values.kerberoshub.frontend.features.i18n.defaultLanguage }}"
+
+        # features > liveview
+        - name: FEATURE_LIVE_STREAM_MODE
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.liveStreamMode }}"
+        - name: FEATURE_HLS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.hlsEnabled }}"
+        - name: FEATURE_MOQ_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.moqEnabled }}"
+        - name: FEATURE_REMOTE_RECORDING_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.remoteRecordingEnabled }}"
+        - name: FEATURE_LIVE_VIEW_DEVICE_STATUS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.deviceStatusEnabled }}"
+        - name: MOQ_RELAY_URL
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.moqRelayUrl }}"
+        - name: MOQ_BROADCAST_PREFIX
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.moqBroadcastPrefix }}"
+        - name: FEATURE_LIVEVIEW_PAGINATION_MODE
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.paginationMode }}"
+        - name: FEATURE_LIVEVIEW_PAGE_SIZE
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.pageSize }}"
+        - name: FEATURE_LIVEVIEW_MAX_STREAMS
+          value: "{{ .Values.kerberoshub.frontend.features.liveview.maxStreams }}"
+
+        # features > devices
+        - name: FEATURE_DEVICES_HIDE_AGENT
+          value: "{{ .Values.kerberoshub.frontend.features.devices.hideAgent }}"
+
+        # features > floorplan
+        - name: FEATURE_FLOORPLAN_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.floorplan.enabled }}"      
+        # features > map
+        - name: MAP_TILE_URL_LIGHT
+          value: "{{ .Values.kerberoshub.frontend.features.map.tileUrlLight }}"
+        - name: MAP_TILE_URL_DARK
+          value: "{{ .Values.kerberoshub.frontend.features.map.tileUrlDark }}"
+        - name: MAP_ATTRIBUTION
+          value: "{{ .Values.kerberoshub.frontend.features.map.attribution }}"
+        - name: MAP_OVERLAY_TILE_URL
+          value: "{{ .Values.kerberoshub.frontend.features.map.overlayTileUrl }}"
+        - name: MAP_OVERLAY_API_KEY
+          value: "{{ .Values.kerberoshub.frontend.features.map.overlayApiKey }}"
+        - name: MAP_OVERLAY_ATTRIBUTION
+          value: "{{ .Values.kerberoshub.frontend.features.map.overlayAttribution }}"
+        - name: MAP_OVERLAY_MIN_ZOOM
+          value: "{{ .Values.kerberoshub.frontend.features.map.overlayMinZoom }}"
+        - name: MAP_OVERLAY_MAX_ZOOM
+          value: "{{ .Values.kerberoshub.frontend.features.map.overlayMaxZoom }}"
+        - name: MAP_OVERLAY_OPACITY
+          value: "{{ .Values.kerberoshub.frontend.features.map.overlayOpacity }}"
+
+        - name: COLOR_TRACK_BOX
+          value: "{{ .Values.kerberoshub.frontend.features.floorplan.colorTrackBox }}"
+        - name: COLOR_TRACK_BOX_HOVER
+          value: "{{ .Values.kerberoshub.frontend.features.floorplan.colorTrackBoxHover }}"
+        - name: COLOR_TRACK_BOX_DRAWING
+          value: "{{ .Values.kerberoshub.frontend.features.floorplan.colorTrackBoxDrawing }}"
+        - name: COLOR_TRACK_BOX_CONTROLS_DELETE
+          value: "{{ .Values.kerberoshub.frontend.features.floorplan.colorTrackBoxControlsDelete }}"
+        - name: COLOR_DEVICE_ACTIVE
+          value: "{{ .Values.kerberoshub.frontend.colorDeviceActive }}"
+        - name: COLOR_DEVICE_INACTIVE
+          value: "{{ .Values.kerberoshub.frontend.colorDeviceInactive }}"
+        - name: COLOR_DEVICE_IDLE
+          value: "{{ .Values.kerberoshub.frontend.colorDeviceIdle }}"
+        - name: COLOR_DEVICE_MOTION
+          value: "{{ .Values.kerberoshub.frontend.colorDeviceMotion }}"
+        - name: COLOR_LIVE_VIEW_CONTROL_ACTIVE
+          value: "{{ .Values.kerberoshub.frontend.colorLiveViewControlActive }}"
+        - name: COLOR_LIVE_VIEW_CONTROL_MOTION
+          value: "{{ .Values.kerberoshub.frontend.colorLiveViewControlMotion }}"
+        - name: COLOR_FLOOR_PLAN_LABEL_TEXT
+          value: "{{ .Values.kerberoshub.frontend.colorFloorPlanLabelText }}"
+        - name: COLOR_FLOOR_PLAN_LABEL_BACKGROUND
+          value: "{{ .Values.kerberoshub.frontend.colorFloorPlanLabelBackground }}"
+        - name: COLOR_DEVICE_MARKER_BORDER
+          value: "{{ .Values.kerberoshub.frontend.colorDeviceMarkerBorder }}"
+
+        # features > video edits
+        - name: FEATURE_VIDEO_EDITS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.videoEdits.enabled }}"
+
+        # features > face redaction 
+        - name: FEATURE_FACE_REDACTION_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.faceRedaction.enabled }}"
+        - name: FEATURE_FACE_REDACTION_CLASSIFIER_TRACKS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.faceRedaction.classifierTracksEnabled }}"
+        
+        # features > media
+        - name: FEATURE_MEDIA_FORWARD_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.forward.enabled }}"
+        - name: FEATURE_MEDIA_DETAIL_ANALYSIS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.detail.analysis.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_DATE_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.date.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_SITES_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.sites.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_GROUPS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.groups.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_DEVICES_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.devices.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_OBJECT_DETECTION_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.objectDetection.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_STAR_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.star.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_ANALYSIS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.analysis.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_REGION_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.region.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_SORT_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.sort.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_CATEGORIES_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.category.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_MARKERS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.markers.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_MARKER_OPTIONS_BY_DATE_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.markerOptionsByDate.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_MARKER_CATEGORY_PRIORITY_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.markerCategoryPriority.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_MARKER_CATEGORY_PRIORITY_CATEGORIES
+          value: {{ .Values.kerberoshub.frontend.features.media.filter.markerCategoryPriority.categories | toJson | replace "\\" "\\\\" | replace "'" "\\u0027" | quote }}
+        - name: FEATURE_MEDIA_FILTER_EVENTS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.events.enabled }}"
+        - name: FEATURE_MEDIA_FILTER_TAGS_ENABLED
+          value: "{{ .Values.kerberoshub.frontend.features.media.filter.tags.enabled }}"
+        
+        {{- if .Values.kerberoshub.extraEnv }}
+        {{- toYaml .Values.kerberoshub.extraEnv | nindent 8 }}
+        {{- end }}
+      {{- end }}

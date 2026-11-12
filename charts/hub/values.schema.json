@@ -1,0 +1,239 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "classificationCatalogExistingConfigMap": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "classificationCatalog": {
+      "type": ["array", "null"],
+      "minItems": 1,
+      "description": "Optional inline classification catalog in the Hub shared choice catalog format; replaces the bundled defaults in the chart's classification-catalog ConfigMap. Omit (or null) for the bundled defaults. Keys must be unique (checked when rendering).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "label"],
+        "properties": {
+          "key": {"type": "string", "minLength": 1},
+          "label": {"type": "string", "minLength": 1},
+          "icon": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "imageVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Kyverno policies (templates/kyverno/) requiring UUG.AI images to be signed by UUG.AI. Created only when the cluster serves kyverno.io/v1.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create the policies when Kyverno is installed."
+        },
+        "validationFailureAction": {
+          "type": "string",
+          "enum": [
+            "Audit",
+            "Enforce"
+          ],
+          "description": "Audit reports unsigned images but lets them run; Enforce rejects them."
+        }
+      }
+    },
+    "imageHardening": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Kyverno policies (templates/kyverno/*-hardened-images.yaml) requiring images to come from a hardened UUG.AI release (signed image-hardening attestation). Created only when the cluster serves kyverno.io/v1.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create the hardening policies when Kyverno is installed."
+        },
+        "validationFailureAction": {
+          "type": "string",
+          "enum": [
+            "Audit",
+            "Enforce"
+          ],
+          "description": "Audit reports images without a hardened release but lets them run; Enforce rejects them."
+        }
+      }
+    },
+    "deviceTags": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "system": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Owners may assign system tags and global workflows may select devices by them. Only for deployments whose owners are trusted (self-hosted)."
+            },
+            "catalog": {
+              "type": "array",
+              "description": "The system tags owners can assign, in the Hub shared choice catalog format (key, label) plus an optional description. Keys must be unique (checked when rendering).",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["key", "label"],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9]([a-z0-9._:-]*[a-z0-9])?$"
+                  },
+                  "label": {"type": "string", "minLength": 1},
+                  "description": {"type": "string"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "kerberoshub": {
+      "type": "object",
+      "properties": {
+        "api": {
+          "type": "object",
+          "properties": {
+            "mcp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "allowedOrigins": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^https?://[^/?#*@,\\s]+$"
+                  },
+                  "description": "Exact HTTP(S) origins for browser MCP clients, without wildcards, credentials, paths or trailing slashes. Independent of REST CORS."
+                }
+              }
+            },
+            "passkeys": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "rpId": {
+                  "type": "string",
+                  "description": "Stable WebAuthn relying-party hostname, without scheme, port or path. Must match each frontend origin's hostname or be its parent domain."
+                },
+                "origins": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^https://[^/?#]+$|^http://localhost(:[0-9]+)?$"
+                  },
+                  "description": "Exact trusted frontend origins, with no path or trailing slash. HTTPS is required except for HTTP localhost development."
+                },
+                "rpName": {"type": "string"}
+              },
+              "if": {
+                "required": ["enabled"],
+                "properties": {"enabled": {"const": true}}
+              },
+              "then": {
+                "required": ["rpId", "origins"],
+                "properties": {
+                  "rpId": {"minLength": 1},
+                  "origins": {"minItems": 1}
+                }
+              }
+            },
+            "corsAllowedOrigins": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^https?://[^/?#]+$"
+              }
+            },
+            "auditExportMaxEventsPerFile": {
+              "type": ["integer", "string"],
+              "minimum": 1,
+              "maximum": 1000000,
+              "pattern": "^([1-9][0-9]{0,5}|1000000)?$",
+              "description": "Most audit events one export file holds (AUDIT_EXPORT_MAX_EVENTS_PER_FILE). Empty uses the API default of 100000."
+            }
+          }
+        }
+      }
+    },
+    "workflowConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "not": {
+        "allOf": [
+          {"anyOf": [{"required": ["includeDefaults"]}, {"required": ["configMaps"]}]},
+          {"anyOf": [{"required": ["existingConfigMap"]}, {"required": ["items"]}, {"required": ["extraConfigMaps"]}]}
+        ]
+      },
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "includeDefaults": {
+          "type": "boolean",
+          "description": "Include bundled files not explicitly replaced by configMaps items; true when omitted."
+        },
+        "configMaps": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/configMapSource"},
+          "description": "Add files or explicitly replace a bundled file using replace: true on an item."
+        },
+        "extraConfigMaps": {
+          "type": "array",
+          "description": "Legacy additive sources; use configMaps for new deployments.",
+          "items": {"$ref": "#/definitions/configMapSource"}
+        },
+        "existingConfigMap": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/configMapItem"}
+        }
+      }
+    }
+  },
+  "definitions": {
+    "configMapSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "items"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/definitions/configMapItem"}
+        }
+      }
+    },
+    "configMapItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "path"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "path": {"type": "string", "pattern": "^(workflow-contracts|catalogs)/[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(yaml|json)$"},
+        "replace": {
+          "type": "boolean",
+          "description": "Replace this whole bundled file, not individual fields/entries. Requires configMaps and includeDefaults: true; the path must identify a bundled file."
+        }
+      }
+    }
+  }
+}

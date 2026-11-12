@@ -1,0 +1,1626 @@
+# Default values for hub.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+#######################################################
+# LICENSING information: you will a license to run Hub.
+# Get your license from support@kerberos.io or
+# use the 8 camera license for testing.
+#######################################################
+license: "L/+DAwEBB2xpY2Vuc2UB/4QAAQIBB1BheWxvYWQBCgABCVNpZ25hdHVyZQEKAAAA/gMk/4QB/gEZ/8sQACxnaXRodWIuY29tL3V1Zy1haS9odWItbGljZW5zZS9tb2RlbHMuTGljZW5zZX8DAQEHTGljZW5zZQH/gAABDAECSWQB/4IAAQNLZXkBDAABB0NvbXBhbnkBDAABB0V4cFRpbWUBBAABBERheXMBBAABB0NhbWVyYXMBBAABBVNpdGVzAQQAAQZWYXVsdHMBBAABCk1lZGlhTGltaXQBBAABCVBlcnBldHVhbAECAAEGQWN0aXZlAQIAAQlJcEFkZHJlc3MBDAAAABj/gQEBAQhPYmplY3RJRAH/ggABBgEYAAAy/4AvAQwAAAAAAAAAAAAAAAACDGZyZWUtbGljZW5zZQH81iZi6gH+AtoBEAEUARQDAQAB/gIAfeXxQb6kaPfAgOWeSAE6qEiQviFD6sciNmNfMel1mEL53FeV0GQe4cYBip9wyJag35az8A1yppxSymZD5V4my2FckyN2zmEW4E2sO/v+8eKepiAGYEzrKtfNCLxdWLmrHd0zjYQ3qk+PNfoPyzCOefeulw3aFsqBlzg9wDkF8cRx6tUW0qNTzki6sFGOuLoxS49cWqsftAvZmt+CRWa8u0VArIAjOpywN0RIZCkEYzp5RYF3LSVyWYEyvVhjE19DDnevzpJyCHRsIHTRcpTQkhboeapOdlEz8cx+PaOvxktN8hBWceTAH+nw96FARG7y6Cpjw3xo+NV1xb0tvRXGaGoK77JnErKLhd/haXji98rGvMakDt18WSbQfTVS84+Fw+/gKGsW3uS3fROAaZw1kZj4PgsEPZDvbVkCVyuS0O87UoYqpxH8S4by8cTF3wDP7FwyIRZbEbYjN2wzHSmlADYOBtdsdb1VGm7wvtB85vML9n7ZSlIpJdqfci06mGks102mDyG2LRMhUEvpUW3D/weErIvj2WiAwf6r0EUj+LO8VmAsYkME9da7FXEN6Vg/5f1u485LOpYki332RaDOhDn2eMG9DVb/HnmQSFagX+XXc/QwfsWiehCgKYGk4jQpyklTqoGu8BAt6Sm8CaoH8ngZ3cHLQT5DcZElV36/N/wA"
+licenseServer:
+  url: ""
+  token: ""
+###########################################################################
+# # Environment: set to 'production', 'develop', 'demo', 'staging' or 'acceptance'.
+# Change the environment to 'staging' or 'acceptance' will add a banner on the
+# front-end, to indicate the environment.
+###########################################################################
+environment: "production"
+isPrivate: true # Set to 'true' if this is a private deployment.
+readOnly: false # Set to 'true' to halt all write operations to the database (e.g. migration, etc).
+###################################################################
+# Deployment mode: all | pipeline | ui
+# - all: Hub services + pipeline + vault
+# - pipeline: pipeline only
+# - ui: Hub services only
+mode: "all"
+###########################################################################
+# Image signature verification (Kyverno)
+###########################################################################
+# Kyverno policies in templates/kyverno/ (one file per ghcr.io/uug-ai image)
+# requiring UUG.AI images to be signed by UUG.AI. Opt-in: when enabled, they are
+# created only if Kyverno is installed.
+imageVerification:
+  enabled: false
+  # Audit: report unsigned images (PolicyReports) but let them run.
+  # Enforce: reject pods whose image is unsigned or signed for another repository.
+  # Images whose releases are not signed yet always stay in Audit (see README).
+  validationFailureAction: Audit
+# Kyverno policies in templates/kyverno/ (*-hardened-images.yaml, one per image
+# whose repository makes hardened releases) requiring the image to come from a
+# hardened UUG.AI release: a signed image-hardening attestation with result
+# "passed" for the image's own repository. Opt-in and separate from
+# imageVerification, since only releases made with hardening enabled carry it.
+imageHardening:
+  enabled: false
+  # Audit: report images without a hardened release but let them run.
+  # Enforce: reject pods whose image is not from a hardened release.
+  validationFailureAction: Audit
+###########################################################################
+# Global configuration
+###########################################################################
+global:
+  imageRegistry: ""
+# Private Docker Registry: The registry secret is required if you have your Docker images behind a private registry.
+# By default it will pull from Docker hub (https://hub.docker.com/r/kerberos).
+#imagePullSecrets:
+#  - name: regcred
+
+# Which network ingress you are using in your Kubernetes Cluster
+ingress: "nginx" # or "traefik"
+# A mongodb instance is required to store all the relevant metadata (this can be standalone or in a cluster).
+
+#########################################
+# Database configuration (metadata store)
+#########################################
+mongodb:
+  # MongoDB URI (for example for a SaaS service like MongoDB Atlas)
+  # If uri is set, the below properties are not used (host, adminDatabase, username, password)
+  #uri: "mongodb+srv://xx:xx@kerberos-hub.xxx.mongodb.net/?retryWrites=true&w=majority&appName=xxx"
+  # When uri is set, give each workload its own appName (hub-api,
+  # hub-pipeline-monitor, ...) instead of the one in uri, so the Atlas query
+  # profiler and currentOp show which service issued an operation.
+  appNamePerService: true
+  # Self-hosted mongodb, you could also use the uri property above.
+  host: mongodb.mongodb
+  adminDatabase: admin
+  authenticationMechanism: SCRAM-SHA-256
+  username: yourusername
+  password: "yourpassword"
+  retryWrites: "true"
+  # Backend engine flavor. Use "mongodb" for native MongoDB / Atlas (default)
+  # or "documentdb" for AWS DocumentDB. The "documentdb" flavor makes the
+  # hub-api disable features DocumentDB does not support (geospatial queries
+  # and indexes, complex $lookup pipelines, etc.). When using DocumentDB you
+  # should also set retryWrites: "false".
+  flavor: "mongodb"
+  # TLS for MongoDB-compatible backends. When uri is set, missing TLS query
+  # parameters are appended automatically. AWS DocumentDB requires TLS and a
+  # trusted RDS CA bundle, typically stored in an existing Kubernetes Secret.
+  tls:
+    enabled: false
+    existingSecret: ""
+    caFileName: ""
+    mountPath: "/etc/mongodb/tls"
+    insecureSkipVerify: false
+# Classifications supported by Hub filters, alerts, markers, and other
+# downstream processing. Classifier output keys must match these values.
+# Disable this to use the legacy classification catalog stored in MongoDB.
+classificationCatalogEnabled: true
+# Optional existing ConfigMap in the release namespace with classifications.json.
+# When set, do not create a catalog ConfigMap; this replaces bundled defaults.
+classificationCatalogExistingConfigMap: ""
+# Defaults live in templates/configMaps/catalogs/classifications.yaml.
+# Optionally define the complete catalog inline instead; it replaces the
+# defaults in the chart's classification-catalog ConfigMap (and so the bundled
+# catalogs/classifications.json). Entries are {key, label, icon?} with unique
+# keys. Do not combine it with classificationCatalogExistingConfigMap or a
+# catalogs/classifications.json replacement in workflowConfiguration.
+# classificationCatalog:
+#   - key: car
+#     label: Car
+#     icon: car
+
+# Device tags, grouped by type. System tags are defined here and assigned by
+# owners (a multi-select on the device page); global workflows select devices
+# across organisations by system tag (`systemTags` in a trigger). Owners set
+# them, so any owner could enroll devices into such a workflow: enable only
+# where owners are the deployment's administrators (self-hosted), never on
+# multi-tenant SaaS. While disabled, hub-api gets an empty catalog (system tags
+# cannot be set) and rendering fails on workflows that select devices by
+# system tag.
+deviceTags:
+  system:
+    enabled: false # a boolean (true/false), not a string
+    # The only system tags owners can assign, in the Hub shared choice catalog
+    # format (as catalogs/classifications.json) plus an optional description.
+    # Rendered into the device-system-tags ConfigMap for hub-api.
+    #   key          stored tag: 1-64 characters of a-z, 0-9, ".", "_", ":" or
+    #                "-", starting and ending with a letter or digit; unique.
+    #   label        display name.
+    #   description  optional help text shown with the tag.
+    # Workflow trigger systemTags must exist here; otherwise rendering fails.
+    catalog: []
+    #  - key: anpr-pilot
+    #    label: ANPR pilot
+    #    description: Runs licence plate recognition on this camera
+# Configuration packaging only: consuming contracts requires a compatible
+# API/frontend. Enabling this mounts files but does not register stage workers.
+workflowConfiguration:
+  enabled: false
+  # Omitted includeDefaults means true; false requires a nonempty configMaps list.
+  # includeDefaults: true
+  # configMaps: []
+  # Each ConfigMap supplies name and items [{key, path, replace?}] in the release namespace.
+  # An item with replace: true replaces one bundled file while retaining other defaults.
+  # Replacement requires includeDefaults: true and a known bundled destination path.
+  # Unmarked collisions and repeated custom destinations are rejected.
+  # Replacing catalogs/classifications.json also supplies the classification API:
+  # do not combine it with classificationCatalogExistingConfigMap or classificationCatalog.
+  # Legacy existingConfigMap/items/extraConfigMaps remain supported, but cannot
+  # be mixed with includeDefaults/configMaps. Both interfaces are omitted here
+  # so Helm's default merging does not introduce a false mixed configuration.
+###################################################
+# MQTT configuration (bi-directional communication)
+###################################################
+# A MQTT broker (vernemq or other like mosquitto) is used to have a bi-directional communication between Agents and Hub.
+# We recommend to use VernemQ (as part of this installation), but a stand-alone mosquitto broker is also possible.
+mqtt:
+  host: "mqtt.yourdomain.com" # this needs to be a public accessible DNS name (it's used to communicate between Kerberos Agents and Kerberos Hub)
+  port: "8443"
+  protocol: "wss"
+  username: "yourusername"
+  password: "yourpassword"
+  legacy:
+    host: ""
+    port: ""
+################################################################
+# AMQP configuration (asynchronous processing for microservices)
+#
+# Usecases:
+# - Hub pipeline: each time a recording is created, a message is
+#                 send to the pipeline to process the recording.
+################################################################
+# We are using a pipeline that is orchestrated through Kafka topics or RabbitMQ queues
+# Events are send back and forth until the processing is done.
+queueProvider: "RABBITMQ" # or "KAFKA"
+queueName: "kcloud-event-queue" # This is the topic to which all events are send.
+# RabbitMQ can be installed in the same cluster using a helm chart, or you can
+# use a service on  cloud provider like AWS, GCP, Azure, etc.
+rabbitmq:
+  host: "rabbitmq.rabbitmq:5672" # can be internal dns name or external
+  #host: "amqps://b-xxx-xxx-xxx-xxx-xxx.mq.eu-central-1.amazonaws.com:5671"
+  username: "yourusername"
+  password: "yourpassword"
+  exchange: ""
+# Shared audit transport. The master switch controls the consumer and all
+# producers; individual services may opt out through their own audit setting.
+audit:
+  enabled: false
+  intake:
+    queue: "hub-audit-events"
+    deadletterQueue: "hub-audit-dead-letter"
+    maxRetries: 10
+    prefetchCount: 20
+    persistTimeout: "10s"
+# If you already have a Kafka cluster you might use this instead of RabbitMQ.
+kafka:
+  broker: "kafka1.yourdomain.com:9094" # can be internal dns name or external
+  username: "yourusername"
+  password: "yourpassword"
+  mechanism: "PLAIN"
+  security: "SASL_PLAINTEXT"
+############################################
+# TURN/STUN configuration (live streaming)
+#
+# Usecases:
+# - WebRTC: for live streaming in full HD.
+############################################
+# For allowing WEBRTC a STUN and TURN server is required.
+# You might want to install coturn in a seperate VM.
+# -> https://help.hcltechsw.com/sametime/11.6/admin/turnserver_ubuntu.html
+turn:
+  host: "turn:turn.yourdomain.com:8443" # this needs to be a public accessible DNS name.
+  username: "username1"
+  password: "password1"
+############################################
+# OpenTelemetry is used for distributed tracing and monitoring.
+# More information can be found at https://opentelemetry.io/docs/
+############################################
+opentelemetry:
+  enabled: false
+  routingEnabled: false
+  collector:
+    # NOTE: the services use the OTLP *HTTP* exporter, so this must be the
+    # collector's HTTP port (4318) and must include the scheme. Use http://
+    # for a plaintext in-cluster collector (e.g. Jaeger) and https:// only if
+    # the collector terminates TLS. A scheme-less value defaults to TLS and
+    # fails against a plaintext collector ("server gave HTTP response to HTTPS client").
+    endpoint: "http://otel-collector:4318"
+  # Trace sampling is decided where a trace starts:
+  # - Uploads start at the Vault, whose deployment sets their rate
+  #   (TRACE_SAMPLER_RATIO_UPLOAD / TRACE_SAMPLER_RATIO_OTHER).
+  # - hub-api starts its own traces; apiSamplingRatios below sets its rates.
+  # hub-workflows, the pipe-* services and the workflow stages only continue
+  # traces started elsewhere: they follow that decision and never start traces
+  # of their own (OTEL_TRACES_SAMPLER=parentbased_always_off, not configurable).
+  #
+  # apiSamplingRatios: hub-api's sampling ratio (0 to 1) per kind of work,
+  # rendered as TRACE_SAMPLER_RATIO_<CLASS> (hub-api on trace library v1.2.6+).
+  # Empty values are not rendered; with none set, hub-api records every trace.
+  #   operator: requests from users and API clients (UI, API tokens).
+  #   other:    everything else hub-api starts: device heartbeats, agent uploads
+  #             and live segments, background work, queries outside a request.
+  #             Unset with operator set: records everything.
+  # Example: ~10% of user requests, 1% of everything else:
+  #   operator: "0.1"
+  #   other: "0.01"
+  apiSamplingRatios:
+    operator: ""
+    other: ""
+############################################
+# OpenAI configuration (semantic search)
+#
+# Usecases:
+# - Semantic search: search for recordings based on text.
+############################################
+openai:
+  enabled: false
+  apikey: "xxx"
+# We have a kerberos vault component installed which contains all the
+# recordings. Kerberos vault is queried to retrieve the recordings
+# from the appropriate provider.
+kerberosvault:
+  uri: "https://api.vault.yourdomain.com" # this needs to be a public accessible DNS name.
+  provider: "a-provider"
+  accesskey: "xxx"
+  secretkey: "xxx"
+  # Archiving is used when creating a task. The underlying recording of the task will be copied from its
+  # existing provider to the below archived provider. Seperate credentials are used, as it makes possible to
+  # specify another retention period.
+  archive:
+    provider: "an-archive-provider"
+    accesskey: "xxx"
+    secretkey: "xxx"
+  thumbnail:
+    provider: "a-thumbnail-provider"
+    accessKey: "xxx"
+    secretKey: "xxx"
+  sprite:
+    provider: "a-sprite-provider"
+    accessKey: "xxx"
+    secretKey: "xxx"
+###########################################################################
+# Administration panel for managing the Hub database (and more in future).
+# For now it's used to create, edit users for Hub.
+###########################################################################
+admin:
+  # Signed release from the UUG.AI release workflow (only ghcr.io/uug-ai is trusted).
+  # It runs shell-free as 65532:65532 on 8080 with a read-only root filesystem:
+  # keep the runtime settings below together with the image (see README).
+  repository: ghcr.io/uug-ai/admin
+  containerPort: 8080
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 10
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  pullPolicy: IfNotPresent
+  tag: "v1.4.5"
+  replicas: 2
+  # Optional pod topology spread constraints for this deployment. Empty by
+  # default. Example:
+  #   topologySpreadConstraints:
+  #     - maxSkew: 1
+  #       topologyKey: kubernetes.io/hostname
+  #       whenUnsatisfiable: ScheduleAnyway
+  #       labelSelector:
+  #         matchLabels:
+  #           app: admin
+  topologySpreadConstraints: []
+  # The only writable path: memory-backed /tmp (counts against the pod memory
+  # limit). Append extra volumes / volumeMounts to these lists.
+  volumes:
+    - name: admin-tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Mi
+  volumeMounts:
+    - name: admin-tmp
+      mountPath: /tmp
+  logLevel: "info" # possible values: trace, debug, info, warn, error
+  resources:
+    requests:
+      memory: 100Mi
+      cpu: 250m
+  url: "admin.yourdomain.com"
+  tls:
+    - hosts:
+        - "admin.yourdomain.com"
+      secretName: admin
+  oauth2Proxy:
+    enabled: false
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    github:
+      clientId: "github-client-id"
+      clientSecret: "github-client-secret"
+      cookieSecret: "generate-a-random-cookie-secret"
+      organization: "github-organization"
+      team: "github-team"
+###########################################################################
+# Following are all the different deployments needed to make
+# Hub properly working.
+kerberoshub:
+  # Extra environment variables like proxy to set for hub pods
+  extraEnv: []
+  #  extraEnv:
+  #    - name: HTTP_PROXY
+  #      value: "custom_value"
+  serviceAccount:
+    # serviceAccount.create Enable creation of ServiceAccount
+    create: false
+    # If create is set to false, a name is not used in helm chart
+    name: ""
+    # additional ServiceAccount annotations
+    annotations: {}
+    labels: {}
+  api:
+    repository: ghcr.io/uug-ai/hub-api
+    pullPolicy: IfNotPresent
+    tag: "v1.11.41"
+    replicas: 2
+    podSecurityContext:
+      fsGroup: 65532
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      seccompProfile:
+        type: RuntimeDefault
+    # Keep writable scratch space for attachment uploads and multipart parsing.
+    volumes:
+      - name: hub-api-tmp
+        emptyDir: {}
+    volumeMounts:
+      - name: hub-api-tmp
+        mountPath: /tmp
+    audit:
+      enabled: true
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Set to false to skip rendering the hub-api Service (e.g. when an
+    # external/shared Service is managed elsewhere).
+    serviceEnabled: true
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    jwtSecret: "this-is-a-secret-please-change-to-random-string" # change to a random value, this is for generating JWT tokens.
+    schema: "https"
+    url: "api.yourdomain.com"
+    # Additional complete HTTP(S) origins allowed to call the Hub API.
+    # The configured frontend origins remain allowed automatically.
+    corsAllowedOrigins: []
+    # Read-only Streamable HTTP MCP endpoint at /mcp; requires a compatible API image.
+    mcp:
+      enabled: false
+      # Exact HTTP(S) origins for browser MCP clients; no wildcards or trailing slash.
+      # Clients without an Origin header (such as VS Code) need no entries.
+      allowedOrigins: []
+    # Temporarily stop serving the polled GET /devices list: hub-api answers 204
+    # without querying MongoDB. The frontend still loads devices once through
+    # /session/bootstrap, but device online/offline status stops refreshing.
+    disableAgentHeartbeat: false
+    # Media proxy: when enabled, hub-api wraps every media URL it receives from
+    # Kerberos Vault into an opaque hub-api URL ({schema}://{url}/media/proxy?t=...)
+    # and streams the object itself, so clients never see Vault or the
+    # underlying storage endpoint. Increases hub-api egress/bandwidth.
+    mediaProxy:
+      enabled: false
+      publicUrl: "" # Optional override of the public hub-api base URL; defaults to {schema}://{url}.
+      key: "" # Optional encryption key (openssl rand -hex 32); defaults to a key derived from jwtSecret. Must be identical on all replicas.
+      ttl: "" # Optional lifetime of proxied URLs (Go duration, e.g. "12h"); defaults to 24h, max 168h.
+    resources:
+      requests:
+        memory: 100Mi
+        cpu: 250m
+      limits:
+        memory: 100Mi
+        cpu: 250m
+    # E-mail templates
+    # Append custom mounts/volumes to the lists above; retain hub-api-tmp.
+    #volumeMounts:
+    #  - name: custom-email-templates
+    #    mountPath: /mail
+    #volumes:
+    #  - name: custom-email-templates
+    #    persistentVolumeClaim:
+    #      claimName: custom-layout-claim
+
+    # Server-side TLS for hub-api itself (port 8081).
+    # When enabled, TLS_CERT_FILE and TLS_KEY_FILE are injected and
+    # the provided Kubernetes TLS secret is mounted read-only.
+    serverTLS:
+      enabled: false
+      secretName: ""
+      mountPath: "/etc/hub-api/tls"
+      certFile: "/etc/hub-api/tls/tls.crt"
+      keyFile: "/etc/hub-api/tls/tls.key"
+    # When migrating to another url, this might help migrating.
+    #legacyUrl: "api.legacy.yourdomain.com"
+
+    # MFA issuer name
+    mfaIssuer: "yourdomain.com"
+    # WebAuthn passkeys for users and sub-users; requires compatible API/frontend images.
+    # Use the public frontend hostname/origins, not the API URL. Keep rpId stable.
+    passkeys:
+      enabled: false
+      rpId: "" # e.g. "hub.example.com", without scheme, port or path.
+      origins: [] # e.g. ["https://hub.example.com"]; exact origins, no trailing slash.
+      rpName: "Kerberos Hub"
+    # Admin API's are made available for automation of Kerberos Hub.
+    # To access those API's (e.g. creation of owner users), an API key needs to be provided.
+    apiKey: "a-random-admin-api-key"
+    # Default retention (in days) applied to tasks that do not have an
+    # explicit `retention_days` set. New tasks created without a custom
+    # retention are stamped with this value. Set to "0" (or a negative
+    # value) to disable the default retention (tasks are kept indefinitely
+    # unless an explicit value is provided). Must match the value used by
+    # `kerberoshub.cleanup.defaultTaskRetentionDays`.
+    defaultTaskRetentionDays: "0"
+    # Maximum retention (in days) allowed on a task. When a caller
+    # supplies an `expires_at` (or the default retention above resolves)
+    # beyond this cap, the value is clamped down to `now + casesMaxRetentionDays`.
+    # Set to "0" (or a negative value) to disable the cap (no maximum).
+    casesMaxRetentionDays: "0"
+    # Most audit events one export file holds (AUDIT_EXPORT_MAX_EVENTS_PER_FILE).
+    # It does not refuse larger exports: the Audit page downloads them as
+    # several files of at most this size. An integer from 1 to 1000000; leave
+    # empty to use the API default of 100000.
+    auditExportMaxEventsPerFile: ""
+    ## Certificates
+    tls:
+      - hosts:
+          - "api.yourdomain.com"
+        secretName: kerberoshub-api
+      #- hosts:
+      #    - "api.legacy.yourdomain.com"
+      #  secretName: kerberoshub-api-legacy
+      - hosts:
+          - "admin.api.yourdomain.com"
+        secretName: kerberoshub-admin
+    language: "english"
+    fallbackLanguage: "english"
+    # Legacy (reseller) it is possible to link to AWS S3 and IAM (however Kerberos Vault is now the recommended option).
+    # This is primarily used for creation of subscriptions, and not needed if you are using mainly Kerberos Vault.
+    aws:
+      region: "xxx"
+      bucket: "xxx"
+      accessKey: "xxx"
+      secretKey: "xxx"
+    stripe: # We use stripe for billing, so it's possible to resell Kerberos Hub if agreed.
+      privateKey: "xxx"
+    slack: # Slack is used in the api, to send logs to a specific Slack channel.
+      enabled: "true"
+      hook: "yourslackhook" # https://hooks.slack.com/services/T08Q2Q9V5/xxKT/JALxxAk26bHtuqTfZ
+      username: "Kerberos Hub" # The slack username
+    elasticsearch: # Logs of the kerberos hub will be send to an elastic search cluster.
+      enabled: "false"
+      protocol: "http"
+      host: "yourelasticsearchinstance.com"
+      port: "9200"
+      index: "kerberos-cloud"
+      username: ""
+      password: ""
+    sso: # OIDC settings for allowing SSO.
+      - domain: "uug.ai"
+        redirectUrl: "https://api.cloud.kerberos.io/sso/callback/uug.ai"
+        forceSSO: "false"
+        issuer: "https://xxx.eu.auth0.com/"
+        claimId: "email" # claim which is used to identify the user
+        clientId: "xxx"
+        clientSecret: "xxx"
+        clientVerificationId: "" # This is only required for SSO chaining.
+        extraHeaders: # Extra headers to be added to the request
+          - name: "x-zitadel-login-client"
+            value: "xxx"
+      - domain: "kerberos.io"
+        redirectUrl: "https://api.cloud.kerberos.io/sso/callback/kerberos.io"
+        forceSSO: "false"
+        issuer: "https://accounts.google.com"
+        claimId: "email" # claim which is used to identify the user
+        clientId: "xxx"
+        clientSecret: "xxx"
+        clientVerificationId: "" # This is only required for SSO chaining.
+        extraHeaders: []
+  frontend:
+    repository: ghcr.io/uug-ai/hub-frontend
+    pullPolicy: IfNotPresent
+    tag: "v1.19.35"
+    replicas: 2
+    containerPort: 8080
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      seccompProfile:
+        type: RuntimeDefault
+    # Keep these entries when adding custom branding/translation mounts.
+    volumes:
+      - name: frontend-tmp
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Mi
+    volumeMounts:
+      - name: frontend-tmp
+        mountPath: /tmp
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Set to false to skip rendering the hub-frontend Service (e.g. when an
+    # external/shared Service is managed elsewhere).
+    serviceEnabled: true
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    schema: "https"
+    url: "yourdomain.com"
+    resources:
+      requests:
+        memory: 50Mi
+        cpu: 50m
+      limits:
+        memory: 50Mi
+        cpu: 50m
+    # The front-end but in read-only mode. Set demoEnabled to true to deploy
+    # the demo front-end (service, ingress and deployment).
+    demoEnabled: false
+    #demoUrl: "demo.yourdomain.com"
+    # When migrating to another url, this might help migrating.
+    #legacyUrl: "legacy.yourdomain.com"
+    tls:
+      - hosts:
+          - "yourdomain.com"
+        secretName: kerberoshub
+        #- hosts:
+        #    - "legacy.yourdomain.com"
+        #  secretName: kerberoshub-legacy
+    #demoTls:
+    #  - hosts:
+    #      - "demo.yourdomain.com"
+    #    secretName: kerberoshub-demo
+    # You can disable the Kerberos agent buttons, this make sense
+    # in a white-label setup, or where you are managing the Kerberos Agents for your customers.
+    hideAddAgent: "false"
+    # Multi tenancy (domains)
+    # By default the Kerberos Hub allows multi-tenancy through the concept
+    # of accounts and subaccounts. However through the concept of domains, you
+    # take it a step further. Within a domain, user accounts are unique, and are prefixed by a (domain\).
+    multiTenant: false
+    #tenantBaseDomain: "yourdomain.com" # this would resolve in following sub domain "https://domain.kerberos.io"
+
+    # Page title (browser)
+    title: "Kerberos Hub - Video surveillance as it should be"
+    # You can style Kerberos hub as you wish.
+    # 1. we do the styling on our side and bake it in the Docker image (change the logo attribute to your company name)
+    # 2. you bring your own logo (set logo to 'custom'), and mount the css file and favicons.
+    # we will need to include your logo in the Docker image, so please reach out to us.
+    logo: "custom"
+    # Custom layout: override css, favicons and translations (i18n)
+    # By providing a style.css file in the custom folder this file will override
+    # any css styling. Favicons are mounted into the favicon folder.
+    #
+    # Translations (i18n): for each language the served strings are
+    #   deepMerge(assets/i18n/<lang>.json, assets/i18n-custom/<lang>.json)
+    # — your optional overrides layered on top of the shipped base file. To
+    # customise, mount a volume at assets/i18n-custom holding <lang>.json files
+    # with the keys you want to change. Any key you omit falls back to the shipped
+    # value, so keys added in future releases always render a real string (never a
+    # raw key) and you only maintain your diffs. Put as little or as much here as
+    # you like — even a complete file — but mounting at this overlay layer is
+    # always the safe choice, because missing keys can never leak into the UI.
+    # You only need files for the languages you actually customise. A partial
+    # example lives in custom-layout/i18n-custom/en.json; the matching complete
+    # files (handy to copy keys from) are published as hub-frontend release assets
+    # (en.json / i18n-<tag>.zip) and ship in the image at assets/i18n.
+    #
+    # (Backward compatibility: deployments that instead mount complete files over
+    # assets/i18n keep working, but that layer has no fallback — any key you do
+    # not supply shows as a raw key — so prefer assets/i18n-custom for new setups.)
+    #volumeMounts:
+    #  - name: custom-layout
+    #    mountPath: /usr/share/nginx/html/assets/custom
+    #  - name: custom-favicon
+    #    mountPath: /usr/share/nginx/html/assets/favicon
+    #  - name: custom-i18n
+    #    mountPath: /usr/share/nginx/html/assets/i18n-custom
+    #volumes:
+    #  - name: custom-layout
+    #    persistentVolumeClaim:
+    #      claimName: custom-layout-claim
+    #  - name: custom-favicon
+    #    persistentVolumeClaim:
+    #      claimName: custom-favicon-claim
+    #  - name: custom-i18n
+    #    persistentVolumeClaim:
+    #      claimName: custom-i18n-claim
+
+    # Note: Front-end naming/labelling and page headings are sourced from the
+    # built-in internationalization files (assets/i18n/*.json) and are no
+    # longer configurable via the Helm chart.
+    # You can add custom links to the navigation bar.
+    navigationLinkTitle1: ""
+    navigationLinkUrl1: ""
+    navigationLinkTitle2: ""
+    navigationLinkUrl2: ""
+    navigationLinkTitle3: ""
+    navigationLinkUrl3: ""
+    navigationLinkTitle4: ""
+    navigationLinkUrl4: ""
+    navigationLinkTitle5: ""
+    navigationLinkUrl5: ""
+    caseFilterAssigneesDefault: "false"
+    # Enable or disable specific features and behaviours in the front-end
+    # Features are grouped per section / page or functionality.
+    features:
+      # General
+      darkModeEnabled: "true" # Enable or disable dark mode toggle 'true' or 'false'
+      splashScreen:
+        enabled: "true" # Enable or disable the pre-bootstrap splash screen 'true' or 'false'
+      landingPage: "/dashboard" # Landing page after login '/dashboard', '/liveview', '/media', '/devices', '/sites', '/groups'
+      # Internationalization (i18n): controls the runtime language behaviour
+      # of the front-end. When `enabled` is "false" the language switcher is
+      # hidden and `defaultLanguage` is always forced; users cannot change it.
+      i18n:
+        enabled: "true" # Enable or disable the language switcher 'true' or 'false'
+        defaultLanguage: "en" # Default language code: en, nl, pl, tr, fr, sv, de
+      # Case management is a feature that allows you to create cases, and link recordings, devices, sites, groups, markers and events to those cases. 
+      case:
+        enabled: "true" # Enable or disable case management feature 'true' or 'false'
+      # Workflows allow you to define automated processes and actions in the front-end.
+      workflows:
+        enabled: "false" # Enable or disable workflows feature 'true' or 'false'
+      # Audit events are visible to owner/admin users when enabled.
+      audit:
+        enabled: "true" # Enable or disable the Audit events page and navigation link 'true' or 'false'
+      # Day overview page and its navigation menu; role page permissions still apply.
+      dayOverview:
+        enabled: "true" # Enable or disable the Day overview page and navigation menu 'true' or 'false'
+      # Organisation controls remain visible as a read-only current organisation when switching is disabled.
+      organisations:
+        enabled: "" # Enable or disable the organisation feature family, including projects; when empty, child groups apply independently
+        switcherEnabled: "false" # Enable or disable organisation switching 'true' or 'false'
+        creationEnabled: "false" # Enable or disable organisation creation; requires switcherEnabled 'true' or 'false'
+        settingsEnabled: "false" # Enable or disable the organisation settings link 'true' or 'false'
+        membersAccessPreviewEnabled: "false" # Show the mocked "Users (preview)" tab in organisation settings to owners 'true' or 'false'
+      projects:
+        enabled: "" # Fallback project group switch used only when organisations.enabled is empty
+        switcherEnabled: "false" # Enable or disable the read-only project dropdown 'true' or 'false'
+        creationEnabled: "false" # Reserved for project creation UI 'true' or 'false'
+        settingsEnabled: "false" # Reserved for project settings UI 'true' or 'false'
+      # Map tile configuration  
+      map:
+        tileUrlLight: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" # Map tile URL for light mode
+        tileUrlDark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" # Map tile URL for dark mode
+        attribution: "&copy; <a href='https://www.openstreetmap.org/copyright' target='_blank'>OpenStreetMap</a>" # Map attribution
+        overlayTileUrl: "" # Optional XYZ overlay URL; supports {z}, {x}, {y}, and {apiKey}
+        overlayApiKey: "" # Optional browser-visible API key substituted into overlayTileUrl
+        overlayAttribution: "" # Attribution displayed when the overlay is enabled
+        overlayMinZoom: "0" # Minimum overlay zoom level
+        overlayMaxZoom: "19" # Maximum overlay zoom level
+        overlayOpacity: "1" # Overlay opacity from 0 to 1
+      # Live view page
+      liveview:
+        defaultStreamMode: "SD" # Default stream mode 'SD' or 'HD' (will be migrated to 'preview' or 'live')
+        liveStreamMode: "webrtc" # Transport backing the LIVE (HD) mode: 'webrtc' (default), 'hls' or 'moq'
+        hlsEnabled: "true" # Offer HLS as a selectable LIVE transport 'true' or 'false'. When 'false' the HLS option is removed from the front-end and streams use webrtc
+        moqEnabled: "false" # Offer MoQ as a selectable LIVE transport 'true' or 'false'
+        remoteRecordingEnabled: "true" # Show the manual REC control and recording-state overlay in live views
+        deviceStatusEnabled: "true" # Show connectivity and recent-motion status in live view tile headers
+        moqRelayUrl: "https://relay.uug.ai/anon" # WebTransport URL of the MoQ relay
+        moqBroadcastPrefix: "devices" # Prefix used to build devices/<deviceKey>/live.hang broadcast names
+        paginationMode: "scroll" # Pagination mode in live view 'scroll', 'numbered' or 'maxStreams'
+        pageSize: "6" # Max streams shown per page when paginationMode is 'numbered' (4, 8, 12, 16 or 25)
+        maxStreams: "-1" # Maximum number of live streams to show in live view, -1 for unlimited
+      # Device page
+      devices:
+        hideAgent: "false" # Hide the 'add agent' button in the front-end
+        analyticsEnabled: "true" # Enable or disable the Analytics tab on device detail pages 'true' or 'false'
+        developerToolsEnabled: "true" # Enable or disable device logs and terminal access 'true' or 'false'
+      # Dashboard page
+      dashboard:
+        sitesFullscreenEnabled: "true" # Enable or disable the fullscreen Sites map 'true' or 'false'
+      # Media page
+      media:
+        # Bulk "Forward media" action in the Recordings Actions menu (on-demand forwarding of metadata-only recordings).
+        forward:
+          enabled: "true" # Enable or disable the Forward media action in media 'true' or 'false'
+        # Analysis block (dominant colors, thumbnail, sprite, motion) on the media detail page.
+        detail:
+          analysis:
+            enabled: "true" # Enable or disable the Analysis block on the media detail page 'true' or 'false'
+        filter:
+          date:
+            enabled: "true" # Enable or disable date filter in media 'true' or 'false'
+          sites:
+            enabled: "true" # Enable or disable site filter in media 'true' or 'false'
+          groups:
+            enabled: "true" # Enable or disable group filter in media 'true' or 'false'
+          devices:
+            enabled: "true" # Enable or disable device filter in media 'true' or 'false'
+          objectDetection:
+            enabled: "true" # Enable or disable object detection filter in media 'true' or 'false'
+          star:
+            enabled: "true" # Enable or disable star filter in media 'true' or 'false'
+          analysis:
+            enabled: "true" # Enable or disable the "with analysis" filter (hides recordings without markers, description or detections) in media 'true' or 'false'
+          region:
+            enabled: "true" # Enable or disable region filter in media 'true' or 'false'
+          sort:
+            enabled: "true" # Enable or disable sort filter in media 'true' or 'false'
+          category:
+            enabled: "true" # Enable or disable category filter in media 'true' or 'false'
+          markers:
+            enabled: "true" # Enable or disable markers filter in media 'true' or 'false'
+          markerOptionsByDate:
+            enabled: "false" # Limit marker-related filter options to the selected recording day
+          markerCategoryPriority:
+            enabled: "false" # Order marker options from configured categories before other markers
+            categories: [] # Ordered marker category names, for example ["security", "traffic"]
+          events:
+            enabled: "true" # Enable or disable events filter in media 'true' or 'false'
+          tags:
+            enabled: "true" # Enable or disable tags filter in media 'true' or 'false'
+          defaultView: "timeline" # Default view for media page 'timeline' or 'grid'
+      # Chart feature
+      chart:
+        colors:
+          - "#84569f"
+          - "#3ba7ff"
+          - "#ff5c8a"
+          - "#4ad991"
+          - "#ffb84d"
+          - "#ff7043"
+        colorChartSelectionFill: "rgba(132, 86, 159, 0.07)"
+        colorChartSelectionStroke: "rgba(132, 86, 159, 0.4)"
+        colorChartGridStroke: "rgba(0, 106, 255, 0.18)"
+      # Floor-plan feature
+      floorplan:
+        enabled: "true" # Enable or disable floorplan feature 'true' or 'false'
+        # Custom colors for floor-plans, update the colors of the corresponding device icons to match these
+        # charts/hub/custom-layout/icons.js
+        colorDeviceActive: "hsla(131, 31%, 52%, 1)"
+        colorDeviceInactive: "hsla(0, 3%, 41%, 1)"
+        colorDeviceIdle: "hsla(47, 86%, 47%, 1)"
+        colorDeviceMotion: "hsla(2, 58%, 48%, 1)"
+        colorLiveViewControlActive: "hsla(131, 31%, 52%, 1)" # Color for the live view control icon for an active device
+        colorLiveViewControlMotion: "hsla(2, 58%, 48%, 1)" # Color for the live view control icon for a device detecting motion, icon is hidden for other states
+        colorFloorPlanLabelText: "hsla(0, 0%, 100%, 1)"
+        colorFloorPlanLabelBackground: "hsla(0, 0%, 0%, 0.8)"
+        colorDeviceMarkerBorder: "hsla(0, 0%, 100%, 1)" # Border around the device marker circle on the map
+        colorTrackBox: "hsla(278, 30%, 48%, 1)" # Boxes shown on the video
+        colorTrackBoxHover: "hsla(47, 86%, 47%, 1)" # Boxes while hovering over the associated track
+        colorTrackBoxDrawing: "hsla(204, 100%, 50%, 1)" # New box while drawing
+        colorTrackBoxControlsDelete: "hsla(219, 100%, 94%, 1)" # Delete icon top right of the box while editing
+      # Video edits feature (umbrella flag for in-app video editing tools, e.g. face redaction)
+      videoEdits:
+        enabled: "false" # Enable or disable video edit tools 'true' or 'false'
+      # Face redaction feature
+      faceRedaction:
+        enabled: "false" # Enable or disable face redaction 'true' or 'false'
+        classifierTracksEnabled: "true" # Make classifier-generated tracks available in the redaction modal
+    # Optional integrations
+    mixpanel: # We can keep track logging in Mixpanel as well
+      apikey: "xxx"
+    sentry: # We can trace errors in Sentry
+      url: "https://xxx@sentry.io/xxx"
+    stripe: # We use stripe for billing, so it's possible to resell Kerberos Hub if agreed.
+      publicKey: ""
+    googlemaps: # Google maps is used inside the application to visualise cameras and sites.
+      apikey: "xxxx"
+      placesApi: "legacy" # Places API for address autocomplete: "legacy" (default) or "new" for keys with Places API (New) enabled. Uses the same apikey.
+    zendesk: # We can use different support tools, for now we use Zendesk but others can be integrated
+      url: "yourdomain.zendesk.com"
+    posthog: # Posthog is used for auditing and user interaction logging
+      key: "xxx"
+      url: "https://posthog.domain.com"
+  support:
+    enabled: false
+  oauth2Proxy:
+    enabled: false
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    github:
+      clientId: "github-client-id"
+      clientSecret: "github-client-secret"
+      cookieSecret: "generate-a-random-cookie-secret"
+      organization: "github-organization"
+      team: "github-team"
+  cleanup:
+    # Explicit opt-in for a selected hardened image; legacy defaults are unchanged.
+    securityContext: {}
+    podSecurityContext: {}
+    repository: ghcr.io/uug-ai/hub-cleanup
+    pullPolicy: IfNotPresent
+    tag: "v1.4.27"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    mode: "serve" # The mode the cleanup service operates in: serve | dry-run | version
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    maxDays: "365" # Hard maximum age (days) for global orphan cleanup.
+    runIntervalMinutes: "10" # Minutes between cleanup cycles.
+    cleanupUsernames: "" # Optional comma-separated usernames to target.
+    batchSize: "250" # Delete batch size per collection operation.
+    userBatchSize: "100" # Users processed per in-memory batch.
+    maxUsersPerRun: "100" # Hard cap of users processed each run.
+    progressEvery: "100" # Print progress every N processed users.
+    activeUserRescanHours: "6" # Next scan delay for active subscriptions.
+    inactiveUserRescanHours: "24" # Next scan delay for inactive users.
+    readTimeoutSeconds: "30" # Read/find/count timeout.
+    deleteTimeoutSeconds: "120" # Delete timeout.
+    reportIncludeStats: "false" # Include richer dry-run/user summary stats.
+    dryRun: "false" # Force dry-run behavior without using mode=dry-run.
+    debug: "false" # Extra per-user/global debug logging.
+    globalPassEnabled: "false" # Enable post-user global cleanup pass.
+    globalPassIntervalHours: "0" # 0 = every cycle when enabled.
+    globalPassDeleteBudget: "0" # 0 = unlimited deletes during global pass.
+    # Default retention (in days) applied to tasks without an explicit
+    # `retention_days`. Tasks older than this (anchored on `creation_date`)
+    # are deleted along with their `case_media` rows. Set to "0" (or a
+    # negative value) to keep tasks without an explicit retention forever.
+    # Tasks with `legal_hold=true` are never deleted. Must match the value
+    # used by `kerberoshub.api.defaultTaskRetentionDays`.
+    defaultTaskRetentionDays: "0"
+    # Deployment-wide retention for audit events. This is independent from
+    # recording plans, inactive-account cleanup, and the optional global pass.
+    # Set to "0" or a negative value to retain audit events indefinitely.
+    auditEventRetentionDays: "400"
+    # Deployment-wide cap for workflow runs, anchored on run execution time.
+    # Runs always expire with their media; this only shortens their lifetime.
+    # Set to "0" or a negative value to let runs follow media retention only.
+    workflowRunRetentionDays: "0"
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+  # Dispatches canonical audit_events to one or more destinations: webhook
+  # sinks, or S3 Object Lock buckets for immutable storage.
+  # Destination credentials are set inline on each destination.
+  audit:
+    repository: ghcr.io/uug-ai/hub-audit
+    pullPolicy: IfNotPresent
+    tag: "v1.0.11"
+    replicas: 1
+    resources: {}
+    # resources:
+    #   requests:
+    #     memory: 32Mi
+    #     cpu: 10m
+    dispatchInterval: "5s"
+    leaseDuration: "2m"
+    terminationGracePeriodSeconds: 150 # Keep above leaseDuration so an in-flight cycle can finish.
+    topologySpreadConstraints: []
+    volumes: []
+    volumeMounts: []
+    extraEnv: []
+    # Optional ServiceAccount for hub-audit alone, for example to grant S3 access
+    # through IRSA without giving it to every Hub workload. When create is false
+    # and name is set, that existing ServiceAccount is used; otherwise the pod
+    # falls back to kerberoshub.serviceAccount.
+    serviceAccount:
+      create: false
+      name: ""
+      annotations: {}
+      # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/hub-audit-archive
+      labels: {}
+    serviceMonitor:
+      enabled: true
+      interval: 15s
+    # Each destination is optional; see the README for every field. Webhook:
+    destinations: []
+    # - id: primary-siem # required; ^[a-z][a-z0-9-]{0,62}$, keeps the checkpoint
+    #   type: webhook # optional: webhook (default) | s3
+    #   enabled: true # optional, default true; false pauses delivery
+    #   url: https://siem.example.com/api/audit # required, http or https
+    #   timeoutSeconds: 10 # optional, default 10, at most 60
+    #   batchSize: 100 # optional, default 100, at most 1000
+    #   maxAttempts: 10 # optional, default 10; then the batch is dead-lettered
+    #   startAt: latest # optional: latest (default) | beginning, for a new id only
+    #   headers: # optional; not Authorization or Idempotency-Key
+    #     X-Source: kerberos-hub
+    #   # Optional inline credentials. The chart stores them in Secret
+    #   # hub-audit-<id>-credentials and mounts them.
+    #   bearerToken: "xxx" # sent as Authorization: Bearer <token>
+    #   secretHeaders:
+    #     X-Api-Key:
+    #       value: "xxx"
+    #   filters: # optional, default all events; an event must match every list set
+    #     organisationIds: []
+    #     projectIds: []
+    #     actions: []
+    #     categories: []
+    #     outcomes: [] # success | failure
+    # S3 Object Lock destination. The bucket needs versioning, Object Lock and a
+    # COMPLIANCE default retention; hub-audit refuses to deliver otherwise. Each
+    # batch is written as <prefix>/<id>/yyyy/mm/dd/<firstId>-<lastId>.ndjson.gz.
+    # Per-provider region/endpoint values (AWS, Wasabi, B2, Ceph RGW, MinIO, Garage):
+    # https://learn.uug.ai/docs/hub/audit-events/#s3-providers
+    # - id: immutable-archive # required
+    #   type: s3 # required for S3
+    #   enabled: true # optional, default true
+    #   timeoutSeconds: 30
+    #   batchSize: 500
+    #   maxAttempts: 100 # keep high: exhausted batches are dead-lettered, not archived
+    #   startAt: beginning
+    #   s3:
+    #     bucket: hub-audit-archive # required
+    #     region: eu-west-1 # required, also for S3-compatible stores
+    #     prefix: hub # optional, default none
+    #     endpoint: https://s3.example.com # optional; S3-compatible stores only, omit for AWS S3
+    #     forcePathStyle: true # optional, default false; usually true for Ceph RGW, MinIO and Garage
+    #     # Optional, default false. Only for stores without Object Lock (e.g. Garage):
+    #     # skips the lock check, so archived batches are deletable.
+    #     allowUnlockedBucket: false
+    #     # Optional inline credentials, both or neither. The chart stores them
+    #     # in Secret hub-audit-<id>-credentials and mounts them.
+    #     accessKey: "xxx"
+    #     secretKey: "xxx"
+    #     # Without them, hub-audit uses the pod's AWS identity (IRSA via
+    #     # kerberoshub.audit.serviceAccount, or an instance profile): AWS S3 only.
+  # hub-workflows is the standalone, queue-driven workflow engine. It consumes
+  # pipeline events and dispatches the stages declared in its workflow
+  # definitions, tracking each run in its own `workflow_runs` collection. It shares events
+  # (not a document) with the analysis pipeline and is meant to grow into the
+  # primary orchestrator. See https://github.com/uug-ai/hub-workflows.
+  workflows:
+    # Disabled by default. When enabled, the analysis service tees each
+    # classify result to this service (via WORKFLOWS_ENABLED on pipe-analysis)
+    # in parallel with the normal throttler/notification tail, which still runs
+    # unchanged. Flip to true to run the workflows engine.
+    enabled: false
+    # This block is purely behaviour: the master switch above plus the workflow
+    # definitions below. The engine's own deployment (image/tag/replicas/queue/
+    # resources) lives under kerberoshub.services.workflows, in the same uniform
+    # shape as the stage workers it dispatches to.
+    #
+    # -----------------------------------------------------------------------
+    # Global workflow definitions — the named workflows the engine runs.
+    #
+    # `definitions` is the engine's deployment-global configuration source and
+    # stage catalog: several distinct workflows can run over one recording, each
+    # opening its own run and dispatching only its own stages. Database-backed
+    # organisation workflows, when present, are read separately per recording.
+    # This is a MAP keyed by workflow name (names are unique and merge cleanly
+    # across -f / --set overrides). Ships empty; the commented block is a worked
+    # example of an object-tracking + loitering pipeline. Add more keys to run
+    # more config workflows.
+    #
+    # Each definition:
+    #   id        optional stable identity: quote a non-zero 24-hex Mongo ObjectID.
+    #             Recommended for new definitions; rendered lowercase. Omit for
+    #             legacy SHA256(exact map key)[:24] identity. Pin that old ID before
+    #             renaming an existing workflow; changing id creates a new identity.
+    #             Invalid IDs and duplicate effective IDs fail Helm rendering,
+    #             including disabled definitions. Name/version are not identity
+    #             when id is explicit. No per-project on/off overrides are provided.
+    #   enabled   include this workflow (soft-delete toggle).
+    #   source    always rendered as "config" (a Helm-defined, ops-managed,
+    #             deployment-global workflow — read-only in the API).
+    #   triggers  how a run OPENS. Omit for a single bare automatic trigger
+    #             (opens for every recording); the per-stage `needs` then decide
+    #             which stages FIRE. Narrow with device/schedule triggers, e.g.
+    #             `- {type: automatic, devices: [{key: <device-key>}]}`, or by
+    #             device label across organisations, e.g.
+    #             `- {type: automatic, systemTags: [anpr-pilot]}` (see deviceTags).
+    #   stages    the executable stages, each {operation, dispatch?, needs?,
+    #             needsMode?}. dispatch is "always" (default) or "conditional";
+    #             a conditional stage's `needs` are upstream dependencies, each
+    #             {operation?, condition?} — operation is the readiness GATE (the
+    #             upstream op whose data must be present before the condition is
+    #             read; omit for a check on the run root itself), condition is
+    #             {path, op, value} where path is ABSOLUTE from the run root;
+    #             a `*` segment fans out across array elements. needsMode combines
+    #             multiple needs: "any" (default;
+    #             fire on the first match) or "all" (a join; fire once every need
+    #             has resolved and matched). The queue is taken from the matching
+    #             services.<operation> entry, so dispatch and consume cannot drift.
+    #
+    # Every stage `operation` must have a deployed worker under
+    # kerberoshub.services.<operation> (deploy the objecttracking / loitering
+    # workers below).
+    definitions: {}
+    # Replace {} above with the indented examples below to enable them. Their IDs
+    # are pinned to the existing name-derived identities; do not regenerate them.
+    #  tracking-workflow:
+    #    id: "ec7e72bc4cedd32018e1f92a"
+    #    enabled: true
+    #    triggers:
+    #      - type: automatic
+    #    stages:
+    #      - operation: objecttracking
+    #        dispatch: always
+    #      - operation: loitering
+    #        dispatch: conditional
+    #        # Fire loitering once objecttracking has resolved — a readiness join
+    #        # (no condition ⇒ gate on the upstream's presence, not a value).
+    #        needs:
+    #          - operation: objecttracking
+    #  vlm-workflow:
+    #    id: "9e3666c56854b2befdb1f645"
+    #    # Describe every recording with the hub-vlm worker (services.vlm below).
+    #    enabled: true
+    #    triggers:
+    #      - type: automatic
+    #    stages:
+    #      - operation: vlm
+    #        dispatch: always
+    # Optional editor metadata (name, description, params) per operation. With
+    # workflowConfiguration contracts, a stage is offered when it has a valid
+    # contract and a deployed worker (services.<operation>.queue); contract
+    # presentation and params take precedence over these entries.
+    editorStages: []
+    #  - operation: vlm
+    #    name: Describe recording
+    #    description: Summarise the recording with a vision language model.
+    #  - operation: forwarder
+    #    name: Forward to my system
+    #    description: Send the result to the external destination configured for the forwarder.
+  # Workflow deployments. Every workflows-subsystem Deployment's image/tag/
+  # replicas/resources/queue lives here in a single, uniform shape:
+  #   - `workflows` is the engine itself (the orchestrator). It is deployed
+  #     whenever kerberoshub.workflows.enabled is true and has no `enabled` of
+  #     its own — the master switch already gates the whole subsystem.
+  #   - every other entry is a stage worker the engine dispatches to. A worker
+  #     consumes its own queue and routes its result back to the engine queue.
+  #     Deploying a worker (services.<name>.enabled) is independent from routing
+  #     to it (a workflows.definitions stage of the same operation) — it runs only
+  #     when its own `enabled` is true AND the workflows engine is enabled.
+  #     Worker-specific settings go in `env` (plain key/values) and `secretEnv`
+  #     (ENV_NAME: {name, key} of an existing Secret, for credentials).
+  services:
+    # hub-workflows — the workflows engine (orchestrator). Consumes the engine
+    # queue, evaluates the boot-loaded config workflows (WORKFLOW_DEFINITIONS)
+    # plus organisation-scoped database workflows, and dispatches to the stage
+    # workers below. Deployed when workflows.enabled is true; it has no separate
+    # `enabled` here.
+    workflows:
+      repository: ghcr.io/uug-ai/hub-workflows
+      securityContext: {}
+      podSecurityContext: {}
+      pullPolicy: IfNotPresent
+      tag: "v1.0.49"
+      replicas: 1 # Number of pods for the service.
+      topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+      # Optional extra volumes / volumeMounts for this deployment (empty = none).
+      #volumes:
+      #  - name: extra
+      #    emptyDir: {}
+      #volumeMounts:
+      #  - name: extra
+      #    mountPath: /data
+      logLevel: "info" # possible values: trace, debug, info, warn, error
+      # Queue this service consumes ingest events and upstream results from
+      # (WORKFLOWS_QUEUE). Must be fed the same messages the analysis service sees.
+      queue: "hub-workflows-queue"
+      resources:
+        requests:
+          memory: 10Mi
+          cpu: 10m
+          # ---------------------------------------------------------------------
+          # EXAMPLE custom stage worker (commented out) — hub-loitering.
+          #
+          # Companion deployment for the workflows.definitions example above (the
+          # loitering stage of tracking-workflow). Uncomment to deploy the demo
+          # worker. It ships as its own repository/module.
+          # See https://github.com/uug-ai/hub-loitering.
+          #loitering:
+          #  # Deploy the hub-loitering worker.
+          #  enabled: true
+          #  repository: ghcr.io/uug-ai/hub-loitering
+          #  pullPolicy: IfNotPresent
+          #  tag: "v1.0.11"
+          #  replicas: 1 # Number of pods for the worker.
+          #  topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+          #  #volumes:
+          #  #  - name: extra
+          #  #    emptyDir: {}
+          #  #volumeMounts:
+          #  #  - name: extra
+          #  #    mountPath: /data
+          #  logLevel: "info" # possible values: trace, debug, info, warn, error
+          #  # Queue this worker consumes dispatched messages from (LOITERING_QUEUE). This
+          #  # same value is taken into the matching workflows.definitions stage, so the
+          #  # engine dispatches and the worker consumes the same queue with no drift.
+          #  # Convention: "kcloud-<operation>-queue.fifo".
+          #  queue: "kcloud-loitering-queue.fifo"
+          #  resources:
+          #    requests:
+          #      memory: 10Mi
+          #      cpu: 10m
+          # ---------------------------------------------------------------------
+          # EXAMPLE stage worker (commented out) for the workflows.definitions example
+          # above — hub-objecttracking. Uncomment the worker whose operation a
+          # definition references, so the engine dispatches and the worker consumes the
+          # same queue with no drift.
+          #objecttracking:
+          #  # Deploy the object-tracking worker (operation "objecttracking").
+          #  enabled: true
+          #  repository: ghcr.io/uug-ai/hub-objecttracking
+          #  pullPolicy: IfNotPresent
+          #  tag: "v1.0.10"
+          #  replicas: 1 # Number of pods for the worker.
+          #  topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+          #  logLevel: "info" # possible values: trace, debug, info, warn, error
+          #  # Queue this worker consumes dispatched messages from (OBJECTTRACKING_QUEUE).
+          #  queue: "kcloud-objecttracking-queue.fifo"
+          #  resources:
+          #    requests:
+          #      memory: 10Mi
+          #      cpu: 10m
+          # ---------------------------------------------------------------------
+          # EXAMPLE stage worker (commented out) — hub-vlm (operation "vlm").
+          #
+          # Samples frames from the recording, describes them with an Azure OpenAI
+          # vision model and emits timeline markers plus a recording description.
+          # Route to it with a workflows.definitions stage `- operation: vlm`.
+          # See https://github.com/uug-ai/hub-vlm for every VLM_* / AZURE_OPENAI_*
+          # setting. Create the API key Secret first, e.g.
+          #   kubectl create secret generic hub-vlm-azure-openai \
+          #     --from-literal=apiKey=<azure-openai-api-key>
+          #vlm:
+          #  # Deploy the hub-vlm worker.
+          #  enabled: true
+          #  repository: ghcr.io/uug-ai/hub-vlm
+          #  pullPolicy: IfNotPresent
+          #  tag: "v1.0.8"
+          #  replicas: 1 # Number of pods for the worker.
+          #  topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+          #  logLevel: "info" # possible values: trace, debug, info, warn, error
+          #  # Queue this worker consumes dispatched messages from (VLM_QUEUE).
+          #  queue: "hub-vlm-queue"
+          #  env:
+          #    AZURE_OPENAI_ENDPOINT: "https://<resource>.openai.azure.com"
+          #    AZURE_OPENAI_DEPLOYMENT: "gpt-5.4-mini" # Name of the model deployment.
+          #    AZURE_OPENAI_REASONING_EFFORT: "low" # none | minimal | low | medium | high
+          #    VLM_MAX_FRAMES: "8" # Frames sampled per recording (max 32).
+          #    VLM_FRAME_WIDTH: "1024" # Maximum frame width in pixels.
+          #    VLM_SET_DESCRIPTION: "true" # Write the summary to the recording description.
+          #  # The API key is read from an existing Secret, never from values.
+          #  secretEnv:
+          #    AZURE_OPENAI_API_KEY:
+          #      name: hub-vlm-azure-openai
+          #      key: apiKey
+          #  resources:
+          #    requests:
+          #      memory: 128Mi
+          #      cpu: 100m
+  monitordevice:
+    securityContext: {}
+    podSecurityContext: {}
+    repository: ghcr.io/uug-ai/hub-monitor-device
+    pullPolicy: IfNotPresent
+    tag: "v1.4.15"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    # Seconds between device status scans. Sets how quickly a camera going
+    # offline/online is detected. With "Group notifications" on, hub-monitor-device
+    # v1.4.10+ holds a change 20 seconds (DEVICE_GROUPING_HOLD_SECONDS) to collect
+    # other cameras that change at the same time; older releases hold one scan.
+    scanIntervalSeconds: 60
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+        # E-mail templates
+        #volumeMounts:
+        #  - name: custom-email-templates
+        #    mountPath: /mail
+        #volumes:
+        #  - name: custom-email-templates
+        #    persistentVolumeClaim:
+        #      claimName: custom-layout-claim
+  reactivate:
+    repository: uugai/hub-reactivatesubscriptions
+    pullPolicy: IfNotPresent
+    tag: "v1.0.2"
+    replicas: 0 # Number of pods for the service. Set to 0 to disable.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+# The Kerberos Hub pipeline is a series of microservices that process the recordings.
+# Each microservice is responsible for a specific task, like counting objects, generating thumbnails, etc.
+# The pipeline is orchestrated through Kafka topics or RabbitMQ queues.
+# The pipeline is a critical component of Kerberos Hub, and should be monitored closely.
+kerberospipeline:
+  event:
+    deploymentAnnotations: {}
+    # Example (opt-in Argo CD ordering):
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "10"
+    repository: ghcr.io/uug-ai/hub-pipeline-event
+    pullPolicy: IfNotPresent
+    tag: "v1.3.10"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+  monitor:
+    repository: ghcr.io/uug-ai/hub-pipeline-monitor
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "70"
+    pullPolicy: IfNotPresent
+    tag: "v1.3.30"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: debug, info, warn, error
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+  sequence:
+    repository: ghcr.io/uug-ai/hub-pipeline-sequence
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "60"
+    pullPolicy: IfNotPresent
+    tag: "v1.7.15"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: debug, info, warn, error
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+  throttler:
+    securityContext: {}
+    podSecurityContext: {}
+    repository: ghcr.io/uug-ai/hub-pipeline-throttler
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "30"
+    pullPolicy: IfNotPresent
+    tag: "v1.2.11"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+  notify:
+    securityContext: {}
+    podSecurityContext: {}
+    repository: ghcr.io/uug-ai/hub-pipeline-notification
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "20"
+    pullPolicy: IfNotPresent
+    tag: "v1.3.48"
+    replicas: 1 # Number of pods for the service.
+    audit:
+      enabled: true
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    notificationExpiryMinutes: "15" # Maximum recording age before notification delivery; 0 disables expiry.
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+        # E-mail templates
+        #volumeMounts:
+        #  - name: custom-email-templates
+        #    mountPath: /mail
+        #volumes:
+        #  - name: custom-email-templates
+        #    persistentVolumeClaim:
+        #      claimName: custom-layout-claim
+  notifyTest:
+    repository: ghcr.io/uug-ai/hub-pipeline-notification-test
+    pullPolicy: IfNotPresent
+    tag: "v1.2.7"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+        # E-mail templates
+        #volumeMounts:
+        #  - name: custom-email-templates
+        #    mountPath: /mail
+        #volumes:
+        #  - name: custom-email-templates
+        #    persistentVolumeClaim:
+        #      claimName: custom-layout-claim
+  analysis:
+    repository: ghcr.io/uug-ai/hub-pipeline-analysis
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "40"
+    pullPolicy: IfNotPresent
+    tag: "v1.8.31"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    # Opt-in: after classification, re-enqueue the recording on the thumbnail
+    # queue to regenerate its thumbnail from the first frame of a tracked moving
+    # object (THUMBNAIL_REGENERATION_ENABLED). Adds up to one thumbnail job per
+    # classified recording; size pipe-thumbnail accordingly before enabling.
+    # minSeconds (THUMBNAIL_REGENERATION_MIN_SECONDS): only regenerate when the
+    # object first appears at least this many seconds into the recording; earlier
+    # objects are already in the original thumbnail. 0 regenerates for every object.
+    thumbnailRegeneration:
+      enabled: false
+      minSeconds: 3
+    # In-memory cache for hot-path MongoDB lookups (site vault per device).
+    # Site changes apply after at most one TTL; each replica caches separately.
+    dbCache:
+      enabled: false
+      ttl: "5m" # Go duration, e.g. "30s", "5m"
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+  dominantColor:
+    securityContext: {}
+    podSecurityContext: {}
+    # Opt-in: deploys pipe-dominantcolor and tells the analysis stage to schedule
+    # it (DOMINANTCOLOR_ENABLED). Requires an analysis image that reads the flag;
+    # older images always publish to the dominantcolor queue.
+    enabled: false # Enable or disable dominant color extraction 'true' or 'false'
+    repository: ghcr.io/uug-ai/hub-pipeline-dominantcolors
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "50"
+    pullPolicy: IfNotPresent
+    tag: "v2.0.10"
+    replicas: 3 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn,
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+  thumbnail:
+    securityContext: {}
+    podSecurityContext: {}
+    repository: ghcr.io/uug-ai/hub-pipeline-thumbnail
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "50"
+    pullPolicy: IfNotPresent
+    tag: "v1.3.24"
+    replicas: 2 # Number of pods for the service.
+    prefetchCount: 0 # Max unacknowledged RabbitMQ messages per pod; 0 = service default (5).
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    quality: "1" # 1 (best) - 31 (worst)
+    width: "600"
+    height: "-1"
+    skipNonKeyframes: true # Decode keyframes only for faster extraction; disable when exact-frame output is required.
+    kerberosvault:
+      enabled: true # If you want to use Kerberos Vault to store the thumbnails
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+  counting:
+    securityContext: {}
+    podSecurityContext: {}
+    repository: ghcr.io/uug-ai/hub-pipeline-counting
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "50"
+    pullPolicy: IfNotPresent
+    tag: "v2.0.7"
+    replicas: 1 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn,
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+  sprite:
+    enabled: false # Enable or disable the sprite generation 'true' or 'false
+    deploymentAnnotations: {}
+    # deploymentAnnotations:
+    #   argocd.argoproj.io/sync-wave: "50"
+    repository: ghcr.io/uug-ai/hub-pipeline-sprite
+    pullPolicy: IfNotPresent
+    tag: "v1.1.28"
+    replicas: 5 # Number of pods for the service.
+    prefetchCount: 0 # Max unacknowledged RabbitMQ messages per pod; 0 = service default (5).
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    # Optional extra volumes / volumeMounts for this deployment (empty = none).
+    #volumes:
+    #  - name: extra
+    #    emptyDir: {}
+    #volumeMounts:
+    #  - name: extra
+    #    mountPath: /data
+    logLevel: "info" # possible values: trace, debug, info, warn,
+    interval: "1" # Number of secondes between each thumbnail in the sprite
+    # Tile size in pixels. Preserve width:height = 16:9 (e.g. 240x135, 480x270, 640x360).
+    # Deploy dimension-aware sprite/analysis workers, Hub API and frontend before increasing.
+    width: "240"
+    height: "135"
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+  export:
+    repository: ghcr.io/uug-ai/hub-pipeline-export
+    pullPolicy: IfNotPresent
+    tag: "v1.2.22"
+    replicas: 2 # Number of pods for the service.
+    topologySpreadConstraints: [] # Optional pod topology spread constraints (empty = none).
+    logLevel: "info" # possible values: trace, debug, info, warn, error
+    # playerAssetsPath: "/custom/player-assets/" # Path to custom player.html template (overrides the embedded default)
+    # volumeMounts:
+    #   - name: custom-player-assets
+    #     mountPath: /custom/player-assets
+    # volumes:
+    #   - name: custom-player-assets
+    #     configMap:
+    #       name: custom-player-html
+    resources:
+      requests:
+        memory: 10Mi
+        cpu: 10m
+###########################################################################
+# Email configuration
+#
+# Preferred email provider, we support mailgun and smtp.
+# Email templates are used to send out emails to users.
+###########################################################################
+email:
+  provider: "mailgun"
+  from: "support@yourdomain.com"
+  displayName: "yourdomain.com"
+  mailgun:
+    domain: "mg.yourdomain.com"
+    apikey: "xxxx"
+  smtp:
+    server: "smtp.yourdomain.com"
+    port: "465"
+    username: "yourusername"
+    password: "yourpassword"
+  templates:
+    welcome: "welcome"
+    welcomeTitle: "Welcome to Kerberos Hub"
+    activate: "activate"
+    activateTitle: "Wonderful! Your Kerberos Hub is now active"
+    forgot: "forgot"
+    forgotTitle: "Password reset Kerberos Hub. You forgot your password"
+    share: "share"
+    shareTitle: "[Action] You received a recording from Kerberos Hub"
+    caseShare: "share_case"
+    caseShareTitle: "[Action] A case has been shared with you on Kerberos Hub"
+    caseShareOtp: "share_case_otp"
+    caseShareOtpTitle: "Your Kerberos Hub verification code"
+    assignTask: "assign_task"
+    assignTaskTitle: "[Action] You've been assigned to a task"
+    detection: "detection"
+    disabled: "disable"
+    highupload: "highupload"
+    device: "device"
+    # Sent instead of "device" when several cameras of an account change status
+    # in the same scan and the account groups device notifications.
+    deviceGroup: "device_group"
+    alertTitle: "[Alert] Kerberos Hub detected something an event"
+    deviceTitle: "[Device] A Kerberos Agent's status has been changed"
+    deviceGroupTitle: "[Device] Several cameras changed status"
+    # Recording check alerts (Alerts → Devices → Recording check). Empty uses
+    # the "recording" template with SMTP. For SendGrid or Mailgun, set the
+    # template id; empty uses the device template there.
+    recording: ""
+    # Empty uses "[Device] A camera stopped recording", "[Device] A camera is
+    # recording again" and their forms for several cameras.
+    recordingTitle: ""

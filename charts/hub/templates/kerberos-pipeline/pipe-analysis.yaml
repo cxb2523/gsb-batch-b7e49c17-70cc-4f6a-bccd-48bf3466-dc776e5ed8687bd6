@@ -1,0 +1,170 @@
+{{- if or (eq .Values.mode "all") (eq .Values.mode "pipeline") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pipe-analysis
+  namespace: {{ .Release.Namespace }}
+  {{- with .Values.kerberospipeline.analysis.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.kerberospipeline.analysis.replicas }}
+  selector:
+    matchLabels:
+      app: pipe-analysis
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configMaps/configmap-mongodb.yaml") . | sha256sum }}
+      labels:
+        app: pipe-analysis
+    spec:
+      {{- if .Values.kerberoshub.serviceAccount.create }}
+      serviceAccountName: {{ default (printf "%s-%s-sa" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-") .Values.kerberoshub.serviceAccount.name }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $mongodbTLS := .Values.mongodb.tls }}
+      {{- if or .Values.kerberospipeline.analysis.volumes (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+      volumes:
+      {{- with .Values.kerberospipeline.analysis.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+        {{- include "hub.mongodb.tlsVolume" . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.kerberospipeline.analysis.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: pipe-analysis
+        image: "{{ .Values.global.imageRegistry }}{{ .Values.kerberospipeline.analysis.repository }}:{{ .Values.kerberospipeline.analysis.tag }}"
+        imagePullPolicy: {{ .Values.kerberospipeline.analysis.pullPolicy }}
+        {{- with .Values.kerberospipeline.analysis.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if or .Values.kerberospipeline.analysis.volumeMounts (and $mongodbTLS.enabled $mongodbTLS.existingSecret) }}
+        volumeMounts:
+        {{- with .Values.kerberospipeline.analysis.volumeMounts }}
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if and $mongodbTLS.enabled $mongodbTLS.existingSecret }}
+          {{- include "hub.mongodb.tlsVolumeMount" . | nindent 12 }}
+        {{- end }}
+        {{- end }}
+        envFrom:
+        - configMapRef:
+            name: mongodb-config
+        env:
+        {{- include "hub.mongodb.appUriEnv" (dict "root" $ "app" "hub-pipeline-analysis") | nindent 8 }}
+        - name: LOG_LEVEL
+          value: "{{ .Values.kerberospipeline.analysis.logLevel }}"
+        - name: CLOUD_PROVIDER
+          value: "{{ .Values.cloudProvider }}"
+        - name: QUEUE_SYSTEM
+          value: "{{ .Values.queueProvider }}"
+
+        # Kafka settings
+        - name: KAFKA_BROKER
+          value: "{{ .Values.kafka.broker }}"
+        - name: KAFKA_USERNAME
+          value: "{{ .Values.kafka.username }}"
+        - name: KAFKA_PASSWORD
+          value: "{{ .Values.kafka.password }}"
+        - name: KAFKA_MECHANISM
+          value: "{{ .Values.kafka.mechanism }}"
+        - name: KAFKA_SECURITY
+          value: "{{ .Values.kafka.security }}"
+
+        # RabbitMQ settings
+        - name: RABBITMQ_HOST
+          value: "{{ .Values.rabbitmq.host }}"
+        - name: RABBITMQ_EXCHANGE
+          value: "{{ .Values.rabbitmq.exchange }}"
+        - name: RABBITMQ_USERNAME
+          value: "{{ .Values.rabbitmq.username }}"
+        - name: RABBITMQ_PASSWORD
+          value: "{{ .Values.rabbitmq.password }}"
+
+        # When true, analysis tees the classify result to the hub-workflows
+        # service in parallel with the throttler/notification tail (which still
+        # runs unchanged). Kept in sync with whether the workflows service runs.
+        - name: WORKFLOWS_ENABLED
+          value: "{{ .Values.kerberoshub.workflows.enabled }}"
+
+        # Queue analysis publishes opened workflow runs to (WORKFLOWS_QUEUE),
+        # taken from the workflows service's queue so analysis and the engine
+        # always agree on the queue name (no drift).
+        - name: WORKFLOWS_QUEUE
+          value: "{{ .Values.kerberoshub.services.workflows.queue }}"
+          
+        # Kerberos Vault
+        - name: KERBEROS_STORAGE_URI
+          value: "{{ .Values.kerberosvault.uri }}"
+        - name: KERBEROS_STORAGE_ACCESS_KEY
+          value: "{{ .Values.kerberosvault.accesskey }}"
+        - name: KERBEROS_STORAGE_SECRET
+          value: "{{ .Values.kerberosvault.secretkey }}"
+
+        # Sprites
+        - name: SPRITE_ENABLED
+          value: "{{ .Values.kerberospipeline.sprite.enabled }}"
+
+        # Dominant colors
+        - name: DOMINANTCOLOR_ENABLED
+          value: "{{ .Values.kerberospipeline.dominantColor.enabled }}"
+
+        # Thumbnail regeneration from classified frames (opt-in)
+        - name: THUMBNAIL_REGENERATION_ENABLED
+          value: {{ .Values.kerberospipeline.analysis.thumbnailRegeneration.enabled | default false | quote }}
+        # Skip regeneration when the object first appears within this many seconds
+        - name: THUMBNAIL_REGENERATION_MIN_SECONDS
+          {{- $regeneration := .Values.kerberospipeline.analysis.thumbnailRegeneration }}
+          value: {{ ternary $regeneration.minSeconds 3 (hasKey $regeneration "minSeconds") | quote }}
+
+        # In-memory cache for hot-path MongoDB lookups
+        - name: DB_CACHE_ENABLED
+          value: {{ .Values.kerberospipeline.analysis.dbCache.enabled | default false | quote }}
+        - name: DB_CACHE_TTL
+          value: {{ .Values.kerberospipeline.analysis.dbCache.ttl | default "5m" | quote }}
+        
+        {{- if .Values.opentelemetry.enabled }}
+        # Open Telemetry tracing
+        - name: OTEL_EXPORTED_OTLP_ENABLED
+          value: "{{ .Values.opentelemetry.enabled }}"
+        - name: OTEL_EXPORTED_OTLP_ROUTING_ENABLED
+          value: "{{ .Values.opentelemetry.routingEnabled }}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{{ .Values.opentelemetry.collector.endpoint }}"
+        {{- include "hub.opentelemetry.samplerEnv" $ | trim | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pipe-analysis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: pipe-analysis
+    service: pipe
+spec:
+  ports:
+    - name: hub-metrics
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: pipe-analysis
+{{- end }}

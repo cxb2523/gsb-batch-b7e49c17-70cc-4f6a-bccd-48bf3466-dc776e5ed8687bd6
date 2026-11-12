@@ -1,0 +1,69 @@
+{{- if or (eq .Values.mode "all") (eq .Values.mode "ui") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.admin.replicas }}
+  selector:
+    matchLabels:
+      app: admin
+  template:
+    metadata:
+      labels:
+        app: admin
+    spec:
+      {{- with .Values.admin.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.admin.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: admin
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.admin.repository }}:{{ .Values.admin.tag }}"
+          imagePullPolicy: {{ .Values.admin.pullPolicy }}
+          {{- with .Values.admin.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.admin.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.admin.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.admin.containerPort | default 80 }}
+              protocol: TCP
+          {{- with .Values.admin.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.admin.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: LOG_LEVEL
+              value: "{{ .Values.admin.logLevel }}"
+            - name: API_URL
+              value: "{{ .Values.kerberoshub.api.schema }}://{{ .Values.kerberoshub.api.url }}"
+            - name: TITLE
+              value: Hub Admin | Scale for everyone, anywhere
+            - name: LOGO_NAME
+            - name: ENVIRONMENT
+              value: staging
+            - name: PRIVATE_EDITION
+              value: "false"
+            - name: PRODUCTION
+              value: "true"
+            - name: DEMO
+              value: "false"
+{{- end }}
