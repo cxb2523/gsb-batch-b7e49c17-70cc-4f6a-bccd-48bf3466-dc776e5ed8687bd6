@@ -60,6 +60,7 @@ export interface ArchiveOptions {
 export interface EntryLocation {
 	offset: number;
 	compressedSize: number;
+	uncompressedSize: number;
 	nameLength: number;
 	/** 0 = stored, 8 = deflate */
 	method: number;
@@ -71,6 +72,8 @@ export class Archive3tz {
 	constructor( source: ByteSource, init: {
 		entries: Map<string, EntryLocation> | null;
 		index: Uint8Array | null;
+		/** the size of the whole archive: offsets outside it are refused (default no check) */
+		size?: number;
 		guessBytes?: number;
 		maxEntryBytes?: number;
 		openRequests: number;

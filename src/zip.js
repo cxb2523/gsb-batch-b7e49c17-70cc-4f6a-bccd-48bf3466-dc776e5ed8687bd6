@@ -150,6 +150,7 @@ export async function readEnd( source, { tailBytes, maxDirectoryBytes } ) {
  * @typedef {object} EntryLocation
  * @property {number} offset  where the local header starts
  * @property {number} compressedSize
+ * @property {number} uncompressedSize
  * @property {number} nameLength
  * @property {number} method  0 = stored, 8 = deflate
  */
@@ -215,7 +216,7 @@ export async function parseDirectory( directory, { yieldEvery = 0 } = {} ) {
 
 		}
 
-		if ( ! path.endsWith( '/' ) ) entries.set( path, { offset, compressedSize, nameLength, method } );
+		if ( ! path.endsWith( '/' ) ) entries.set( path, { offset, compressedSize, uncompressedSize, nameLength, method } );
 		lastPath = path;
 		p += 46 + nameLength + extraLength + commentLength;
 
@@ -236,6 +237,10 @@ export async function parseDirectory( directory, { yieldEvery = 0 } = {} ) {
  *
  * The name written in the local header must be the one asked for: this
  * guards against a hash collision in the index or a damaged directory.
+ * It is checked before the entry's data is read, as are the sizes the
+ * header declares: an entry over `maxEntryBytes` is refused without its
+ * data ever arriving whole in memory, and an archive that ends in the
+ * middle of an entry is an error, never a short or empty answer.
  *
  * @param {import('./sources.js').ByteSource} source
  * @param {string} path
@@ -245,12 +250,23 @@ export async function parseDirectory( directory, { yieldEvery = 0 } = {} ) {
  * @param {number} [maxEntryBytes]  the most an entry may take, compressed or
  *   once decompressed: a larger one is refused (a damaged or hostile archive,
  *   a "zip bomb")
+ * @param {number} [archiveSize]  the size of the whole archive, when known:
+ *   an offset that does not leave room for a local header is refused before
+ *   any request is made
  */
-export async function readEntryAt( source, path, offset, known, guessBytes, maxEntryBytes = Infinity ) {
+export async function readEntryAt( source, path, offset, known, guessBytes, maxEntryBytes = Infinity, archiveSize = Infinity ) {
 
 	const wanted = normalizePath( path );
 	const tooLarge = what => new Error( `${ path }: ${ what } is over the limit of ${ maxEntryBytes } bytes (maxEntryBytes).` );
+	const truncated = what => new Error( `${ path }: the archive ends ${ what } (damaged or truncated archive).` );
+	if ( ! Number.isSafeInteger( offset ) || offset < 0 || offset + 30 > archiveSize ) {
+
+		throw new Error( `${ path }: the entry offset ${ offset } is outside the archive.` );
+
+	}
+
 	if ( known && known.compressedSize > maxEntryBytes ) throw tooLarge( 'its size' );
+	if ( known && known.uncompressedSize > maxEntryBytes ) throw tooLarge( 'its decompressed size' );
 	const nameLength = known ? known.nameLength : new TextEncoder().encode( wanted ).length;
 	const first = 30 + nameLength + EXTRA_MARGIN + ( known ? known.compressedSize : guessBytes );
 
@@ -262,6 +278,7 @@ export async function readEntryAt( source, path, offset, known, guessBytes, maxE
 	};
 
 	await ensure( 30 );
+	if ( buffer.length < 30 ) throw truncated( 'before the local header' );
 	let view = viewOf( buffer );
 	if ( view.getUint32( 0, true ) !== SIG_LOCAL_HEADER ) throw new Error( `${ path }: no local header at offset ${ offset }.` );
 
@@ -275,20 +292,41 @@ export async function readEntryAt( source, path, offset, known, guessBytes, maxE
 	if ( known ) {
 
 		compressedSize = known.compressedSize;
+		await ensure( 30 + localNameLength );
+		if ( buffer.length < 30 + localNameLength ) throw truncated( 'in the middle of the local header' );
 
 	} else {
 
 		await ensure( dataStart );
+		if ( buffer.length < dataStart ) throw truncated( 'in the middle of the local header' );
 		view = viewOf( buffer );
 		compressedSize = view.getUint32( 18, true );
-		if ( compressedSize === 0xffffffff ) {
+		let uncompressedSize = view.getUint32( 22, true );
+		if ( compressedSize === 0xffffffff || uncompressedSize === 0xffffffff ) {
 
+			// ZIP64: extra field 0x0001 holds the real sizes, uncompressed
+			// first, each present only when its 32-bit field is 0xffffffff.
 			for ( let q = 30 + localNameLength; q + 4 <= dataStart; ) {
 
 				const tag = view.getUint16( q, true );
 				const length = view.getUint16( q + 2, true );
-				// extra 0x0001 in a local header holds both sizes: uncompressed, then compressed
-				if ( tag === 0x0001 ) { compressedSize = readU64( view, q + 12 ); break; }
+				if ( tag === 0x0001 ) {
+
+					let r = q + 4;
+					const take = () => {
+
+						if ( r + 8 > dataStart ) return null;
+						const value = readU64( view, r );
+						r += 8;
+						return value;
+
+					};
+					if ( uncompressedSize === 0xffffffff ) uncompressedSize = take() ?? uncompressedSize;
+					if ( compressedSize === 0xffffffff ) compressedSize = take() ?? compressedSize;
+					break;
+
+				}
+
 				q += 4 + length;
 
 			}
@@ -296,14 +334,21 @@ export async function readEntryAt( source, path, offset, known, guessBytes, maxE
 		}
 
 		if ( ( flags & 0x8 ) && ! compressedSize ) throw new Error( `${ path }: sizes stored after the data (not a canonical .3tz).` );
+		if ( compressedSize > maxEntryBytes ) throw tooLarge( 'its size' );
+		// With sizes after the data (flag 0x8) the declared decompressed size
+		// cannot be trusted; the inflation limit below still holds.
+		if ( ! ( flags & 0x8 ) && uncompressedSize > maxEntryBytes ) throw tooLarge( 'its decompressed size' );
 
 	}
 
-	if ( compressedSize > maxEntryBytes ) throw tooLarge( 'its size' );
-	await ensure( dataStart + compressedSize );
-
+	// The name decides whether these bytes are the entry asked for at all:
+	// check it before the (possibly large) data is fetched.
+	view = viewOf( buffer );
 	const name = normalizePath( new TextDecoder().decode( buffer.subarray( 30, 30 + localNameLength ) ) );
 	if ( name !== wanted ) throw new Error( `Asked for ${ path }, found ${ name } at offset ${ offset }.` );
+
+	await ensure( dataStart + compressedSize );
+	if ( buffer.length < dataStart + compressedSize ) throw truncated( 'in the middle of the entry' );
 
 	const data = buffer.subarray( dataStart, dataStart + compressedSize );
 	if ( method === 0 ) return data;

@@ -12,6 +12,7 @@ Everything of 0.2.0 works as before.
 - `httpSource( … ).stats()` also gives `url`, `etag` (of the first response that had one) and `pending` (the ranges asked and not yet answered).
 - TypeScript declarations in `src/index.d.ts` (`types` in `package.json`), with the `ByteSource` and `SourceStats` types.
 - The `Archive3tz` constructor's `guessBytes` defaults to `DEFAULT_GUESS_BYTES`.
+- The index path (`@3dtilesIndex1@`) is hardened against damaged or hostile archives: an entry offset outside the archive is refused before any request; a declared compressed or decompressed size over `maxEntryBytes` is refused before the data arrives whole (the decompressed size is now checked from the local header, and from the central directory); a local header whose name is not the requested path is refused before the data is fetched; an archive that ends in the middle of an entry is an error instead of a short or empty answer; an index whose declared length is not a multiple of 24 fails at open, before the index is read.
 
 ## 0.2.0 — 2026-11-06
 

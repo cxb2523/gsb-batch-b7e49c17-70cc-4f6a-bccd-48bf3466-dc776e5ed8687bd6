@@ -21,7 +21,8 @@ function crc32( bytes ) {
 /**
  * Write a .3tz in memory.
  * files: [{ path, data: Uint8Array|string, deflate?: boolean, localExtra?: number, storedName?: string }]
- * options: { zip64?: boolean, index?: boolean, compressIndex?: boolean }
+ * options: { zip64?: boolean, index?: boolean, compressIndex?: boolean, indexExtraBytes?: number }
+ *   `indexExtraBytes` appends that many zero bytes to the index (a damaged index, for tests).
  */
 export function make3tz( files, options = {} ) {
 
@@ -85,7 +86,7 @@ export function make3tz( files, options = {} ) {
 			return a0 < b0 ? - 1 : a0 > b0 ? 1 : a1 < b1 ? - 1 : a1 > b1 ? 1 : 0;
 
 		} );
-		const index = new Uint8Array( records.length * 24 );
+		const index = new Uint8Array( records.length * 24 + ( options.indexExtraBytes || 0 ) );
 		const iv = new DataView( index.buffer );
 		records.forEach( ( r, i ) => {
 
