@@ -246,9 +246,13 @@ export class FlightModel {
     this.gearPos = 1;                           // retractable gear: 1 down, 0 up
     // What the aircraft's systems and the weather are doing to the airframe (see js/systems.js).
     // ice: 0 clean .. 1 severe. power: fraction of engine output available. cut: no combustion.
+    // pitotHeat: the heated pitot switch, on or off. pitotBlock: 0 clear .. 1 sealed, the
+    // fraction of the ram pressure the airspeed indicator can still see. pitotFailure is a
+    // mechanical blockage that heat cannot melt. All three are settable from outside; the
+    // flight model owns the pitot physics so the instruments respond even without Systems.
     // Rigging: the bent rudder tab and aileron rig a factory sets so the aircraft flies hands-off in cruise.
     this.rig = { roll: 0, yaw: 0 };
-    this.fx = { ice: 0, power: 1, cut: false, rough: 0, starter: true, flapPower: true, flapFrozen: false, trimOffset: 0 };
+    this.fx = { ice: 0, pitotHeat: false, pitotBlock: 0, pitotFailure: false, staticP: null, power: 1, cut: false, rough: 0, starter: true, flapPower: true, flapFrozen: false, trimOffset: 0 };
     this.els = buildTail(def);
     this.body = def.body.stations.map(([x, len, depth, width]) => ({ x, side: len * depth, plan: len * width }));
     this.contacts = def.gear.contacts;
@@ -276,14 +280,16 @@ export class FlightModel {
     this.touchdowns = 0;
     this.gearLoad = def.gear.contacts.map(() => 0);
     this.out = {
-      ias: 0, tas: 0, gs: 0, alt: 0, agl: 0, altInd: 0, vs: 0, vsInd: 0,
+      ias: 0, iasTrue: 0, iasInd: 0, tas: 0, gs: 0, alt: 0, agl: 0, altInd: 0, vs: 0, vsInd: 0,
       roll: 0, pitch: 0, heading: 0, track: 0,
       alpha: 0, beta: 0, gLoad: 1, slip: 0, turnRate: 0,
       rpm: 0, thrust: 0, power: 0, fuelFlow: 0, egt: 20, oilT: 20, oilP: 0, map: 0,
-      stallWarn: 0, stalled: 0, onGround: false, wheelSpeed: 0, groundLoad: 0,
+      stallWarn: 0, stallWarnIas: 0, stallMargin: 0, stalled: 0, onGround: false, wheelSpeed: 0, groundLoad: 0,
       flapPos: 0, flapMoving: false, firing: false, vi: 0,
       touchdownVs: 0, scrape: 0, mass: 0, rho: 1.225, oat: 15,
+      ice: 0, pitotBlock: 0, pitotHeated: false,
     };
+    this.pitotSensed = null;        // total pressure the airspeed indicator's line is holding
   }
 
   get mass() { return this.def.mass.empty + this.payload + this.fuel + 45 * this.fx.ice; }
@@ -312,12 +318,21 @@ export class FlightModel {
     this.ctl.trim = onGround ? 0.06 : 0.0;
     this.crashed = null;
     this.inflow.fill(0); this.wing.gamma.fill(0); this.wing.Aimg.fill(0); this.wing.hasImage = false; this._tick = 0;
+    this.pitotSensed = null;          // the pitot line starts at the ambient total pressure
     for (const el of this.els) el.wake[0] = el.wake[1] = el.wake[2] = 0;
     this.egt = running ? 600 : this.out.oat; this.oilT = running ? 80 : this.out.oat; this.cht = running ? 150 : this.out.oat;
     this.vsiLag = 0;
     this._wasAir = !onGround;
     this.step(1e-4);
   }
+
+  // The knobs the weather and the panel move, and tests pin: how much ice is on the
+  // airframe, whether the pitot head is heated, and how far it has blocked over
+  // (0 clear .. 1 sealed). Each takes effect on the next step. The wing's own lift,
+  // drag and weight follow `fx.ice`; the horn's own threshold follows the same numbers.
+  setIcing(ice) { this.fx.ice = clamp(ice, 0, 1); }
+  setPitotHeat(on) { this.fx.pitotHeat = !!on; }
+  setPitotBlock(block) { const b = clamp(block, 0, 1); this.fx.pitotBlock = b; if (b === 0) this.pitotSensed = null; }
 
   step(dt) {
     const c = this.ctl, o = this.out, env = this.env, pos = this.pos, vel = this.vel, wb = this.w;
@@ -761,7 +776,39 @@ export class FlightModel {
 
     // ---------------- what the instruments and the rest of the sim read
     o.tas = V; o.alpha = alpha; o.beta = beta;
-    o.ias = Math.sqrt(sigma) * Math.max(u, 0);
+    o.ias = Math.sqrt(sigma) * Math.max(u, 0);      // the true airspeed the aircraft is flying, in indicated terms
+    o.iasTrue = o.ias;                              // alias: `ias` stays the airframe's own speed for the rest of the sim
+    // ---- pitot-static: the airspeed indicator only sees what reaches its line.
+    // Ice narrowing the ram inlet costs the line part of the ram pressure it can take in
+    // and makes the line follow changes ever more slowly. So while the ice builds the
+    // gauge falls away from the true airspeed, reading low and lagging. When the opening
+    // seals (block 1, or a failure the heat cannot melt) nothing more gets through and
+    // the line keeps the pressure it was holding: the gauge then reads
+    // `trapped total - static now`, so as the aircraft climbs, the falling static
+    // pressure makes the airspeed indicator climb with the altimeter while the aircraft
+    // is really slowing down. Heat melts the ice in the head in twenty seconds and the
+    // gauge follows the real pressure again.
+    const qHead = 0.5 * rho * sq(Math.max(u, 0));
+    const sealed = fx.pitotFailure || fx.pitotBlock >= 0.999;
+    if (!sealed) {
+      const open = 1 - fx.pitotBlock;
+      const target = atm.p + qHead * (1 - 0.40 * fx.pitotBlock);       // a restricted inlet loses part of the ram pressure
+      if (this.pitotSensed == null || fx.pitotBlock <= 0.004) this.pitotSensed = atm.p + qHead;
+      else {
+        const rate = 30 * open;                                        // and follows changes more and more slowly
+        this.pitotSensed += (target - this.pitotSensed) * (1 - Math.exp(-dt * rate));
+      }
+    } else if (this.pitotSensed == null) this.pitotSensed = atm.p + qHead;   // sealed on the first step: it froze on the truth
+    if (fx.pitotHeat && !fx.pitotFailure && fx.pitotBlock > 0) fx.pitotBlock = Math.max(0, fx.pitotBlock - dt / 20);   // heat melts the ice in the head
+    o.pitotBlock = fx.pitotBlock; o.pitotHeated = fx.pitotHeat; o.ice = ice;
+    // indicated airspeed: what the panel shows. A clean pitot and static system reads the
+    // truth exactly; otherwise the gauge reads the pressure the line is holding against
+    // whatever static pressure the static port delivers (its own trapped pressure if that
+    // is sealed too).
+    const pStatic = fx.staticP ?? atm.p;
+    o.iasInd = !o.pitotBlock && !fx.pitotFailure && fx.staticP == null
+      ? o.ias
+      : Math.sqrt(2 * Math.max(0, this.pitotSensed - pStatic) / 1.225);
     o.gs = Math.hypot(vel[0], vel[1]);
     o.alt = alt; o.agl = agl; o.vs = -vel[2];
     // altimeter: pressure altitude against the Kollsman setting
@@ -782,6 +829,17 @@ export class FlightModel {
     o.oilP = clamp(this.rpm / 1000, 0, 1) * (75 - 0.12 * Math.max(0, this.oilT - 80)) * (0.55 + 0.45 * clamp(this.rpm / 2400, 0, 1)) / 0.775 * 0.775;
     o.map = (atm.p / 3386.39) * (0.36 + 0.61 * (1 - Math.pow(1 - c.throttle, 1.6))) * (1 - 0.00003 * Math.max(0, this.rpm - 1000) * (1 - c.throttle));
     o.stallWarn = !onGround && o.ias > 12 ? smooth(0.80, 0.86, warnMax) : 0;
+    // The horn's own threshold, as a calibrated airspeed: the speed at which the critical
+    // strip's lift coefficient reaches the angle the reed is set to warn at. Weight and ice
+    // both enter, so a heavier or iced wing warns sooner (at a higher airspeed).
+    {
+      const cmx = W.cmx[W.warnIdx], tc = 0.83, kk = kappa(W.sep);
+      const aStall = cmx / (W.a2d * kk), aWarn = tc * aStall;
+      const f = 0.5 * (1 - Math.tanh((tc - 1) / W.sep));
+      const clW = Math.max(0.05, W.a2d * aWarn * sq((1 + Math.sqrt(f)) / 2));
+      o.stallWarnIas = Math.sqrt(2 * mass * G / (1.225 * this.S * clW));     // CAS: rho cancels out
+      o.stallMargin = o.ias - o.stallWarnIas;                                // m/s above the horn (negative would be warning already)
+    }
     o.stalled = sepS / this.S;       // fraction of the wing area that has let go
     o.onGround = onGround; o.wheelSpeed = onGround ? wheelSpeed : 0; o.groundLoad = groundLoad; o.scrape = scrape;
     o.flapPos = this.flapPos; o.flapMoving = this.flapPos !== fp0;

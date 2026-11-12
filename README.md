@@ -93,8 +93,20 @@ the truth, not the truth.
 
 - Airframe ice builds when the aircraft is inside visible cloud (the same
   cloud field that is drawn) below freezing: less maximum lift, more drag,
-  more weight, a rougher propeller. The pitot ices faster unless heated, and
-  a blocked airspeed indicator then behaves like an altimeter.
+  more weight, a rougher propeller — all rising monotonically with `fm.fx.ice`,
+  and the stall horn's threshold airspeed rises with it, so the horn sounds
+  earlier the more ice is aboard.
+- The pitot ices faster than the wing unless `fx.pitotHeat` is on. As the ice
+  narrows the ram inlet the line loses part of the ram pressure and follows
+  changes more slowly, so the airspeed indicator falls away from the true
+  airspeed; when it seals, the line keeps the pressure it holds and the
+  indicator becomes an altimeter — it climbs in a climb while the aircraft
+  really slows, as the pressure altitude falls. Heat stops the ice and melts a
+  blockage away in about twenty seconds. The flight model owns this physics
+  (`fm.out.ias` is the true airspeed in indicated terms, `fm.out.iasInd` is
+  what the gauge reads, `fm.out.stallWarnIas` the horn's own speed); Systems
+  feeds it the ice and reports both through `systems.ind`, with the PITOT and
+  ICE annunciators lit when they are worth looking at.
 - Attitude and heading gyros are spun by an engine-driven vacuum pump. Lose
   it and the attitude indicator leans over slowly with no flag. The heading
   gyro drifts (bearing friction, and the Earth turning under it) and has to
@@ -106,7 +118,11 @@ the truth, not the truth.
   carburettor ice on carburetted engines; oil loss ending in a seized engine.
 - Ten failures, injected from the Faults list or at random.
 
-`node test/systems.mjs` checks these against what pilots are taught to expect.
+`node test/systems.mjs` checks these against what pilots are taught to expect,
+including the whole icing chain: the clean panel reads the truth; ice drives
+maximum lift down and weight and drag up while the horn's threshold airspeed
+rises monotonically; a sealed pitot shows a climbing airspeed indicator over a
+falling true airspeed; and heat melts the blockage out.
 
 **Terrain** (`js/terrain.js`). A quadtree of web-mercator tiles around the
 aircraft: real elevation (Terrarium tiles, SRTM-class) under satellite
@@ -226,6 +242,8 @@ the approach · 4 5 tune the ADF · 6 GPS direct-to · 7 indicator source.
 
 Systems: 8 pitot heat · 9 set the heading gyro to the compass · 0 fuel tank ·
 - carburettor heat · Q altimeter to QNH. The Faults list injects failures.
+Flying into freezing cloud builds ice; the HUD shows the ice and pitot block
+and the indicated against the true airspeed, and 8 melts the pitot clear.
 
 With the keyboard, two assists stand in for hands and feet: the rudder is
 worked to keep the ball centred, and with the roll keys released the yoke is

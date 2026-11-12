@@ -38,6 +38,7 @@ export class Systems {
     this.sw = { master: true, alternator: true, avionics: true, pitotHeat: false, carbHeat: false, magnetos: 3, tank: 'both', lights: true };
     this.failed = {};
     this.ice = 0; this.pitotIce = 0; this.carbIce = 0;
+    this.iceManual = false; this.pitotManual = false;      // set by the pilot/tests and not to be overwritten by the weather
     this.soc = 1; this.volts = 28; this.amps = 0; this.powered = true;
     this.suction = fm.rpm > 500 ? 5 : 0; this.gyro = fm.rpm > 500 ? 1 : 0;
     this.attErr = [0, 0]; this.toppleDir = [Math.random() < 0.5 ? -1 : 1, Math.random() < 0.5 ? -1 : 1];
@@ -48,9 +49,17 @@ export class Systems {
     this.oilLeft = 1; this.seized = false; this.badMag = Math.random() < 0.5 ? 1 : 2;
     this.variation = 0;
     this.events = [];
-    this.ind = { ias: 0, altInd: 0, vsInd: 0, pitch: 0, roll: 0, heading: 0, compass: 0, turnRate: 0, slip: 0, suction: 0, volts: 28, amps: 0, oilP: 0, fuelL: 0, fuelR: 0, tcFlag: false, lowVolts: false, lowVac: false };
-    Object.assign(fm.fx, { ice: 0, power: 1, cut: false, rough: 0, starter: true, flapPower: true, flapFrozen: false, trimOffset: 0 });
+    this.ind = { ias: 0, iasTrue: 0, iasInd: 0, altInd: 0, vsInd: 0, pitch: 0, roll: 0, heading: 0, compass: 0, turnRate: 0, slip: 0, suction: 0, volts: 28, amps: 0, oilP: 0, fuelL: 0, fuelR: 0, tcFlag: false, lowVolts: false, lowVac: false, ice: 0, pitotBlock: 0, pitotHeated: false, stallWarn: 0, stallWarnIas: 0 };
+    Object.assign(fm.fx, { ice: 0, pitotHeat: false, pitotBlock: 0, pitotFailure: false, staticP: null, power: 1, cut: false, rough: 0, starter: true, flapPower: true, flapFrozen: false, trimOffset: 0 });
+    fm.pitotSensed = null;
   }
+
+  // What the pilot (or a test) can set directly, overriding the weather-driven model:
+  // how much ice is on the airframe, whether the pitot head is heated, and how far the
+  // pitot has blocked over (0 clear .. 1 sealed). The panel and the flight model follow.
+  setIce(level) { this.iceManual = true; this.ice = clamp(level, 0, 1); this.fm.fx.ice = this.ice; }
+  setPitotHeat(on) { this.sw.pitotHeat = !!on; this.fm.fx.pitotHeat = !!on && this.powered; }
+  setPitotBlock(block) { this.pitotManual = true; const b = clamp(block, 0, 1); this.fm.fx.pitotBlock = b; this.pitotIce = Math.max(this.pitotIce, 0.55 + 0.45 * b); }
 
   fail(name) { if (FAILURES[name] && !this.failed[name]) { this.failed[name] = true; this.events.push(name); } }
   repair() { this.failed = {}; this.oilLeft = 1; this.seized = false; this.fm.fx.trimOffset = 0; this.trapPitot = this.trapStatic = null; }
@@ -82,18 +91,33 @@ export class Systems {
     const wet = Math.max(wx.lwc || 0, wx.precip > 0.2 && wx.oat < 0.5 ? 0.6 : 0);
     const band = wx.oat <= 0.5 ? clamp((0.5 - wx.oat) / 3, 0, 1) * clamp((wx.oat + 22) / 10, 0, 1) : 0;   // worst between -3 and -12
     const speed = clamp(o.tas / 50, 0.2, 2);
-    if (wet > 0.05 && band > 0) this.ice = Math.min(1, this.ice + wet * band * speed * dt / 420);          // severe in about seven minutes
-    else this.ice = Math.max(0, this.ice - dt * (wx.oat > 1 ? 0.004 * (wx.oat + 2) : 0.0004));             // melts in warm air, sublimates slowly in cold
+    if (!this.iceManual) {
+      if (wet > 0.05 && band > 0) this.ice = Math.min(1, this.ice + wet * band * speed * dt / 420);        // severe in about seven minutes
+      else this.ice = Math.max(0, this.ice - dt * (wx.oat > 1 ? 0.004 * (wx.oat + 2) : 0.0004));           // melts in warm air, sublimates slowly in cold
+    }
+    this.ice = clamp(this.ice, 0, 1);
     fx.ice = this.ice;
 
-    // ---- pitot: ices faster than the wing unless heated
-    if (wet > 0.05 && band > 0 && !(sw.pitotHeat && this.powered)) this.pitotIce = Math.min(1.2, this.pitotIce + wet * band * dt / 60);
-    else this.pitotIce = Math.max(0, this.pitotIce - dt * (sw.pitotHeat && this.powered ? 0.05 : wx.oat > 1 ? 0.02 : 0));
-    const pitotBlocked = F.pitot || this.pitotIce >= 1;
-    if (pitotBlocked && !this.trapPitot) this.trapPitot = o.staticP + o.dynP;       // ram inlet and drain both sealed: the pressure is trapped
-    if (!pitotBlocked) this.trapPitot = null;
+    // ---- pitot: ices faster than the wing unless heated. The flight model owns the
+    // blockage and the trapped pressure (so `fm.out.iasInd` shows exactly what the gauge
+    // reads); Systems feeds it the 0..1 blockage the ice makes, and heat melts the ice
+    // at the head just as the flight model melts the blockage.
+    // The head is clear until the ice is half built; the last half seals it.
+    if (sw.pitotHeat && this.powered) {
+      // the flight model's block is decaying: track it, and clear the ice with it
+      this.pitotIce = fx.pitotBlock > 0 ? 0.55 + 0.45 * fx.pitotBlock : 0;
+    } else if (!this.pitotManual) {
+      if (wet > 0.05 && band > 0 && !F.pitot) this.pitotIce = Math.min(1.2, this.pitotIce + wet * band * dt / 60);
+      else this.pitotIce = Math.max(0, this.pitotIce - dt * (wx.oat > 1 ? 0.02 : 0));
+      fx.pitotBlock = clamp((this.pitotIce - 0.55) / 0.45, 0, 1);
+    }
+    fm.fx.pitotHeat = sw.pitotHeat && this.powered;
+    fm.fx.pitotFailure = !!F.pitot;                    // a mechanical blockage, which heat cannot melt
+    const pitotBlocked = fm.fx.pitotFailure || fm.fx.pitotBlock > 0.999;
+    this.trapPitot = pitotBlocked ? (this.trapPitot ?? o.staticP + o.dynP) : null;   // the trapped pressure, for anything asking about a sealed head
     if (F.static && !this.trapStatic) this.trapStatic = { p: o.staticP, alt: o.altInd };
     if (!F.static) this.trapStatic = null;
+    fm.fx.staticP = this.trapStatic ? this.trapStatic.p : null;   // a sealed static port holds its pressure, and the gauge reads that instead
 
     // ---- carburettor ice (carburetted engines only): worst in mild, humid air at low power
     let power = 1, rough = 0;
@@ -186,9 +210,11 @@ export class Systems {
 
     // ---- what the panel shows
     const ind = this.ind;
-    const staticP = this.trapStatic ? this.trapStatic.p : o.staticP;
-    const total = this.trapPitot !== null ? this.trapPitot : o.staticP + o.dynP;
-    ind.ias = Math.sqrt(2 * Math.max(0, total - staticP) / 1.225);
+    ind.ias = o.iasInd;                                   // what the pressure in the pitot line makes the gauge read
+    ind.iasTrue = o.ias;                                  // the speed the aircraft is really flying
+    ind.iasInd = o.iasInd;
+    ind.stallWarn = o.stallWarn; ind.stallWarnIas = o.stallWarnIas;
+    ind.pitotBlock = fm.fx.pitotBlock; ind.pitotHeated = fm.fx.pitotHeat && !fm.fx.pitotFailure;
     ind.altInd = this.trapStatic ? this.trapStatic.alt : o.altInd;
     ind.vsInd = this.trapStatic ? 0 : o.vsInd;
     ind.pitch = o.pitch + this.attErr[0]; ind.roll = o.roll + this.attErr[1];

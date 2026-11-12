@@ -348,7 +348,7 @@ function handleKeys() {
       case 'Digit5': toast('ADF', nav.stepAdf(1), 2); break;
       case 'Digit6': toast(nav.stepDirect() || 'Direct', '', 1.6); break;
       case 'Digit7': toast(nav.toggleSource() || 'Source', '', 1.6); break;
-      case 'Digit8': systems.sw.pitotHeat = !systems.sw.pitotHeat; toast(systems.sw.pitotHeat ? 'Pitot heat on' : 'Pitot heat off', '', 1.2); break;
+      case 'Digit8': systems.setPitotHeat(!systems.sw.pitotHeat); toast(systems.sw.pitotHeat ? 'Pitot heat on' : 'Pitot heat off', '', 1.2); break;
       case 'Digit9': systems.syncHeading(); toast('Heading set to compass', '', 1.4); break;
       case 'Digit0': systems.sw.tank = { both: 'left', left: 'right', right: 'both' }[systems.sw.tank]; toast(`Fuel ${systems.sw.tank}`, '', 1.2); break;
       case 'Minus': if (S.def.engine && S.def.engine.carb) { systems.sw.carbHeat = !systems.sw.carbHeat; toast(systems.sw.carbHeat ? 'Carb heat on' : 'Carb heat off', '', 1.2); } break;
@@ -483,7 +483,10 @@ function updateHud(dt) {
   if (S.def.prop && S.def.prop.governor) bits.push(`Prop ${Math.round(c.prop * 100)}`);
   if (!S.def.engine) bits.push(`Airbrake ${Math.round(c.spoiler * 100)}`);
   if (systems.sw.pitotHeat) bits.push('Pitot heat');
-  if (systems.ice > 0.04) bits.push(`<i>Ice ${Math.round(systems.ice * 100)}</i>`);
+  if (systems.ice > 0.04) { bits.push(`<i>Ice ${Math.round(systems.ice * 100)}</i>`); bits.push(`Horn ${Math.round(o.stallWarnIas / KT)} kt`); }
+  if (ind.pitotBlock > 0.04) bits.push(`<i>Pitot blocked ${Math.round(ind.pitotBlock * 100)} %</i>`);
+  // the two numbers a blocked pitot hides from the pilot: the gauge, and what the aircraft is really doing
+  if (ind.pitotBlock > 0.04 || fm.fx.pitotFailure) bits.push(`Indicated ${Math.round(ind.ias / KT)} kt · true ${Math.round(o.ias / KT)} kt`);
   if (S.def.engine && !o.firing) bits.push('<i>Engine off</i>');
   $('hState').innerHTML = bits.join(' · ');
 }

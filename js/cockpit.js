@@ -524,15 +524,15 @@ class Annunciator {
     this.last = '';
   }
   draw(ind) {
-    const items = [['VOLTS', ind && ind.lowVolts, '#e0362c'], ['VAC', ind && ind.lowVac, '#f0a23a'], ['OIL PRESS', ind && ind.lowOil, '#e0362c'], ['LOW FUEL', ind && (ind.fuelL < 9 || ind.fuelR < 9) && ind.avionics, '#f0a23a'], ['TURN', ind && ind.tcFlag, '#f0a23a']];
+    const items = [['VOLTS', ind && ind.lowVolts, '#e0362c'], ['VAC', ind && ind.lowVac, '#f0a23a'], ['OIL', ind && ind.lowOil, '#e0362c'], ['FUEL', ind && (ind.fuelL < 9 || ind.fuelR < 9) && ind.avionics, '#f0a23a'], ['PITOT', ind && ind.pitotBlock > 0.9, '#e0362c'], ['ICE', ind && ind.ice > 0.3, '#f0a23a'], ['TURN', ind && ind.tcFlag, '#f0a23a']];
     const key = items.map((i) => (i[1] ? 1 : 0)).join('');
     if (key === this.last) return; this.last = key;
     const x = this.x; x.fillStyle = '#101112'; x.fillRect(0, 0, 512, 48);
-    x.textAlign = 'center'; x.textBaseline = 'middle'; x.font = `700 19px ${FONT}`;
+    x.textAlign = 'center'; x.textBaseline = 'middle'; x.font = `700 14px ${FONT}`;
     items.forEach(([name, on, col], i) => {
-      const px = 8 + i * 100;
-      x.fillStyle = on ? col : '#1c1d1f'; x.fillRect(px, 6, 94, 36);
-      x.fillStyle = on ? '#0a0a0b' : '#2c2d30'; x.fillText(name, px + 47, 25);
+      const w = 512 / items.length, px = i * w + 3;
+      x.fillStyle = on ? col : '#1c1d1f'; x.fillRect(px, 6, w - 6, 36);
+      x.fillStyle = on ? '#0a0a0b' : '#2c2d30'; x.fillText(name, px + (w - 6) / 2, 25);
     });
     this.tex.needsUpdate = true;
   }
