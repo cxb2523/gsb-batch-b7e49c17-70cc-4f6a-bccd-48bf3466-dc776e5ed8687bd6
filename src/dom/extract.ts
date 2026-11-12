@@ -5,7 +5,7 @@
  * painter.
  */
 import { transposeSnapshot, type Orientation } from "../core/orient.ts";
-import { parseNumber } from "../core/parse.ts";
+import { conventionForLang, parseNumber, type NumberConvention } from "../core/parse.ts";
 import type { PageSnapshot, TableSnapshot } from "../core/types.ts";
 
 export interface ExtractedTable {
@@ -110,17 +110,17 @@ const isHiddenCell = (cell: HTMLElement): boolean =>
  * True for a button whose whole text is a number, such as a price that opens
  * a popover with its terms. The number is the cell's value, not a control.
  */
-const holdsValue = (el: HTMLElement): boolean =>
-  el.matches("button, [role=button]") && parseNumber(el.textContent ?? "") !== null;
+const holdsValue = (el: HTMLElement, convention: NumberConvention): boolean =>
+  el.matches("button, [role=button]") && parseNumber(el.textContent ?? "", convention) !== null;
 
-const cellText = (cell: HTMLElement, keepButtons = false): string => {
+const cellText = (cell: HTMLElement, convention: NumberConvention, keepButtons = false): string => {
   if (isHiddenCell(cell)) return "";
   const noise =
     cell.firstElementChild === null
       ? []
       : [
           ...[...cell.querySelectorAll<HTMLElement>(CONTROLS)].filter(
-            (el) => !holdsValue(el) && !(keepButtons && el.matches("button, [role=button]")),
+            (el) => !holdsValue(el, convention) && !(keepButtons && el.matches("button, [role=button]")),
           ),
           ...[...cell.querySelectorAll<HTMLElement>("sup")].filter(isAnnotation),
           ...[...cell.querySelectorAll<HTMLElement>(SCREEN_READER_ONLY)].filter(isScreenReaderOnly),
@@ -135,7 +135,8 @@ const cellText = (cell: HTMLElement, keepButtons = false): string => {
  * controls leaves it empty. When nothing else is left, the button's text is
  * the label. Body cells still drop buttons such as Edit.
  */
-const headerText = (cell: HTMLElement): string => cellText(cell) || cellText(cell, true);
+const headerText = (cell: HTMLElement, convention: NumberConvention): string =>
+  cellText(cell, convention) || cellText(cell, convention, true);
 
 /** Expands spans so grid[r][c] is the cell covering that slot. */
 const buildGrid = (rows: readonly HTMLTableRowElement[]): HTMLTableCellElement[][] => {
@@ -242,15 +243,19 @@ const isBold = (cell: HTMLTableCellElement): boolean => {
  * "Atlanta Braves | (94-68)" over "Miami Marlins | (80-82)" is data. "Team |
  * W-L" over the same rows is a header.
  */
-const looksLikeData = (grid: readonly (readonly HTMLTableCellElement[])[], width: number): boolean => {
+const looksLikeData = (
+  grid: readonly (readonly HTMLTableCellElement[])[],
+  width: number,
+  convention: NumberConvention,
+): boolean => {
   const first = grid[0];
   const body = grid.slice(1).filter((g) => isFull(g, width));
   if (first === undefined || !isFull(first, width) || body.length === 0) return false;
   for (let c = 0; c < width; c++) {
     const cell = first[c]!;
     if (isBold(cell)) return false;
-    const shape = shapeOf(cellText(cell));
-    if (!body.some((g) => shapeOf(cellText(g[c]!)) === shape)) return false;
+    const shape = shapeOf(cellText(cell, convention));
+    if (!body.some((g) => shapeOf(cellText(g[c]!, convention)) === shape)) return false;
   }
   return true;
 };
@@ -259,7 +264,11 @@ const looksLikeData = (grid: readonly (readonly HTMLTableCellElement[])[], width
  * True when one cell spans the row, or all of it but a leading empty cell.
  * Each slot must hold a cell, and the spanning cell must have text.
  */
-const isSpanningLabel = (row: readonly (HTMLTableCellElement | undefined)[], width: number): boolean => {
+const isSpanningLabel = (
+  row: readonly (HTMLTableCellElement | undefined)[],
+  width: number,
+  convention: NumberConvention,
+): boolean => {
   const cells = [...new Set(row.slice(0, width))];
   if (cells.length === 1) return true;
   const [first, label] = cells;
@@ -269,8 +278,8 @@ const isSpanningLabel = (row: readonly (HTMLTableCellElement | undefined)[], wid
     label !== undefined &&
     row[0] === first &&
     first.colSpan <= 1 &&
-    cellText(first) === "" &&
-    cellText(label) !== ""
+    cellText(first, convention) === "" &&
+    cellText(label, convention) !== ""
   );
 };
 
@@ -279,13 +288,17 @@ const isHeaderRow = (row: HTMLTableRowElement): boolean =>
   (row.cells.length > 0 && Array.from(row.cells).every((c) => c.tagName === "TH"));
 
 /** Nearest heading before the table in document order. */
-const precedingHeading = (table: Element, headings: readonly Element[]): string | null => {
+const precedingHeading = (
+  table: Element,
+  headings: readonly Element[],
+  convention: NumberConvention,
+): string | null => {
   let best: Element | null = null;
   for (const h of headings) {
     if (h.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING) best = h;
     else break;
   }
-  return best === null ? null : cellText(best as HTMLElement) || null;
+  return best === null ? null : cellText(best as HTMLElement, convention) || null;
 };
 
 /** Elements that make a row something to act on: select, star, open. */
@@ -378,11 +391,16 @@ const isLayoutTable = (table: HTMLTableElement, rows: readonly HTMLTableRowEleme
   table.isContentEditable ||
   isAppList(table, rows);
 
-/** Reads one table. Returns null for a layout table, or a table with fewer than two rows or columns or no data rows. */
+/**
+ * Reads one table. Returns null for a layout table, or a table with fewer than two rows or columns or no data rows.
+ * `convention` comes from the document's `lang`, so a German page's "1.299,00"
+ * is read with its commas and dots in the German roles.
+ */
 export const extractTable = (
   table: HTMLTableElement,
   id: string,
   headings: readonly Element[],
+  convention: NumberConvention = conventionForLang(table.ownerDocument?.documentElement?.lang),
 ): ExtractedTable | null => {
   const rows = ownRows(table);
   if (isLayoutTable(table, rows)) return null;
@@ -396,23 +414,24 @@ export const extractTable = (
   // standings table with no header).
   let headerCount = 0;
   while (headerCount < rows.length - 1 && isHeaderRow(rows[headerCount]!)) headerCount++;
-  if (headerCount === 0 && !looksLikeData(grid, width)) headerCount = 1;
+  if (headerCount === 0 && !looksLikeData(grid, width, convention)) headerCount = 1;
   // Units rows written as <td> ("Percent", "Index") sit under the real header.
   // They have no numbers and sit above a row that has numbers. Section labels
   // that span the row ("Monastic orders") can come between them, so the row
   // checked for numbers is the next one that is not a label. A title row that
   // spans the table, over column names written as <td>, then section labels,
   // otherwise leaves the column names as the first data row.
-  const hasNumber = (r: number) => (grid[r] ?? []).some((cell) => parseNumber(cellText(cell)) !== null);
+  const hasNumber = (r: number) =>
+    (grid[r] ?? []).some((cell) => parseNumber(cellText(cell, convention), convention) !== null);
   const nextNonLabel = (r: number) => {
     let next = r;
-    while (width > 2 && next < rows.length - 1 && isSpanningLabel(grid[next] ?? [], width)) next++;
+    while (width > 2 && next < rows.length - 1 && isSpanningLabel(grid[next] ?? [], width, convention)) next++;
     return next;
   };
   for (let extra = 0; extra < 2 && headerCount > 0 && headerCount < rows.length - 2; extra++) {
     const r = headerCount;
     const row = grid[r] ?? [];
-    const texts = row.map((cell) => cellText(cell));
+    const texts = row.map((cell) => cellText(cell, convention));
     // A section label ("Pre-cycle sets") is one cell that spans the row. A units row has short, distinct cells.
     const distinctCells = new Set(row).size;
     if (distinctCells < 2 || texts.some((t) => t.length > 30)) break;
@@ -424,7 +443,7 @@ export const extractTable = (
     const parts: string[] = [];
     for (let r = 0; r < headerCount; r++) {
       const cell = grid[r]![c];
-      const t = cell === undefined ? "" : headerText(cell);
+      const t = cell === undefined ? "" : headerText(cell, convention);
       if (t !== "" && parts.at(-1) !== t) parts.push(t);
     }
     return parts.join(": ");
@@ -442,14 +461,14 @@ export const extractTable = (
     // Skip section labels, which are one cell that spans the row. Wikipedia's
     // election boxes end with a note ("Party hold") that spans all but an
     // empty color swatch.
-    if (width > 2 && isSpanningLabel(g, width)) continue;
+    if (width > 2 && isSpanningLabel(g, width, convention)) continue;
     const padded = !isFull(g, width) && stopsEarly(g, width);
     if (!isFull(g, width) && !padded) continue;
     // The missing trailing slots get empty cells that are not in the page, so they read as blanks.
     const cellsInRow = padded
       ? Array.from({ length: width }, (_, c) => g[c] ?? table.ownerDocument.createElement("td"))
       : g.slice(0, width);
-    const text = cellsInRow.map((cell) => cellText(cell));
+    const text = cellsInRow.map((cell) => cellText(cell, convention));
     // Repeated header rows inside tbody (baseball-reference every 20 rows, Wikipedia at the foot).
     if (isHeaderRow(row) && isRepeatedHeader(text, headers)) continue;
     if (row.classList.contains("thead")) continue;
@@ -458,13 +477,13 @@ export const extractTable = (
   }
   if (dataRows.length === 0) return null;
 
-  const caption = table.caption === null ? "" : cellText(table.caption);
+  const caption = table.caption === null ? "" : cellText(table.caption, convention);
   return {
     element: table,
     axis: "columns",
     snapshot: {
       id,
-      title: caption !== "" ? caption : precedingHeading(table, headings),
+      title: caption !== "" ? caption : precedingHeading(table, headings, convention),
       headers,
       rows: texts,
     },
@@ -504,8 +523,10 @@ export const extractPage = (
   const elements = Array.from(doc.querySelectorAll("table"));
   const wanted = elements.map((t, i) => [t, i] as const).filter(([t]) => include(t));
   const headings = wanted.length === 0 ? [] : Array.from(doc.querySelectorAll("h1, h2, h3, h4"));
+  // One convention for the whole page: the <html> lang decides how every cell's digits are read.
+  const convention = conventionForLang(doc.documentElement.lang);
   const tables = wanted
-    .map(([t, i]) => extractTable(t, `t${i}`, headings))
+    .map(([t, i]) => extractTable(t, `t${i}`, headings, convention))
     .filter((t): t is ExtractedTable => t !== null);
   return {
     page: {

@@ -47,6 +47,13 @@ render the README images.
 - **Cell text is what the user sees.** `cellText` reads `innerText`, which
   leaves out hidden sort keys. It skips buttons, form controls, and
   footnote superscripts by walking the nodes, not by string replacement.
+- **The page's `lang` sets one number convention for the whole extraction.**
+  `extractPage` derives it with `conventionForLang` and passes it to every
+  `extractTable`, so the in-extraction parses (`holdsValue`, `hasNumber`)
+  read a German page's "1.299,00" as 1299 instead of guessing the English
+  roles. `extractTable` falls back to its own document's `lang` when called
+  directly, as the demo site does. Text that breaks the convention stays
+  text; the parser never guesses.
 - **Some tables are skipped.** Tables with `role="presentation"`, tables that
   contain tables, and tables in an editable region (`isContentEditable`) are
   not extracted. An editor would save painted styles with the document.

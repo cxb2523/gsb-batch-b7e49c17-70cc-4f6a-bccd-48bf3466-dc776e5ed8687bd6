@@ -15,6 +15,7 @@ the judge combines answers, not what the model answers. The eval in
 | `allowance.test.ts` | `src/ext/allowance.ts` | The free allowance shown in the popup: merging reported counts, the reset time, and the messages. |
 | `concurrency.test.ts` | `src/decide/concurrency.ts` | Result order, the concurrency limit, and the abort on the first failure. |
 | `dates.test.ts` | `src/core/dates.ts` | Parsing of dates, months, times, relative times, and ranges of days, and the legend's date text. |
+| `extract.test.ts` | `src/dom/extract.ts` | Extracting tables from documents whose `lang` implies a number convention: German comma decimals, English and missing-lang dot decimals, and Spanish staying English. Runs under jsdom with a `checkVisibility` shim. |
 | `flag.test.ts` | `src/api/flag.ts` | The /flag report shape, its refusals and body limit, and the issue that a report files. |
 | `flag-report.test.ts` | `src/ext/flag-report.ts` | The report that the "looks wrong" dialog previews: header and row caps, cell truncation, and the unticked URL. |
 | `judge.test.ts` | `src/decide/judge.ts` | Shared scales, declined columns, failed requests, ranks, brackets, and date columns, with a scripted model. |
