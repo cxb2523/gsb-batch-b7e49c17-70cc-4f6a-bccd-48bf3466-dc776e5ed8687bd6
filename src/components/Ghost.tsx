@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import cx from "classnames";
 import Alien from "../images/alien.png";
-import { type Recording, valueAt } from "../game/recording";
+import { type Recording, normalizeRecording, valueAt } from "../game/recording";
 
 type Props = {
   recording: Recording;
@@ -15,24 +15,29 @@ type Props = {
 export const Ghost = ({ recording, runId, active, windowHeight }: Props) => {
   const [up, setUp] = useState(false);
   const startRef = useRef<number | null>(null);
+  // `recording` comes from persisted/remote data, so never trust its shape.
+  const safeRecording = useMemo(
+    () => normalizeRecording(recording),
+    [recording],
+  );
 
   useEffect(() => {
     setUp(false);
     startRef.current = null;
-    if (!active || recording.length === 0) return;
+    if (!active || safeRecording.length === 0) return;
 
     let raf = 0;
     startRef.current = performance.now();
     const tick = () => {
       const elapsed = performance.now() - (startRef.current ?? 0);
-      setUp(valueAt(recording, elapsed));
+      setUp(valueAt(safeRecording, elapsed));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [recording, runId, active]);
+  }, [safeRecording, runId, active]);
 
-  if (!active || recording.length === 0) return null;
+  if (!active || safeRecording.length === 0) return null;
 
   const transform = up
     ? `translateY(${windowHeight * -1}px)`

@@ -115,18 +115,20 @@ export default function App() {
   }, [state.phase]);
 
   // Recording lifecycle: start a fresh tape when a run begins; stop when it ends.
+  // Every playthrough (including entering the next level) also bumps the ghost's
+  // replay identity so its clock restarts from the beginning of the tape.
   useEffect(() => {
-    if (state.phase === "playing" && recordingStartRef.current === null) {
-      recordingStartRef.current = performance.now();
-      recordingRef.current = [[0, false]];
-      setRunId((id) => id + 1);
-      setSubmitted(false);
-    }
-    if (state.phase === "title" || state.phase === "idle") {
-      // resetting state outside an active run
-      if (state.phase === "idle" && state.level === 1) {
-        recordingStartRef.current = null;
+    if (state.phase === "playing") {
+      if (recordingStartRef.current === null) {
+        recordingStartRef.current = performance.now();
+        recordingRef.current = [[0, false]];
+        setSubmitted(false);
       }
+      setRunId((id) => id + 1);
+      return;
+    }
+    if (state.phase === "idle" && state.level === 1) {
+      recordingStartRef.current = null;
     }
   }, [state.phase, state.level]);
 

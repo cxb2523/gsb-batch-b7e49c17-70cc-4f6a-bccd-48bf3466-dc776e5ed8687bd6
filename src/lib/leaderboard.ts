@@ -1,4 +1,7 @@
-import type { Recording } from "../game/recording";
+import {
+  normalizeRecording,
+  type Recording,
+} from "../game/recording";
 
 export type Run = {
   id: string;
@@ -66,10 +69,12 @@ export const localLeaderboard: LeaderboardClient = {
   async bestRunWithRecording() {
     const runs = readLocalRuns();
     if (runs.length === 0) return null;
-    return runs.reduce(
-      (best, r) => (best === null || r.score > best.score ? r : best),
+    const best = runs.reduce(
+      (run, r) => (run === null || r.score > run.score ? r : run),
       null as RunWithRecording | null,
     );
+    if (best === null) return null;
+    return { ...best, recording: normalizeRecording(best.recording) };
   },
   async submitRun(input) {
     const run: RunWithRecording = {
@@ -104,7 +109,8 @@ const remoteLeaderboard = (base: string): LeaderboardClient => ({
     const res = await fetch(`${base}/ghost`);
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`ghost fetch failed: ${res.status}`);
-    return (await res.json()) as RunWithRecording;
+    const data = (await res.json()) as RunWithRecording;
+    return { ...data, recording: normalizeRecording(data.recording) };
   },
   async submitRun(input) {
     const res = await fetch(`${base}/runs`, {
