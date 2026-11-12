@@ -1,0 +1,263 @@
+import { Router } from 'express';
+import fs from 'fs';
+import os from 'os';
+import { parseLogDirectory, parseMultiMachineDirectory } from '../parser.js';
+import { syncLocalToShared } from '../sync.js';
+import { filterByDateRange, autoGranularity, aggregateByTime, aggregateBySession, aggregateByProject, aggregateByModel, aggregateCache } from '../aggregator.js';
+import { calculateRecordCost, PLAN_DEFAULTS } from '../pricing.js';
+import { createQuotaFetcher } from '../quota.js';
+import { getSubscriptionInfo } from '../credentials.js';
+import { updateQuotaCycleSnapshot, loadQuotaCycles, computeCycleData } from '../quota-cycles.js';
+
+export function createApiRouter(logBaseDir, options = {}) {
+  const router = Router();
+  // ?? not ||: tests pass cacheTtlMs 0 to force a re-parse on every request
+  const CACHE_TTL_MS = options.cacheTtlMs ?? 5000;
+  let cachedRecords = [];
+  let lastRefreshed = null;
+
+  // Background sync: runs periodically without blocking API requests
+  if (options.syncDir) {
+    const SYNC_INTERVAL_MS = options.syncIntervalMs || 30000;
+    let syncInFlight = false;
+    const runBackgroundSync = () => {
+      if (syncInFlight) return Promise.resolve(); // slow shares can exceed the interval; don't stack syncs
+      syncInFlight = true;
+      return syncLocalToShared(logBaseDir, options.syncDir, options.machineName).catch(err => {
+        console.warn('Background sync failed:', err.message);
+      }).finally(() => { syncInFlight = false; });
+    };
+    // Warm the parse cache once the initial sync lands — warming earlier
+    // would cache a pre-sync view of the shared dir for a full TTL.
+    runBackgroundSync().then(() => refreshRecords());
+    setInterval(runBackgroundSync, SYNC_INTERVAL_MS).unref();
+  }
+
+  // Per-file parse cache (keyed by path, invalidated on mtime/size change).
+  // Without it every TTL expiry re-reads the full log set, which on a slow
+  // sync mount (Google Drive) can take longer than the TTL itself.
+  const fileCache = new Map();
+
+  function refreshRecords() {
+    if (lastRefreshed && (Date.now() - lastRefreshed) < CACHE_TTL_MS) return cachedRecords;
+    try {
+      const started = Date.now();
+      if (options.syncDir) {
+        cachedRecords = parseMultiMachineDirectory(options.syncDir, fileCache);
+      } else {
+        cachedRecords = parseLogDirectory(logBaseDir, fileCache);
+      }
+      // Stamp AFTER parsing: stamping the pre-parse time leaves the cache
+      // already expired whenever a parse outlasts the TTL, so every request
+      // triggers a full re-parse (the "slow initial load" failure mode).
+      lastRefreshed = Date.now();
+      console.log(`Parsed ${cachedRecords.length} records in ${lastRefreshed - started}ms${options.syncDir ? ' (sync mode)' : ''}`);
+    } catch (err) {
+      console.error('Failed to parse log directory:', err.message);
+      if (!lastRefreshed) lastRefreshed = Date.now();
+    }
+    return cachedRecords;
+  }
+
+  // Warm the parse cache off the request path so the first page load after
+  // startup doesn't pay for the initial full parse. In sync mode, warming is
+  // chained onto the initial sync above instead.
+  if (!options.syncDir) setImmediate(refreshRecords);
+
+  function applyFilters(query) {
+    let records = filterByDateRange(refreshRecords(), query.from, query.to);
+    if (query.project) {
+      // Case-insensitive substring match — the UI offers a free-text filter box,
+      // and exact equality made any partial input return an empty table.
+      const q = query.project.toLowerCase();
+      records = records.filter(r => r.project && r.project.toLowerCase().includes(q));
+    }
+    if (query.model) records = records.filter(r => r.model === query.model);
+    return records;
+  }
+
+  router.get('/usage', (req, res) => {
+    try {
+      const records = applyFilters(req.query);
+      const granularity = req.query.granularity || autoGranularity(req.query.from, req.query.to);
+      const buckets = aggregateByTime(records, granularity);
+      const total = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_api_cost_usd: 0 };
+      for (const r of records) {
+        total.input_tokens += r.input_tokens; total.output_tokens += r.output_tokens;
+        total.cache_read_tokens += r.cache_read_tokens; total.cache_creation_tokens += r.cache_creation_tokens;
+        total.estimated_api_cost_usd += calculateRecordCost(r);
+      }
+      total.estimated_api_cost_usd = Math.round(total.estimated_api_cost_usd * 100) / 100;
+      res.json({ granularity, buckets, total });
+    } catch (err) {
+      res.status(500).json({ error: err.message, code: 'PARSE_ERROR' });
+    }
+  });
+
+  router.get('/models', (req, res) => { res.json({ models: aggregateByModel(applyFilters(req.query)) }); });
+  router.get('/projects', (req, res) => { res.json({ projects: aggregateByProject(applyFilters(req.query)) }); });
+
+  router.get('/sessions', (req, res) => {
+    const records = applyFilters(req.query);
+    let sessions = aggregateBySession(records);
+    const sort = req.query.sort || 'date';
+    const order = req.query.order || 'desc';
+    const sortFn = { date: (a, b) => new Date(b.startTime) - new Date(a.startTime), cost: (a, b) => b.estimated_cost_usd - a.estimated_cost_usd, tokens: (a, b) => b.total_tokens - a.total_tokens }[sort] || ((a, b) => new Date(b.startTime) - new Date(a.startTime));
+    sessions.sort(sortFn);
+    if (order === 'asc') sessions.reverse();
+    const totalTokens = sessions.reduce((sum, s) => sum + s.total_tokens, 0);
+    const totalCost = sessions.reduce((sum, s) => sum + s.estimated_cost_usd, 0);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit) || 20));
+    const totalSessions = sessions.length;
+    const totalPages = Math.ceil(totalSessions / limit);
+    sessions = sessions.slice((page - 1) * limit, page * limit);
+    res.json({ sessions, pagination: { page, limit, total_sessions: totalSessions, total_pages: totalPages }, totals: { total_tokens: totalTokens, estimated_cost_usd: Math.round(totalCost * 100) / 100 } });
+  });
+
+  router.get('/cost', (req, res) => {
+    const records = applyFilters(req.query);
+    const plan = req.query.plan || 'max5x';
+    const customPrice = req.query.customPrice ? parseFloat(req.query.customPrice) : null;
+    const subscriptionCost = customPrice || PLAN_DEFAULTS[plan] || 100;
+    let apiCost = 0;
+    for (const r of records) apiCost += calculateRecordCost(r);
+    apiCost = Math.round(apiCost * 100) / 100;
+    const dayMap = new Map();
+    for (const r of records) {
+      const d = new Date(r.timestamp);
+      const day = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      dayMap.set(day, (dayMap.get(day) || 0) + calculateRecordCost(r));
+    }
+    const costPerDay = Array.from(dayMap.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([date, cost]) => {
+      const d = new Date(date);
+      // getDate(), not getUTCDate(): the constructor builds a local-midnight
+      // date, whose UTC day is the previous day in UTC+ timezones.
+      const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      return { date, api_cost: Math.round(cost * 100) / 100, subscription_daily: Math.round((subscriptionCost / daysInMonth) * 100) / 100 };
+    });
+    const savings = apiCost - subscriptionCost;
+    res.json({ plan, subscription_cost_usd: subscriptionCost, api_equivalent_cost_usd: apiCost, savings_usd: Math.round(savings * 100) / 100, savings_percent: apiCost > 0 ? Math.round((savings / apiCost) * 1000) / 10 : 0, cost_per_day: costPerDay });
+  });
+
+  router.get('/cache', (req, res) => { res.json(aggregateCache(applyFilters(req.query))); });
+
+  const quotaFetcher = options.quotaFetcher || createQuotaFetcher();
+  router.get('/quota', async (req, res) => {
+    try {
+      const data = await quotaFetcher.fetchQuota();
+      if (data.available) {
+        try {
+          updateQuotaCycleSnapshot(
+            data,
+            logBaseDir,
+            options.machineName || os.hostname(),
+            options.snapshotDir,
+            options.syncDir
+          );
+        } catch (err) {
+          console.warn('Failed to update quota cycle snapshot:', err.message);
+        }
+      }
+      res.json(data);
+    } catch (err) {
+      res.json({ available: false, error: err.message });
+    }
+  });
+
+  router.get('/quota-cycles', (req, res) => {
+    try {
+      const data = loadQuotaCycles(
+        options.machineName || os.hostname(),
+        options.syncDir || null,
+        options.snapshotDir
+      );
+
+      // Recompute token/cost fields from the live parser for every cycle
+      // (current + history). The snapshot's utilization % (from the Anthropic
+      // quota API) is preserved — that value is Anthropic's truth and cannot
+      // be reconstructed locally — but all other fields come from the current
+      // parser so historical cycles reflect dedup fixes applied to older logs.
+      //
+      // Convert UTC cycle dates to local date-only strings (YYYY-MM-DD) so
+      // filterByDateRange uses local midnight boundaries, matching the date
+      // picker's range that drives the summary cards and /api/cost.
+      const toLocalDate = (iso) => {
+        const d = new Date(iso);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      };
+      const records = refreshRecords();
+      const recompute = (cycle) => {
+        // Backfilled cycles sit on exact reset boundaries and are not part of
+        // the date-picker alignment above. Rounding them to local dates would
+        // make every pair of adjacent repaired cycles share a boundary day and
+        // report nearly eight days of usage each, so keep their exact windows.
+        const [from, to] = cycle.backfilled
+          ? [cycle.start, cycle.resets_at]
+          : [toLocalDate(cycle.start), toLocalDate(cycle.resets_at)];
+        const cycleRecords = filterByDateRange(records, from, to);
+        const quotaShim = {
+          seven_day: { utilization: cycle.overall?.utilization || 0 },
+          seven_day_opus: { utilization: cycle.models?.opus?.utilization || 0 },
+          seven_day_sonnet: { utilization: cycle.models?.sonnet?.utilization || 0 },
+        };
+        // A backfilled cycle has no utilization to preserve — the API only ever
+        // reports the window current when asked. The shim coerces null to 0 to
+        // keep the arithmetic total, so restore the unknowns afterwards or the
+        // response would claim a confident 0.0%.
+        const unknownUtil = cycle.overall?.utilization == null;
+        Object.assign(cycle, computeCycleData(cycleRecords, quotaShim));
+        if (unknownUtil) {
+          for (const m of [cycle.overall, cycle.models?.opus, cycle.models?.sonnet]) {
+            if (!m) continue;
+            m.utilization = null;
+            m.projectedTokensAt100 = null;
+            m.projectedCostAt100 = null;
+          }
+        }
+      };
+
+      if (data.currentCycle) {
+        recompute(data.currentCycle);
+        const start = new Date(data.currentCycle.start);
+        const now = new Date();
+        data.currentCycle.daysElapsed = Math.round(((now - start) / (1000 * 60 * 60 * 24)) * 10) / 10;
+        data.currentCycle.daysTotal = 7;
+      }
+      for (const cycle of data.history || []) recompute(cycle);
+
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/subscription', (req, res) => {
+    const info = options.getSubscriptionInfo ? options.getSubscriptionInfo() : getSubscriptionInfo();
+    res.json(info || { plan: null, subscriptionType: null, rateLimitTier: null });
+  });
+
+  // Each top-level directory under the sync dir is one machine's log copy.
+  // Without a sync dir there is only this machine.
+  function countMachines() {
+    if (!options.syncDir) return 1;
+    try {
+      return fs.readdirSync(options.syncDir, { withFileTypes: true })
+        .filter(e => e.isDirectory()).length || 1;
+    } catch {
+      return 1;
+    }
+  }
+
+  router.get('/status', (req, res) => {
+    refreshRecords();
+    res.json({
+      record_count: cachedRecords.length,
+      last_refreshed: lastRefreshed ? new Date(lastRefreshed).toISOString() : null,
+      cache_ttl_ms: CACHE_TTL_MS,
+      machine_count: countMachines(),
+    });
+  });
+
+  return router;
+}
