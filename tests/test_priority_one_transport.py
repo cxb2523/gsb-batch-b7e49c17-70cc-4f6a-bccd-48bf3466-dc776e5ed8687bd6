@@ -132,8 +132,10 @@ def test_new_game_retains_host_and_requires_players_to_join_a_fresh_session():
                     assert app.state.engine.resolver is not previous.resolver
                     assert app.state.engine.transcript is not previous.transcript
                     assert app.state.engine.journal is not previous.journal
-                    assert previous.transcript.path.read_text().endswith("</html>\n")
-                    previous_html = previous.transcript.path.read_text()
+                    assert previous.transcript.path.read_text(encoding="utf-8").endswith(
+                        "</html>\n"
+                    )
+                    previous_html = previous.transcript.path.read_text(encoding="utf-8")
                     with pytest.raises(WebSocketDisconnect) as exc:
                         player.receive_json()
                     assert exc.value.code == 4002
@@ -167,10 +169,11 @@ def test_new_game_retains_host_and_requires_players_to_join_a_fresh_session():
                         ]
                         new_path = app.state.engine.transcript.path
                         assert new_path != previous.transcript.path
-                        assert "New forest" in new_path.read_text()
-                        assert "Old gate" not in new_path.read_text()
-                        assert "Old private guidance" not in new_path.read_text()
-                        assert previous.transcript.path.read_text() == previous_html
+                        new_html = new_path.read_text(encoding="utf-8")
+                        assert "New forest" in new_html
+                        assert "Old gate" not in new_html
+                        assert "Old private guidance" not in new_html
+                        assert previous.transcript.path.read_text(encoding="utf-8") == previous_html
 
 
 def test_old_action_failure_cannot_reply_to_a_player_in_the_new_game(monkeypatch):

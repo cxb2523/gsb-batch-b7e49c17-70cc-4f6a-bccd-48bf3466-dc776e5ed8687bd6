@@ -241,6 +241,9 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         engine.join_order.append(client_id)
         engine.turn_queue.append(client_id)
         engine.state = GameState.SCENARIO_INJECTION
+        # Assemble the host snapshot before publication: once the engine is visible,
+        # pending sockets can join and mutate the roster while it is being read.
+        snapshot = engine._snapshot_locked(host)
         sockets = [
             socket for owner, socket in manager.active_connections.items() if owner != client_id
         ]
@@ -249,9 +252,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         websocket.app.state.engine = engine
         await asyncio.gather(*(manager.close_socket(socket, code=4002) for socket in sockets))
         await previous.shutdown()
-        await manager.send_personal(
-            client_id, ServerEvent(type="auth_ok", payload=engine._snapshot_locked(host))
-        )
+        await manager.send_personal(client_id, ServerEvent(type="auth_ok", payload=snapshot))
         LOGGER.info("New game created; previous players disconnected")
         return engine
 
