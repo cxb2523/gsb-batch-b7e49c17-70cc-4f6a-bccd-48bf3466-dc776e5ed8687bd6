@@ -1452,12 +1452,25 @@ Bare health object without an envelope.
         "match_event": "Event name",
         "match_series": "Series name",
         "unix_timestamp": "1713996000",
-        "match_page": "https://www.vlr.gg/..."
+        "match_page": "https://www.vlr.gg/...",
+        "detail_status": "fetched"
       }
-    ]
+    ],
+    "summary": {
+      "total_matches": 1,
+      "detail_fetched": 1,
+      "detail_failed": 0
+    }
   }
 }
 ```
+
+`detail_status` is `fetched` when the match's detail page was retrieved and
+parsed, and `failed` when the detail request raised, returned a 4xx/5xx
+status, or contained no parseable detail. On failure `team1_logo`/`team2_logo`
+stay empty strings and `current_map`/`map_number` stay `"Unknown"`; one failed
+match never affects the others. `summary.detail_fetched` plus
+`summary.detail_failed` always equals `summary.total_matches`.
 
 </details>
 

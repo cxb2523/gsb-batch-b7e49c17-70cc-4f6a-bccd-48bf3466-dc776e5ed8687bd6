@@ -29,6 +29,11 @@ from utils.pagination import PaginationConfig, scrape_multiple_pages
 
 logger = logging.getLogger(__name__)
 
+# Per-match detail fetch status carried on every live segment. Lets callers
+# distinguish "the detail page had no such field" from "this fetch failed".
+DETAIL_STATUS_FETCHED = "fetched"
+DETAIL_STATUS_FAILED = "failed"
+
 
 def _safe_flag(team_node) -> str:
     """Safely extract the homepage flag token from a team node."""
@@ -39,6 +44,42 @@ def _safe_flag(team_node) -> str:
     return flag_class.replace(" mod-", "").replace("16", "_")
 
 
+def _parse_live_match_detail(match_html) -> dict | None:
+    """Parse team logos and the active live map from a match detail page.
+
+    Returns None when the page contains neither a match header nor a live map
+    switch, i.e. no match detail could be resolved from it.
+    """
+    logos = []
+    for img in match_html.css(".match-header-vs img"):
+        logo_url = "https:" + img.attributes.get("src", "")
+        logos.append(logo_url)
+
+    current_map_element = match_html.css_first(
+        ".vm-stats-gamesnav-item.js-map-switch.mod-active.mod-live"
+    )
+
+    if len(logos) < 2 and current_map_element is None:
+        return None
+
+    team_logos = logos[:2] if len(logos) >= 2 else ["", ""]
+
+    current_map = "Unknown"
+    map_number = "Unknown"
+    if current_map_element:
+        map_text = (
+            current_map_element.css_first("div", default="Unknown")
+            .text().strip().replace("\n", "").replace("\t", "")
+        )
+        current_map = re.sub(r"^\d+", "", map_text)
+        map_number_match = re.search(r"^\d+", map_text)
+        map_number = map_number_match.group(0) if map_number_match else "Unknown"
+
+    return {
+        "team_logos": team_logos,
+        "current_map": current_map,
+        "map_number": map_number,
+    }
 
 
 @handle_scraper_errors
@@ -169,32 +210,43 @@ async def vlr_live_score():
         )
 
         result = []
+        detail_success_count = 0
+        detail_failed_count = 0
         for match_data, detail_resp in zip(live_matches, detail_responses):
             team_logos = ["", ""]
             current_map = "Unknown"
             map_number = "Unknown"
+            detail_status = DETAIL_STATUS_FAILED
 
-            if detail_resp is not None:
-                match_html = parse_html(detail_resp.text)
-
-                logos = []
-                for img in match_html.css(".match-header-vs img"):
-                    logo_url = "https:" + img.attributes.get("src", "")
-                    logos.append(logo_url)
-                if len(logos) >= 2:
-                    team_logos = logos[:2]
-
-                current_map_element = match_html.css_first(
-                    ".vm-stats-gamesnav-item.js-map-switch.mod-active.mod-live"
-                )
-                if current_map_element:
-                    map_text = (
-                        current_map_element.css_first("div", default="Unknown")
-                        .text().strip().replace("\n", "").replace("\t", "")
+            if detail_resp is not None and detail_resp.status_code < 400:
+                try:
+                    match_html = parse_html(detail_resp.text)
+                    detail = _parse_live_match_detail(match_html)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to parse match detail %s: %s",
+                        match_data["url_path"], e,
                     )
-                    current_map = re.sub(r"^\d+", "", map_text)
-                    map_number_match = re.search(r"^\d+", map_text)
-                    map_number = map_number_match.group(0) if map_number_match else "Unknown"
+                    detail = None
+                if detail is not None:
+                    team_logos = detail["team_logos"]
+                    current_map = detail["current_map"]
+                    map_number = detail["map_number"]
+                    detail_status = DETAIL_STATUS_FETCHED
+                    detail_success_count += 1
+                else:
+                    logger.warning(
+                        "Match detail %s contained no parseable detail",
+                        match_data["url_path"],
+                    )
+            elif detail_resp is not None:
+                logger.warning(
+                    "Match detail %s returned upstream status %d",
+                    match_data["url_path"], detail_resp.status_code,
+                )
+
+            if detail_status == DETAIL_STATUS_FAILED:
+                detail_failed_count += 1
 
             rt = match_data["round_texts"]
             result.append(
@@ -219,10 +271,21 @@ async def vlr_live_score():
                     "unix_timestamp": match_data["timestamp"],
                     "match_page": match_data["url_path"],
                     "match_id": match_data["match_id"],
+                    "detail_status": detail_status,
                 }
             )
 
-        data = {"data": {"status": status, "segments": result}}
+        data = {
+            "data": {
+                "status": status,
+                "segments": result,
+                "summary": {
+                    "total_matches": len(result),
+                    "detail_fetched": detail_success_count,
+                    "detail_failed": detail_failed_count,
+                },
+            }
+        }
 
         return data
 
