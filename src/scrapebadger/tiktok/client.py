@@ -1,0 +1,405 @@
+"""TikTok API client combining all sub-clients.
+
+This module provides the main TikTokClient class that serves as the
+entry point for all TikTok API operations.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from scrapebadger.tiktok.ads import AdsClient
+from scrapebadger.tiktok.hashtags import HashtagsClient
+from scrapebadger.tiktok.music import MusicClient
+from scrapebadger.tiktok.reference import ReferenceClient
+from scrapebadger.tiktok.search import SearchClient
+from scrapebadger.tiktok.trending import TrendingClient
+from scrapebadger.tiktok.users import UsersClient
+from scrapebadger.tiktok.videos import VideosClient
+
+if TYPE_CHECKING:
+    from scrapebadger._internal.client import BaseClient
+
+
+class TikTokClient:
+    """Client for all TikTok API operations.
+
+    This class provides access to all TikTok scraping endpoints through
+    organized sub-clients for different resource types.
+
+    Attributes:
+        users: Client for user profile, videos, followers, following, liked, reposts.
+        videos: Client for video detail, comments, replies, related, transcript, oEmbed.
+        search: Client for general, video, hashtag, and user search.
+        music: Client for sound/music detail and the videos using a sound.
+        hashtags: Client for hashtag detail and tagged videos.
+        trending: Client for trending videos, hashtags, and songs.
+        ads: Client for the EU Commercial Content Library (ad transparency).
+        reference: Client for reference data (regions).
+
+    Example:
+        ```python
+        from scrapebadger import ScrapeBadger
+
+        async with ScrapeBadger(api_key="your-key") as client:
+            # Get a user profile
+            profile = await client.tiktok.users.get_profile("charlidamelio")
+            print(profile.user.nickname)
+
+            # Get video detail
+            video = await client.tiktok.videos.get_detail("7212345678901234567")
+            print(video.video.description)
+
+            # Search videos
+            results = await client.tiktok.search.videos("cooking")
+
+            # Trending songs
+            songs = await client.tiktok.trending.songs(region="GB")
+
+            # Supported regions
+            regions = await client.tiktok.reference.regions()
+        ```
+
+    Note:
+        This client is not instantiated directly. Instead, access it through
+        the `tiktok` property of the main `ScrapeBadger` client.
+    """
+
+    def __init__(self, client: BaseClient) -> None:
+        """Initialize TikTok client with all sub-clients.
+
+        Args:
+            client: The base HTTP client for making API requests.
+        """
+        self._client = client
+
+        # Initialize sub-clients
+        self._users = UsersClient(client)
+        self._videos = VideosClient(client)
+        self._search = SearchClient(client)
+        self._music = MusicClient(client)
+        self._hashtags = HashtagsClient(client)
+        self._trending = TrendingClient(client)
+        self._ads = AdsClient(client)
+        self._reference = ReferenceClient(client)
+
+    @property
+    def users(self) -> UsersClient:
+        """Access user profile, videos, followers, following, liked, reposts.
+
+        Returns:
+            UsersClient for user endpoints.
+
+        Example:
+            ```python
+            profile = await client.tiktok.users.get_profile("charlidamelio")
+            videos = await client.tiktok.users.get_videos("charlidamelio")
+            ```
+        """
+        return self._users
+
+    @property
+    def videos(self) -> VideosClient:
+        """Access video detail, comments, replies, related, transcript, oEmbed.
+
+        Returns:
+            VideosClient for video endpoints.
+
+        Example:
+            ```python
+            detail = await client.tiktok.videos.get_detail("7212345678901234567")
+            comments = await client.tiktok.videos.get_comments("7212345678901234567")
+            ```
+        """
+        return self._videos
+
+    @property
+    def search(self) -> SearchClient:
+        """Access general, video, hashtag, and user search.
+
+        Returns:
+            SearchClient for search endpoints.
+
+        Example:
+            ```python
+            results = await client.tiktok.search.videos("cooking")
+            users = await client.tiktok.search.users("gordon ramsay")
+            ```
+        """
+        return self._search
+
+    @property
+    def music(self) -> MusicClient:
+        """Access sound/music detail and the videos using a sound.
+
+        Returns:
+            MusicClient for music endpoints.
+
+        Example:
+            ```python
+            music = await client.tiktok.music.get_detail("6745650783771970561")
+            videos = await client.tiktok.music.get_videos("6745650783771970561")
+            ```
+        """
+        return self._music
+
+    @property
+    def hashtags(self) -> HashtagsClient:
+        """Access hashtag detail and tagged videos.
+
+        Returns:
+            HashtagsClient for hashtag endpoints.
+
+        Example:
+            ```python
+            tag = await client.tiktok.hashtags.get_detail("fyp")
+            videos = await client.tiktok.hashtags.get_videos("fyp")
+            ```
+        """
+        return self._hashtags
+
+    @property
+    def trending(self) -> TrendingClient:
+        """Access trending videos, hashtags, and songs.
+
+        Returns:
+            TrendingClient for trending endpoints.
+
+        Example:
+            ```python
+            videos = await client.tiktok.trending.videos(region="GB")
+            songs = await client.tiktok.trending.songs(region="GB")
+            ```
+        """
+        return self._trending
+
+    @property
+    def ads(self) -> AdsClient:
+        """Access the EU Commercial Content Library (ad transparency).
+
+        Returns:
+            AdsClient for ad library endpoints.
+
+        Example:
+            ```python
+            ads = await client.tiktok.ads.search("sneakers", region="DE")
+            ```
+        """
+        return self._ads
+
+    @property
+    def reference(self) -> ReferenceClient:
+        """Access reference data endpoints.
+
+        Returns:
+            ReferenceClient for fetching supported regions.
+
+        Example:
+            ```python
+            regions = await client.tiktok.reference.regions()
+            ```
+        """
+        return self._reference
+
+    # --- BEGIN generated by sdk/codegen/facade — do not edit ---
+
+    async def search_tiktok_advertisers(
+        self, *, query: str, region: str = "DE", count: int = 10
+    ) -> dict[str, Any]:
+        """Search TikTok advertisers.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {"query": query, "region": region, "count": count}.items()
+            if v is not None
+        }
+        return await self._client.get("/v1/tiktok/ads/advertisers", params=params)
+
+    async def get_tiktok_ad_detail(self, ad_id: str, *, region: str = "DE") -> dict[str, Any]:
+        """Get TikTok ad detail.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {k: v for k, v in {"region": region}.items() if v is not None}
+        return await self._client.get(f"/v1/tiktok/ads/{ad_id}", params=params)
+
+    async def best_selling_tiktok_shop_products(
+        self, *, region: str = "US", category_id: str | None = None, pages: int = 2, limit: int = 20
+    ) -> dict[str, Any]:
+        """Best-selling TikTok Shop products.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {
+                "region": region,
+                "category_id": category_id,
+                "pages": pages,
+                "limit": limit,
+            }.items()
+            if v is not None
+        }
+        return await self._client.get("/v1/tiktok/shop/bestsellers", params=params)
+
+    async def tiktok_shop_root_categories(self, *, region: str = "US") -> dict[str, Any]:
+        """TikTok Shop root categories.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {k: v for k, v in {"region": region}.items() if v is not None}
+        return await self._client.get("/v1/tiktok/shop/categories", params=params)
+
+    async def tiktok_shop_category_subcategories_top_products(
+        self, category_id: str, *, region: str = "US"
+    ) -> dict[str, Any]:
+        """TikTok Shop category: subcategories + top products.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {k: v for k, v in {"region": region}.items() if v is not None}
+        return await self._client.get(f"/v1/tiktok/shop/categories/{category_id}", params=params)
+
+    async def tiktok_shop_category_products(
+        self,
+        category_id: str,
+        *,
+        region: str = "US",
+        count: int = 20,
+        exclude_product_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """TikTok Shop category products.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {
+                "region": region,
+                "count": count,
+                "exclude_product_ids": exclude_product_ids,
+            }.items()
+            if v is not None
+        }
+        return await self._client.get(
+            f"/v1/tiktok/shop/categories/{category_id}/products", params=params
+        )
+
+    async def tiktok_shop_regional_mall_feed(
+        self, *, region: str = "US", tab_id: int = 0, page_token: str | None = None
+    ) -> dict[str, Any]:
+        """TikTok Shop regional mall feed.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {"region": region, "tab_id": tab_id, "page_token": page_token}.items()
+            if v is not None
+        }
+        return await self._client.get("/v1/tiktok/shop/mall", params=params)
+
+    async def tiktok_shop_product_detail(
+        self, product_id: str, *, region: str = "US"
+    ) -> dict[str, Any]:
+        """TikTok Shop product detail.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {k: v for k, v in {"region": region}.items() if v is not None}
+        return await self._client.get(f"/v1/tiktok/shop/products/{product_id}", params=params)
+
+    async def tiktok_shop_product_reviews(
+        self,
+        product_id: str,
+        *,
+        region: str = "US",
+        page: int = 1,
+        count: int = 20,
+        sort: str = "recommended",
+        rating: str | None = None,
+        with_media: bool = False,
+        verified: bool = False,
+    ) -> dict[str, Any]:
+        """TikTok Shop product reviews.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {
+                "region": region,
+                "page": page,
+                "count": count,
+                "sort": sort,
+                "rating": rating,
+                "with_media": with_media,
+                "verified": verified,
+            }.items()
+            if v is not None
+        }
+        return await self._client.get(
+            f"/v1/tiktok/shop/products/{product_id}/reviews", params=params
+        )
+
+    async def tiktok_shop_theme_ranking(
+        self,
+        rank_id: str,
+        *,
+        region: str = "US",
+        rank_type: int = 1,
+        cursor: int = 0,
+        count: int = 20,
+    ) -> dict[str, Any]:
+        """TikTok Shop theme ranking.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {
+                "region": region,
+                "rank_type": rank_type,
+                "cursor": cursor,
+                "count": count,
+            }.items()
+            if v is not None
+        }
+        return await self._client.get(f"/v1/tiktok/shop/rankings/{rank_id}", params=params)
+
+    async def search_tiktok_shop_products(
+        self, *, q: str, region: str = "US", page_token: str | None = None, offset: int = 0
+    ) -> dict[str, Any]:
+        """Search TikTok Shop products.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {
+                "q": q,
+                "region": region,
+                "page_token": page_token,
+                "offset": offset,
+            }.items()
+            if v is not None
+        }
+        return await self._client.get("/v1/tiktok/shop/search", params=params)
+
+    async def tiktok_shop_store_products(
+        self, seller_id: str, *, region: str = "US", cursor: str = "", count: int = 20
+    ) -> dict[str, Any]:
+        """TikTok Shop store + products.
+
+        Generated from the OpenAPI spec; returns the raw response dict.
+        """
+        params = {
+            k: v
+            for k, v in {"region": region, "cursor": cursor, "count": count}.items()
+            if v is not None
+        }
+        return await self._client.get(f"/v1/tiktok/shop/stores/{seller_id}", params=params)
+
+    # --- END generated by sdk/codegen/facade ---

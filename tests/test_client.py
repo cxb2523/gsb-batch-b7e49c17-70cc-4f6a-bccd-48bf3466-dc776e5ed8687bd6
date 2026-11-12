@@ -1,0 +1,249 @@
+"""Tests for the main ScrapeBadger client."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import pytest
+
+from scrapebadger import ScrapeBadger
+from scrapebadger.twitter.client import TwitterClient
+
+if TYPE_CHECKING:
+    from scrapebadger._internal.config import ClientConfig
+
+
+class TestScrapeBadgerClient:
+    """Tests for the ScrapeBadger client."""
+
+    def test_init_with_api_key(self, api_key: str) -> None:
+        """Test client initialization with API key."""
+        client = ScrapeBadger(api_key=api_key)
+        assert client.config.api_key == api_key
+        assert client.config.base_url == "https://scrapebadger.com"
+
+    def test_init_with_custom_base_url(self, api_key: str) -> None:
+        """Test client initialization with custom base URL."""
+        client = ScrapeBadger(
+            api_key=api_key,
+            base_url="https://custom.api.com",
+        )
+        assert client.config.base_url == "https://custom.api.com"
+
+    def test_init_with_custom_timeout(self, api_key: str) -> None:
+        """Test client initialization with custom timeout."""
+        client = ScrapeBadger(api_key=api_key, timeout=60.0)
+        assert client.config.timeout == 60.0
+
+    def test_init_with_custom_retries(self, api_key: str) -> None:
+        """Test client initialization with custom retries."""
+        client = ScrapeBadger(api_key=api_key, max_retries=5)
+        assert client.config.max_retries == 5
+
+    def test_init_with_config(self, config: ClientConfig) -> None:
+        """Test client initialization with config object."""
+        client = ScrapeBadger(config=config)
+        assert client.config == config
+
+    def test_init_without_api_key_raises_error(self) -> None:
+        """Test that initialization without API key raises error."""
+        with pytest.raises(ValueError, match="API key is required"):
+            ScrapeBadger(api_key=None)
+
+    def test_twitter_property(self, api_key: str) -> None:
+        """Test twitter property returns TwitterClient."""
+        client = ScrapeBadger(api_key=api_key)
+        assert isinstance(client.twitter, TwitterClient)
+
+    def test_twitter_property_is_cached(self, api_key: str) -> None:
+        """Test twitter property returns same instance."""
+        client = ScrapeBadger(api_key=api_key)
+        twitter1 = client.twitter
+        twitter2 = client.twitter
+        assert twitter1 is twitter2
+
+    def test_repr(self, api_key: str) -> None:
+        """Test string representation."""
+        client = ScrapeBadger(api_key=api_key)
+        assert "ScrapeBadger" in repr(client)
+        assert "scrapebadger.com" in repr(client)
+
+    async def test_context_manager(self, api_key: str) -> None:
+        """Test async context manager."""
+        async with ScrapeBadger(api_key=api_key) as client:
+            assert isinstance(client, ScrapeBadger)
+
+    async def test_close(self, api_key: str) -> None:
+        """Test close method."""
+        client = ScrapeBadger(api_key=api_key)
+        await client.close()
+        # Should not raise when called multiple times
+        await client.close()
+
+
+class TestPostRaw:
+    """`post_raw` exists because `response.json()` cannot read a raw body.
+
+    `/v1/web/scrape` with `raw_content: true` answers with the scraped body
+    itself. The JSON path fell back to `{}` on a parse failure, so those scrapes
+    returned an empty result and no error.
+    """
+
+    async def test_returns_undecoded_bytes_and_headers(self, api_key: str) -> None:
+        import httpx
+
+        from scrapebadger._internal.client import BaseClient
+        from scrapebadger._internal.config import ClientConfig
+
+        png = b"\x89PNG\r\n\x1a\n\x00\xff\xfe"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, content=png, headers={"Content-Type": "image/png", "X-Credits-Used": "2"}
+            )
+
+        client = BaseClient(ClientConfig(api_key=api_key))
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="https://api.test"
+        )
+
+        body, headers, status = await client.post_raw("/v1/web/scrape", json={"url": "x"})
+
+        assert body == png, "bytes must not be decoded"
+        assert status == 200
+        assert headers["content-type"] == "image/png"
+        assert headers["x-credits-used"] == "2"
+
+    async def test_error_status_still_raises(self, api_key: str) -> None:
+        import httpx
+
+        from scrapebadger import ScrapeBadgerError
+        from scrapebadger._internal.client import BaseClient
+        from scrapebadger._internal.config import ClientConfig
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(402, json={"detail": "Out of credits"})
+
+        client = BaseClient(ClientConfig(api_key=api_key))
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="https://api.test"
+        )
+
+        with pytest.raises(ScrapeBadgerError):
+            await client.post_raw("/v1/web/scrape", json={"url": "x"})
+
+
+class TestPermissionDenied:
+    """403 insufficient_scope from a key restricted to other APIs."""
+
+    async def test_insufficient_scope_raises_permission_denied(self, api_key: str) -> None:
+        import httpx
+
+        from scrapebadger import PermissionDeniedError, ScrapeBadgerError
+        from scrapebadger._internal.client import BaseClient
+        from scrapebadger._internal.config import ClientConfig
+
+        body = {
+            "detail": "This API key does not have permission to use the Twitter / X API.",
+            "error": "insufficient_scope",
+            "required_scope": "twitter",
+            "allowed_scopes": ["google", "amazon"],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, json=body)
+
+        client = BaseClient(ClientConfig(api_key=api_key))
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="https://api.test"
+        )
+
+        with pytest.raises(PermissionDeniedError) as exc:
+            await client.get("/v1/twitter/users/x/by_username")
+        assert exc.value.status_code == 403
+        assert exc.value.required_scope == "twitter"
+        assert exc.value.allowed_scopes == ["google", "amazon"]
+        assert "Twitter / X" in str(exc.value)
+        assert isinstance(exc.value, ScrapeBadgerError)
+
+
+class TestIPNotAllowed:
+    async def test_ip_not_allowed_raises_ip_error(self, api_key: str) -> None:
+        import httpx
+
+        from scrapebadger import IPNotAllowedError, PermissionDeniedError
+        from scrapebadger._internal.client import BaseClient
+        from scrapebadger._internal.config import ClientConfig
+
+        body = {
+            "detail": "This request came from 203.0.113.9, which is not on its allowlist.",
+            "error": "ip_not_allowed",
+            "client_ip": "203.0.113.9",
+        }
+        client = BaseClient(ClientConfig(api_key=api_key))
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(403, json=body)),
+            base_url="https://api.test",
+        )
+        with pytest.raises(IPNotAllowedError) as exc:
+            await client.get("/v1/google/search")
+        assert exc.value.client_ip == "203.0.113.9"
+        assert isinstance(exc.value, PermissionDeniedError)
+
+
+class TestBlocked:
+    async def _raise(self, api_key: str, body: dict) -> Exception:
+        import httpx
+
+        from scrapebadger._internal.client import BaseClient
+        from scrapebadger._internal.config import ClientConfig
+
+        client = BaseClient(ClientConfig(api_key=api_key))
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(422, json=body)),
+            base_url="https://api.test",
+        )
+        with pytest.raises(Exception) as exc:
+            await client.post("/v1/web/scrape", json={"url": "https://example.com"})
+        return exc.value
+
+    async def test_blocking_422_raises_blocked_error(self, api_key: str) -> None:
+        from scrapebadger import BlockedError, ValidationError
+
+        captcha = {
+            "system": "recaptcha_v2",
+            "version": "v2_checkbox",
+            "gate": True,
+            "params": {"sitekey": "6Lc"},
+        }
+        err = await self._raise(
+            api_key,
+            {
+                "error": "blocking_page_detected",
+                "detail": "blocked",
+                "block_kind": "captcha",
+                "vendor": "google",
+                "captcha": captcha,
+                "data": {"status_code": 403},
+            },
+        )
+        assert isinstance(err, BlockedError)
+        assert isinstance(err, ValidationError)
+        assert err.block_kind == "captcha"
+        assert err.vendor == "google"
+        assert err.captcha == captcha
+        assert err.data == {"status_code": 403}
+
+    async def test_older_blocking_body_has_none_fields(self, api_key: str) -> None:
+        from scrapebadger import BlockedError
+
+        err = await self._raise(api_key, {"error": "blocking_page_detected", "detail": "blocked"})
+        assert isinstance(err, BlockedError)
+        assert err.block_kind is None and err.vendor is None and err.captcha is None
+
+    async def test_other_422_stays_validation_error(self, api_key: str) -> None:
+        from scrapebadger import BlockedError, ValidationError
+
+        err = await self._raise(api_key, {"detail": [{"loc": ["body", "url"], "msg": "required"}]})
+        assert isinstance(err, ValidationError)
+        assert not isinstance(err, BlockedError)

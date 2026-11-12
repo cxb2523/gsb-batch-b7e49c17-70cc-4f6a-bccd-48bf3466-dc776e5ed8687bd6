@@ -1,0 +1,645 @@
+# Changelog
+
+## [0.77.1] - 2026-11-11
+
+- **`idealista.get_listing_engagement_stats` is deprecated.** Idealista withdrew public per-ad stats on 2026-11-10 (the `allowsAdStats` flag flipped platform-wide; 0/50 live ES ads eligible; the route answers "stats not found" — the data is advertiser-login-only now). The method now emits a `DeprecationWarning` and still calls the endpoint, which answers an error; it will be removed in a future release. No other changes.
+
+## [0.77.0] - 2026-11-10
+
+- **Google AI Mode: location targeting.** `google.ai_mode.search()` takes `location`, `uule`, `lat` and `lon` (all optional, keyword-only) and answers "near me" and other local questions as if the user were in that place, down to the city or district, wherever the request exits from. `location` is a Google canonical location name (`"Wonju-si,Gangwon-do,South Korea"`), a Google criteria ID (`"1009889"`) or an unambiguous short name within `gl`; `uule` is a Google UULE in its `w+` or `j+` form; `lat` and `lon` go together. Use only one of the three. Located answers carry a `location` object (`requested`, `resolved`, `latitude`, `longitude`, `uule`), and `country` is the effective `gl`. The API answers 422 (`ValidationError`) for more than one targeting method, `lat` without `lon`, an unknown or ambiguous location (the error lists candidate names), or a `uule` that is not `w+`/`j+`. A located request that cannot be answered right now fails with an unbilled 503; retry it. (SCR-610)
+- `gl` on `google.ai_mode.search()` is now `str | None = None`, so `location` can supply it: with `location` and no `gl`, the SDK leaves `gl` out and the API uses the location's country. Without `location`, an omitted `gl` is still sent as `"us"`, so existing calls send exactly the same request. `gl` is Google's market parameter; it does not choose the exit country.
+
+## [0.76.3] - 2026-11-09
+
+- Deprecate `twitter.stream.list_delivery_logs()` and `twitter.stream.list_filter_rule_delivery_logs()`. ScrapeBadger no longer stores delivered tweets: `GET /v1/twitter/stream/logs` and `GET /v1/twitter/stream/filter-rules/{id}/logs` answer 410 Gone (`delivery_logs_removed`). Both methods keep their signatures, emit a `DeprecationWarning` and raise the API's 410 as `ScrapeBadgerError`. Keep your own log at your webhook receiver. Monitors, filter rules, webhooks and billing logs are unchanged. (SCR-396)
+
+## [0.76.2] - 2026-11-09
+
+- Deprecate `results.get()`. ScrapeBadger no longer caches or stores responses: `GET /v1/results/{id}` answers 410 Gone, responses carry no `X-Result-ID`, and identical calls are always fetched fresh and billed. The method now emits a `DeprecationWarning` and raises the API's 410 as `ScrapeBadgerError`; re-run the call with `jq`/`fields`/`max_items` instead. `AsyncRequest.result_id` is always `None`. Google `no_cache` is kept for compatibility but has no effect. Async polling (`requests.get`) and batches are unchanged. (SCR-396)
+
+## [0.76.1] - 2026-11-08
+
+- Add verified account-free Facebook Marketplace filters, public continuations and detail enrichment.
+
+## 0.76.0 — 2026-11-07
+
+- Expose Google Search `oq`, `sourceid` and `ie` request fields, including explicit empty values. Backend defaults are `oq=q`, `sourceid=chrome`, `ie=UTF-8`.
+
+## 0.75.0 — 2026-11-07
+
+- Add Google Search and Light location, coordinates, radius, color scheme, advanced query filters, and cache bypass controls.
+- Support raw Google HTML without JSON decoding; preserve existing JSON calls.
+
+
+## 0.74.0
+
+- **Yelp Search API.** New `yelp` namespace: `yelp.search_businesses(location=..., query=, market="us", category=, sort_by="recommended", price=, features=, page=1)` returns ranked Yelp businesses for a location, and `yelp.list_markets()` lists the Yelp sites it searches (`us`, `ca`). `location` is what you would type into Yelp (city, neighbourhood, address or postcode). `query` (what to search for) and `category` (a Yelp category alias such as `pizza`) are both optional; with neither, the search browses the location. `sort_by` is `recommended`, `rating` or `review_count`; `price` takes comma-separated levels 1-4; `features` takes comma-separated refinements (`delivery`, `takeout`, `reservations`, `outdoor_seating`, `good_for_kids`, `dogs_allowed`, `free_wifi`, `wheelchair_accessible`); `page` is 1-11, ten businesses each. Ads come back in `ads`, separate from ranked `results`. The response is the raw dict and keeps `False`, `0`, empty and `None` values unchanged. A page costs 15 credits; an empty result and `list_markets()` are free. Unsupported, repeated or malformed parameters (an unknown feature, a repeated price level) raise `ValidationError` from an unbilled 422. Business detail and reviews are not part of this API. (SCR-569)
+- **AutoScout24: listing detail.** `autoscout24.get_listing(url=...)` or `autoscout24.get_listing(listing_id=..., market=...)` returns one vehicle listing from search results with its full specifications, equipment, photos, price and seller. Pass exactly one of `url` (the full HTTPS listing URL) or `listing_id` (the listing UUID, no SEO slug); the API enforces this, not the SDK. `market` (`de`, `at`, `be`, `es`, `fr`, `it`, `lu`, `nl`) is inferred from the URL, otherwise `de`; an explicit `market` must match the URL host. The response is the raw dict (`market`, `source_url`, `listing`, `latency_ms`), and native vehicle and equipment groups pass through unchanged, including `False`, `0` and empty values. A successful detail costs 10 credits. A removed or missing listing raises `NotFoundError` from an unbilled 404 and invalid input `ValidationError` (422); a source failure (503) is retried like other 5xx before `ServerError` is raised. (SCR-564)
+- **GitHub: repository detail.** `github.get_repository(owner, repo)` returns public default-branch repository detail: identity and owner, fork parent/source and fork comparison, archived/template/mirror flags, license, topics and counts, the latest commit and its checks, the native README, root files, languages, latest release, contributors, dependents, funding, community files and `metadata_available`. Root file, contributor and dependent previews are not exhaustive (`contributors_truncated`, `dependents_truncated`). A call costs 10 credits. Each path segment is percent-encoded, `.` and `..` raise `ValueError` without a request, and no query options are accepted. The method shipped unannounced in 0.73.0, ahead of the API; this release documents it. (SCR-567)
+- No existing signature changes.
+
+## 0.73.0 — 2026-11-07
+
+- Add live `endpoints()` discovery, reflecting admin availability and omitting hidden endpoints. Lifecycle errors retain HTTP 404/410/423 and are not retried.
+
+## 0.72.0 — 2026-11-07
+
+- **GitHub Profile API.** Adds `github.get_profile(username, tab=, year=, page=, next_page_token=)` for public user and organization profiles, native README and contribution sections, profile repositories, and paginated user stars.
+- **Brave Search API.** Adds the `brave` namespace for web, image, video and news search, autocomplete, and locale discovery.
+- **AutoScout24 API.** Adds the `autoscout24` namespace for public vehicle search, supported markets, and search filters.
+- Refreshes generated OpenAPI facades, including batch, Google related-question expansion, Facebook, account and Airbnb parameters. Existing callable signatures are preserved from the reviewed generated SDK candidate.
+- Aligns Copilot and Perplexity query-building tests with the generated explicit `strict_country=False` default. The gateway and scraper already default this flag to false; true-value, location and POST behavior remain covered.
+
+## 0.71.0 — 2026-11-03
+
+- **Perplexity: `location`.** `perplexity.ask_perplexity_a_question(prompt=..., location="tokyo")` and `perplexity.measure_a_brand_s_visibility_in_a_perplexity_answer(..., location="tokyo")` say where the asker is, so Perplexity answers a local-sounding question ("best dentist", "popular cafes") for that place instead of the residential exit's city. It takes a city slug (`tokyo`, `osaka`, `seoul`, `new-york`, `london`, ...; case-insensitive, spaces and underscores fold to hyphens, so `"New York"` works) or `"lat,lng"` in decimal degrees (`"35.6812,139.7671"`). It does not change the exit: `country` still picks the exit and language. Any other value fails with HTTP 400; the SDK sends it as given and leaves validation to the API. The response gains `location`, the canonical form that was sent (`"tokyo"`, `"35.6812,139.7671"`), or `None` when unset. On the POST forms put `"location": "tokyo"` in `payload`. Sent only when set. No existing signature changes. (SB-001181)
+
+## 0.70.0 — 2026-11-03
+
+- **Google Search: People Also Ask answers.** `google.search.search(q, expand_related_questions=True)` opens every People Also Ask question the page shows (usually four); an integer `N` opens the first N. Each answered question in `related_questions` then carries `text_blocks` and `references`, in the same shape as `ai_overview`; a question whose answer did not come back keeps them `None`. The answers are fetched on the session that served the SERP, so a question can't be expanded later. Each answered question bills as one more Search request (credits = 20 x (1 + answered) at today's price). Sent as `"true"` or `N` only when set; `None`, `False` and `0` send nothing, and values outside 0-99 raise `ValueError`. It upgrades `mode="fast"` to full; `/v1/google/light/search` does not accept it.
+- **Google Search response (server-side, already passed through as dicts; docstrings and `docs/google.md` updated).** `related_questions[].type` (`"ai_overview"` or `None`). `ai_overview.text_blocks` now include `list` blocks with `list_items`; paragraph blocks and list items carry `reference_indexes` (0-based into `ai_overview.references`), and references can carry `logo`. `organic_results[]` gain `read_more_link`, `rich_snippet` and `date`. `shopping_results[]` gain `position`, `category`, `extracted_price`, `original_price`, `extracted_original_price`, `delivery`, `extensions`, `product_id`, `catalog_id`, `product_link` and `scrapebadger_product_detail_link`. New blocks: `perspectives`, `discussions_and_forums`, `short_videos`, `things_to_know`. `search_information.organic_results_state` can be `"Results for relaxed query"`, and an explicit Google no-results answer returns `"no_results"` with empty `organic_results`. A full-mode `site:` query returns Web-tab organic results without rich blocks.
+- **`light()` now uses `/v1/google/light/search`: 10 credits instead of 20.** It used to call `/v1/google/search?mode=fast`, which returns the same Light content but bills at the full Search rate. The response is the same `{search_information, organic_results, related_searches, pagination}`. `light()` also takes the other parameters the Light endpoint accepts (`device`, `lr`, `tbs`, `uule`, `filter`, `nfpr`, `cr`, `ludocid`, `lsig`, `kgmid`, `si`, `ibp`, `uds`), all optional and keyword-only.
+- `mode="fast"` and Light Search have a 12-second processing budget (was documented as 8). No existing signature changes.
+
+## 0.69.1 — 2026-11-01
+
+- **eBay completed: `ended_at`.** `SearchResult.ended_at` is when eBay last closed a sold listing out, in UTC to the minute ("2026-11-01T16:05:00Z"): the listing's end, or the latest sale on a multi-quantity listing that is still live. `search.completed()` results are ordered by it, newest first. eBay ignores the time sorts on sold listings, so `best_match`, `ending_soonest` and `newly_listed` all return that order; only the price sorts reorder. `sold_date_at` is eBay's "Sold" label day, which on a multi-quantity listing can be months older than `ended_at`, so bucket sales by day on `ended_at`. `per_page` above 200 returns 200, the most eBay puts on one page. No signature changes. (SB-001196)
+
+## 0.69.0 — 2026-10-30
+
+- **Copilot API.** New `copilot` namespace: `copilot.ask_copilot_a_question(prompt=..., country=, market=, strict_country=)` asks Microsoft Copilot (Copilot Search in Bing) and returns the answer with the sources it cites, `copilot.measure_a_brand_s_visibility_in_a_copilot_answer(prompt=..., brand=..., ...)` scores a brand in that answer, and `copilot.list_copilot_markets()` lists the markets. POST forms take a `payload`. `strict_country=True` answers only from an exit in `country` and fails with HTTP 503 `country_unavailable` (not billed) when none answers. Also fixes the `User-Agent` version, which still said 0.67.0. No existing signature changes. (SCR-479)
+
+## 0.68.0 — 2026-10-28
+
+- **Batch submit and webhooks.** `requests.batch(items, callback_url=)` submits up to 100 GET reads (`{"path": "/v1/...", "query": {...}}`) as async requests in one free call and returns a `BatchSubmission` holding one `BatchItemResult` per item: `accepted`, `status`, `request_id`, `poll_url`, or `error` when the item was refused (not billed). With `callback_url`, every item POSTs a signed webhook when it completes. Verify it with the existing `scrapebadger.twitter.verify_webhook_signature(secret, raw_body, header)` and the secret from `GET /v1/account/webhook-secret`. It is the same `X-ScrapeBadger-Signature: sha256=` scheme stream monitors use. No existing signature changes. (SCR-470)
+
+## 0.67.0 — 2026-10-27
+
+- **Perplexity: `strict_country`.** `perplexity.ask_perplexity_a_question(prompt=..., country="DE", strict_country=True)` and `perplexity.measure_a_brand_s_visibility_in_a_perplexity_answer(..., strict_country=True)` answer only from an exit in `country`, never another one. When no exit there answers in time the call fails with HTTP 503 `country_unavailable` and is not billed. Requires `country` (400 otherwise). Without it `country` stays best-effort: when that market has no exit left, another one answers and the response `country` says which. On the POST forms put `"strict_country": true` in `payload`. Sent only when true. (SCR-464)
+
+## 0.65.1 — 2026-10-25
+
+- **Facebook: `facebook.browse_a_marketplace_category(..., radius=)`.** Category browse now takes `radius` (km, or miles in the US; Facebook's default is 65). The API used to drop it on a category; Facebook does apply it, so a local feed no longer pulls in the next city over. `resolved_location.radius` now reports the radius that was applied. (SB-001140, SCR-447)
+
+## 0.65.0 — 2026-10-23
+
+- **Agent platform endpoints (all free, never billed).** `agent.quote(method, path, params=, body=)` returns a typed `Quote` — credits (`min`/`max`/`base`/`per_item`), USD at list and best plan rates, parameter validation (`valid`, `errors`) and p50/p95/p99 latency. `agent.feedback(summary, kind=, details=, request_id=, endpoint=, contact=)` and `agent.report_bug(...)` file feedback or a bug report. `results.get(result_id, jq=, fields=, max_items=, summary=)` re-reads a billed result (`X-Result-ID`) for ~15 minutes, optionally reshaped. `requests.get(request_id)` polls a call made with `Prefer: respond-async` and returns an `AsyncRequest` with `running`, `status_code`, `result_id`, `credits_used` and `data`. New `AgentTrial` model for the `agent_trial` block of `account.get_account_info()` on trial keys. No existing signature changes. (SCR-443)
+
+## 0.64.1 — 2026-10-21
+
+- **Instagram: every method is available again.** The authenticated Instagram tier is back on, so the "Temporarily unavailable" note is gone from every Instagram docstring (`users.about`, `related`, `videos`, `reels`, `tagged`, `pinned`, `followers`, `following`, `search_followers`, `stories`, `highlights`; `media.oembed`, `likers`, `replies`, `comment_likers`; all `hashtags`, `locations`, `audio` and `search` methods). `users.related` returns the standard paginated envelope; `users.videos` may return slightly more than `amount` items and `next_cursor` continues the feed; `search.places` ranks globally. When the account pool is momentarily saturated these calls can return `503 pool_unavailable` (not billed, retry after 10 s); a single API key over its fair share of the pool gets `429 rate_limited`. No signature changes. (SCR-431)
+
+## 0.64.0 — 2026-10-21
+
+- **Vinted brand ID list.** `vinted.reference.popular_brands(letter, market=...)` (Node: `popularBrands({ letter, market })`) returns Vinted's A–Z brand directory: about 240 of the most popular brands per letter with ID, slug and item count. Loop A–Z and `"0"` for about 6,000 brand IDs; `brands()` stops at 10 matches per keyword.
+
+## 0.63.0 — 2026-10-20
+
+- **Sold listings by seller.** `ebay.search.completed(seller="musicmagpie", domain="co.uk")` returns one seller's sold listings, page by page, with no keyword needed. `query` is now optional; pass `query`, `seller` or both (neither raises `ValueError`).
+- `pagination.has_more` on completed searches is now correct at `per_page` 120 and 240 (server-side fix; it used to read `False` on every page at those sizes).
+
+## 0.62.0 — 2026-10-17
+
+- Add 44 dedicated ecommerce API methods across Etsy (8), AliExpress (8), Target (11), ASOS (7), and Best Buy (10), including discovery, product details, reviews, navigation and availability where supported.
+- Expose the gateway query parameters with their defaults, including market and locale options where supported. See the endpoint docs for verified filters, pagination and current pricing.
+
+## 0.61.1 — 2026-10-15
+
+- **Removed per-endpoint credit prices from docstrings and docs again.** Baidu, ChatGPT, eBay image search, Google Shopping offers, LoopNet and the Apartments guide had picked up hard-coded "Costs N credits" lines, which the 2026-10-14 repricing made wrong. Prices are configured per endpoint by ScrapeBadger and served live from `GET /public/pricing`; see the per-endpoint docs at docs.scrapebadger.com. Free reference endpoints still say they are free.
+
+## 0.61.0 — 2026-10-14
+
+- **`BlockedError` — why a web scrape was blocked.** A `web.scrape` whose every attempt hit an anti-bot wall (`422`, `error: "blocking_page_detected"`) now raises `BlockedError`, a subclass of `ValidationError`, so existing `except ValidationError` handlers still catch it. It exposes `block_kind` (`"antibot"`, `"captcha"`, `"rate_limit"`, `"ip_ban"`, `"geo_block"`, `"auth_wall"`, `"empty"` or `"other"`), `vendor` (the protection that served the wall, e.g. `"cloudflare"`, `"datadome"`, `"akamai"`, `"aws_waf"`), `captcha` (the CAPTCHA gating the page when `block_kind == "captcha"`: `system`, `version`, `gate`, `solvable`, `params` such as `sitekey`) and `data` (the scrape result returned with the block). Blocked requests are not charged.
+- `captcha_systems` entries on web results may now carry `version`, `gate`, `solvable` and `params`, and `blocking_details` may carry `vendor`, `kind` and `signals` (server-side; already passed through as dicts).
+
+## 0.60.1 — 2026-10-13
+
+- **Gumtree South Africa ids are refs.** gumtree.co.za re-platformed on 2026-10-12 and the API now serves `market="za"` from the new site: category, location and listing ids are refs such as `"p6dnh"` (Cars & Bakkies), `"dkp8y"` (Gauteng) and `"ls26bvmcpnsqmz7l9jz"` (a listing), e.g. `search(market="za", category="p6dnh", location="dkp8y", filters="make:toyota")`. 0.60.0 typed those ids as `int`, so za responses failed validation: `TreeNode.id`, `TreeResponse.id`, `CategoryRef.id`, `CategoryFacet.id`, `LocationSuggestion.id`, `category_id` and `category_ids` are now `int | str` (uk/au still return ints), and `list_categories` / `list_locations` take `parent_id: int | str`. za filter keys are the site's own (`make`, `model`, `fuelType`, `year`, `mileageKm` …), and za search pages through the first 375 matches.
+
+## 0.60.0 — 2026-10-12
+
+- **Gumtree Australia + South Africa.** Every `client.gumtree` method takes an optional `market`: `"uk"` (gumtree.com, GBP — the default when unset, so existing calls are unchanged), `"au"` (gumtree.com.au, AUD) or `"za"` (gumtree.co.za, ZAR). uk takes slugs for `category`/`location`; au and za take the numeric ids (as strings) from `list_categories`, `list_locations` and `location_autocomplete` of the same market, e.g. `search(market="za", category="9077", location="3100003")`. `search` `distance` is miles (uk) or km (au) and not offered by za; `urgent_only`/`with_photos` are uk only; `seller_type` is uk and za. za listing ids are the full 26-digit ad id.
+- **`gumtree.list_markets()`** returns each market's domain, country, currency, distance unit, page size and id format (`GumtreeMarketsResponse` / `GumtreeMarketInfo`).
+- **Behaviour change:** `search` and `search_filters` no longer send `location="uk"` by default — unset means the whole country of the chosen market. `search_filters` also takes `filters` (za: filters already applied, e.g. `"ma:toyota"` to list Toyota models).
+- **New response fields:** `market` on every top-level response; `currency` on `SearchResponse`; `short_id`, `price_type` and `seller_name` on listings; `id` on category facets (the au/za category id); `price_type`, `status`, `view_count` and `reply_count` on `ListingDetail`; `member_since_year`, `last_active_text`, `lifetime_listings` and `total_views` on `Seller`.
+- Australian `search` and `search_filters` cost 10 credits and Australian `list_locations` 5 credits (browser-rendered); everything else is priced as before.
+
+## 0.59.0 — 2026-10-12
+
+- **Gumtree API — 8 endpoints via `client.gumtree`.** UK classifieds (gumtree.com): `search` (keywords, `category` slug, `location` slug/town/postcode with a `distance` radius in miles, `min_price`/`max_price` in GBP, `sort`, `seller_type`, `urgent_only`, `with_photos`, category-specific `filters="key:value,..."`, `page` 1–50), `search_filters` (a category's filters, sort orders and radius options with live counts), `get_listing` (description, every attribute incl. full vehicle spec and history-check flags, images, location, seller with rating, verification and masked phone, similar listings), `get_seller_listings`, `autocomplete`, `location_autocomplete`, `list_locations` and `list_categories`. Dates come as both Unix `*_utc` and ISO 8601 `*_at`. Models are exported top-level with a `Gumtree` prefix (e.g. `GumtreeListingDetail`).
+
+## 0.58.0 — 2026-10-11
+
+- **Wallapop API — 10 endpoints via `client.wallapop`.** A typed client for the Spanish, Italian and Portuguese second-hand marketplace (`market`: `es`, `it`, `pt`): `search` (40 listings per page with Wallapop's own filters — location and radius, category, price, condition, brand, model, colour, listing age, shipping, warranty, refurbished, and the cars filters year, km, gearbox and horsepower; cursor pagination via `next_page`), `get_item`, `get_user`, `get_user_items`, `get_user_reviews`, `autocomplete`, `list_categories`, `list_filters`, `list_filter_options` and `list_markets`. Boolean filters are only sent when `True`. Models are exported top-level with a `Wallapop` prefix (`WallapopSearchResponse`, `WallapopItemDetail`, `WallapopUserProfile`, ...).
+
+## 0.57.0 — 2026-10-12
+
+- **`facebook.get_group_posts(sort=...)`.** `"newest"` (the API default) returns a group's feed newest first by post time, and each page continues with older posts. `"relevance"` keeps Facebook's top-posts ranking, which moves older posts with fresh comments up. Facebook serves 3 posts per page to logged-out clients on every plan; keep the same `sort` while following `end_cursor`.
+- Album, sale and listing posts now list each photo once in `attachments`, with `uri`, `width` and `height` (server-side fix, no SDK change needed).
+
+## 0.56.0 — 2026-10-10
+
+- **`web.screenshot()` — a PNG of any page.** `POST /v1/web/screenshot` renders the URL in the browser engine and returns the PNG base64-encoded in `ScreenshotResult.screenshot`; `.png` decodes it and `.save(path)` writes the file. Options: `full_page`, `width` (320–3840), `height` (240–4320), `wait_for`, `country`, `proxy_tier`. A page that loads without a screenshot is a `502` and costs nothing.
+- **`web.extract_data()` — CSS/XPath selectors and AI extraction by field.** `POST /v1/web/extract` takes `extract_rules` (field → selector, or `{selector, type, all, output}`), `ai_extract_rules` (field → description) and `ai_query`, and returns `ExtractResult` with selector results in `data` and the AI answer in `ai_extraction`. Broken selectors are a free `422`. The existing `web.extract(url, prompt)` is unchanged.
+- **`web.scrape()` viewport options:** `screenshot_full_page` (with `screenshot=True`, capture the whole scrollable page instead of the viewport), `window_width` and `window_height`.
+- **Google Ads Transparency Center via `client.google.ads`:** `search` (creatives by advertiser ID or domain, with format and date filters), `search_advertisers` (name or domain → advertiser IDs; up to `num=3000` advertisers and `num_domains=100` domain rows; `fuzzy=True` also finds misspelled and look-alike advertisers and adds per-row `similarity` / `matched_query`, plus `variants` / `variants_failed`), `advertiser` (disclosed spend, ad mix, per-day spend) and `creative` (one creative with every variation and optional political disclosure).
+- **Deprecated: `web.submit_batch_scraping_job()` and `web.get_batch_job_status()`.** Batch jobs were never available — the API answers `501` (not billed). Both now emit a `DeprecationWarning`; send concurrent `scrape()` calls instead.
+- The `User-Agent` reports the real SDK version again (it was stuck at `0.47.1`).
+
+## 0.55.0 — 2026-10-09
+
+- **Naver API — 55 endpoints via `client.naver`.** A full handwritten client for Korea's dominant portal and commerce platform, organised into six sub-clients: `search` (integrated SERP, autocomplete, local, and the news/blog/cafe/kin/image/video/clip/web verticals), `places` (detail, reviews, photos), `shopping` (bestsellers, keyword & brand rankings, insight, categories, finder & catalog search, filters, deals, verticals, price comparison, plus Shopping Live under `shopping.live` — broadcasts, channels, shortclips), `stores` (SmartStore / Brand profile, categories, products, bestsellers), `products` (detail, review summary, paginated reviews, Q&A, variant-group graph, group review summary) and `reviews` (commerce review detail, video in-key, SSR queries).
+
+## 0.54.0 — 2026-10-05
+
+- **Reddit posts carry a full-resolution `preview_image`.** `thumbnail` is a signed ~140px crop that cannot be resized (changing `width`/`height` breaks the signature). Posts now also return `preview_image`, `preview_image_width` and `preview_image_height`: Reddit's original-size preview. For link posts it is the only full-size image; for native video it is the poster frame. `None`/`null` when Reddit has no preview (most text posts).
+
+## 0.53.0 — 2026-10-05
+
+- **`IPNotAllowedError` for keys restricted to IP addresses.** API keys can now be limited to IP addresses and CIDR ranges in the dashboard; a request from anywhere else answers `403` with `error: "ip_not_allowed"` (not charged). The SDK raises `IPNotAllowedError`, carrying `client_ip` — the address ScrapeBadger saw. It subclasses `PermissionDeniedError`, so existing handlers still catch it.
+
+## 0.52.0 — 2026-10-05
+
+- **`PermissionDeniedError` for keys restricted to specific APIs.** API keys can now be limited to chosen APIs in the dashboard; calling any other API answers `403` with `error: "insufficient_scope"` (and charges nothing). The SDK raises `PermissionDeniedError` for it, carrying `required_scope` and `allowed_scopes`. It subclasses `ScrapeBadgerError`, so existing `except ScrapeBadgerError` handlers still catch it.
+
+## 0.49.0 — 2026-09-19
+
+- **Vinted image search results carry `similarity_score`.** Visual similarity to the query image on a 0–1 scale, where the query image's own listing scores `1.0`. Populated only by `search_by_image`, and only on the calls where Vinted returns a ranking; `None` otherwise. A `None` is not a weak match — the result set is identical either way — so treat it as "no score available", not as a low score.
+
+## 0.48.0 — 2026-09-18
+
+- **`vinted.reference.brands` now requires `keyword`.** `GET /v1/vinted/brands` answers `422` without one, so the parameter was never optional — a call that omitted it type-checked and then failed at runtime. Calls that pass a keyword are unaffected.
+
+## 0.47.1 — 2026-09-15
+
+- **Retried HTTP errors honor `Retry-After`.** A retryable status (the AI Mode and SERP capacity `503` included) now waits for the server's `Retry-After` — delay-seconds or an HTTP-date, including the obsolete asctime form read as UTC — without shortening the existing exponential backoff, retry limits or status policy. `429` still raises `RateLimitError` with the parsed delay; a malformed header falls back to the previous behaviour.
+
+## 0.47.0 — 2026-09-15
+
+- Search Vinted by image URL or base64 photo, with market, category, brand and price filters.
+
+## 0.46.0 — 2026-09-15
+
+- Discover and call 76 public Vinted mobile reads, including pricing and sold comparables.
+- Add size/material filters, pagination continuation and display labels to Vinted models.
+
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.45.0] - 2026-09-10
+
+### Added
+
+- **`facebook.get_post_detail(post_id, url=...)` and
+  `facebook.get_post_comments(post_id, url=...)`** — a Facebook post URL comes
+  in several shapes (`/reel/`, `permalink.php`, `{page}/posts/{pfbid}`), and
+  `url` overrides `post_id` for all of them. The parameter has always worked on
+  the API; it was missing from the SDK. Reported in SB-001096.
+- **`facebook.search_marketplace(..., radius=...)`** — search radius around the
+  location, in km (miles in the US). Honoured on search; ignored on category
+  browse.
+- **`zillow.get_multifamily_building(url=...)`** — the untyped facade twin of
+  `zillow.properties.get_building` added in 0.44.0.
+- **TikTok Shop** — `tiktok.tiktok_shop_root_categories`,
+  `tiktok_shop_category_subcategories_top_products`,
+  `tiktok_shop_product_detail`, `tiktok_shop_product_reviews`,
+  `search_tiktok_shop_products` and `tiktok_shop_store_products`.
+
+### Fixed
+
+- Nothing in the SDK, but worth knowing if you use the Facebook endpoints: the
+  page/profile feed served **one post per call** with an empty page 2, post
+  detail 404'd every URL shape, and comment threads always came back empty.
+  All four are fixed on the API side (SB-001096) — no SDK change was needed.
+
+## [0.44.0] - 2026-09-09
+
+### Added
+
+- **`zillow.properties.get_building(url)`** — Zillow's for-rent inventory is
+  mostly apartment communities served on `/apartments/...` and `/b/...` pages,
+  which `get_property` cannot read (it now raises a clear 400 pointing here).
+  Returns floor plans and every available unit with rent, base rent, required
+  monthly fees, sqft, beds/baths and move-in date, plus amenities, unit
+  features, policies, special offers, office hours, pet policy, schools,
+  photos and walk/transit/bike scores. Requested in SB-001087.
+- **`Building`, `BuildingFloorPlan`, `BuildingUnit`, `BuildingResponse`,
+  `UnitSummary`** models.
+- **Building fields on `Listing`** — `is_building`, `building_name`, `lot_id`,
+  `units_available`, `unit_summaries[]`. Building search cards now also carry a
+  `price`/`price_raw`: only paid cards expose a base-rent range, so the rest
+  fall back to the per-bedroom rollup (they were previously priceless).
+
+## [0.43.0] - 2026-09-04
+
+### Added
+
+- **Image input on `chatgpt.ask.ask` and `gemini.ask.ask`** — pass `image_url`
+  and the model looks at the picture and answers about it (JPEG, PNG, GIF,
+  WEBP, BMP; up to 5 MB). An image ask is slower than a text one — allow
+  90-150 s. Requested in SB-001078.
+- **`images` on both ask responses** (`MediaItem[]`) — the pictures the answer
+  itself displayed, with favicon-sized assets excluded.
+
+### Note
+
+Neither endpoint will GENERATE an image. Anonymous `chatgpt.com` and
+`gemini.google.com` both gate image generation behind a login, so `images` is
+only ever what the answer showed, never something the model drew.
+
+## [0.42.0] - 2026-09-04
+
+### Added
+- **`ebay.search.search_by_image()`** — eBay's own visual search, the one behind
+  the camera icon in eBay's search bar. Give it a picture as `image_url` (a
+  public http(s) URL) or `image_base64` (JPEG or PNG, up to 10 MB decoded; a
+  `data:image/jpeg;base64,...` URL is accepted too) and get back the same
+  `SearchResponse` that `search()` returns, with `query` set to `None`. Takes
+  the usual SRP filters — `domain`, `category_id`, `page`, `per_page`,
+  `condition`, `buying_format`, `min_price`, `max_price`, `free_shipping`,
+  `location`, `language`. Costs 10 credits (two eBay fetches: the upload, then
+  the results page). Passing neither or both images raises `ValueError` locally
+  rather than costing a round trip.
+
+  There is deliberately no `sort_by`: eBay ignores sorting on a visual results
+  page, and a parameter that silently does nothing is worse than no parameter.
+
+## [0.41.0] - 2026-09-02
+
+### Added
+- **`wait_for_found` and `js_scenario_report` on `ScrapeResult`** — whether the
+  `wait_for` selector appeared, and a per-step trace of the `js_scenario`
+  (`step`, `action`, `selector`, `ok`, `error`, `url`) so a flow that does not
+  end where you expected can be read step by step.
+
+### Changed
+- `web.scrape()`: a `js_scenario` now runs **before** `wait_for`, and a missed
+  `wait_for` or a failed scenario step is a free `422` (`wait_for_timeout` /
+  `js_scenario_failed`) instead of a billed copy of the page you started on.
+  Scenario steps use `action` (`click`, `fill`, `scroll`, `wait`, `evaluate`).
+
+## [0.40.1] - 2026-09-02
+
+### Changed
+- **Instagram: seven more methods flagged temporarily unavailable** —
+  `users.related`, `media.oembed`, `media.comment_likers`, `hashtags.get`,
+  `hashtags.recent`, `search.hashtags` and `search.top` need the authenticated
+  Instagram tier, which is offline; they return `503 temporarily_unavailable`
+  (not billed) until it is back. Their docstrings now say so, matching the rest
+  of the gated set. No signature changes. (SCR-42, support SB-001065)
+
+## [0.40.0] - 2026-09-02
+
+### Added
+- **`catalog_id` on `google.shopping.offers`** — look up multi-seller Google
+  Shopping offers by Google's own Shopping catalog id (the `catalog_id` on every
+  `shopping.search` tile, or `prds=catalogid:<id>` in a Google Shopping URL) as
+  an alternative to `barcode`. The response carries `catalog_id` and
+  `total_offers`; `barcode` is now optional (exactly one of the two is required).
+
+## [0.39.0] - 2026-08-23
+
+### Added
+- **`gallery_images` on `RedditPost`** — multi-image gallery posts now expose
+  every image at full source resolution, in the order the poster arranged them.
+  Previously a gallery returned only `is_gallery: true`, a ~140px `thumbnail`,
+  and a `url` pointing at `reddit.com/gallery/<id>` — the images themselves were
+  unreachable. Populated on every post-returning endpoint: `posts.get`,
+  `search.posts`, subreddit/user/domain listings, trending and duplicates.
+- New `RedditGalleryImage` model — `media_id`, `url`, `width`, `height`,
+  `mime_type`, and `mp4_url` for animated items (whose `url` is the `.gif`).
+  Exported from both `scrapebadger` and `scrapebadger.reddit`.
+
+## [0.38.0] - 2026-08-19
+
+### Added
+- **New `booking` namespace — the Booking.com API.** Five operations on
+  `client.booking`: `search_properties`, `search_destinations`,
+  `get_property_detail`, `get_property_reviews` and
+  `get_room_types_and_live_rates`. Global coverage, any Booking-supported
+  currency and locale, no upstream Booking account or key required.
+- `get_room_types_and_live_rates` returns the **full per-room rate table** for a
+  property and dates — every room type with every rate bookable on it (price,
+  price before discount, price per night, discounts, badges, occupancy, meal
+  plan), plus per-room facilities, alternative bed layouts, photos and a priced
+  child/crib/extra-bed policy. `search_properties` returns only the single
+  cheapest rate per property.
+
+## [0.37.0] - 2026-08-14
+
+### Added
+- Spec-generated additions on the v1 surface (zero breaking changes): Facebook Ad Library advertiser page search (`facebook.search_advertiser_pages`) and page info/transparency (`facebook.get_advertiser_page_info`), the `app_store` and `google_play` namespaces, Google ads-transparency operations, TikTok Ad Library detail/advertiser search, and other newly added API operations. Generated methods return raw dicts until typed models land.
+
+## [0.36.0] - 2026-08-11
+
+### Added
+- Spec-generated additions on the v1 surface (zero breaking changes): new `facebook`, `idealista`, `perplexity` and `account` namespaces, plus previously missing operations (Twitter stream/filter-rule management, ChatGPT/Gemini POST variants, apartments/depop/redfin/zillow detail routes and more). Generated methods return raw dicts/objects until typed models land.
+- SDK is now regenerated automatically from the ScrapeBadger OpenAPI spec on every API change; a surface-lock CI check guarantees existing methods never change.
+
+## [0.24.2] - 2026-08-03
+
+### Fixed
+
+- **A transient `500` no longer kills a long-running job.** `500` was missing from the default `retry_on_status`, so while a `502` was retried, a `500` raised `ServerError` on the spot and burned the remaining 9 retries. Real-world sequences look like `502 → 500 → 200`; the middle hop ended runs that were thousands of pages deep. The default is now `(500, 502, 503, 504)`. Override `retry_on_status` on `ClientConfig` if you want the old behaviour.
+- **Retry every transient transport failure, not just three of them.** The retry path caught only `ConnectError`, `ReadTimeout` and `WriteTimeout`, so a `ConnectTimeout`, `PoolTimeout`, `ProxyError`, or a server dropping a pooled connection (`RemoteProtocolError`) failed immediately — the last of which is common on long-lived connection pools. `UnsupportedProtocol` and `LocalProtocolError` are still raised straight away: they are caller/config mistakes that no retry can fix.
+
+## [0.24.1] - 2026-08-02
+
+### Added
+
+- **Google Lens `price`** — each visual match now carries `price` as `{value, currency, extracted}` alongside the raw `tag` chip it is parsed from, so a shoppable match gives you a number to compute on instead of a `"$115"` string. `currency` is the symbol Google printed, not an ISO code (`$` is ambiguous between USD/CAD/AUD). `tag` is unchanged. (SCR-150)
+
+## [0.24.0] - 2026-08-02
+
+### Added
+
+- **Vinted `catalog_ids` search filter** — `client.vinted.search.search("nike", catalog_ids="221")` restricts a search to one or more Vinted categories. Vinted applies it *before* the search runs (sub-categories included), so you get whole pages of in-category results instead of filtering them out client-side. A catalog ID is the `catalog[]` value in a Vinted category URL (`vinted.fr/catalog?catalog[]=221`); IDs are per market. (SCR-159)
+- **Vinted item fields the SDK was dropping** — `VintedItemSummary` and `VintedItemDetail` now model `path`, `service_fee`, `total_item_price`, `is_visible` and `promoted` (plus `content_source` on the summary, and `color2` / `can_bundle` / `can_reserve` / `is_favourite` on the detail). The API had always returned these; the models used `extra="ignore"`, so they were silently discarded. (SCR-159)
+
+### Changed
+
+- **Vinted `service_fee` / `total_item_price` are plain decimal strings** — on search results they used to come back as a stringified Python dict (`"{'amount': '0.75', 'currency_code': 'EUR'}"`) that no client could parse; the item endpoint already returned `"0.75"`. Both now return the amount alone, in `price.currency_code`. (SCR-159)
+- **Vinted `VintedItemDetail.category` documented as a breadcrumb list** — it is the category path, root first, localized to the market; `upload_date` is Vinted's relative "listed" label, not an ISO timestamp. (SCR-159)
+- **Corrected Vinted search billing docs** — a search is a flat 5 credits whatever filters you pass. `seller_country` seller lookups were never billed on top, despite the old "1 credit + 1 per uncached seller" note. (SCR-159)
+
+## [0.23.0] - 2026-07-25
+
+### Added
+
+- **eBay `pagination.has_more`** — the stop signal for paging through completed/sold listings. `total_pages`/`total_results` are `None` on eBay's sold grid, and past the last page eBay re-serves that page instead of returning empty, so looping "until the results are empty" never terminated. Loop `while r.pagination.has_more` instead; the API now also returns an empty page once you page past the end. The `page` ceiling is raised to 1000 (a broad sold search runs ~133 pages deep at `per_page=240`, ~26k listings). (SCR-124)
+
+### Changed
+
+- **eBay `is_sponsored` is now `bool | None` and always `None`** — previously typed `bool` and reported `True` for 100% of results. eBay renders its "Sponsored" badge into every result card as anti-scraping bait, so promoted placements cannot be distinguished from organic ones in the response. The field reports `None` (unknown) rather than a value that was wrong on every row. (SCR-124)
+
+## [0.22.0] - 2026-07-23
+
+### Added
+
+- **Google Flights `sort_by`** — `client.google.flights.search(..., sort_by="price")` now returns the FULL price-sorted inventory (every carrier, the cheap long-layover fares) plus Google's own price floor, typical range, and price history, instead of only the ~6-8 "best" preview. Default `sort_by="top"` keeps the fast best-picks behaviour. (SCR-123)
+
+## [0.21.0] - 2026-07-17
+
+### Added
+
+- **eBay completed-search sold dates** — `SearchResult` now exposes `sold_date` (sale date text as rendered by eBay, e.g. "2 Jul 2026"; localized on non-English markets) and `sold_date_at` (best-effort ISO date "2026-07-02", `None` when the market's format isn't English) on `client.ebay` completed/sold result cards. (SCR-122)
+- **eBay item `is_ended`** — `Item` now exposes `is_ended` (`True` when the listing has closed — sold or ended — any buying format, default `False`). `end_time_utc`/`end_time_at` broaden from auction-only to the listing end: auction close or sold time for ended listings of any format; still `None` for active fixed-price listings. (SCR-122)
+
+## [0.20.0] - 2026-07-13
+
+### Added
+
+- **LinkedIn client** (`client.linkedin`) — LinkedIn's public, no-auth (logged-out) surface. Endpoints: `jobs_search()`, `get_job()`, `company_jobs()`, `get_company()`, `get_school()`, `get_profile()`, `get_post()`, `get_article()`, `get_course()`, `geo_suggest()`, `health()` under `/v1/linkedin`. Fully-typed Pydantic models (`LinkedInJobsSearchResponse`, `LinkedInJobDetail`, `LinkedInProfile` incl. nested experience/education, `LinkedInCompany`, `LinkedInSchool`, `LinkedInPost`, `LinkedInLearningCourse`, `LinkedInGeoSuggestResponse`). Sourced from the guest Jobs API and public SSR JSON-LD pages; deep logged-in data is auth-gated and out of scope. (SCR-119)
+
+## [0.18.0] - 2026-07-12
+
+### Added
+
+- **Redfin client** (`client.redfin`) — Redfin (redfin.com, US) for-sale search, property detail, agent profiles, autocomplete, and markets. Endpoints: `search()`, `get_property()`, `get_agent()`, `autocomplete()`, `list_markets()`, mirroring the Immobiliare flat-client pattern, with fully-typed maximal-coverage Pydantic models (`RedfinSearchResponse`, `RedfinProperty` incl. nested `address`/`price_history`/`tax_history`/`schools`/`amenities`, `RedfinAgent`, etc.). Single market: redfin.com (US, USD, en-US). (SCR-116)
+
+## [0.17.0] - 2026-07-08
+
+### Added
+
+- **LoopNet sub-client** (`client.loopnet`) — commercial-real-estate (CoStar) listings, brokers, and reference data across loopnet.com/.ca/.co.uk/.fr/.es (US/CA/UK/FR/ES). Endpoints: `search.search()` (for-lease / for-sale / auctions, all property types, filters, pagination), `listings.get()`, `brokers.get()`, `reference.markets()`, `reference.property_types()`, with fully-typed maximal-coverage Pydantic models (`LoopnetSearchResponse`, `LoopnetListingDetail` incl. offers/facts/brokers/media, `LoopnetBrokerProfile`, `LoopnetListingCard`, etc.). LoopNet is behind Akamai Bot Manager (browser-farm-only) — served via the ScrapeBadger farm. (SCR-102)
+
+## [0.15.7] - 2026-07-07
+
+### Added
+
+- **Zillow sub-client** (`client.zillow`) — real-estate listings, property detail, and agent profiles from zillow.com (US + Canadian inventory). Five endpoints: `search.search()`, `search.autocomplete()`, `properties.get_property()`, `agents.get_agent()`, `reference.list_markets()`, with fully-typed maximal-coverage Pydantic models (`ZillowSearchResponse`, `ZillowProperty` incl. nested `home_facts`/`price_history`/`tax_history`/`schools`/`zestimate_history`, `ZillowAgent`, etc.). (SCR-99)
+
+## [0.15.6] - 2026-07-07
+
+### Added
+
+- Add Leboncoin Scraper API client (France) — 10 endpoints: search, ad detail, similar ads, seller profile + listings, markets/regions/departments/categories/location search.
+
+## [0.15.5] - 2026-07-02
+
+### Added
+
+- **Realtor sub-client** (`client.realtor`) — real-estate listings across realtor.com (US) and realtor.ca (Canada) behind a single `market` parameter. Four endpoints: `search.search()`, `search.autocomplete()`, `properties.get_property()`, `reference.list_markets()`, with fully-typed Pydantic models (`RealtorSearchResponse`, `RealtorPropertyDetail`, etc.). (SCR-98)
+
+## [0.15.4] - 2026-06-30
+
+### Added
+
+- **`client.twitter.tweets.advanced_search()` / `advanced_search_all()`** — aliases for `search()` / `search_all()` that match the `/advanced_search` REST endpoint name, so the endpoint-named call no longer raises `AttributeError`. (SCR-52)
+
+### Fixed
+
+- **Auto-pagination no longer repeats the first page** (`*_all` iterators, e.g. `client.twitter.tweets.search_all`). The shared `paginate()` helper now stops when the backend returns the same cursor it was given, instead of re-fetching the page it just yielded — previously a non-advancing cursor from the API could cause a repeat-page loop. (SCR-52)
+
+## [0.15.3] - 2026-06-30
+
+### Added
+
+- **Google Shopping offers by barcode** — `client.google.shopping.offers(barcode, *, gl=None, hl="en")` calls `GET /v1/google/shopping/offers`. Resolves a product barcode (GTIN-8/UPC-A/EAN-13/GTIN-14) to a product via Google web search, then returns its multi-seller Google Shopping prices (`barcode`, `resolved_query`, `product_title`, `offers`). Costs 14 credits; returns 422 for an invalid barcode and 404 if unresolvable.
+
+## [0.15.2] - 2026-06-22
+
+### Added
+
+- **eBay auction data** on the eBay client models:
+  - `SearchResult.current_bid` and `Item.current_bid` — an auction's current high bid (mirrors `price`).
+  - `Item.end_time_utc` / `Item.end_time_at` — the absolute auction end time (Unix float / ISO-8601 Z).
+  - `Item.buy_it_now_price` — the Buy It Now price for fixed-price listings, or an auction that also offers Buy It Now (`None` for pure auctions).
+  - `bids` (bid count) and `time_left` (relative remaining, e.g. `"12h 16m"`) are now reliably populated for auction listings.
+
+## [0.15.0] - 2026-06-21
+
+### Added
+
+- **eBay API client** (`client.ebay`) covering all 12 endpoints across 18 marketplaces:
+  - `ebay.search.search()` — active-listing keyword search (category, condition, buying_format, price, free-shipping filters)
+  - `ebay.search.completed()` — completed/sold listings (sold-price history)
+  - `ebay.search.autocomplete()` — keyword suggestions
+  - `ebay.items.get_item()` — full listing detail (images, shipping, item specifics, seller, returns)
+  - `ebay.items.get_item_reviews()` — catalog product reviews + rating histogram (optional `product_id`)
+  - `ebay.sellers.get_seller()` / `get_seller_items()` / `get_seller_feedback()`
+  - `ebay.categories.browse_category()` — browse listings within a category
+  - `ebay.reference.list_categories()` / `list_markets()`
+- Frozen, forward-compatible Pydantic models for every eBay response field (exported with an `Ebay`-prefix at the top level, e.g. `EbayItem`, `EbaySearchResult`, `EbaySeller`, `EbayReview`, `EbayPrice`).
+
+## [0.9.0] - 2026-05-29
+
+### Changed (Breaking)
+
+- **Reddit response models trimmed to fields available via old.reddit.com HTML/RSS** — after Reddit
+  deprecated the unauthenticated `.json` API, the ScrapeBadger backend switched to scraping
+  `old.reddit.com` HTML and RSS feeds. Fields that Reddit no longer exposes through that source have
+  been removed from all models to keep the SDK types in sync with what the API actually returns.
+  Consuming code that accessed removed fields will receive `AttributeError` at runtime.
+
+  **`RedditPost`** — removed: `ups`, `downs`, `upvote_ratio`, `view_count`, `num_duplicates`,
+  `edited`, `edited_at`, `is_video`, `is_locked`, `is_archived`, `is_pinned`,
+  `is_robot_indexable`, `is_meta`, `is_crosspostable`, `send_replies`,
+  `author_flair_text`, `author_flair_type`, `author_flair_template_id`,
+  `link_flair_background_color`, `link_flair_text_color`, `link_flair_template_id`,
+  `link_flair_type`, `link_flair_css_class`, `distinguished`, `thumbnail`,
+  `thumbnail_width`, `thumbnail_height`, `post_hint`, `preview_images`, `media`,
+  `gallery_data`, `crosspost_parent`, `suggested_sort`, `total_awards`, `awards`,
+  `content_categories`, `removed_by_category`, `treatment_tags`, `subreddit_subscribers`.
+
+  **`RedditComment`** — removed: `ups`, `downs`, `controversiality`, `edited`, `edited_at`,
+  `gilded`, `is_locked`, `is_score_hidden`, `is_submitter`, `parent_id`, `post_title`,
+  `send_replies`, `subreddit_type`, `total_awards`, `distinguished`,
+  `author_flair_text`, `author_flair_type`.
+
+  **`RedditSubreddit`** — removed: `subscribers`, `active_users`, `description_html`,
+  `public_description_html`, `submit_text`, `submit_text_html`, `header_title`, `type`,
+  `submission_type`, `is_quarantined`, `is_advertiser_friendly`, `advertiser_category`,
+  `language`, `icon_url`, `header_url`, `banner_url`, `banner_background_color`,
+  `primary_color`, `key_color`, `wiki_enabled`, `allow_images`, `allow_videos`,
+  `allow_galleries`, `allow_polls`, `allow_discovery`, `spoilers_enabled`,
+  `emojis_enabled`, `free_form_reports`, `accept_followers`, `restrict_posting`,
+  `link_flair_enabled`, `link_flair_position`, `user_flair_enabled`,
+  `user_flair_position`, `comment_score_hide_mins`, `should_archive_posts`,
+  `allowed_media_in_comments`.
+
+  **`RedditUser`** — removed: `id`, `fullname`, `description`, `icon_url`, `snoovatar_url`,
+  `banner_url`, `profile_title`, `profile_url`, `awardee_karma`, `awarder_karma`,
+  `has_verified_email`, `verified`, `accepts_followers`, `has_subscribed`, `is_employee`,
+  `is_mod`, `is_suspended`, `is_nsfw`, `pref_show_snoovatar`.
+
+  **`RedditRule`** — removed: `description_html`, `kind`, `violation_reason`.
+
+- **Helper models deleted** — `RedditPreviewImage`, `RedditMedia`, `RedditAward`, and
+  `RedditUserSummary` are no longer exported (they were only used by removed fields).
+  Remove any imports of these names from consuming code.
+
+### Added
+
+- `RedditPagination` — new standalone pagination model (`after`, `before`, `count`, `limit`)
+  exported from `scrapebadger.reddit`.
+
+## [0.8.3] - 2026-05-29
+
+### Fixed
+
+- **Reddit search & listing methods sent the wrong query-parameter names**, causing a `422 'q' field required` against the live API. The API expects `q` (search query) and `t` (time filter); the SDK was sending `query` and `time_filter`. Fixed across `search.posts`, `search.subreddits`, `search.users`, `search.domain_posts`, `subreddits.posts`, `users.posts`, `users.comments`. The Python keyword arguments are unchanged (`query=`, `time_filter=`) — only the wire params are corrected.
+- **`search.domain_posts()` hit the wrong URL** — `/v1/reddit/search/domain` with `domain` as a query param. The real route is `/v1/reddit/domains/{domain}/posts` (domain is a path segment). Fixed.
+
+## [0.8.2] - 2026-05-29
+
+### Fixed
+
+- **`client.reddit.posts.get()` and `client.reddit.posts.comments()` were calling the wrong URL** — `/v1/reddit/posts/{subreddit}/{post_id}` (two path segments) instead of the actual API route `/v1/reddit/posts/{post_id}`. Both methods 404'd against the live API in 0.8.0/0.8.1. The `subreddit` positional argument has been **removed** from both methods — call `posts.get(post_id)` and `posts.comments(post_id, ...)`. This is a breaking change for anyone who worked around the bug, but the previous signature never worked against production.
+
+## [0.8.1] - 2026-05-28
+
+### Removed
+
+- **`client.reddit.subreddits.moderators(...)`** — Reddit gated the moderator listing behind authentication in 2024. There is no public path that yields the data. Removed the method along with `RedditModerator` and `SubredditModeratorResponse` types rather than ship a permanently-broken endpoint.
+
+### Fixed
+
+- `client.reddit.search.subreddits(...)` no longer crashes when Reddit returns banned/quarantined subreddits with `null` values for required-typed fields (previously raised a backend 500 / ValidationError).
+
+## [0.8.0] - 2026-05-28
+
+### Added
+
+- **Reddit Scraper API** — new `client.reddit.*` namespace covering 22 endpoints across search, posts, subreddits, users, and wiki:
+  - `client.reddit.search.posts(q, ...)` — global or subreddit-scoped post search with full Reddit syntax (title:, author:, subreddit:, flair:, AND/OR/NOT)
+  - `client.reddit.search.subreddits(q, ...)`, `client.reddit.search.users(q, ...)`
+  - `client.reddit.search.domain_posts(domain, ...)` — posts linking to an external domain
+  - `client.reddit.posts.trending(...)`, `client.reddit.posts.get(post_id)`
+  - `client.reddit.posts.comments(post_id, depth=...)` — full nested comment trees with configurable depth (0–10)
+  - `client.reddit.posts.duplicates(post_id, ...)` — cross-post detection
+  - `client.reddit.subreddits.get(name)`, `.posts(...)`, `.rules(...)`, `.moderators(...)`, `.wiki_pages(...)`, `.wiki_page(...)`, `.popular(...)`, `.new(...)`
+  - `client.reddit.users.get(name)`, `.posts(...)`, `.comments(...)`, `.moderated(...)`, `.trophies(...)`
+- **Comprehensive Reddit response models** — `RedditPost` (66 fields), `RedditComment` (34), `RedditSubreddit` (48), `RedditUser` (27)
+- **Datetime parity** — every datetime field ships both Unix timestamp (`*_utc`) and ISO 8601 UTC string (`*_at`)
+- Frozen Pydantic models with `extra="ignore"` for forward compatibility
+
+## [0.7.0] - 2026-04-21
+
+### Added
+
+- **`client.google.shopping.product(product_id, ...)`** — Shopping product detail page fetch by `product_id`.
+- **`client.google.shopping.click(title, source, q, product_id?)`** — Resolve the direct merchant URL for a Shopping product tile via Google's "I'm Feeling Lucky" redirect.
+- **`client.google.search.light(q, ...)`** — Lightweight `mode=fast` SERP — organic results + related searches only, ~40% faster than the full SERP.
+- **`client.google.search.search(..., mode="full" | "fast")`** — New `mode` parameter on the main search method. `mode="fast"` hits Google's lite `gbv=1` endpoint.
+- **`client.google.maps.posts(..., next_page_token=...)`** — Pagination support on business posts.
+
+### Changed
+
+- **Removed hardcoded per-endpoint credit numbers from docstrings and docs.** Credit costs are configured per-endpoint by ScrapeBadger admins and returned live from `GET /public/pricing` — no more stale "costs 2 credits" comments that go out of sync when pricing changes.
+- **`client.google.products.detail(product_id, q=None, ...)`** — `q` is now optional. The backend accepts lookups by `product_id` alone; pass `q` only when you want the richer `/async/oapv` context blob.
+- CHANGELOG section heading for 0.6.0 renamed from "Google Scrapingdog parity" to "Google parity".
+
+### Removed
+
+- **`client.google.local`** — removed. The Local Pack is exposed via the SERP `/v1/google/search` response's `local_results` field rather than a dedicated endpoint. **Breaking** for anyone using the dedicated local client; migrate to reading `local_results` from `client.google.search.search(...)`.
+
+## [0.6.0] - 2026-04-11
+
+### Added — Google parity (refs scrape-badger/scrapebadger#135)
+
+Three new Google product sub-clients and deeper Scholar / Trends / Search surface:
+
+- **`client.google.local`** — Local Pack business listings ranked for a SERP query (`tbm=lcl`). Driven by `q + location/uule`, returns ratings, reviews, addresses, phone numbers, and GPS coordinates. Complementary to the Maps API.
+- **`client.google.shorts`** — Short-form vertical video results (YouTube Shorts, TikTok, Facebook Reels) via Google's Shorts SERP mode (`udm=39`).
+- **`client.google.flights`** — One-way, round-trip, and multi-city flight search with passenger config, cabin class, stops filter, and max-price. Returns `best_flights`, `other_flights`, `price_insights`, and per-offer carbon emissions.
+- **`client.google.scholar.profiles(mauthors, ...)`** — Author profile search by name with `after_author` / `before_author` pagination.
+- **`client.google.scholar.author(author_id, ...)`** — Full author profile (articles, citation stats, co-authors).
+- **`client.google.scholar.author_citation(author_id, ...)`** — Citations-per-year chart for a Scholar author.
+- **`client.google.scholar.cite(q, ...)`** — MLA / APA / Chicago / Harvard / Vancouver citation formats plus export links (BibTeX / RIS / EndNote / RefWorks).
+- **`client.google.trends.autocomplete(q, ...)`** — Categorized Knowledge Graph topic entities (`mid`, `type`, link) for a query prefix. Distinct from Google Search autocomplete.
+- **`client.google.search.search(..., ai_overview=True)`** — Optional flag that chases Google's deferred AI Overview `page_token` with a follow-up fetch and merges the result into `ai_overview`. Adds ~1s and 1 credit only when the SERP actually defers the overview.
+
+The Google product roster is now **19** (was 16).
+
+## [0.2.0] - 2026-03-05
+
+### Added
+
+- **Twitter Streams**: Real-time tweet monitoring via WebSocket and webhooks
+  - `StreamClient` with full monitor CRUD: `create_monitor`, `list_monitors`, `get_monitor`, `update_monitor`, `pause_monitor`, `resume_monitor`, `delete_monitor`
+  - WebSocket streaming via `connect()` async context manager with auto-reconnect support
+  - `verify_webhook_signature()` utility for HMAC-SHA256 webhook verification
+  - Delivery log and billing log listing: `list_delivery_logs`, `list_billing_logs`
+  - Full type-safe models: `StreamMonitor`, `StreamMonitorList`, `TweetEvent`, `ConnectedEvent`, `PingEvent`, `ErrorEvent`, `DeliveryLog`, `BillingLog`
+  - `WebSocketStreamError` exception for stream connection failures
+
+## [0.1.1] - 2024-12-27
+
+### Fixed
+
+- Fixed Python 3.10 compatibility for StrEnum
+- Fixed all ruff linting issues
+- Fixed mypy type checking errors
+- Fixed GitHub badge URLs to correct organization
+
+## [0.1.0] - 2024-12-27
+
+### Added
+
+- Initial release of the ScrapeBadger Python SDK
+- Full async support with `httpx`
+- Strongly-typed responses using Pydantic v2
+- Twitter API client with 37+ endpoints:
+  - Tweets: get by ID, search, get replies, retweeters, favoriters
+  - Users: get by username/ID, followers, following, search
+  - Lists: get details, members, tweets, search
+  - Communities: get details, members, moderators, tweets
+  - Trends: get trends, place-specific trends, available locations
+  - Geo: search places, get place details
+- Automatic pagination with async iterators
+- Built-in retry logic with exponential backoff
+- Comprehensive exception handling
+- Full type hints for IDE support
+
+### Security
+
+- API key authentication
+- No sensitive data logged
+
+[Unreleased]: https://github.com/scrape-badger/scrapebadger-python/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/scrape-badger/scrapebadger-python/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/scrape-badger/scrapebadger-python/releases/tag/v0.1.0
