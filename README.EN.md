@@ -202,7 +202,9 @@ Only these two are needed — no Personal Access Token or any other secret.
   <li>The main workflow lives at <code>.github/workflows/collector.yml</code> and can also be triggered manually from the Actions tab (<strong>Run workflow</strong>).</li>
   <li>The current schedule is <code>cron: '45 */3 * * *'</code> — every 3 hours, at minute 45. To change the interval, edit this value in <code>collector.yml</code>.</li>
   <li>After each run, the state and report files (per-channel checkpoint, dedup archive, channel report, invalid channels) are committed back to the repository automatically.</li>
-  <li>If sending either message (header or list) fails due to a genuine error (not the file-count cap), that batch is saved to <code>data/pending_send.json</code> and retried on the next run, before any newly found files.</li>
+  <li>The three JSON state files (checkpoint, sent archive, pending queue) are written only once at the very end of a run. Each file is written to a temporary file first and then swapped in atomically, so an interrupted run can never leave half-written JSON or resend/skip files incorrectly.</li>
+  <li><code>data/pending_send.json</code> keeps two separate sections: <code>retry</code> (batches whose header or list message genuinely failed — retried with priority on the next run) and <code>discarded</code> (files dropped because of the per-run cap — never backfilled or sent later). A batch enters the sent archive only after <em>both</em> messages succeed.</li>
+  <li>If the first page of a channel fails, that channel is recorded as invalid and reported as <code>ERR</code> without clearing its existing checkpoint; if a later page fails, the results already collected are kept and pagination simply stops.</li>
 </ul>
 
 <div class="highlight">
@@ -225,11 +227,14 @@ Only these two are needed — no Personal Access Token or any other secret.
 │   ├── blocked_keywords.txt       # blocked-keyword list (input)
 │   ├── last_message_id.json       # (generated) per-channel checkpoint
 │   ├── seen_files.json            # (generated) archive of already-published files
-│   ├── pending_send.json          # (generated) queue of files with a genuine send failure
+│   ├── pending_send.json          # (generated) retry queue (send failures) + permanently discarded files
 │   ├── channel_report.txt         # (generated) per-channel history of files found
 │   ├── invalid_channels.txt       # (generated) unreachable/invalid channels
 │   ├── filtered_files.txt         # (generated) files skipped due to a blocked keyword
 │   └── npvt_report.txt            # (generated) per-run summary report
+├── tests/
+│   ├── conftest.py
+│   └── test_npvt_collector.py     # offline tests: local HTML fixtures, fake sender, no network access
 ├── README.md
 └── README.EN.md
 </pre>
@@ -270,7 +275,7 @@ This repository is inspired by public Telegram scraping techniques used in the o
 
 <details>
 <summary><strong>What happens if a channel can't be opened?</strong></summary>
-<p>That channel is recorded in <code>data/invalid_channels.txt</code> and shows as <code>ERR</code> in <code>data/channel_report.txt</code>.</p>
+<p>That channel is recorded in <code>data/invalid_channels.txt</code> and shows as <code>ERR</code> in <code>data/channel_report.txt</code>. Its previous checkpoint in <code>data/last_message_id.json</code> is left untouched, so a transient failure doesn't hide files on a later successful run. If only a later pagination page fails, the files collected from earlier pages are kept and pagination stops there.</p>
 </details>
 
 <details>

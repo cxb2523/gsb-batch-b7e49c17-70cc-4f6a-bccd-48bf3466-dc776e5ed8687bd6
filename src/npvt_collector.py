@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -69,6 +70,18 @@ INVALID_CHANNELS_FILE = DATA_DIR / "invalid_channels.txt"
 PENDING_FILE = DATA_DIR / "pending_send.json"
 BLOCKED_KEYWORDS_FILE = DATA_DIR / "blocked_keywords.txt"
 FILTERED_FILES_FILE = DATA_DIR / "filtered_files.txt"
+
+# ----------------------------------------------------------------------------
+# وضعیت پایدار (state)
+# ----------------------------------------------------------------------------
+# صف انتظار دو دستهٔ کاملاً جدا دارد:
+#   - retry:      ارسالشان به خطای واقعی خورده و باید در اجرای بعدی (با اولویت)
+#                 دوباره تلاش شوند.
+#   - discarded:  به‌خاطر عبور از سقف MAX_FILES_PER_MESSAGE کنار گذاشته شده‌اند
+#                 و هرگز نباید دوباره به صف بازگردانده یا ارسال شوند.
+PENDING_SCHEMA_VERSION = 2
+PENDING_RETRY_KEY = "retry"
+PENDING_DISCARDED_KEY = "discarded"
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "10"))
@@ -171,9 +184,144 @@ def load_json(path: Path, default):
     return default
 
 
-def save_json(path: Path, data) -> None:
+def _atomic_write_text(path: Path, text: str) -> None:
+    """
+    فایل را ابتدا در یک فایل موقت (در همان پوشه) می‌نویسد و سپس با
+    os.replace به‌صورت اتمیک جایگزین می‌کند. اگر در میانهٔ کار خطایی رخ دهد،
+    فایل مقصد دست‌نخورده می‌ماند و فایل موقت پاک می‌شود؛ بنابراین هیچ‌وقت
+    یک JSON نیمه‌کاره باقی نمی‌ماند.
+    """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def save_json(path: Path, data) -> None:
+    _atomic_write_text(Path(path), json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _serialize_pending(
+    retry_items: dict, discarded_items: dict
+) -> dict:
+    def as_dict(item):
+        return item.to_dict() if isinstance(item, NpvtFile) else dict(item)
+
+    return {
+        "schema_version": PENDING_SCHEMA_VERSION,
+        PENDING_RETRY_KEY: {key: as_dict(item) for key, item in retry_items.items()},
+        PENDING_DISCARDED_KEY: {key: as_dict(item) for key, item in discarded_items.items()},
+    }
+
+
+def save_state(
+    checkpoints: dict,
+    seen_files: dict,
+    retry_items: dict,
+    discarded_items: dict,
+) -> None:
+    """
+    سه فایل وضعیت (چک‌پوینت، آرشیو ارسال‌شده، صف انتظار) را یک‌جا و فقط در
+    پایان اجرا می‌نویسد.
+
+    ابتدا هر سه محتوا کاملاً سریالایز می‌شوند و هر سه فایل موقت نوشته و
+    fsync می‌شوند؛ تنها پس از موفقیت همهٔ این مراحل، فایل‌های نهایی با
+    os.replace جایگزین می‌شوند. بنابراین اگر در ساخت/نوشتن هر یک از آن‌ها
+    خطایی رخ دهد، هیچ‌کدام از فایل‌های وضعیت تغییر نمی‌کنند و هیچ JSON
+    نیمه‌کاره‌ای روی دیسک باقی نمی‌ماند.
+    """
+    entries = [
+        (Path(CHECKPOINT_FILE), checkpoints),
+        (Path(SEEN_FILES_FILE), seen_files),
+        (Path(PENDING_FILE), _serialize_pending(retry_items, discarded_items)),
+    ]
+
+    # سریالایز کردن همه پیش از لمس دیسک: خطای احتمالی هیچ فایلی را خراب نمی‌کند.
+    serialized = [
+        (path, json.dumps(data, ensure_ascii=False, indent=2))
+        for path, data in entries
+    ]
+
+    prepared: list[tuple[Path, Path]] = []  # (temp, final)
+    try:
+        for path, text in serialized:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+            )
+            tmp_path = Path(tmp_name)
+            prepared.append((tmp_path, path))
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+        # همهٔ فایل‌های موقت با موفقیت آماده‌اند؛ حالا جایگزینی اتمیک.
+        for tmp_path, path in prepared:
+            os.replace(tmp_path, path)
+    except BaseException:
+        for tmp_path, _ in prepared:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        raise
+
+
+def load_pending_state(path: Path | None = None) -> tuple[dict, dict]:
+    """
+    صف انتظار را می‌خواند و دو بخش آن را جدا برمی‌گرداند:
+    (retry_items, discarded_items)
+
+    فرمت قدیمی (یک دیکشنری تخت از فایل‌های ناموفق) هم پشتیبانی می‌شود و در
+    آن حالت همهٔ موارد به‌عنوان retry در نظر گرفته می‌شوند.
+    """
+    path = Path(path) if path is not None else PENDING_FILE
+    raw = load_json(path, {})
+    if not isinstance(raw, dict):
+        logger.warning("ساختار %s معتبر نیست؛ صف خالی در نظر گرفته می‌شود.", path)
+        return {}, {}
+
+    is_new_format = raw.get("schema_version") == PENDING_SCHEMA_VERSION or (
+        isinstance(raw.get(PENDING_RETRY_KEY), dict)
+        and isinstance(raw.get(PENDING_DISCARDED_KEY), dict)
+    )
+    if is_new_format:
+        retry_raw = raw.get(PENDING_RETRY_KEY) or {}
+        discarded_raw = raw.get(PENDING_DISCARDED_KEY) or {}
+    else:
+        retry_raw = raw
+        discarded_raw = {}
+
+    retry_items: dict[str, NpvtFile] = {}
+    for key, data in retry_raw.items():
+        if not isinstance(data, dict):
+            continue
+        try:
+            retry_items[str(key)] = NpvtFile.from_dict(data)
+        except Exception:
+            logger.warning("یک مورد نامعتبر در صف retry نادیده گرفته شد: %r", key)
+
+    discarded_items: dict[str, dict] = {}
+    for key, data in discarded_raw.items():
+        if isinstance(data, dict):
+            discarded_items[str(key)] = dict(data)
+
+    return retry_items, discarded_items
 
 
 def fetch_url(url: str) -> str:
@@ -288,6 +436,10 @@ def scan_channel(channel: str, last_id: int) -> tuple[list[NpvtFile], int, bool,
         if not html:
             if first_page:
                 invalid = True
+            else:
+                # صفحهٔ بعدی در دسترس نیست؛ نتایج صفحه‌های قبلی حفظ می‌شوند
+                # و فقط صفحه‌بندی متوقف می‌شود (کانال نامعتبر اعلام نمی‌شود).
+                logger.warning("   ↳ صفحهٔ بعدی (%s) شکست خورد؛ با نتایج فعلی متوقف می‌کنیم.", url)
             break
 
         soup = BeautifulSoup(html, "lxml")
@@ -295,6 +447,8 @@ def scan_channel(channel: str, last_id: int) -> tuple[list[NpvtFile], int, bool,
         if not nodes:
             if first_page:
                 invalid = True
+            else:
+                logger.warning("   ↳ صفحهٔ بعدی (%s) پیامی نداشت؛ با نتایج فعلی متوقف می‌کنیم.", url)
             break
 
         ids_on_page: list[int] = []
@@ -448,6 +602,7 @@ def main() -> None:
 
     checkpoints: dict = load_json(CHECKPOINT_FILE, {})
     seen_files: dict = load_json(SEEN_FILES_FILE, {})
+    pending_retry, discarded_files = load_pending_state(PENDING_FILE)
 
     all_new: list[NpvtFile] = []
     all_filtered: list[tuple[str, str, str]] = []
@@ -460,6 +615,8 @@ def main() -> None:
         found, newest_id, invalid, filtered = scan_channel(ch, last_id)
 
         if invalid:
+            # خطای صفحهٔ اول: کانال در گزارش ERR می‌شود، اما چک‌پوینت قبلی
+            # آن دست‌نخورده می‌ماند تا داده‌های ازدست‌رفته دوباره بررسی شوند.
             logger.warning("   ↳ ⚠️ کانال نامعتبر یا غیرقابل‌دسترسی (وجود ندارد/خصوصی/مسدود).")
             invalid_channels.append(ch)
             channel_results.append((ch, "ERR"))
@@ -472,8 +629,8 @@ def main() -> None:
                 logger.info("   ↳ 🚫 %d فایل به‌خاطر کلیدواژه‌ی مسدود نادیده گرفته شد.", len(filtered))
             channel_results.append((ch, str(len(found))))
 
-        if newest_id:
-            checkpoints[ch] = max(newest_id, last_id)
+            if newest_id:
+                checkpoints[ch] = max(newest_id, last_id)
 
         all_new.extend(found)
         all_filtered.extend(filtered)
@@ -489,46 +646,77 @@ def main() -> None:
             continue
         unique_batch[item.dedup_key] = item
 
-    # ---- گام ۲: حذف مواردی که در اجراهای قبلی قبلاً ارسال شده‌اند ----
+    # ---- گام ۲: حذف موارد قبلاً ارسال‌شده و موارد «کنارگذاشته‌شده برای همیشه» ----
     already_sent = 0
-    to_send: list[NpvtFile] = []
+    previously_discarded = 0
+    duplicate_with_pending = 0
+    fresh_items: list[NpvtFile] = []
     for key, item in unique_batch.items():
         if key in seen_files:
             already_sent += 1
             continue
-        to_send.append(item)
+        if key in discarded_files:
+            # قبلاً به‌خاطر سقف کنار گذاشته شده؛ هرگز دوباره کاندید ارسال نمی‌شود.
+            previously_discarded += 1
+            continue
+        if key in pending_retry:
+            # همان فایل از قبل در صف retry است؛ دوباره اضافه نمی‌شود.
+            duplicate_with_pending += 1
+            continue
+        fresh_items.append(item)
 
     logger.info(
         "🔍 جمع‌بندی اسکن: %d پیام یافت شد | %d تکراری در همین اجرا حذف شد | "
-        "%d مورد قبلاً ارسال شده بود | %d مورد تازه‌یاب.",
-        len(all_new), duplicate_in_batch, already_sent, len(to_send),
+        "%d مورد قبلاً ارسال شده بود | %d مورد قبلاً کنار گذاشته شده بود | "
+        "%d مورد تازه‌یاب.",
+        len(all_new), duplicate_in_batch, already_sent, previously_discarded, len(fresh_items),
     )
 
-    # ---- گام ۳: ادغام با صف اجرای قبلی (فقط شکست‌های واقعیِ ارسال، نه سرریز سقف) ----
-    pending: dict = load_json(PENDING_FILE, {})
-    work_items: dict[str, NpvtFile] = {
-        key: NpvtFile.from_dict(data) for key, data in pending.items()
-    }
-    for item in to_send:
-        work_items.setdefault(item.dedup_key, item)
+    # ---- گام ۳: پاک‌سازی وضعیت‌های متناقض و آماده‌سازی صف retry ----
+    for key in list(pending_retry):
+        if key in seen_files:
+            # قبلاً با موفقیت ارسال شده؛ دیگر نباید در صف retry بماند.
+            del pending_retry[key]
+        elif key in discarded_files:
+            # retry بر ثبت کنارگذاشته‌شده اولویت دارد.
+            del discarded_files[key]
 
-    if pending:
-        logger.info("📥 %d مورد از صف اجرای قبلی (ارسال ناموفق) دوباره امتحان می‌شود.", len(pending))
-
-    # ---- گام ۴: مرتب‌سازی بر اساس جدیدترین زمان انتشار، و انتخاب حداکثر ----
-    # ---- MAX_FILES_PER_MESSAGE مورد؛ باقی، طبق دستور، کاملاً کنار گذاشته می‌شود ----
-    all_work = sorted(work_items.values(), key=lambda it: it.posted_at_dt, reverse=True)
-    batch = all_work[:MAX_FILES_PER_MESSAGE]
-    discarded = all_work[MAX_FILES_PER_MESSAGE:]
-
-    if discarded:
+    if pending_retry:
         logger.info(
-            "🗑️ %d فایل اضافه بر سقف %d موردِ هر اجرا، کاملاً کنار گذاشته شد (هیچ‌وقت دوباره لحاظ نمی‌شود).",
-            len(discarded), MAX_FILES_PER_MESSAGE,
+            "📥 %d مورد از صف اجرای قبلی (ارسال ناموفق) با اولویت دوباره امتحان می‌شود.",
+            len(pending_retry),
+        )
+    if duplicate_with_pending:
+        logger.info("   ↳ %d مورد تازه‌یاب از قبل در صف retry بود و تکراری نشد.", duplicate_with_pending)
+
+    # ---- گام ۴: انتخاب دسته ----
+    # موارد retry اجرای قبلی همیشه اولویت دارند و اگر از سقف بیشتر باشند،
+    # در صف retry می‌مانند (نه در دستهٔ «کنارگذاشته‌شده»). فقط فایل‌های
+    # تازه‌یابی که از ظرفیت باقی‌مانده بیشترند، برای همیشه کنار گذاشته می‌شوند.
+    max_per_run = max(0, MAX_FILES_PER_MESSAGE)
+    retry_sorted = sorted(pending_retry.values(), key=lambda it: it.posted_at_dt, reverse=True)
+    fresh_sorted = sorted(fresh_items, key=lambda it: it.posted_at_dt, reverse=True)
+
+    batch: list[NpvtFile] = retry_sorted[:max_per_run]
+    remaining_capacity = max_per_run - len(batch)
+    if remaining_capacity > 0:
+        fresh_selected = fresh_sorted[:remaining_capacity]
+        fresh_overflow = fresh_sorted[remaining_capacity:]
+    else:
+        fresh_selected = []
+        fresh_overflow = fresh_sorted
+    batch.extend(fresh_selected)
+
+    if fresh_overflow:
+        logger.info(
+            "🗑️ %d فایل تازه‌یاب اضافه بر سقف %d موردِ هر اجرا، کاملاً کنار گذاشته شد "
+            "(در صف اجرای بعدی بازگردانده نمی‌شود).",
+            len(fresh_overflow), max_per_run,
         )
 
     sent = failed = 0
-    leftover: dict[str, NpvtFile] = {}
+    # از همهٔ retryهای قبلی شروع می‌کنیم؛ آن‌هایی که انتخاب نشده‌اند هم می‌مانند.
+    retry_next: dict[str, NpvtFile] = dict(pending_retry)
 
     if not batch:
         logger.info("ℹ️ هیچ فایل جدیدی برای ارسال نبود.")
@@ -539,6 +727,7 @@ def main() -> None:
         list_ok = send_telegram_message(list_text, parse_mode="HTML")
 
         if header_ok and list_ok:
+            # فقط وقتی هر دو پیام موفق بودند، این دسته «ارسال‌شده» ثبت می‌شود.
             sent = len(batch)
             for item in batch:
                 seen_files[item.dedup_key] = {
@@ -549,14 +738,24 @@ def main() -> None:
                     "posted_at": item.posted_at,
                     "date": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
+                retry_next.pop(item.dedup_key, None)
         else:
+            # خطای واقعی ارسال: کل دسته به صف retry اجرای بعدی می‌رود.
             failed = len(batch)
-            leftover = {item.dedup_key: item for item in batch}
+            for item in batch:
+                retry_next[item.dedup_key] = item
             logger.error("   ↳ ارسال پیام هدر یا فهرست فایل‌ها شکست خورد؛ این دسته برای اجرای بعدی در صف می‌ماند.")
 
-    save_json(CHECKPOINT_FILE, checkpoints)
-    save_json(SEEN_FILES_FILE, seen_files)
-    save_json(PENDING_FILE, {key: item.to_dict() for key, item in leftover.items()})
+    # فایل‌های تازه‌یابِ سرریز، در فهرست «کنارگذاشته‌شده» ثبت می‌شوند تا اگر
+    # دوباره دیده شوند، هرگز به دستهٔ ارسال بازنگردند.
+    discarded_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    for item in fresh_overflow:
+        discarded_files[item.dedup_key] = {
+            **item.to_dict(),
+            "reason": "max_files_per_run",
+            "discarded_at": discarded_at,
+        }
+
     update_channel_report(channel_results)
     write_invalid_channels(invalid_channels)
     append_filtered_files(all_filtered)
@@ -566,15 +765,22 @@ def main() -> None:
         f.write(
             f"{time.strftime('%Y-%m-%d %H:%M:%S')} | found={len(all_new)} "
             f"duplicates={duplicate_in_batch} already_sent={already_sent} "
-            f"batch={len(batch)} sent={sent} failed={failed} discarded={len(discarded)} "
-            f"pending_retry={len(leftover)} filtered={len(all_filtered)} "
-            f"invalid_channels={len(invalid_channels)}\n"
+            f"previously_discarded={previously_discarded} "
+            f"batch={len(batch)} sent={sent} failed={failed} discarded={len(fresh_overflow)} "
+            f"pending_retry={len(retry_next)} discarded_total={len(discarded_files)} "
+            f"filtered={len(all_filtered)} invalid_channels={len(invalid_channels)}\n"
         )
+
+    # ---- گام ۵: تنها نقطهٔ نوشتن وضعیت ----
+    # هر سه فایل (چک‌پوینت، آرشیو ارسال‌شده، صف انتظار) پس از پایان همهٔ
+    # کارهای این اجرا، یک‌جا و به‌صورت اتمیک نوشته می‌شوند.
+    save_state(checkpoints, seen_files, retry_next, discarded_files)
 
     logger.info(
         "✅ پایان اجرا. ارسال‌شده: %d | ناموفق (در صف ماند): %d | کنار گذاشته‌شده (سقف %d): %d | "
-        "فیلترشده: %d | کانال نامعتبر: %d",
-        sent, failed, MAX_FILES_PER_MESSAGE, len(discarded), len(all_filtered), len(invalid_channels),
+        "در انتظار retry: %d | فیلترشده: %d | کانال نامعتبر: %d",
+        sent, failed, max_per_run, len(fresh_overflow), len(retry_next),
+        len(all_filtered), len(invalid_channels),
     )
 
 
