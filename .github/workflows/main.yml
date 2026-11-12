@@ -9,12 +9,16 @@ jobs:
     - uses: actions/checkout@v2
       with:
         submodules: true
+    - name: Run tests
+      run: |
+        pip3 install Flask pytest
+        python3 -m pytest tests -q
     - name: Update data
-      env: 
+      env:
         GH_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
         git submodule update --recursive --remote
         pip3 install Flask
-        python3 ./src/main.py > docs/index.html
+        python3 ./src/main.py --output-html ./docs/index.html --no-print
         chmod +x ./src/update.sh
         ./src/update.sh

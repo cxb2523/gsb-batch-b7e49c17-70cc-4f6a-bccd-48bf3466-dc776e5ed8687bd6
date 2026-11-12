@@ -3,6 +3,7 @@
 
   <head>
     <title>COVID-19 Virus Outbreak in Greece</title>
+    <meta charset="utf-8">
     <meta name="description" content="Data about the COVID-19 outbreak in Greece" />
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500&display=swap" rel="stylesheet">
@@ -208,7 +209,7 @@
           ['DATE', 'ACTIVE CASES', 'REPORTED', 'CRITICAL', 'RECOVERED', 'DECEASED'],
           {%- for row in case_data -%}
             {%- autoescape false %}
-              {{ '["{g}", {v}, {r}, {c}, {h}, {d}],'.format(g = row['DATE'], v = row['ACTIVE CASES'], r = row['REPORTED'], c = row['CRITICAL'], h = row['RECOVERED'], d = row['DECEASED']) }}
+              {{ '["{g}", {v}, {r}, {c}, {h}, {d}],'.format(g = row['DATE'], v = row['ACTIVE CASES'] | js_number, r = row['REPORTED'] | js_number, c = row['CRITICAL'] | js_number, h = row['RECOVERED'] | js_number, d = row['DECEASED'] | js_number) }}
             {%- endautoescape %}
           {%- endfor %}
         ]);
@@ -304,7 +305,7 @@
       <div id="deceased-cases-counter" class="stat-box">
         <h2 class="stat-name">Deceased</h2>
         <p class="stat-value">{{ deceased_cases }}</p>
-        <p class="stat-diff {{'reverse' if deceased_cases_diff[0] == '-' else ''}}"><svg id="Layer_1" version="1.1" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="4 0 16 24" enable-background="{{'display:none;' if deceased_cases_diff == '0.00' }} new 0 0 24 24" style="vertical-align: bottom; transform: scale(0.7, 0.8){{' rotate(180deg)' if deceased_cases_diff[0] == '-' }}; fill: {{'rgb(244, 67, 54)' if deceased_cases_diff[0] != '-' else 'rgb(56, 142, 60)'}}; height: 14px;" x="0px" y="0px" ng-style="{'fill': compareDelta.deltaColor,
+        <p class="stat-diff {{'reverse' if deceased_cases_diff[0] == '-' else ''}}"><svg id="Layer_1" version="1.1" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="4 0 16 24" enable-background="new 0 0 24 24" style="{{'display:none;' if deceased_cases_diff == '0.00' }} vertical-align: bottom; transform: scale(0.7, 0.8){{' rotate(180deg)' if deceased_cases_diff[0] == '-' }}; fill: {{'rgb(244, 67, 54)' if deceased_cases_diff[0] != '-' else 'rgb(56, 142, 60)'}}; height: 14px;" x="0px" y="0px" ng-style="{'fill': compareDelta.deltaColor,
           'height': $ctrl.svgHeight}" ng-if="compareDelta.deltaDirection === '+'" class="ng-scope">
             <polygon points="12,2.7 5,9.7 8,9.7 8,13 16,13 16,9.7 19,9.7 "></polygon>
             <rect x="8" y="14" width="8" height="3"></rect>
@@ -315,7 +316,7 @@
       <div id="discharged-cases-counter" class="stat-box">
         <h2 class="stat-name">Discharged</h2>
         <p class="stat-value">{{ recovered_cases }}</p>
-        <p class="stat-diff {{'reverse' if recovered_cases_diff[0] != '-' else ''}}"><svg id="Layer_1" version="1.1" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="4 0 16 24" enable-background="new 0 0 24 24" style="{{'display:none;' if recovered_cases_diff == '0.00' }} vertical-align: bottom; transform: scale(0.7, 0.8){{' rotate(180deg)' if recovered_cases_diff[0] == '-' }}; fill: {{'rgb(244, 67, 54)' if recovered_cases_diff[0] == '-' else 'rgb(56, 142, 60)'}}; height: 14px;" x="0px" y="0px" ng-style="{'fill': compareDelta.deltaColor,
+        <p class="stat-diff {{'reverse' if recovered_cases_diff[0] == '-' else ''}}"><svg id="Layer_1" version="1.1" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="4 0 16 24" enable-background="new 0 0 24 24" style="{{'display:none;' if recovered_cases_diff == '0.00' }} vertical-align: bottom; transform: scale(0.7, 0.8){{' rotate(180deg)' if recovered_cases_diff[0] == '-' }}; fill: {{'rgb(244, 67, 54)' if recovered_cases_diff[0] == '-' else 'rgb(56, 142, 60)'}}; height: 14px;" x="0px" y="0px" ng-style="{'fill': compareDelta.deltaColor,
           'height': $ctrl.svgHeight}" ng-if="compareDelta.deltaDirection === '+'" class="ng-scope">
             <polygon points="12,2.7 5,9.7 8,9.7 8,13 16,13 16,9.7 19,9.7 "></polygon>
             <rect x="8" y="14" width="8" height="3"></rect>
