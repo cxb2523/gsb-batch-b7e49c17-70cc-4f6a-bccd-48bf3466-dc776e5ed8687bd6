@@ -11,7 +11,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { guessit, guessitMany, version } from './src/index.js';
+import { guessit, version } from './src/index.js';
+import type { GuessItBatchEntry } from './src/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env['PORT'] || '3847', 10);
@@ -31,6 +32,48 @@ const MAX_FILENAME_LENGTH = 1024;
  * requests, or `guessitMany()` in-process, which is unbounded.
  */
 const MAX_BATCH = 100;
+
+/**
+ * Cumulative wall-clock parse time one request may consume, in milliseconds.
+ * Length caps alone don't bound cost: parsing grows with the square of the
+ * match count, so a 1024-character string of repeated season markers burns
+ * ~200 ms where a real name burns under 3 ms — a full batch of those holds a
+ * request for tens of seconds. The budget is per request, shared between the
+ * single-name and batch paths, and checked after each parsed name (parsing is
+ * synchronous, so a name already in flight always runs to completion). When a
+ * name pushes the request over budget the server answers 413 and does not
+ * parse the rest of the batch; names already completed are still returned in
+ * the 413 body under `results`, in the usual {input_string, result|error}
+ * shape. The library itself is untouched — in-process callers of guessit() /
+ * guessitMany() stay unbounded.
+ *
+ * GUESSIT_PARSE_BUDGET_MS overrides the budget; unset or unparseable values
+ * fall back to a conservative default that fits several worst-case names but
+ * not a hostile batch. Read once at startup.
+ */
+const DEFAULT_PARSE_BUDGET_MS = 1000;
+
+function resolveParseBudgetMs(): number {
+  const raw = process.env['GUESSIT_PARSE_BUDGET_MS'];
+  if (raw === undefined || raw.trim() === '') return DEFAULT_PARSE_BUDGET_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PARSE_BUDGET_MS;
+}
+
+const PARSE_BUDGET_MS = resolveParseBudgetMs();
+
+/** Body sent with a 413 when the parse budget trips. */
+function budgetExceededBody(elapsedMs: number, trigger: string, results?: GuessItBatchEntry[]) {
+  return {
+    error:
+      `Parse time budget exceeded: ${Math.round(elapsedMs)} ms used of the ` +
+      `${PARSE_BUDGET_MS} ms allowed per request (GUESSIT_PARSE_BUDGET_MS)`,
+    budget_ms: PARSE_BUDGET_MS,
+    elapsed_ms: Math.round(elapsedMs),
+    trigger,
+    ...(results !== undefined ? { results } : {}),
+  };
+}
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -95,7 +138,13 @@ function handleGuessitGet(url: URL, res: http.ServerResponse): void {
   }
 
   try {
+    const start = performance.now();
     const result = guessit(filename, options);
+    const elapsed = performance.now() - start;
+    if (elapsed > PARSE_BUDGET_MS) {
+      sendJson(res, 413, budgetExceededBody(elapsed, filename));
+      return;
+    }
     sendJson(res, 200, result);
   } catch (err) {
     sendJson(res, 500, { error: 'Failed to parse filename', detail: String(err) });
@@ -130,7 +179,33 @@ async function handleGuessitPost(req: http.IncomingMessage, res: http.ServerResp
         sendJson(res, 413, { error: `filename exceeds ${MAX_FILENAME_LENGTH} characters` });
         return;
       }
-      sendJson(res, 200, guessitMany(names, parsed.options ?? {}));
+      // Parse name by name so the per-request budget can stop the batch: once
+      // the cumulative parse time crosses PARSE_BUDGET_MS, the remaining names
+      // are refused with a 413 instead of being parsed. The name that tripped
+      // the budget is reported as `trigger`, never as a normal entry; names
+      // completed before it ride along in `results` under the usual contract.
+      // Entries are built exactly like guessitMany does — a throwing name
+      // yields {input_string, error} and does not abort the batch. (Per-name
+      // calls re-prepare the options each time; measured at ~0.4 ms per name,
+      // negligible next to the budget.)
+      const options = parsed.options ?? {};
+      const budgetStart = performance.now();
+      const entries: GuessItBatchEntry[] = [];
+      for (const name of names) {
+        let entry: GuessItBatchEntry;
+        try {
+          entry = { input_string: name, result: guessit(name, options) };
+        } catch (err) {
+          entry = { input_string: name, error: err instanceof Error ? err.message : String(err) };
+        }
+        const elapsed = performance.now() - budgetStart;
+        if (elapsed > PARSE_BUDGET_MS) {
+          sendJson(res, 413, budgetExceededBody(elapsed, name, entries));
+          return;
+        }
+        entries.push(entry);
+      }
+      sendJson(res, 200, entries);
       return;
     }
 
@@ -143,7 +218,13 @@ async function handleGuessitPost(req: http.IncomingMessage, res: http.ServerResp
       return;
     }
 
+    const start = performance.now();
     const result = guessit(parsed.filename, parsed.options ?? {});
+    const elapsed = performance.now() - start;
+    if (elapsed > PARSE_BUDGET_MS) {
+      sendJson(res, 413, budgetExceededBody(elapsed, parsed.filename));
+      return;
+    }
     sendJson(res, 200, result);
   } catch (err) {
     if (err instanceof Error && err.message === 'Body too large') {
@@ -264,4 +345,5 @@ server.listen(PORT, () => {
   console.log(`guessit-js server running at http://localhost:${PORT}`);
   console.log(`API endpoint: http://localhost:${PORT}/api/guessit?filename=...`);
   console.log(`Batch:        POST /api/guessit {"filenames": ["...", "..."]} (max ${MAX_BATCH})`);
+  console.log(`Parse budget: ${PARSE_BUDGET_MS} ms per request (GUESSIT_PARSE_BUDGET_MS)`);
 });

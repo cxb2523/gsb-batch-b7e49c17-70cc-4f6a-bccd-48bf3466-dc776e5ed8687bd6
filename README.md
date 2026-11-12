@@ -220,6 +220,18 @@ A name that fails to parse becomes an `error` entry — the request still answer
 `200`. The caps bound the shape of one request, not throughput: for 10k names,
 send 100 requests, or skip HTTP and call `guessitMany()` in-process.
 
+**Parse budget** (`npm start` dev server and the hosted worker): parsing cost
+grows with the square of the match count, so the length caps alone don't bound
+CPU — a 1024-character string of repeated season markers (`S01E01.` × 146)
+takes ~200 ms where a real name takes under 3 ms. These two surfaces therefore
+cap the cumulative parse time per request: `GUESSIT_PARSE_BUDGET_MS`
+milliseconds, defaulting to a conservative 1000 ms when unset. A request that
+exceeds its budget gets a `413` whose body carries a readable `error`, the
+`trigger` input string, and — for a batch stopped mid-way — the already
+completed entries under `results` in the usual `{input_string, result|error}`
+shape. The budget lives only in the HTTP layer; in-process `guessit()` /
+`guessitMany()` calls are unbounded.
+
 ## WASM
 
 For non-JS environments (Rust, Go, C++, edge compute). Uses [Javy](https://github.com/bytecodealliance/javy) (QuickJS → WASM).
