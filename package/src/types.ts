@@ -1,0 +1,117 @@
+import type { CSSProperties, DetailedHTMLProps, HTMLAttributes, PropsWithChildren, ReactNode } from "react";
+
+// hooks.tsx
+export type DirectiveEvent = "change" | "pause" | null;
+
+export type HighlightMode = "word" | "sentence" | "line" | "paragraph";
+
+export type HighlightProps = {
+  className?: string;
+  id?: string;
+  style?: CSSProperties;
+  title?: string;
+};
+
+export type NodeProps = PropsWithChildren<{ key?: string; className?: string }>;
+
+export type SpeakingWord = { index: string; charIndex: number; length: number } | null;
+
+export type SpeakProps = SpeechSynthesisUtteranceProps & { text: ReactNode };
+
+export type SpeechStatus = "started" | "paused" | "stopped" | "queued";
+
+export type SpeechSynthesisBoundaryEvent = { progress: number };
+
+export type SpeechSynthesisBoundaryEventHandler = (event: SpeechSynthesisBoundaryEvent) => void;
+
+export type SpeechSynthesisErrorHandler = (error: Error) => void;
+
+export type SpeechSynthesisEventHandler = () => void;
+
+export type SpeechSynthesisEventName = "word" | "sentence";
+
+export type SpeechSynthesisUtteranceProps = {
+  pitch?: number;
+  rate?: number;
+  volume?: number;
+  lang?: string;
+  voiceURI?: string | string[];
+};
+
+export type UpdateMode = "immediate" | "throttle" | "debounce";
+
+export type UseSpeakOptions = {
+  preserveUtteranceQueue?: boolean;
+  highlightText?: boolean;
+  showOnlyHighlightedText?: boolean;
+  highlightMode?: HighlightMode;
+  highlightProps?: HighlightProps;
+  highlightContainerProps?: HighlightProps;
+  enableDirectives?: boolean;
+  updateMode?: UpdateMode;
+  updateDelay?: number;
+  maxChunkSize?: number;
+  onError?: SpeechSynthesisErrorHandler;
+  onStart?: SpeechSynthesisEventHandler;
+  onResume?: SpeechSynthesisEventHandler;
+  onPause?: SpeechSynthesisEventHandler;
+  onStop?: SpeechSynthesisEventHandler;
+  onBoundary?: SpeechSynthesisBoundaryEventHandler;
+  onQueueChange?: QueueChangeEventHandler;
+};
+
+export type UseSpeechOptions = SpeakProps & UseSpeakOptions & { stableText?: boolean; autoPlay?: boolean };
+
+export type UseSpeechOptionsInternal = UseSpeechOptions & { id?: string };
+
+// icons.tsx
+export type IconProps = DetailedHTMLProps<HTMLAttributes<HTMLSpanElement>, HTMLSpanElement>;
+
+// index.ts
+export type Children = (childrenOptions: ChildrenOptions) => ReactNode;
+
+export type ChildrenOptions = {
+  speechStatus?: SpeechStatus;
+  isInQueue?: boolean;
+  start?: SpeechActionHandler;
+  pause?: SpeechActionHandler;
+  stop?: SpeechActionHandler;
+};
+
+export type DivProps = DetailedHTMLProps<HTMLAttributes<HTMLDivElement>, HTMLDivElement>;
+
+export type HighlightedTextProps = DivProps & { id: string };
+
+export type SpeechActionHandler = VoidFunction;
+
+export type SpeechProps = UseSpeechOptionsInternal & {
+  startBtn?: ReactNode;
+  pauseBtn?: ReactNode;
+  stopBtn?: ReactNode;
+  useStopOverPause?: boolean;
+  enableConditionalHighlight?: boolean;
+  props?: DivProps;
+  children?: Children;
+};
+
+export type VoidFunction = () => void;
+
+// queue.ts
+export type CleanupHandler = VoidFunction;
+
+export type QueueChangeEventHandler = (queue: SpeechUtterancesQueue) => void;
+
+export type SpeechQueue = SpeechQueueItem[];
+
+export type SpeechQueueItem = { text: string; utterance: SpeechSynthesisUtterance; setSpeechStatus: SpeechStatusUpdater };
+
+export type SpeechStatusUpdater = (newStatus: SpeechStatus) => void;
+
+export type SpeechUtterancesQueue = Partial<SpeechSynthesisUtterance>[];
+
+// utils.tsx
+export type Index = string | number;
+
+export type State = { stopReason: "auto" | "change" | "manual" };
+
+export type Words = string | Words[];
