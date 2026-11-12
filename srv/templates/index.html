@@ -1,0 +1,584 @@
+$def with (films, cameras, menu, selected,name,scene,shot,take,str,randhash,thumb,vumetermessage,func,filmfolder,dsk)
+
+<script>
+function Get(yourUrl){
+        var Httpreq = new XMLHttpRequest(); // a new request
+        Httpreq.open("POST",yourUrl,false);
+        Httpreq.send(null);
+        return Httpreq.responseText;          
+}
+(function($$)
+{
+    $$(document).ready(function()
+    {
+        var refreshtime = 1000;
+        var oldrefreshtime = 100;
+        idleTime = 0;
+        //Increment the idle time counter every second.
+        var idleInterval = setInterval(timerIncrement, 1000);
+        function timerIncrement()
+        {
+            idleTime++;
+            if (idleTime > 1)
+            {
+                refreshtime = 1000;
+            }
+            if (oldrefreshtime != refreshtime)
+            {
+                refreshtime = 500;
+            }
+            else
+            {
+                refreshtime = 100;
+            }
+            oldrefreshtime = refreshtime;
+        }
+
+        $$.ajaxSetup(
+        {
+            cache: false,
+            beforeSend: function() {
+                $$('#content').hide();
+                $$('#loading').show();
+            },
+            complete: function() {
+                $$('#loading').hide();
+                $$('#content').show();
+            },
+            success: function() {
+                $$('#loading').hide();
+                $$('#content').show();
+            }
+        });
+
+        var myFunction = function(){
+                refresh();
+                console.log(refreshtime);
+                clearInterval(interval);
+                interval = setInterval(myFunction, refreshtime);
+        }
+        var interval = setInterval(myFunction, refreshtime);
+    });
+
+    function refresh(){
+        var $$container = $$("#menu2");
+        $$container.load('/static/menu.html');
+        $$.ajax({
+            method: "POST",
+            type: "Content-type",
+            url:"/api",
+            success: function(result) {
+            },
+            error: function(result) {
+            console.log('error', result);
+            }
+        })
+    }
+    $$(this).on('keydown', function (event) {
+        idleTime = 0;
+        refreshtime = 10;
+    });
+})(jQuery);
+
+$$(document).on('keydown', function (event) {
+    console.log('error', event.which);
+    if (event.which == 37) {
+        $$('#LEFT').trigger('click');
+    } else if (event.which == 39) {
+        $$('#RIGHT').trigger('click');
+    } else if (event.which == 38) {
+        event.preventDefault();
+        $$('#UP').trigger('click');
+    } else if (event.which == 40) {
+        event.preventDefault();
+        $$('#DOWN').trigger('click');
+    } else if (event.which == 33) {
+        event.preventDefault();
+        $$('#RECORD').trigger('click');
+    } else if (event.which == 32) {
+        event.preventDefault();
+        $$('#RECORD').trigger('click');
+    } else if (event.which == 34) {
+        event.preventDefault();
+        $$('#RETAKE').trigger('click');
+    } else if (event.which == 9) {
+        event.preventDefault();
+        $$('#VIEW').trigger('click');
+    } else if (event.which == 46) {
+        $$('#DELETE').trigger('click');
+    } else if (event.which == 13) {
+        $$('#MIDDLE').trigger('click');
+    } else if (event.which == 68) {
+        $$('#DUB').trigger('click');
+    } else if (event.which == 97) {
+        $$('#CAMERA0').trigger('click');
+    } else if (event.which == 98) {
+        $$('#CAMERA1').trigger('click');
+    } else if (event.which == 99) {
+        $$('#CAMERA2').trigger('click');
+    } else if (event.which == 100) {
+        $$('#CAMERA3').trigger('click');
+    } else if (event.which == 101) {
+        $$('#CAMERA4').trigger('click');
+    } else if (event.which == 102) {
+        $$('#CAMERA5').trigger('click');
+    } else if (event.which == 103) {
+        $$('#CAMERA6').trigger('click');
+    } else if (event.which == 104) {
+        $$('#CAMERA7').trigger('click');
+    } else if (event.which == 105) {
+        $$('#CAMERA8').trigger('click');
+    } else if (event.which == 106) {
+        $$('#CAMERA9').trigger('click');
+    } else if (event.which == 229) {
+        $$('#CAMERA0').trigger('click');
+    } else if (event.which == 98) {
+        $$('#CAMERA1').trigger('click');
+    } else if (event.which == 99) {
+        $$('#CAMERA2').trigger('click');
+    } else if (event.which == 100) {
+        $$('#CAMERA3').trigger('click');
+    } else if (event.which == 101) {
+        $$('#CAMERA4').trigger('click');
+    } else if (event.which == 102) {
+        $$('#CAMERA5').trigger('click');
+    } else if (event.which == 103) {
+        $$('#CAMERA6').trigger('click');
+    } else if (event.which == 104) {
+        $$('#CAMERA7').trigger('click');
+    } else if (event.which == 105) {
+        $$('#CAMERA8').trigger('click');
+    } else if (event.which == 106) {
+        $$('#CAMERA9').trigger('click');
+    } else if (event.which == 77) {
+        $$('#MOVE').trigger('click');
+    } else if (event.which == 67) {
+        $$('#COPY').trigger('click');
+    } else if (event.which == 80) {
+        $$('#PASTE').trigger('click');
+    }
+});
+</script>
+connected 
+<pre>use keyboard to control</pre>
+$for i in cameras:
+    $i
+
+$if thumb != '':
+    $ picture= '/'+filmfolder + name + "/scene" + str(scene).zfill(3) + "/shot" + str(shot).zfill(3) + "/picture" + str(take).zfill(3) + ".jpeg"
+$else:
+    $ picture= '/'+filmfolder + name + "/scene" + str(scene).zfill(3) + "/shot" + str(shot).zfill(3) + "/take" + str(take).zfill(3) + ".jpeg"
+
+
+$ take_link='/'+filmfolder + name + "/scene" + str(scene).zfill(3) + "/shot" + str(shot).zfill(3) + "/take" + str(take).zfill(3) + ".mp4"
+$ scene_link='/'+filmfolder + name + "/scene" + str(scene).zfill(3) + "/scene.mp4"
+$ film_link='/'+filmfolder + name + "/" +name+ ".mp4"
+$if thumb != '':
+    $if selected == 0:
+        <a href='$film_link'><img width="80%" src="$picture?$randhash"/></a><br>
+    $elif selected == 1:
+        <a href='$scene_link'><img width="80%" src="$picture?$randhash"/></a><br>
+    $elif selected > 1:
+        <a href='$take_link'><img width="80%" src="$picture?$randhash"/></a><br>
+    <br>
+
+<div class="responsive-div">
+
+<div class="controller">
+<a id="VIEW">VIEW</a> <a id="UP">UP</a> <a id="RECORD">RECORD</a><br>
+<a id="LEFT">LEFT</a> <a id="MIDDLE">MIDDLE</a> <a id="RIGHT">RIGHT</a><br>
+<a id="DELETE">DELETE</a> <a id="DOWN">DOWN</a> <a id="RETAKE">RETAKE</a><br>
+</div>
+
+<div class="controller2">
+<a id="CAMERA0">CAM1</a> <a id="CAMERA1">CAM2</a> <a id="CAMERA2">CAM3</a><br>
+<a id="CAMERA3">CAM4</a> <a id="CAMERA4">CAM5</a> <a id="CAMERA5">CAM6</a><br>
+</div>
+
+<div class="controller3">
+<a id="MOVE">MOVE</a> <a id="COPY">COPY</a> <a id="PASTE">PASTE</a> <a id="DUB">DUB</a> <br>
+</div>
+
+</div>
+
+<div id="menu2" style="width:95%; max-width:800px;" ></div>
+<div id="menu" style="width:95%; max-width:800px;">
+</div>
+
+<script>
+$$('#CAMERA0').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera0",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA1').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera1",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA2').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera2",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA3').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera3",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA4').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera4",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA5').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera5",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA6').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera6",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA7').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera7",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+
+$$('#LEFT').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=left",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#RIGHT').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=right",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#DOWN').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=down",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#UP').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=up",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#RECORD').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=record",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#RETAKE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=retake",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#DELETE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=delete",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#VIEW').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=view",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#MIDDLE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=middle",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA0').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera0",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA1').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera1",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA2').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera2",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA3').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera3",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA4').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera4",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA5').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera5",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA6').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera6",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA7').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera7",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA8').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera8",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#CAMERA9').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=camera9",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#MOVE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=move",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#COPY').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=copy",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#PASTE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=paste",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#DUB').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=dub",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+
+</script>
+

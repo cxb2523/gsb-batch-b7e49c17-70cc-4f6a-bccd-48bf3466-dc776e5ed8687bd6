@@ -1,0 +1,423 @@
+$def with (films, film, scenes, str, filmfolder, counttakes, countshots, countscenes, shots, scene, takes, shot, take, checkvideo,randhash, if_exist, createthumb,basedir,time,get_video_length, db, real_filmfolder)
+$ video = ''
+
+<script>
+$$(document).on('keydown', function (event) {
+    console.log('error', event.which);
+    if (event.which == 37) {
+        event.preventDefault();
+        $$('#LEFT').trigger('click');
+    } else if (event.which == 39) {
+        event.preventDefault();
+        $$('#RIGHT').trigger('click');
+    } else if (event.which == 38) {
+        event.preventDefault();
+        $$('#UP').trigger('click');
+    } else if (event.which == 40) {
+        event.preventDefault();
+        $$('#DOWN').trigger('click');
+    } else if (event.which == 33) {
+        event.preventDefault();
+        $$('#RECORD').trigger('click');
+    } else if (event.which == 32) {
+        event.preventDefault();
+        $$('#RECORD').trigger('click');
+    } else if (event.which == 34) {
+        $$('#RETAKE').trigger('click');
+    } else if (event.which == 9) {
+        event.preventDefault();
+        $$('#VIEW').trigger('click');
+    } else if (event.which == 46) {
+        $$('#DELETE').trigger('click');
+        event.preventDefault();
+    } else if (event.which == 13) {
+        $$('#MIDDLE').trigger('click');
+        event.preventDefault();
+    } else if (event.which == 77) {
+        $$('#MOVE').trigger('click');
+    } else if (event.which == 67) {
+        $$('#COPY').trigger('click');
+    } else if (event.which == 80) {
+        $$('#PASTE').trigger('click');
+    } else if (event.which == 68) {
+        $$('#DUB').trigger('click');
+    }
+});
+</script>
+
+<style>
+body {
+  margin: 0; /* Remove default body margin */
+}
+.image-container {
+  display: flex; /* Flexbox for layout */
+  flex-wrap: wrap; /* Wrap to next row */
+  gap: 0px; /* Space between items */
+  padding-bottom: 300px;
+}
+.draggable {
+  max-width: 100px; /* Adjust size as needed */
+  height: auto; /* Maintain aspect ratio */
+  cursor: move; /* Indicate draggable */
+  user-select: none; /* Prevent text selection */
+  border: 0px solid #ccc; /* Optional: visual feedback */
+}
+.draggable.dragging {
+  opacity: 0.5; /* Visual feedback during drag */
+}
+button {
+    all: unset; /* Resets all inherited properties */
+    display: inline-block; /* Ensures the button behaves like a block element */
+    cursor: pointer; /* Changes the cursor to a pointer on hover */
+    display: flex;
+    /* Add any additional styles you want here */
+}
+.responsive-div {
+    display: none; /* Hide by default */
+    text-align: center;
+}
+@media (max-width: 700px) {
+    .responsive-div {
+        display: block; /* Show when screen width is 500px or less */
+    }
+}
+
+
+</style>
+
+
+<br>
+<a href="/c/">camera control</a>
+<div class="responsive-div">
+<div class="controller">
+<a id="VIEW">VIEW</a> <a id="UP">UP</a> <a id="RECORD">RECORD</a><br>
+<a id="LEFT">LEFT</a> <a id="MIDDLE">MIDDLE</a> <a id="RIGHT">RIGHT</a><br>
+<a id="DELETE">DELETE</a> <a id="DOWN">DOWN</a> <a id="RETAKE">RETAKE</a><br>
+<a id="MOVE">MOVE</a> <a id="COPY">COPY</a> <a id="PASTE">PASTE</a> <a id="DUB">DUB</a> <br>
+</div>
+<div id="menu2" style="margin:0 auto; width:99%" ></div>
+<div id="menu" style="margin:0 auto; width:99%">
+</div>
+</div>
+
+</div>
+<br>
+<div id="content">
+$ t=0
+<br>
+$if film != '' and scene != '' and shot != '':
+    <div class="image-container">
+    $ i = film
+    $ scenes=countscenes(filmfolder, i)
+    $for s in range(scenes):
+        <pre style="margin-top:0px; margin-left:5px; width: 100%; " ></pre>
+        <pre style="margin-top:0px; margin-left:5px; width: 100%; " >scene $str(s+1)</pre>
+        $ t = counttakes(i, filmfolder, s+1, 1)
+        $ shots = countshots(i, filmfolder, s+1)
+        $for s2 in range(shots):
+            $ t2 = countshots(i, filmfolder, s+1)
+            $ p2 = counttakes(i, filmfolder, s+1, s2+1)
+            $ mp4_file = basedir+'/'+filmfolder + i + '/scene' + str(s+1).zfill(3) + '/shot' + str(s2+1).zfill(3) + '/take' + str(p2).zfill(3) + '.mp4'
+            $ shot_file = real_filmfolder + i + '/scene' + str(s+1).zfill(3) + '/shot' + str(s2+1).zfill(3) + '/'
+            $ shot_mp4_file = real_filmfolder + i + '/scene' + str(s+1).zfill(3) + '/shot' + str(s2+1).zfill(3) + '/take' + str(p2).zfill(3) + '.mp4'
+            $ picture = basedir+'/'+filmfolder + i + '/scene' + str(s+1).zfill(3) + '/shot' + str(s2+1).zfill(3) + '/take' + str(p2).zfill(3) + '.jpeg'
+            $ picture_url = '/'+filmfolder + i + '/scene' + str(s+1).zfill(3) + '/shot' + str(s2+1).zfill(3) + '/take' + str(p2).zfill(3) + '.jpeg'
+            $ thumbnail = basedir+'/'+filmfolder + i + '/scene' + str(s+1).zfill(3) + '/shot' + str(s2+1).zfill(3) + '/take' + str(p2).zfill(3) + '_thumb.jpeg'
+            $ thumbnail_url = '/'+filmfolder + i + '/scene' + str(s+1).zfill(3) + '/shot' + str(s2+1).zfill(3) + '/take' + str(p2).zfill(3) + '_thumb.jpeg'
+            <div class='shotdata' data-file="$shot_file" data-film="$film" data-scene="${str(s+1)}" data-shot="${str(s2+1)}" style="padding:0px;">
+            |$str(s2+1)|
+            $get_video_length(shot_mp4_file)
+            <button class="sendDataButton">
+            $ check=if_exist(thumbnail_url)
+            $if check == True:
+                <img style="vertical-align:middle; width:100%; max-width:80px; height:auto;" src="$thumbnail_url?$randhash" alt="scene=${str(s+1)}&shot=${str(s2+1)}"/>
+            $else:
+                $ check=if_exist(picture_url)
+                $if check == True:
+                    $#createthumb(picture,thumbnail)
+                    $#time.sleep(0.2)
+                    <img style="vertical-align:middle; width:100%; max-width:80px; height:auto;" src="$picture_url?$randhash" alt="scene=${str(s+1)}&shot=${str(s2+1)}"/>
+                $else:
+                    $ thumbnail_url = '/static/empty.jpeg'
+                    <img style="vertical-align:middle; width:100%; max-width:80px; height:auto;" src="$thumbnail_url?$randhash" alt="scene=${str(s+1)}&shot=${str(s2+1)}"/>
+            </button>
+            </div>
+        </br>
+    </div>
+$else:
+    <h1>FILMS</h1>
+    $for i in films:
+        <a href="$i"><pre>$i</pre></a>
+        $ thumbnail_url = '/'+filmfolder + i + '/scene' + str(4).zfill(3) + '/shot' + str(1).zfill(3) + '/take' + str(1).zfill(3) + '.jpeg'
+        <a href="$i"><img style="vertical-align:middle; width:80%; max-width:50px;"  src="$thumbnail_url?$randhash"/></a><br><br>
+
+$if shot != None:
+    $for t in range(takes):
+        $ thumbnail_url = '/'+filmfolder + film + '/scene' + str(scene).zfill(3) + '/shot' + str(shot).zfill(3) + '/take' + str(t+1).zfill(3) + '.jpeg'
+        <pre>take $str(t+1)</pre>
+        <a href="?scene=$scene&shot=$shot&take=${str(t+1)}"><img style="vertical-align:middle; width:80%; max-width:50px;"  src="$thumbnail_url?$randhash" alt="scene=$scene&shot=$shot&take=${str(t+1)}"/></a><br>
+$elif scene != None:
+    $for s in range(shots)
+        <pre>shot $str(s+1)</pre>
+        $ t = countshots(film, filmfolder, scene)
+        $ p = counttakes(film, filmfolder, scene, s+1)
+        $ thumbnail_url = '/'+filmfolder + film + '/scene' + str(scene).zfill(3) + '/shot' + str(s+1).zfill(3) + '/take' + str(p).zfill(3) + '.jpeg'
+        <a href="?scene=$scene&shot=${str(s+1)}"><img style="vertical-align:middle; width:80%; max-width:50px;" src="$thumbnail_url?$randhash" alt="scene=$scene&shot=$shot&take=${str(t+1)}"/></a><br>
+
+</div>
+<script>
+$$(document).ready(function() {
+function refreshPage() {
+    $$.ajax({
+        url: '/e/$film', // Replace with your server endpoint
+        method: 'GET',
+        success: function(html) {
+        },
+        error: function(error) {
+            console.error('Error refreshing page:', error);
+        }
+    });
+}
+$$('.sendDataButton').click(function() {
+    // Retrieve data from the div
+    var shotname = $$('.sendDataButton').text(); //
+    var shotdata = $$(this).closest('.shotdata');
+    var film = shotdata.data('film'); // Get data-info attribute
+    var scene = shotdata.data('scene'); // Get data-info attribute
+    var shot = shotdata.data('shot'); // Get data-info attribute
+    console.log('error', film);
+    console.log('error', scene);
+    console.log('error', shot);
+
+    // Prepare the data to be sent
+    var postData = {
+        film: film,
+        scene: scene,
+        shot: shot
+    };
+
+    // Send the POST request
+    $$.ajax({
+        url: '/api', // Replace with your server URL
+        type: 'POST',
+        data: postData,
+        success: function(response) {
+            console.log('Data sent successfully:', response);
+        },
+        error: function(xhr, status, error) {
+            console.error('Error sending data:', error);
+        }
+    });
+});
+
+$$('#LEFT').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=left",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#RIGHT').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=right",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#DOWN').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=down",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#UP').on('click', function () {
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=up",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#RECORD').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=record",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#RETAKE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=retake",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#DELETE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=delete",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#VIEW').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=view",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#MIDDLE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=middle",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#MOVE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=move",
+    success: function(result) {
+    setTimeout(function() {
+    location.reload(); // Refresh the entire page
+},1500);
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#COPY').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=copy",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#PASTE').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=paste",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+$$('#DUB').on('click', function () { 
+    $$.ajax({
+    method: "POST",
+    type: "Content-type",
+    url:"/api?func=dub",
+    success: function(result) {
+    },
+    error: function(result) {
+    console.log('error', result);
+    }
+})
+});
+
+
+  // Function to fetch data and update div
+  function updateShotData() {
+    // Get the div and its data attributes
+    const $$shotDivs = $$('.shotdata');
+
+    // AJAX request
+    $$.ajax({
+      url: '/api', // Replace with your actual API endpoint
+      method: 'GET',
+      dataType: 'json', // Explicitly expect JSON response
+      success: function(response) {
+        // Assuming JSON response like: { "scene": "1", "shot": "2" }
+        const currentScene = response.scene;
+        const currentShot = response.shot;
+        const currentFilm = response.film;
+        const fileList = response.selected;
+
+        // Reset all divs to transparent border
+        $$shotDivs.css('border', '1px solid transparent');
+        $$shotDivs.css('background', 'transparent');
+
+        // Find and update matching div
+        $$shotDivs.each(function() {
+          const $$div = $$(this);
+          if ($$div.data('scene') == currentScene && $$div.data('shot') == currentShot && $$div.data('film') == currentFilm ) {
+            $$div.css('border', '1px solid white'); // Draw border on matching div
+          }
+          if (fileList.includes($$div.data('file'))) {
+            $$div.css('background', 'grey');
+          }
+        });
+      },
+      error: function(xhr, status, error) {
+        console.error('API request failed:', error);
+        $$shotDivs.css('border', '1px solid transparent'); // Reset all borders on error
+      }
+    });
+  }
+
+
+  // Initial call
+  updateShotData();
+
+  // Set interval to call every second (1000ms)
+  setInterval(updateShotData, 300);
+});
+
+
+</script>
+
