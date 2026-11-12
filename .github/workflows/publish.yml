@@ -1,0 +1,64 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            binary: lightpanda-x86_64-linux
+            platform_tag: manylinux_2_35_x86_64
+          - os: ubuntu-24.04-arm
+            binary: lightpanda-aarch64-linux
+            platform_tag: manylinux_2_38_aarch64
+          - os: macos-15-intel
+            binary: lightpanda-x86_64-macos
+            platform_tag: macosx_14_0_x86_64
+          - os: macos-latest
+            binary: lightpanda-aarch64-macos
+            platform_tag: macosx_14_0_arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Check version matches release tag
+        run: test "$(uv version --short)" = "${GITHUB_REF_NAME#v}"
+
+      - name: Download Lightpanda binary
+        run: scripts/get-browser "${{ matrix.binary }}"
+
+      - name: Run integration tests
+        run: uv run pytest
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Retag wheel
+        run: uv tool run wheel tags --python-tag py3 --abi-tag none --platform-tag ${{ matrix.platform_tag }} --remove dist/*.whl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist/*.whl
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

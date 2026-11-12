@@ -1,0 +1,57 @@
+[project]
+name = "lightpanda-py"
+version = "0.4.1"
+description = "Lightpanda for Python, a fast headless browser for AI agents and web automation. Zero dependencies, browser included."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Tom Clesius", email = "tomclesius@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = []
+keywords = [
+    "lightpanda",
+    "headless browser",
+    "web scraping",
+    "cdp",
+    "playwright",
+    "puppeteer",
+    "mcp",
+    "ai agents",
+    "markdown",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.scripts]
+lightpanda = "lightpanda.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/tclesius/lightpanda-py"
+Repository = "https://github.com/tclesius/lightpanda-py"
+Issues = "https://github.com/tclesius/lightpanda-py/issues"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "lightpanda"
+module-root = "src"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
