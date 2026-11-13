@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { CustomToolLayout } from '../components/CustomToolLayout';
 import { useInputHistory } from '../utils/useInputHistory';
 import { getBackendUrl } from '../config';
@@ -8,6 +8,13 @@ import { Copy, Save, ChevronRight, ChevronDown, Check, Download, ArrowRight, Min
 import { openExternalLink } from '../utils/openLink';
 import { NativeShell, isNative } from '../utils/nativeShell';
 import { logService } from '../utils/logger';
+import {
+  buildScanResult,
+  lastOctet,
+  validateSubnet,
+  type ScanResult,
+  type ScanStatus,
+} from '../shared/lanScan';
 
 // Helper for Copy
 const copyToCb = (text: string) => {
@@ -530,91 +537,200 @@ export function WpScannerTool({ tool, onClose }: { tool: ToolDef; onClose: () =>
 // 5. IP Scanner
 export function NetScannerTool({ tool, onClose }: { tool: ToolDef; onClose: () => void }) {
   const { value: url, setValue: setUrl } = useInputHistory();
-  const [status, setStatus] = useState<'idle' | 'running' | 'finished'>('idle');
-  const [results, setResults] = useState<any[]>([]);
+  // idle: no scan / ready to scan; running: scan in progress; done: final result available
+  const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
+  const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
+  const [results, setResults] = useState<string[]>([]);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const defaultGateway = '192.168.1.1';
 
-  const execute = async () => {
-    let target = fixUrlSlashes((url || defaultGateway).trim());
-    (document.activeElement as HTMLElement)?.blur();
-    setStatus('running');
-    setResults([]);
-    logService.addLog({ module: 'DIR_SCAN', event: 'Scan Started', target: target, status: 'SYSTEM', details: `Target: ${target}` });
+  // Refs keep the async callbacks bound to the current scan session, so a
+  // late hostFound from a cancelled/old session can never touch the UI.
+  const sessionRef = useRef<{ id: number; cancelled: boolean }>({ id: 0, cancelled: false });
+  const listenerRef = useRef<{ remove: () => void } | null>(null);
 
-    const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(target);
+  /** Normalize either a gateway IP (192.168.1.1) or a full subnet (192.168.1.0/24). */
+  const resolveSubnet = (raw: string): string => {
+    const target = raw.trim();
+    if (target.includes('/')) return target;
+    // Same rule as the native side: keep everything up to the last dot.
+    const prefix = target.substring(0, target.lastIndexOf('.') + 1);
+    return `${prefix}0/24`;
+  };
+
+  const execute = async () => {
+    const raw = (url || defaultGateway).trim();
+    (document.activeElement as HTMLElement)?.blur();
+
+    // Shared validation runs on the JS side BEFORE crossing the bridge, so an
+    // illegal subnet is rejected without any native thread pool starting.
+    const subnet = resolveSubnet(raw);
+    const check = validateSubnet(subnet);
+    if (!check.valid) {
+      setErrorMsg(check.reason || 'Invalid subnet');
+      setPhase('idle');
+      setScanStatus(null);
+      setResults([]);
+      return;
+    }
+
+    setErrorMsg(null);
+    setResults([]);
+    setScanStatus(null);
+    setPhase('running');
+    const session = { id: sessionRef.current.id + 1, cancelled: false };
+    sessionRef.current = session;
+    logService.addLog({ module: 'LAN_SCAN', event: 'Scan Started', target: subnet, status: 'SYSTEM', details: `Subnet: ${subnet}` });
+
+    const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(raw);
 
     if (isNative && isPrivateIP) {
       try {
-        const prefix = target.substring(0, target.lastIndexOf('.') + 1);
-        const subnetStr = `${prefix}0/24`;
-
-        const hostListener = await NativeShell.addListener('hostFound', (hostData: any) => {
-          setResults(prev => {
-            if (prev.some(r => r.ip === hostData.ip)) return prev;
-            return [...prev, { ip: hostData.ip, status: 'Alive (Native Scan)' }];
-          });
+        const hostListener = await NativeShell.addListener('hostFound', (hostData: { ip: string }) => {
+          // No hostFound may land after the user cancelled this session.
+          if (sessionRef.current.id !== session.id || session.cancelled) return;
+          setResults(prev => (prev.includes(hostData.ip) ? prev : [...prev, hostData.ip]));
         });
+        listenerRef.current = hostListener;
 
-        await NativeShell.scanLAN({ subnet: subnetStr });
-        hostListener.remove();
-      } catch (e) {
-        console.error("Native scanLAN error:", e);
+        const finalResult: ScanResult = await NativeShell.scanLAN({ subnet });
+        if (sessionRef.current.id === session.id) {
+          setResults(finalResult.hosts);
+          setScanStatus(finalResult.status);
+          setPhase('done');
+        }
+      } catch (e: any) {
+        // Rejection (illegal subnet / bridge error) is distinct from a
+        // completed zero-host scan: no result object, explicit error shown.
+        if (sessionRef.current.id === session.id) {
+          setErrorMsg(e?.message ? `Scan rejected: ${e.message}` : 'Scan rejected');
+          setPhase('idle');
+          setScanStatus(null);
+        }
       } finally {
-        setStatus('finished');
+        listenerRef.current?.remove();
+        listenerRef.current = null;
       }
       return;
     }
 
+    // Web fallback: backend gateway scan (cannot reach the local Wi-Fi LAN).
     try {
       const backendUrl = getBackendUrl();
-      const qs = new URLSearchParams({ target }).toString();
+      const qs = new URLSearchParams({ target: raw }).toString();
       const res = await fetch(`${backendUrl}/api/net/netscan?${qs}`);
       const data = await res.json();
-      setResults(data.alive || [{ip: target, status: 'Alive (mocked)'}]);
-    } catch (e) {
-      console.error(e);
+      const ips: string[] = (data.alive || [{ ip: raw, status: 'Alive (mocked)' }]).map((h: any) => h.ip);
+      const finalResult = buildScanResult('completed', ips);
+      setResults(finalResult.hosts);
+      setScanStatus(finalResult.status);
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'Gateway scan failed');
     } finally {
-      setStatus('finished');
+      setPhase('done');
     }
   };
+
+  const cancel = async () => {
+    const session = sessionRef.current;
+    session.cancelled = true;
+    // Detach the listener first so even a late in-flight hostFound can never
+    // reach the UI after cancellation; the native side also stops emitting.
+    listenerRef.current?.remove();
+    listenerRef.current = null;
+    try {
+      if (isNative) {
+        await NativeShell.cancelScan();
+      }
+    } catch (e) {
+      console.error('cancelScan failed:', e);
+    }
+    // Freeze whatever was found so far; the scanLAN promise resolves the
+    // authoritative "cancelled" result and re-enables the scan button.
+    setResults(prev => [...prev].sort((a, b) => lastOctet(a) - lastOctet(b)));
+    setScanStatus('cancelled');
+    setPhase('done');
+  };
+
+  const startAnother = () => {
+    setPhase('idle');
+    setScanStatus(null);
+    setResults([]);
+    setErrorMsg(null);
+    sessionRef.current.cancelled = false;
+  };
+
+  const statusLabel =
+    phase === 'running' ? 'SCANNING'
+    : scanStatus === 'cancelled' ? 'CANCELLED'
+    : phase === 'done' ? 'COMPLETE'
+    : 'STANDBY';
 
   return (
     <CustomToolLayout tool={tool} onClose={onClose}>
       <div className="flex flex-col gap-4 sm:gap-6">
         <div className="bg-[#050505] border-l-4 border-l-neon-green border-y border-r border-neon-green/20 rounded-r-lg p-4 sm:p-5 flex flex-col gap-4 sm:gap-5">
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-            <ClearableInput 
-               type="text" 
+            <ClearableInput
+               type="text"
                inputMode="url"
                value={url}
                onChange={(e) => setUrl(fixUrlSlashes(e.target.value))}
                onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); execute(); } }}
                autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false}
-               placeholder={`Gateway IP: ${defaultGateway}`}
+               placeholder={`Gateway IP: ${defaultGateway} (or 192.168.1.0/24)`}
                className="bg-[#050505] border border-neon-green/20 focus-within:border-neon-green rounded-xl text-xs"
              onClear={() => setUrl('')} />
-            <button 
-              onClick={status === 'running' ? () => setStatus('finished') : execute}
-              className="w-full sm:w-auto shrink-0 bg-neon-green text-black border border-neon-green rounded px-6 py-3 hover:bg-neon-green hover:shadow-[0_0_15px_rgba(57,255,20,0.5)] transition-all flex items-center justify-center font-bold"
-            >
-               {status === 'running' ? <Minus size={20} /> : <Search size={20} />}
-            </button>
+            {phase === 'running' ? (
+              <button
+                onClick={cancel}
+                className="w-full sm:w-auto shrink-0 bg-black text-red-400 border border-red-500/50 rounded px-6 py-3 hover:bg-red-500/10 transition-all flex items-center justify-center font-bold uppercase tracking-widest text-xs"
+              >
+                <Minus size={18} className="mr-2" /> Cancel
+              </button>
+            ) : (
+              <button
+                onClick={execute}
+                className="w-full sm:w-auto shrink-0 bg-neon-green text-black border border-neon-green rounded px-6 py-3 hover:bg-neon-green hover:shadow-[0_0_15px_rgba(57,255,20,0.5)] transition-all flex items-center justify-center font-bold"
+              >
+                <Search size={20} />
+              </button>
+            )}
           </div>
+
+          {errorMsg && (
+            <div className="text-red-400 font-mono text-[10px] sm:text-xs border border-red-500/40 bg-red-500/5 p-2 rounded flex items-center gap-2 uppercase tracking-wide">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between border-t border-neon-green/10 pt-4">
             <div className="flex items-center gap-4">
               <div className="w-[40px] h-[40px] bg-black border border-neon-green/20 rounded flex items-center justify-center shrink-0">
-                 {status === 'running' ? <ArcLoader /> : <Check size={20} className="text-neon-green" />}
+                 {phase === 'running' ? <ArcLoader /> : <Check size={20} className="text-neon-green" />}
               </div>
               <div className="text-xs font-mono flex flex-col gap-1 text-gray-400 uppercase tracking-widest">
                 <div>Queue <span className="mx-2">/</span> <span className="text-white">{url || defaultGateway}/24</span></div>
-                <div>Status <span className="mx-2">/</span> <span className={status === 'running' ? 'text-neon-green animate-pulse' : 'text-white'}>{status === 'running' ? 'SCANNING' : status === 'finished' ? 'COMPLETE' : 'STANDBY'}</span></div>
+                <div>Found <span className="mx-2">/</span> <span className="text-white">{results.length}</span></div>
+                <div>Status <span className="mx-2">/</span> <span className={phase === 'running' ? 'text-neon-green animate-pulse' : scanStatus === 'cancelled' ? 'text-red-400' : 'text-white'}>{statusLabel}</span></div>
               </div>
             </div>
             {results.length > 0 && <button onClick={() => setResults([])} className="bg-black hover:bg-neon-green/10 border border-red-500/30 text-gray-400 hover:text-red-400 px-4 py-2 rounded text-[10px] font-bold uppercase tracking-widest transition-all">Clear</button>}
             <div className="text-[10px] text-gray-500 font-mono tracking-widest uppercase text-left sm:text-right hidden sm:block">
-               Range: 1 → 254<br />Timeout: 80ms
+               Range: 1 → 254<br />Timeout: 500ms
             </div>
           </div>
+
+          {phase === 'done' && (
+            <div className={`font-mono text-[10px] sm:text-xs border p-2 rounded flex items-center gap-2 uppercase tracking-wide ${scanStatus === 'cancelled' ? 'text-red-400 border-red-500/40 bg-red-500/5' : 'text-neon-green border-neon-green/30 bg-neon-green/5'}`}>
+              <span>
+                Scan {scanStatus === 'cancelled' ? 'cancelled' : 'completed'} — {results.length} host{results.length === 1 ? '' : 's'} found.
+              </span>
+              <button onClick={startAnother} className="ml-auto underline hover:opacity-80">Scan again</button>
+            </div>
+          )}
+
           {/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(url || defaultGateway) && (
             <div className="text-yellow-500 font-mono text-[10px] sm:text-xs mt-2 border border-yellow-500/30 bg-yellow-500/5 p-2 rounded flex items-center gap-2 uppercase tracking-wide">
               <AlertTriangle size={14} className="shrink-0" />
@@ -630,15 +746,15 @@ export function NetScannerTool({ tool, onClose }: { tool: ToolDef; onClose: () =
                 <h3 className="text-white uppercase tracking-widest text-xs font-bold font-mono">DISCOVERED HOSTS ({results.length})</h3>
              </div>
              <div className="flex flex-col gap-2">
-               {results.map((r, i) => (
-                 <div key={i} className="bg-[#050505] border-l-2 border-l-neon-green border-y border-r border-white/5 rounded-r-lg p-4 flex items-center justify-between text-sm hover:border-r-neon-green/30 transition-all font-mono group">
+               {[...results].sort((a, b) => lastOctet(a) - lastOctet(b)).map((ip, i) => (
+                 <div key={ip} className="bg-[#050505] border-l-2 border-l-neon-green border-y border-r border-white/5 rounded-r-lg p-4 flex items-center justify-between text-sm hover:border-r-neon-green/30 transition-all font-mono group">
                    <div className="flex flex-col gap-1 flex-1 min-w-0 pr-4">
-                     <span className="text-white font-bold group-hover:text-neon-green transition-colors truncate">{r.ip}</span>
+                     <span className="text-white font-bold group-hover:text-neon-green transition-colors truncate">{ip}</span>
                      <span className="text-gray-500 text-[10px] uppercase">{i === 0 ? 'Gateway / Router' : 'Network Device'}</span>
                    </div>
                    <div className="flex items-center gap-4">
                      <span className="text-neon-green/70 font-bold text-[10px] uppercase cursor-pointer hover:underline hover:text-neon-green hidden sm:inline-block">[Scan Ports]</span>
-                     <ActionButtons text={r.ip} />
+                     <ActionButtons text={ip} />
                    </div>
                  </div>
                ))}

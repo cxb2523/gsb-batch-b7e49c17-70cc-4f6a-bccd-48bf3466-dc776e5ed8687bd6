@@ -1,6 +1,7 @@
 package com.k4n3co.pwnnet;
 
 import android.util.Log;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -15,12 +16,14 @@ import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 @CapacitorPlugin(name = "NativeShell")
 public class NativeShellPlugin extends Plugin {
@@ -250,34 +253,173 @@ public class NativeShellPlugin extends Plugin {
         }).start();
     }
 
+    /**
+     * One LAN scan session. Holds the plugin call, worker pool, cancellation
+     * flag and every host discovered so far. All mutating paths are
+     * synchronized so that scan completion and user cancellation can never
+     * resolve the same call twice.
+     *
+     * Rule parity: the validation / prefix / dedup / ordering / status rules
+     * mirror src/shared/lanScan.ts 1:1 — change both together.
+     */
+    private static final class LanScanSessionData {
+        final PluginCall call;
+        final ExecutorService pool;
+        final Set<String> hosts = new HashSet<>();
+        volatile boolean cancelled = false;
+        boolean finalized = false;
+
+        LanScanSessionData(PluginCall call, ExecutorService pool) {
+            this.call = call;
+            this.pool = pool;
+        }
+    }
+
+    private volatile LanScanSessionData activeScan;
+    private static final Pattern DIGITS = Pattern.compile("\\d+");
+
+    /**
+     * Shared subnet validation — Java mirror of validateSubnet() in
+     * src/shared/lanScan.ts. Rejects before any thread pool is created:
+     *   1. non-empty string containing '/';
+     *   2. at least three numeric dotted octets before '/'.
+     * Returns null when valid, otherwise a human-readable rejection reason.
+     */
+    private String validateSubnet(String subnet) {
+        if (subnet == null || subnet.isEmpty()) {
+            return "Target subnet required";
+        }
+        if (!subnet.contains("/")) {
+            return "Subnet must contain \"/\" (e.g. 192.168.1.0/24)";
+        }
+        String addressPart = subnet.split("/")[0];
+        String[] octets = addressPart.split("\\.");
+        if (octets.length < 3) {
+            return "Subnet prefix must contain at least three dotted octets (e.g. 192.168.1.0/24)";
+        }
+        for (int i = 0; i < 3; i++) {
+            if (!DIGITS.matcher(octets[i].trim()).matches()) {
+                return "Subnet octet #" + (i + 1) + " (\"" + octets[i] + "\") is not a number";
+            }
+        }
+        return null;
+    }
+
+    /** Java mirror of derivePrefix() in src/shared/lanScan.ts. */
+    private String derivePrefix(String subnet) {
+        String addressPart = subnet.split("/")[0];
+        return addressPart.substring(0, addressPart.lastIndexOf('.') + 1);
+    }
+
+    private static int lastOctet(String ip) {
+        try {
+            return Integer.parseInt(ip.substring(ip.lastIndexOf('.') + 1));
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
+    }
+
     @PluginMethod
     public void scanLAN(PluginCall call) {
         String subnet = call.getString("subnet");
-        if (subnet == null || !subnet.contains("/")) { call.reject("Target subnet required"); return; }
+
+        // Validate BEFORE starting anything: invalid input rejects immediately
+        // and no thread pool / network work is ever scheduled.
+        String rejection = validateSubnet(subnet);
+        if (rejection != null) {
+            call.reject(rejection);
+            return;
+        }
+        final String prefix = derivePrefix(subnet);
+
+        final LanScanSessionData session = new LanScanSessionData(
+                call, Executors.newFixedThreadPool(64));
+        activeScan = session;
         call.setKeepAlive(true);
+
         new Thread(() -> {
             try {
-                String prefix = subnet.split("/")[0].substring(0, subnet.lastIndexOf(".") + 1);
-                ExecutorService pool = Executors.newFixedThreadPool(64);
                 for (int i = 1; i < 255; i++) {
+                    if (session.cancelled) break;
                     final String host = prefix + i;
-                    pool.execute(() -> {
+                    session.pool.execute(() -> {
+                        // A task already queued when cancel() arrives must no-op.
+                        if (session.cancelled) return;
                         try {
                             if (InetAddress.getByName(host).isReachable(500)) {
-                                JSObject result = new JSObject();
-                                result.put("ip", host);
-                                result.put("status", "alive");
-                                notifyListeners("hostFound", result);
+                                boolean accept;
+                                synchronized (session) {
+                                    accept = !session.cancelled && !session.finalized
+                                            && session.hosts.add(host);
+                                }
+                                if (accept) {
+                                    JSObject result = new JSObject();
+                                    result.put("ip", host);
+                                    result.put("status", "alive");
+                                    getBridge().executeOnMainThread(
+                                            () -> notifyListeners("hostFound", result));
+                                }
                             }
                         } catch (Exception ignored) {}
                     });
                 }
-                pool.shutdown();
-                pool.awaitTermination(30, TimeUnit.SECONDS);
-                JSObject done = new JSObject();
-                done.put("status", "completed");
-                call.resolve(done);
-            } catch (Exception e) { call.reject(e.getMessage()); }
+                session.pool.shutdown();
+                session.pool.awaitTermination(30, TimeUnit.SECONDS);
+                finishScan(session, session.cancelled ? "cancelled" : "completed");
+            } catch (Exception e) {
+                finishScan(session, session.cancelled ? "cancelled" : "completed");
+            }
         }).start();
+    }
+
+    /**
+     * Cancel the running scan. Already-discovered hosts are preserved; the
+     * scan resolves (exactly once) with status "cancelled" and no further
+     * hostFound events are emitted.
+     */
+    @PluginMethod
+    public void cancelScan(PluginCall call) {
+        LanScanSessionData session = activeScan;
+        if (session != null) {
+            session.cancelled = true;
+            session.pool.shutdownNow();
+            finishScan(session, "cancelled");
+        }
+        JSObject ack = new JSObject();
+        ack.put("cancelled", true);
+        call.resolve(ack);
+    }
+
+    /**
+     * Single finalization path: whichever of (natural completion, timeout,
+     * cancellation, error) wins the synchronized race resolves the plugin
+     * call; every later invocation returns the same result object and never
+     * resolves or rejects a second time.
+     */
+    private void finishScan(LanScanSessionData session, String status) {
+        JSObject done;
+        synchronized (session) {
+            if (session.finalized) {
+                return;
+            }
+            session.finalized = true;
+            if ("cancelled".equals(status)) {
+                session.cancelled = true;
+            }
+            List<String> sorted = new ArrayList<>(session.hosts);
+            sorted.sort(Comparator.comparingInt(NativeShellPlugin::lastOctet));
+            JSArray hostArray = new JSArray();
+            for (String ip : sorted) {
+                hostArray.put(ip);
+            }
+            done = new JSObject();
+            done.put("status", status);
+            done.put("hosts", hostArray);
+            done.put("found", sorted.size());
+            if (activeScan == session) {
+                activeScan = null;
+            }
+        }
+        session.call.resolve(done);
     }
 }

@@ -1,9 +1,17 @@
 import { registerPlugin, PluginListenerHandle } from '@capacitor/core';
 import { Capacitor } from '@capacitor/core';
+import type { ScanResult } from '../shared/lanScan';
 
 export interface NativeShellPlugin {
   execute(options: { command: string }): Promise<{ exitCode: number }>;
-  scanLAN(options: { subnet: string }): Promise<{ status: string }>;
+  /**
+   * Run one LAN scan. Rejects immediately (no native work started) when the
+   * subnet fails the shared validateSubnet() rules. Resolves exactly once,
+   * either with status "completed" or "cancelled".
+   */
+  scanLAN(options: { subnet: string }): Promise<ScanResult>;
+  /** Cancel the active scan; the scanLAN promise then resolves "cancelled". */
+  cancelScan(): Promise<{ cancelled: boolean }>;
   crackHash(options: { hash: string, type: string, wordlistContent: string, useMutations: boolean }): Promise<void>;
   addListener(eventName: 'stdout', listenerFunc: (data: { line: string }) => void): Promise<PluginListenerHandle>;
   addListener(eventName: 'stderr', listenerFunc: (data: { line: string }) => void): Promise<PluginListenerHandle>;

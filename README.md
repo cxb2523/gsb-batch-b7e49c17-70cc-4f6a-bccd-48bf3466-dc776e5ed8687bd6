@@ -87,6 +87,21 @@ npm install
 # 4. Start the development server
 npm run dev
 ```
+### Run the LAN-scan logic tests
+
+The subnet validation, prefix derivation, result sorting/dedup and
+cancellation/status rules live in a dependency-free shared module
+(`src/shared/lanScan.ts`) used by both the web app and the Android plugin, and
+are covered by Node-based unit tests (no device/emulator required, Node >= 20):
+
+```bash
+npm test
+# equivalent: node --import tsx --test src/shared/lanScan.test.ts
+```
+
+See [`docs/LAN_SCAN.md`](docs/LAN_SCAN.md) for the full scan-lifecycle contract
+(normal completion, zero hosts, invalid subnet, cancellation).
+
 ### **To open app:**
 
 **Click** the **URL** shown in the **terminal** *(usually http://localhost:3000 or http://0.0.0.0:3000)*.
