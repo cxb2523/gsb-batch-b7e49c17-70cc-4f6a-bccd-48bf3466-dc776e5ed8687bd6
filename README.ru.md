@@ -46,6 +46,7 @@ geofeed.csv.gz
 geofeed.jsonl.gz
 geofeed.parquet
 failed-geofeeds.csv
+fetch-status.csv
 diff.json
 manifest.json
 changelog.md
@@ -62,6 +63,42 @@ prefix,country,region,city,postal_code,rir,inetnum,url,fetched_at,signed,signatu
 `geofeed.jsonl` содержит те же записи в виде JSON-объектов, по одной строке на запись.
 
 `changelog.md` содержит сводку по количеству строк, помеченным строкам и покрытию по каждому RIR для последнего запуска.
+
+## Результаты запуска и отчётность об ошибках
+
+Каждый запуск оставляет проверяемый след: что удалось скачать, а что нет. Так
+потребитель может отличить «для этого префикса данных нет» от «в этом запуске
+данные не удалось получить».
+
+- Каждый URL geofeed скачивается ровно один раз, сколько бы записей `inetnum`
+  на него ни ссылалось. Результат хранит статус: `fetched`, `not_modified`
+  (ответ 304, тело взято из кэша) или `failed`, а также причину сбоя.
+- `fetch-status.csv` перечисляет каждый запрошенный URL со статусом, этапом и
+  причиной сбоя, числом ссылающихся inetnum, счётчиками разобранных, битых и
+  не попавших в inetnum строк и временем загрузки — итог по каждому URL можно
+  проверить отдельно.
+- Неудачный URL даёт ровно одну строку в `failed-geofeeds.csv`, и эта строка
+  сохраняет все ссылающиеся `inetnum` (до 25, далее суффикс `;...+N`).
+- `failed-geofeeds.csv` сохраняет прежние столбцы и добавляет столбец `stage`
+  с этапом сбоя: `download`, `parse` или `validate`.
+- Ответ 304 при отсутствии локального тела кэша считается сбоем этапа
+  `download`, а не молчаливым пустым успехом.
+- Сбой загрузки одного массового источника RIR не прерывает запуск: источник
+  фиксируется как failed, а остальные массовые источники и прямые geofeed
+  обрабатываются дальше.
+- Если все массовые источники упали и валидация не дала ни одной строки,
+  запуск завершается с ненулевым кодом и сообщением
+  `harvest failed: all bulk RIR sources failed ...`, а файлы набора данных не
+  записываются — пустой артефакт нельзя спутать с реальным результатом.
+- Статистика `manifest.json` включает счётчики по каждому источнику:
+  `bulk_sources`, `bulk_sources_ok`, `bulk_sources_failed`,
+  `bulk_sources_not_modified`, `direct_geofeed_sources`,
+  `direct_geofeed_sources_ok`, `direct_geofeed_sources_failed`, а также
+  счётчики по URL (`fetched_urls`, `not_modified_urls`, `failed_fetches`),
+  по этапам (`failed_downloads`, `failed_parses`, `failed_validations`,
+  `failures_by_stage`) и по форме строк (`malformed_geofeed_rows`,
+  `unmatched_geofeed_rows`). Поле `sources` содержит запись на каждый входной
+  источник: имя, вид, RIR, URL, статус, этап, ошибку и число записей.
 
 ## Загрузка ежедневного набора данных
 

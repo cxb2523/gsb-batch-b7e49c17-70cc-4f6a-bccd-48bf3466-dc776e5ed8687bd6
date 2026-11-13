@@ -70,6 +70,7 @@ jobs:
             dist/geofeed.jsonl.gz \
             dist/geofeed.parquet \
             dist/failed-geofeeds.csv \
+            dist/fetch-status.csv \
             dist/diff.json \
             dist/manifest.json \
             dist/changelog.md > dist/SHA256SUMS
@@ -87,6 +88,7 @@ jobs:
             dist/geofeed.jsonl.gz
             dist/geofeed.parquet
             dist/failed-geofeeds.csv
+            dist/fetch-status.csv
             dist/diff.json
             dist/manifest.json
             dist/changelog.md
@@ -118,6 +120,7 @@ jobs:
             dist/geofeed.jsonl.gz \
             dist/geofeed.parquet \
             dist/failed-geofeeds.csv \
+            dist/fetch-status.csv \
             dist/diff.json \
             dist/manifest.json \
             dist/changelog.md \

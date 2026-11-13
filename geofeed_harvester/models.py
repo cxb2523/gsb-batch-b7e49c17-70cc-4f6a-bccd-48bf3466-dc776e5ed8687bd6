@@ -82,3 +82,72 @@ class ValidatedGeofeedRow:
 
 
 FetchStatus = Literal["fetched", "not_modified", "failed"]
+FailureStage = Literal["download", "parse", "validate"]
+SourceKind = Literal["bulk", "direct"]
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """Outcome of one geofeed URL fetch.
+
+    A URL is fetched once no matter how many ``inetnum`` records reference it,
+    so ``refs`` retains every referencing record even when the fetch fails.
+    """
+
+    url: str
+    refs: tuple[InetnumRef, ...]
+    rows: tuple[RawGeofeedRow, ...]
+    fetched_at: str
+    status: FetchStatus
+    error: str | None = None
+    stage: FailureStage | None = None
+    data_rows: int = 0
+    malformed_rows: int = 0
+    unmatched_rows: int = 0
+
+
+@dataclass(frozen=True)
+class SourceResult:
+    """Outcome of downloading one bulk RIR dump or direct geofeed source."""
+
+    name: str
+    kind: SourceKind
+    rir: str
+    url: str
+    status: Literal["downloaded", "not_modified", "failed"]
+    fetched_at: str
+    error: str | None = None
+    stage: FailureStage | None = None
+    records: int = 0
+
+
+@dataclass(frozen=True)
+class FailureRecord:
+    """One failed URL, ready to be written to ``failed-geofeeds.csv``."""
+
+    url: str
+    rir: str
+    refs: tuple[InetnumRef, ...]
+    error: str
+    stage: FailureStage
+    fetched_at: str
+
+
+@dataclass(frozen=True)
+class FetchStatusRecord:
+    """Per-URL fetch conclusion, written to ``fetch-status.csv``.
+
+    Unlike ``FailureRecord`` this covers every URL that was attempted, so the
+    run's success/304/failure split can be checked URL by URL.
+    """
+
+    url: str
+    rir: str
+    status: FetchStatus
+    stage: FailureStage | None
+    error: str | None
+    refs: int
+    rows: int
+    malformed_rows: int
+    unmatched_rows: int
+    fetched_at: str

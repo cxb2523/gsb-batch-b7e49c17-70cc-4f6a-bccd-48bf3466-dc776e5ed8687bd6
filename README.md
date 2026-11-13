@@ -51,6 +51,7 @@ geofeed.csv.gz
 geofeed.jsonl.gz
 geofeed.parquet
 failed-geofeeds.csv
+fetch-status.csv
 diff.json
 manifest.json
 changelog.md
@@ -68,6 +69,47 @@ prefix,country,region,city,postal_code,rir,inetnum,url,fetched_at,signed,signatu
 
 `changelog.md` summarizes row counts, flagged rows, and per-RIR coverage for the
 latest run.
+
+## Run Outcomes And Failure Reporting
+
+Every run leaves an auditable record of what was fetched and what was not, so a
+consumer can tell "there is no data for this prefix" from "this run did not
+manage to fetch it".
+
+- Each geofeed URL is fetched exactly once, no matter how many `inetnum` records
+  reference it. The result keeps a status: `fetched`, `not_modified` (304, body
+  reused from cache) or `failed`, plus the failure reason.
+- `fetch-status.csv` lists every attempted URL with its status, failure stage and
+  reason, referencing-inetnum count, parsed/malformed/unmatched row counts and
+  fetch timestamp, so each URL's conclusion can be checked individually.
+- A failed URL produces exactly one row in `failed-geofeeds.csv`, and that row
+  keeps every referring `inetnum` (up to 25, then a `;...+N` suffix).
+- `failed-geofeeds.csv` keeps the original columns and adds a `stage` column
+  naming the phase that failed: `download`, `parse` or `validate`.
+- A 304 response with no cached body is a `download` failure, never a silent
+  empty success.
+- Bulk RIR source failures do not abort the run: the source is recorded as
+  failed and the remaining bulk sources plus direct geofeeds are still
+  processed.
+- If every bulk source fails and validation yields zero rows, the run exits
+  non-zero with `harvest failed: all bulk RIR sources failed ...` and no dataset
+  files are written, so an empty artifact cannot be mistaken for a real result.
+- `manifest.json` stats include per-source counts: `bulk_sources`,
+  `bulk_sources_ok`, `bulk_sources_failed`, `bulk_sources_not_modified`,
+  `direct_geofeed_sources`, `direct_geofeed_sources_ok`,
+  `direct_geofeed_sources_failed`, plus per-URL fetch counts
+  (`fetched_urls`, `not_modified_urls`, `failed_fetches`), per-stage counts
+  (`failed_downloads`, `failed_parses`, `failed_validations`,
+  `failures_by_stage`) and row-shape counters (`malformed_geofeed_rows`,
+  `unmatched_geofeed_rows`). `sources` holds one entry per input source with
+  name, kind, RIR, URL, status, stage, error and record count.
+
+`failed-geofeeds.csv`:
+
+```csv
+url,rir,inetnum_refs,error,fetched_at,stage
+https://broken.example.net/geofeed.csv,RIPE,192.0.2.0/24;192.0.2.0/25,http_error: connection refused,2026-11-13T07:44:29+00:00,download
+```
 
 ## Downloading The Daily Dataset
 

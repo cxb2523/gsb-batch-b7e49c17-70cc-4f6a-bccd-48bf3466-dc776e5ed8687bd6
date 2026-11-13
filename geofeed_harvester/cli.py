@@ -3,14 +3,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
 
+from geofeed_harvester.errors import HarvestError
 from geofeed_harvester.pipeline import run_harvest
 from geofeed_harvester.rdap import discover_arin_rdap_refs
-from geofeed_harvester.sources import DIRECT_GEOFEED_SOURCES, prepare_inputs
+from geofeed_harvester.sources import DIRECT_GEOFEED_SOURCES, PreparedInputs, prepare_inputs
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Harvest RFC 8805 geofeed datasets.")
     parser.add_argument(
         "--rir-dump",
@@ -51,24 +53,34 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    input_stats = {}
     rir_dumps = list(args.rir_dump or [])
-    direct_geofeeds = []
+    direct_geofeeds: list[tuple[str, str, Path]] = []
+    prepared_inputs: PreparedInputs | None = None
     if args.auto_discover:
-        input_stats = prepare_inputs(
+        prepared_inputs = prepare_inputs(
             raw_dir=args.bulk_dir,
             normalized_rir_path=args.normalized_rir_dump,
             direct_geofeed_dir=args.direct_geofeed_dir,
             include_lacnic=not args.skip_lacnic,
         )
-        rir_dumps.append(args.normalized_rir_dump)
+        for source in prepared_inputs.failed:
+            print(
+                f"source failed: {source.kind} {source.name} "
+                f"({source.stage}/{source.error})",
+                file=sys.stderr,
+            )
         if not args.skip_lacnic:
+            # Only feed successfully downloaded direct sources into the harvest;
+            # failed ones are already recorded in prepared_inputs.sources.
             for source in DIRECT_GEOFEED_SOURCES:
-                direct_geofeeds.append(
-                    (source.rir, source.url, args.direct_geofeed_dir / f"{source.name}.csv")
-                )
+                if any(
+                    result.name == source.name and result.status != "failed"
+                    for result in prepared_inputs.direct
+                ):
+                    direct_geofeeds.append(
+                        (source.rir, source.url, args.direct_geofeed_dir / f"{source.name}.csv")
+                    )
 
-    arin_refs_path = None
     if args.arin_rdap_seed:
         arin_refs = asyncio.run(
             discover_arin_rdap_refs(
@@ -87,24 +99,29 @@ def main() -> None:
                     fh.write("source: ARIN\n\n")
             rir_dumps.append(arin_refs_path)
 
-    if not rir_dumps and not direct_geofeeds:
+    if not rir_dumps and not direct_geofeeds and prepared_inputs is None:
         parser.error("pass --rir-dump or use --auto-discover")
 
-    stats = asyncio.run(
-        run_harvest(
-            rir_dump_paths=rir_dumps,
-            out_dir=args.out_dir,
-            cache_dir=args.cache_dir,
-            concurrency=args.concurrency,
-            bgp_validator=args.bgp_validator,
-            direct_geofeed_paths=direct_geofeeds,
-            previous_jsonl=args.previous_jsonl,
-            signature_verdicts_path=args.signature_verdicts,
+    try:
+        stats = asyncio.run(
+            run_harvest(
+                rir_dump_paths=rir_dumps,
+                out_dir=args.out_dir,
+                cache_dir=args.cache_dir,
+                concurrency=args.concurrency,
+                bgp_validator=args.bgp_validator,
+                direct_geofeed_paths=direct_geofeeds,
+                previous_jsonl=args.previous_jsonl,
+                signature_verdicts_path=args.signature_verdicts,
+                prepared_inputs=prepared_inputs,
+            )
         )
-    )
-    stats = {**input_stats, **stats}
-    print(json.dumps(stats, indent=2, sort_keys=True))
+    except HarvestError as exc:
+        print(f"harvest failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(stats, indent=2, sort_keys=True, default=str))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

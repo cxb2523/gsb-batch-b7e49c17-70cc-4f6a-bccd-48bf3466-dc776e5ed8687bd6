@@ -30,6 +30,11 @@ def main() -> None:
             f"- Unique prefixes: `{stats.get('unique_prefixes', 0):,}`",
             f"- Unique geofeed URLs: `{stats.get('unique_geofeed_urls', 0):,}`",
             f"- Countries: `{stats.get('countries', 0):,}`",
+            f"- Bulk sources ok / failed: `{stats.get('bulk_sources_ok', 0):,}` / "
+            f"`{stats.get('bulk_sources_failed', 0):,}`",
+            f"- Direct geofeed sources ok / failed: "
+            f"`{stats.get('direct_geofeed_sources_ok', 0):,}` / "
+            f"`{stats.get('direct_geofeed_sources_failed', 0):,}`",
             f"- Failed geofeed fetches: `{stats.get('failed_geofeed_fetches', 0):,}`",
             f"- Added / removed / changed prefixes: `{diff.get('added_count', 0):,}` / "
             f"`{diff.get('removed_count', 0):,}` / `{diff.get('changed_count', 0):,}`",

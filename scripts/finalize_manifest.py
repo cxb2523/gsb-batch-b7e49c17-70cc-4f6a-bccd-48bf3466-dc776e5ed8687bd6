@@ -9,6 +9,7 @@ RELEASE_FILES = [
     "geofeed.jsonl.gz",
     "geofeed.parquet",
     "failed-geofeeds.csv",
+    "fetch-status.csv",
     "diff.json",
     "manifest.json",
     "changelog.md",

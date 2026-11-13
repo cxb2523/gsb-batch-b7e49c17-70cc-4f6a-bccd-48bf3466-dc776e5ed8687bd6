@@ -7,8 +7,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from geofeed_harvester.fetch import FetchResult
-from geofeed_harvester.models import ValidatedGeofeedRow
+from geofeed_harvester.models import FailureRecord, FetchStatusRecord, ValidatedGeofeedRow
 
 CSV_HEADER = [
     "prefix",
@@ -28,12 +27,29 @@ CSV_HEADER = [
 ]
 
 
+FAILED_CSV_HEADER = ["url", "rir", "inetnum_refs", "error", "fetched_at", "stage"]
+STATUS_CSV_HEADER = [
+    "url",
+    "rir",
+    "status",
+    "stage",
+    "error",
+    "inetnum_refs",
+    "rows",
+    "malformed_rows",
+    "unmatched_rows",
+    "fetched_at",
+]
+
+
 def write_outputs(
     rows: Iterable[ValidatedGeofeedRow],
     out_dir: Path,
-    stats: dict[str, int] | None = None,
-    fetch_results: Iterable[FetchResult] | None = None,
+    stats: dict[str, object] | None = None,
+    failures: Iterable[FailureRecord] | None = None,
     previous_jsonl: Path | None = None,
+    source_details: Iterable[dict[str, object]] | None = None,
+    status_records: Iterable[FetchStatusRecord] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     materialized = list(rows)
@@ -41,24 +57,28 @@ def write_outputs(
     jsonl_path = out_dir / "geofeed.jsonl"
     parquet_path = out_dir / "geofeed.parquet"
     failed_path = out_dir / "failed-geofeeds.csv"
+    status_path = out_dir / "fetch-status.csv"
     diff_path = out_dir / "diff.json"
     manifest_path = out_dir / "manifest.json"
 
     _write_csv(materialized, csv_path)
     _write_jsonl(materialized, jsonl_path)
     parquet_written = _write_parquet(materialized, parquet_path)
-    failed_count = _write_failed_fetches(fetch_results or [], failed_path)
+    failures_materialized = list(failures or [])
+    _write_failures(failures_materialized, failed_path)
+    _write_fetch_status(list(status_records or []), status_path)
     diff = _build_diff(materialized, previous_jsonl)
     diff_path.write_text(json.dumps(diff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    _write_changelog(materialized, out_dir / "changelog.md", diff, failed_count)
+    _write_changelog(materialized, out_dir / "changelog.md", diff, failures_materialized)
     _write_manifest(
         rows=materialized,
         out_dir=out_dir,
         stats=stats or {},
         diff=diff,
-        failed_count=failed_count,
+        failures=failures_materialized,
         parquet_written=parquet_written,
         path=manifest_path,
+        source_details=list(source_details or []),
     )
 
 
@@ -88,18 +108,46 @@ def _write_parquet(rows: list[ValidatedGeofeedRow], path: Path) -> bool:
     return True
 
 
-def _write_failed_fetches(fetch_results: Iterable[FetchResult], path: Path) -> int:
-    failed = [result for result in fetch_results if result.status == "failed"]
+def _write_failures(failures: Iterable[FailureRecord], path: Path) -> None:
+    materialized = list(failures)
     with path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["url", "rir", "inetnum_refs", "error", "fetched_at"])
-        for result in failed:
-            rirs = ";".join(sorted({ref.rir for ref in result.refs}))
-            inetnums = ";".join(str(ref.inetnum) for ref in result.refs[:25])
-            if len(result.refs) > 25:
-                inetnums += f";...+{len(result.refs) - 25}"
-            writer.writerow([result.url, rirs, inetnums, result.error or "", result.fetched_at])
-    return len(failed)
+        writer.writerow(FAILED_CSV_HEADER)
+        for failure in materialized:
+            inetnums = ";".join(str(ref.inetnum) for ref in failure.refs[:25])
+            if len(failure.refs) > 25:
+                inetnums += f";...+{len(failure.refs) - 25}"
+            writer.writerow(
+                [
+                    failure.url,
+                    failure.rir,
+                    inetnums,
+                    failure.error,
+                    failure.fetched_at,
+                    failure.stage,
+                ]
+            )
+
+
+def _write_fetch_status(records: Iterable[FetchStatusRecord], path: Path) -> None:
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(STATUS_CSV_HEADER)
+        for record in records:
+            writer.writerow(
+                [
+                    record.url,
+                    record.rir,
+                    record.status,
+                    record.stage or "",
+                    record.error or "",
+                    record.refs,
+                    record.rows,
+                    record.malformed_rows,
+                    record.unmatched_rows,
+                    record.fetched_at,
+                ]
+            )
 
 
 def _build_diff(rows: list[ValidatedGeofeedRow], previous_jsonl: Path | None) -> dict[str, object]:
@@ -141,7 +189,7 @@ def _write_changelog(
     rows: list[ValidatedGeofeedRow],
     path: Path,
     diff: dict[str, object],
-    failed_count: int,
+    failures: list[FailureRecord],
 ) -> None:
     by_rir: dict[str, int] = {}
     flagged = 0
@@ -149,13 +197,16 @@ def _write_changelog(
         by_rir[row.rir] = by_rir.get(row.rir, 0) + 1
         if row.flags:
             flagged += 1
+    by_stage = _count_stages(failures)
 
     lines = [
         "# GeoFeed Harvester Changelog",
         "",
         f"- Valid rows: {len(rows)}",
         f"- Rows with flags: {flagged}",
-        f"- Failed geofeed fetches: {failed_count}",
+        f"- Failed geofeed fetches: {len(failures)}",
+        f"- Failures by stage: download={by_stage.get('download', 0)}, "
+        f"parse={by_stage.get('parse', 0)}, validate={by_stage.get('validate', 0)}",
         f"- Added prefixes: {diff['added_count']}",
         f"- Removed prefixes: {diff['removed_count']}",
         f"- Changed prefixes: {diff['changed_count']}",
@@ -183,11 +234,12 @@ def _write_changelog(
 def _write_manifest(
     rows: list[ValidatedGeofeedRow],
     out_dir: Path,
-    stats: dict[str, int],
+    stats: dict[str, object],
     diff: dict[str, object],
-    failed_count: int,
+    failures: list[FailureRecord],
     parquet_written: bool,
     path: Path,
+    source_details: list[dict[str, object]] | None = None,
 ) -> None:
     files = {}
     for item in sorted(out_dir.iterdir()):
@@ -200,14 +252,15 @@ def _write_manifest(
     urls = {row.url for row in rows}
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "schema_version": 1,
+        "schema_version": 2,
         "stats": {
             **stats,
             "valid_rows": len(rows),
             "unique_prefixes": len({str(row.prefix) for row in rows}),
             "unique_geofeed_urls": len(urls),
             "countries": len(countries),
-            "failed_geofeed_fetches": failed_count,
+            "failed_geofeed_fetches": len(failures),
+            "failures_by_stage": _count_stages(failures),
             "parquet_written": parquet_written,
         },
         "diff": {
@@ -217,9 +270,18 @@ def _write_manifest(
             "changed_count": diff["changed_count"],
         },
         "countries": countries,
+        "sources": source_details or [],
         "files": files,
     }
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _count_stages(failures: list[FailureRecord]) -> dict[str, int]:
+    counts = {"download": 0, "parse": 0, "validate": 0}
+    for failure in failures:
+        stage = failure.stage or "download"
+        counts[stage] = counts.get(stage, 0) + 1
+    return counts
 
 
 def _row_key(row: ValidatedGeofeedRow) -> str:
