@@ -256,6 +256,9 @@ check('crawl settings start from the UI defaults', body['max_pages'] == 1500 and
       and opts['sitemap'] and opts['near_dup'] and opts['bot_check'] and opts['bot_sample'] == 10)
 check('pattern lists become one per line', body['exclude_patterns'] == '/tag/*\n/cart')
 check('compare_no_js needs render_js', at.crawl_settings({'url': 'x', 'compare_no_js': True})[0]['compare_no_js'] is False)
+check('auto throttle is on by default', at.crawl_settings({'url': 'x'})[0]['auto_throttle'] is True)
+check('auto throttle can be switched off', at.crawl_settings({'url': 'x', 'auto_throttle': False})[0]['auto_throttle'] is False)
+check('auto throttle accepts a string flag', at.crawl_settings({'url': 'x', 'auto_throttle': 'false'})[0]['auto_throttle'] is False)
 try:
     at.crawl_settings({'url': ''})
     check('a crawl without a URL is refused', False)

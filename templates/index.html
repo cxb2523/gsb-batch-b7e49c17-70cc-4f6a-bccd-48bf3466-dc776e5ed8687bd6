@@ -235,6 +235,9 @@
                oninput="crawlerOnSpeedChange(this.value)" />
         <div id="crawler-delay-warn" style="display:none;margin-top:4px;font-size:11px;color:#b45309;background:#fefce8;border:1px solid #fde68a;border-radius:4px;padding:3px 8px;">Warning: delays below 0.4s may trigger rate limits or blocks on the target server.</div>
       </div>
+      <label class="check" title="Watches how long each page takes. When a host keeps answering slowly (without sending a 429), requests to it are automatically spaced further apart so the workers stop piling up on it, and full speed is restored once it recovers. Uncheck to keep a fixed request rate no matter how slow the host gets.">
+        <input type="checkbox" id="crawler-auto-throttle" checked /> Auto-throttle slow hosts <small>(widen request gaps on persistent slowdowns)</small>
+      </label>
       <div class="slider-row">
         <label>Max depth: <strong id="crawler-depth-label">10</strong></label>
         <input type="range" id="crawler-depth" min="1" max="20" value="10" step="1"

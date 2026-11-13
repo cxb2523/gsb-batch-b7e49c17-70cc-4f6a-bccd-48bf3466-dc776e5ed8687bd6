@@ -63,6 +63,7 @@ TOOLS = [
             'max_depth': {'type': 'integer', 'minimum': 1, 'maximum': 20, 'description': 'Click depth limit (default 10).'},
             'max_workers': {'type': 'integer', 'minimum': 1, 'maximum': 20, 'description': 'Parallel fetches (default 5).'},
             'crawl_delay': {'type': 'number', 'minimum': 0, 'description': 'Seconds between requests to one host (default 0.4).'},
+            'auto_throttle': {'type': 'boolean', 'description': 'Widen the per-host request gap automatically when the host keeps answering slowly, and release it once it recovers (default true). Set false for a fixed request rate.'},
             'render_js': {'type': 'boolean', 'description': 'Render pages in a headless browser (for JS sites; 3 to 5 times slower).'},
             'compare_no_js': {'type': 'boolean', 'description': 'With render_js: also fetch plain HTML and report what only appears with JS.'},
             'ignore_robots': {'type': 'boolean', 'description': 'Crawl URLs robots.txt disallows. Only on sites you own or may crawl.'},

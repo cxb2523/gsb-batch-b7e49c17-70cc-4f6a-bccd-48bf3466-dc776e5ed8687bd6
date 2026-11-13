@@ -41,6 +41,7 @@ UI_DEFAULTS = {
     'max_pages': 1500,
     'max_workers': 5,
     'crawl_delay': 0.4,
+    'auto_throttle': True,
     'max_depth': 10,
     'render_js': False,
     'compare_no_js': False,
@@ -685,13 +686,14 @@ def crawl_settings(opts):
     except (TypeError, ValueError) as e:
         raise ToolError(f'Bad crawl setting: {e}')
     for k in ('render_js', 'compare_no_js', 'ignore_robots', 'ignore_noindex', 'solve_challenges',
-              'sitemap', 'near_dup', 'bot_check'):
+              'sitemap', 'near_dup', 'bot_check', 'auto_throttle'):
         o[k] = _bool(o[k], UI_DEFAULTS[k])
     body = {
         'url': url,
         'max_pages': o['max_pages'],
         'max_workers': o['max_workers'],
         'crawl_delay': o['crawl_delay'],
+        'auto_throttle': o['auto_throttle'],
         'max_depth': o['max_depth'],
         'render_js': o['render_js'],
         'compare_no_js': o['render_js'] and o['compare_no_js'],

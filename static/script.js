@@ -1124,6 +1124,7 @@ function startCrawl(opts) {
     max_pages: parseInt(document.getElementById('crawler-max').value) || 500,
     max_workers: parseInt(document.getElementById('crawler-workers').value) || 5,
     crawl_delay: parseFloat(document.getElementById('crawler-speed').value),
+    auto_throttle: document.getElementById('crawler-auto-throttle')?.checked !== false,
     max_depth: parseInt(document.getElementById('crawler-depth').value) || 10,
     render_js: document.getElementById('crawler-render-js').checked,
     compare_no_js: document.getElementById('crawler-render-js').checked && (document.getElementById('crawler-compare-no-js')?.checked || false),
