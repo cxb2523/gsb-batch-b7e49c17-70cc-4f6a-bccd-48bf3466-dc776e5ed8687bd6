@@ -147,3 +147,164 @@ describe('UpscalerCore without an engine', () => {
         expect(core.beginFrame()).toBeNull();
     });
 });
+
+//* Split-frame state — the geometry stage (dispatchGuides/encodeGuides) and
+// the late stage (dispatchUpscale/encodeUpscale) are an ordered pair. Every
+// misuse must fail on its own distinguishable transition, with the same
+// constraints on the submitting and host-encoder variants. All driven through
+// the mock device above: no real WebGPU device is involved.
+
+describe('UpscalerCore split-frame state', () => {
+    const camera = { near: 0.1, far: 100, perspective: true };
+
+    beforeEach(() => {
+        vi.stubGlobal('GPUBufferUsage', { MAP_READ: 1, COPY_SRC: 4, COPY_DST: 8, UNIFORM: 64, STORAGE: 128 });
+        vi.stubGlobal('GPUTextureUsage', { COPY_SRC: 1, COPY_DST: 2, TEXTURE_BINDING: 4, STORAGE_BINDING: 8 });
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    async function temporalCore(path: 'temporal' | 'guides' | 'spatial' | 'bilinear' = 'temporal') {
+        const mocks = mockDevice();
+        const core = new UpscalerCore({ device: mocks.device as unknown as GPUDevice });
+        core.configure({ displayWidth: 64, displayHeight: 32, customUpscaleRatio: 2, path });
+        await core.prepare();
+        return { ...mocks, core };
+    }
+
+    const guideInputs = (gpu: (label: string) => GPUTexture) => ({ depth: gpu('depth'), velocity: gpu('velocity') });
+    const upscaleInputs = (gpu: (label: string) => GPUTexture) => ({ color: gpu('color'), depth: gpu('depth'), velocity: gpu('velocity') });
+
+    it('returns guidesPending to false after a full two-stage split frame', async () => {
+        const { core, gpu } = await temporalCore();
+        expect(core.guidesPending).toBe(false);
+
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(true);
+        core.dispatchUpscale(upscaleInputs(gpu), camera);
+        expect(core.guidesPending).toBe(false);
+    });
+
+    it('rejects a second guides stage with a finish-with-dispatchUpscale error', async () => {
+        const { core, gpu } = await temporalCore();
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(true);
+
+        expect(() => core.dispatchGuides(guideInputs(gpu), camera)).toThrow(
+            /already ran this frame — finish with dispatchUpscale\(\)/,
+        );
+        // The rejected stage must not touch the GPU, and the frame stays open.
+        expect(core.guidesPending).toBe(true);
+    });
+
+    it('rejects a late stage without a guides stage, naming dispatchGuides/dispatch', async () => {
+        const { core, gpu, device } = await temporalCore();
+        expect(core.guidesPending).toBe(false);
+
+        expect(() => core.dispatchUpscale(upscaleInputs(gpu), camera)).toThrow(
+            /call dispatchGuides\(\) first \(or use the all-in-one dispatch\(\)\)/,
+        );
+        expect(device.createCommandEncoder).not.toHaveBeenCalled();
+        expect(device.queue.submit).not.toHaveBeenCalled();
+        expect(core.guidesPending).toBe(false);
+    });
+
+    it('rejects the all-in-one dispatch while a split frame is in flight', async () => {
+        const { core, gpu, device } = await temporalCore();
+        core.dispatchGuides(guideInputs(gpu), camera);
+
+        expect(() => core.dispatch(upscaleInputs(gpu), camera)).toThrow(
+            /split frame is in flight — finish it with dispatchUpscale\(\)/,
+        );
+        // Only the guides stage's encoder/submit happened; the rejected dispatch added none.
+        expect(device.createCommandEncoder).toHaveBeenCalledTimes(1);
+        expect(device.queue.submit).toHaveBeenCalledTimes(1);
+        expect(core.guidesPending).toBe(true);
+    });
+
+    it('constrains the encode pair the same way without ever creating an encoder or submitting', async () => {
+        const mocks = await temporalCore();
+        const { core, gpu, encoder, device } = mocks;
+
+        // Missing guides stage: encodeUpscale cannot run first.
+        expect(() => core.encodeUpscale(encoder as unknown as GPUCommandEncoder, upscaleInputs(gpu), camera)).toThrow(
+            /call dispatchGuides\(\) first \(or use the all-in-one dispatch\(\)\)/,
+        );
+        expect(device.createCommandEncoder).not.toHaveBeenCalled();
+        expect(device.queue.submit).not.toHaveBeenCalled();
+        expect(core.guidesPending).toBe(false);
+
+        // Happy path through the host encoder.
+        core.encodeGuides(encoder as unknown as GPUCommandEncoder, guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(true);
+        expect(() => core.encodeGuides(encoder as unknown as GPUCommandEncoder, guideInputs(gpu), camera)).toThrow(
+            /already ran this frame — finish with dispatchUpscale\(\)/,
+        );
+        core.encodeUpscale(encoder as unknown as GPUCommandEncoder, upscaleInputs(gpu), camera);
+        expect(core.guidesPending).toBe(false);
+
+        // The encode entry points own no submission machinery.
+        expect(device.createCommandEncoder).not.toHaveBeenCalled();
+        expect(device.queue.submit).not.toHaveBeenCalled();
+    });
+
+    it.each(['spatial', 'bilinear'] as const)('rejects dispatchGuides on the %s path', async (path) => {
+        const { core, gpu } = await temporalCore(path);
+        expect(() => core.dispatchGuides(guideInputs(gpu), camera)).toThrow(
+            /dispatchGuides\(\) requires the temporal or guides path/,
+        );
+        expect(core.guidesPending).toBe(false);
+    });
+
+    it('keeps the guides-only path idle and rejects its upscale/dispatch entry points', async () => {
+        const { core, gpu } = await temporalCore('guides');
+
+        // dispatchGuides is the whole frame: it never opens a split frame, so
+        // a second call in the next frame is legal.
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(false);
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(false);
+
+        expect(() => core.dispatch(upscaleInputs(gpu), camera)).toThrow(/the 'guides' path has no upscale/);
+        expect(() => core.dispatchUpscale(upscaleInputs(gpu), camera)).toThrow(
+            /dispatchUpscale\(\) requires the temporal path/,
+        );
+    });
+
+    it('clears the split frame on configure() so a fresh split frame can start', async () => {
+        const { core, gpu } = await temporalCore();
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(true);
+
+        core.configure({ displayWidth: 64, displayHeight: 32, customUpscaleRatio: 2 });
+        expect(core.guidesPending).toBe(false);
+
+        // Re-prepare the reconfigured pass graph, then run the pair again.
+        await core.prepare();
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(true);
+        core.dispatchUpscale(upscaleInputs(gpu), camera);
+        expect(core.guidesPending).toBe(false);
+    });
+
+    it('clears the split frame on dispose() and allows a restart afterwards', async () => {
+        const { core, gpu } = await temporalCore();
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(true);
+
+        core.dispose();
+        expect(core.guidesPending).toBe(false);
+
+        // A new working set and pass graph: the next guides stage starts clean.
+        core.configure({ displayWidth: 64, displayHeight: 32, customUpscaleRatio: 2 });
+        await core.prepare();
+        core.dispatchGuides(guideInputs(gpu), camera);
+        expect(core.guidesPending).toBe(true);
+        core.dispatchUpscale(upscaleInputs(gpu), camera);
+        expect(core.guidesPending).toBe(false);
+    });
+});

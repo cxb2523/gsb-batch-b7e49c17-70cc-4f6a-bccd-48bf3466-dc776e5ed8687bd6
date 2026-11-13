@@ -1,4 +1,5 @@
 import { ComputePass } from './internal/ComputePass';
+import { SplitFrameState } from './internal/SplitFrameState';
 import { notReadyError } from './initializationError';
 import { ConstantsBuffer } from './internal/ConstantsBuffer';
 import { GpuTimer } from './internal/GpuTimer';
@@ -259,9 +260,10 @@ export class UpscalerCore<THandle = GPUTexture> {
     // dispatches) and after the frame-end index flips.
     private _latestDepthWrite = 0;
     private _latestHistoryWrite = 0;
-    // A split frame is in flight: dispatchGuides() ran, dispatchUpscale()
-    // hasn't. Guards against double-encoding the guides stage.
-    private _guidesPending = false;
+    // Split-frame lifecycle: an explicit idle/guides phase instead of a bare
+    // boolean, so each misused entry point fails on its own named transition.
+    // Guides-path frames end inside dispatchGuides and never leave `idle`.
+    private readonly _splitFrame = new SplitFrameState();
 
     constructor(options: UpscalerCoreOptions<THandle>);
     constructor(options: UpscalerCoreInternalOptions<THandle>) {
@@ -611,7 +613,7 @@ export class UpscalerCore<THandle = GPUTexture> {
      * between finishing the split frame and the monolithic {@link dispatch}.
      */
     get guidesPending(): boolean {
-        return this._guidesPending;
+        return this._splitFrame.guidesPending;
     }
 
     /**
@@ -707,17 +709,7 @@ export class UpscalerCore<THandle = GPUTexture> {
 
     private _stageFrame(inputs: DispatchInputs, camera: FrameCamera): void {
         this._startDispatch();
-        if (this._path === 'guides') {
-            throw new Error(
-                "@pmndrs/upscaler: the 'guides' path has no upscale — drive it with dispatchGuides().",
-            );
-        }
-        if (this._guidesPending) {
-            throw new Error(
-                '@pmndrs/upscaler: a split frame is in flight — finish it with dispatchUpscale() ' +
-                    'instead of dispatch().',
-            );
-        }
+        this._splitFrame.assertFrameEntry(this._path);
         if (!this._output || !this._outputGPU) {
             throw new Error('@pmndrs/upscaler: configure() must run before dispatch().');
         }
@@ -797,18 +789,9 @@ export class UpscalerCore<THandle = GPUTexture> {
 
     private _stageGuides(inputs: GuideDispatchInputs, camera: FrameCamera): void {
         this._startDispatch();
-        if (this._path !== 'temporal' && this._path !== 'guides') {
-            throw new Error(
-                `@pmndrs/upscaler: dispatchGuides() requires the temporal or guides path (got '${this._path}').`,
-            );
-        }
+        this._splitFrame.assertGuidesEntry(this._path);
         if (!this._dilatedMotion) {
             throw new Error('@pmndrs/upscaler: configure() must run before dispatchGuides().');
-        }
-        if (this._guidesPending) {
-            throw new Error(
-                '@pmndrs/upscaler: dispatchGuides() already ran this frame — finish with dispatchUpscale().',
-            );
         }
         this._writeConstants(inputs, camera);
         this._constants.upload();
@@ -821,7 +804,7 @@ export class UpscalerCore<THandle = GPUTexture> {
             this._pendingReset = false;
             this._depthIndex = 1 - this._depthIndex;
         } else {
-            this._guidesPending = true;
+            this._splitFrame.guidesEncoded(this._path);
         }
     }
 
@@ -861,16 +844,7 @@ export class UpscalerCore<THandle = GPUTexture> {
 
     private _stageUpscale(inputs: DispatchInputs, camera: FrameCamera): void {
         if (!this.isReady) throw new Error("@pmndrs/upscaler: await init() (or prepare()) before dispatchUpscale().");
-        if (this._path !== 'temporal') {
-            throw new Error(
-                `@pmndrs/upscaler: dispatchUpscale() requires the temporal path (got '${this._path}').`,
-            );
-        }
-        if (!this._guidesPending) {
-            throw new Error(
-                '@pmndrs/upscaler: call dispatchGuides() first (or use the all-in-one dispatch()).',
-            );
-        }
+        this._splitFrame.assertUpscaleEntry(this._path);
         if (!this._output || !this._outputGPU) {
             throw new Error('@pmndrs/upscaler: configure() must run before dispatchUpscale().');
         }
@@ -883,7 +857,7 @@ export class UpscalerCore<THandle = GPUTexture> {
     }
 
     private _endUpscale(): void {
-        this._guidesPending = false;
+        this._splitFrame.upscaleEncoded();
         this._frameIndex++;
         this._pendingReset = false;
         this._historyIndex = 1 - this._historyIndex;
@@ -1602,7 +1576,8 @@ export class UpscalerCore<THandle = GPUTexture> {
             history: null,
         };
         this._guides = null;
-        this._guidesPending = false;
+        // configure() and dispose() both rebuild from a clean split frame.
+        this._splitFrame.reset();
         this._history = null;
         this._locks = null;
         this._dilatedDepth = null;
