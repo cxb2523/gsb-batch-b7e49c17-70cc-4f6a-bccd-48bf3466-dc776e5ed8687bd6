@@ -249,6 +249,67 @@ class ProjectAuth:
             return self.verify_database_password(project, database, password, "write")
         return False
 
+    def check_database_access(
+        self, project: str, database: str, password: str, access_level: str = "read"
+    ) -> dict:
+        """Explain whether a password grants access to a database.
+
+        Read-only, side-effect-free companion to has_database_access(): it
+        applies the exact same password semantics (open access when no
+        password is set, write password implicitly grants read) and
+        additionally factors in the write-protection flag, returning a
+        verdict the admin UI can show *before* saving a configuration.
+
+        Returns a dict with:
+          - allowed:         final access decision for this request.
+          - reason:          short machine-readable code, one of
+                             "open_access"          — no password configured,
+                             "password_ok"          — password matched directly,
+                             "write_grants_read"    — write password used for read,
+                             "password_required"    — password set, none given,
+                             "invalid_password"     — password set, wrong one,
+                             "read_only"            — write protection applied.
+          - has_password:    whether any password is configured.
+          - write_protected: whether the database is read-only.
+
+        Write protection is independent of passwords: when it is set and the
+        password check passed, the reason is "read_only" — reads stay allowed
+        while write requests are denied even with valid credentials.
+        """
+        has_password = self.has_database_password(project, database)
+        write_protected = self.is_database_write_protected(project, database)
+
+        if not has_password:
+            allowed = True
+            reason = "open_access"
+        elif self.verify_database_password(project, database, password, access_level):
+            allowed = True
+            reason = "password_ok"
+        elif access_level == "read" and self.verify_database_password(
+            project, database, password, "write"
+        ):
+            # Write credentials implicitly grant read access.
+            allowed = True
+            reason = "write_grants_read"
+        else:
+            allowed = False
+            reason = "password_required" if not password else "invalid_password"
+
+        if write_protected and allowed:
+            # Read-only flag wins over credentials for write requests; read
+            # requests keep their password-based verdict but the reason must
+            # still surface that the database is read-only.
+            reason = "read_only"
+            if access_level != "read":
+                allowed = False
+
+        return {
+            "allowed": allowed,
+            "reason": reason,
+            "has_password": has_password,
+            "write_protected": write_protected,
+        }
+
     def has_database_password(self, project: str, database: str) -> bool:
         """Check if a password is set for a database.
 

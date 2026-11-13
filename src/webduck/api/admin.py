@@ -24,6 +24,7 @@
 #    POST   /admin/projects/{project}/databases        — Create database
 #    DELETE /admin/projects/{project}/databases/{db}    — Delete database
 #    PUT    /admin/projects/{p}/databases/{db}/password — Set DB password
+#    GET    /admin/projects/{p}/databases/{db}/access-check — Dry-run access check
 #    GET    /admin/users                              — List admin users
 #    POST   /admin/users                              — Create admin user
 #    DELETE /admin/users/{username}                    — Delete admin user
@@ -375,6 +376,42 @@ async def set_database_write_protection(
 
     state = "enabled" if req.protected else "disabled"
     return {"success": True, "message": f"Write protection {state} for '{database}'"}
+
+
+@router.get("/projects/{project}/databases/{database}/access-check")
+async def check_database_access(
+    project: str,
+    database: str,
+    password: str = "",
+    access_level: str = "read",
+    username: str = Depends(verify_admin),
+) -> dict:
+    """Dry-run access check for a database password.
+
+    Read-only query endpoint: given a candidate password and access level,
+    returns ProjectAuth.check_database_access()'s verdict unchanged
+    (allowed / reason / has_password / write_protected) so the admin UI can
+    show what a password would permit *before* saving it. Nothing is
+    modified by this endpoint.
+
+    Unknown projects or databases yield a distinguishable 404 rather than
+    a generic 500.
+    """
+    if not storage_engine:
+        log_error("check_database_access: Storage engine not initialized")
+        raise HTTPException(status_code=500, detail="Storage engine not initialized")
+
+    if not (storage_engine.data_dir / project).is_dir():
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not await asyncio.to_thread(storage_engine.database_exists, project, database):
+        raise HTTPException(status_code=404, detail="Database not found")
+
+    from webduck.auth.manager import ProjectAuth
+
+    project_auth = ProjectAuth(storage_engine.data_dir)
+    return await asyncio.to_thread(
+        project_auth.check_database_access, project, database, password, access_level
+    )
 
 
 @router.get("/users")
