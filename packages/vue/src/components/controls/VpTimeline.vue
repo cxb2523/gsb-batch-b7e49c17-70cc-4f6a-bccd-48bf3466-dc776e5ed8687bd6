@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { Chapter, ThumbnailCue } from '@vue-player/core'
-import { formatTime } from '@vue-player/core'
+import { findThumbnailCue, formatTime } from '@vue-player/core'
 
 const props = defineProps<{
   currentTime: number
@@ -151,14 +151,16 @@ const tooltipChapter = computed(() => {
 
 const showTooltip = computed(() => tooltipRatio.value !== null && props.duration > 0)
 
-// Active thumbnail for the hovered/seeking position
+// Active thumbnail for the hovered/seeking position.
+// Intervals are half-open: time === start selects this cue,
+// time === end falls through to the next cue (see findThumbnailCue).
 const activeThumbnail = computed<ThumbnailCue | null>(() => {
   const cues = props.thumbnailCues
   if (!cues?.length) return null
   const t = tooltipRatio.value
   if (t === null) return null
   const time = t * props.duration
-  return cues.find((c) => time >= c.start && time < c.end) ?? null
+  return findThumbnailCue(cues, time)
 })
 
 // Style for sprite-sheet thumbnails (xywh fragment)
