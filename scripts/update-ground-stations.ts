@@ -18,7 +18,7 @@
 
 import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -53,14 +53,37 @@ interface MetaFile {
   [canonicalName: string]: MetaEntry;
 }
 
+/** Why a source was not adopted for the merge. */
+export type RejectReason = 'fetch-error' | 'empty' | 'sanity-check-failed';
+
+/** Per-source fetch outcome, recorded whether or not the source was used. */
+export interface SourceOutcome {
+  name: string;
+  adopted: boolean;
+  rejectReason: RejectReason | null;
+  candidateCount: number;
+}
+
 interface ChangeReport {
   added: string[];
   statusChanged: { name: string; from: string; to: string }[];
   coordConflicts: { name: string; source: string; distKm: number }[];
-  sourcesUsed: string[];
-  sourcesFailed: string[];
+  sources: SourceOutcome[];
   flaggedForRemoval: string[];
   totalStations: number;
+}
+
+/** Verifiable summary of one update run, returned by runUpdate and printed
+ *  at the end of the script so a human (or CI log reader) can audit what
+ *  happened without digging through logs. */
+export interface UpdateConclusion {
+  sources: SourceOutcome[];
+  added: string[];
+  statusChanged: { name: string; from: string; to: string }[];
+  coordConflicts: { name: string; source: string; distKm: number }[];
+  flaggedForRemoval: string[];
+  totalStations: number;
+  dataFileWritten: boolean;
 }
 
 // ── Paths ──────────────────────────────────────────────────────────────
@@ -416,48 +439,45 @@ function classifyStarlinkSxEntry(entry: Record<string, unknown>): 'gateway' | 'p
 async function fetchStarlinkSx(): Promise<StationCandidate[]> {
   const url = 'https://starlink.sx/gateways.json';
   console.log(`[starlink.sx] Fetching ${url}...`);
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+  // Errors propagate to the caller so they are classified as 'fetch-error'
+  // in the source outcome instead of being silently swallowed as "empty".
+  const res = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
 
-    if (!Array.isArray(data)) {
-      console.log('[starlink.sx] Response is not an array, skipping');
-      return [];
-    }
-
-    const candidates: StationCandidate[] = [];
-    let popCount = 0;
-    for (const entry of data) {
-      if (!entry.lat || !entry.lng || !entry.town) continue;
-
-      // Determine operational status from Ka/E band operational flags
-      const kaOp = (entry as Record<string, unknown> & { ka?: { operational?: boolean } }).ka?.operational === true;
-      const eOp = (entry as Record<string, unknown> & { e?: { operational?: boolean } }).e?.operational === true;
-      const isOperational = kaOp || eOp;
-
-      const town = String(entry.town).trim();
-      const type = classifyStarlinkSxEntry(entry as Record<string, unknown>);
-      if (type === 'pop') popCount++;
-
-      candidates.push({
-        name: town,
-        lat: parseFloat(String(entry.lat)),
-        lon: parseFloat(String(entry.lng)),
-        status: isOperational ? 'operational' : 'planned',
-        type,
-        source: 'starlink.sx',
-      });
-    }
-    console.log(`[starlink.sx] Found ${candidates.length} stations (${candidates.length - popCount} gateways, ${popCount} PoPs)`);
-    return candidates;
-  } catch (err) {
-    console.log(`[starlink.sx] Failed (best-effort): ${err instanceof Error ? err.message : err}`);
+  if (!Array.isArray(data)) {
+    console.log('[starlink.sx] Response is not an array, skipping');
     return [];
   }
+
+  const candidates: StationCandidate[] = [];
+  let popCount = 0;
+  for (const entry of data) {
+    if (!entry.lat || !entry.lng || !entry.town) continue;
+
+    // Determine operational status from Ka/E band operational flags
+    const kaOp = (entry as Record<string, unknown> & { ka?: { operational?: boolean } }).ka?.operational === true;
+    const eOp = (entry as Record<string, unknown> & { e?: { operational?: boolean } }).e?.operational === true;
+    const isOperational = kaOp || eOp;
+
+    const town = String(entry.town).trim();
+    const type = classifyStarlinkSxEntry(entry as Record<string, unknown>);
+    if (type === 'pop') popCount++;
+
+    candidates.push({
+      name: town,
+      lat: parseFloat(String(entry.lat)),
+      lon: parseFloat(String(entry.lng)),
+      status: isOperational ? 'operational' : 'planned',
+      type,
+      source: 'starlink.sx',
+    });
+  }
+  console.log(`[starlink.sx] Found ${candidates.length} stations (${candidates.length - popCount} gateways, ${popCount} PoPs)`);
+  return candidates;
 }
 
 // ── PoP list from Starlink rDNS data ───────────────────────────────────
@@ -571,9 +591,9 @@ async function geocode(query: string): Promise<{ lat: number; lon: number } | nu
 
 // ── Load existing data ─────────────────────────────────────────────────
 
-function loadExisting(): DataFile {
+function loadExisting(dataPath: string = DATA_PATH): DataFile {
   try {
-    const raw = JSON.parse(readFileSync(DATA_PATH, 'utf-8'));
+    const raw = JSON.parse(readFileSync(dataPath, 'utf-8'));
     return {
       lastUpdated: raw.lastUpdated || '',
       stations: (raw.stations || []).map((s: Record<string, unknown>) => ({
@@ -589,9 +609,9 @@ function loadExisting(): DataFile {
   }
 }
 
-function loadMeta(): MetaFile {
+function loadMeta(metaPath: string = META_PATH): MetaFile {
   try {
-    return JSON.parse(readFileSync(META_PATH, 'utf-8'));
+    return JSON.parse(readFileSync(metaPath, 'utf-8'));
   } catch {
     return {};
   }
@@ -603,6 +623,7 @@ async function reconcile(
   existing: Station[],
   allCandidates: StationCandidate[],
   report: ChangeReport,
+  geocodeFn: (query: string) => Promise<{ lat: number; lon: number } | null> = geocode,
 ): Promise<Station[]> {
   // Build existing lookup by canonical name
   const existingByKey = new Map<string, Station>();
@@ -664,7 +685,7 @@ async function reconcile(
       // Rate-limit Nominatim (1 req/sec policy)
       await new Promise((r) => setTimeout(r, 1100));
       console.log(`  Geocoding new station: ${best.name}`);
-      const coords = await geocode(best.name);
+      const coords = await geocodeFn(best.name);
       if (!coords) {
         console.log(`    -> Not found, skipping`);
         continue;
@@ -777,7 +798,10 @@ function updateMeta(
 
 // ── Change report ──────────────────────────────────────────────────────
 
-function writeReport(report: ChangeReport): void {
+function writeReport(report: ChangeReport, reportPath: string = REPORT_PATH): void {
+  const sourcesUsed = report.sources.filter((s) => s.adopted).map((s) => s.name);
+  const sourcesFailed = report.sources.filter((s) => !s.adopted).map((s) => s.name);
+
   const lines: string[] = [
     '# Ground Station Update Report',
     '',
@@ -785,8 +809,23 @@ function writeReport(report: ChangeReport): void {
     `**Total stations:** ${report.totalStations}`,
     '',
     '## Sources',
-    `- Used: ${report.sourcesUsed.length > 0 ? report.sourcesUsed.join(', ') : 'none'}`,
-    `- Failed: ${report.sourcesFailed.length > 0 ? report.sourcesFailed.join(', ') : 'none'}`,
+    `- Used: ${sourcesUsed.length > 0 ? sourcesUsed.join(', ') : 'none'}`,
+    `- Failed: ${sourcesFailed.length > 0 ? sourcesFailed.join(', ') : 'none'}`,
+    '',
+    '## Fetch Conclusion',
+    '',
+    '| Source | Adopted | Reject reason | Candidates |',
+    '| --- | --- | --- | --- |',
+    ...report.sources.map(
+      (s) =>
+        `| ${s.name} | ${s.adopted ? 'yes' : 'no'} | ${s.rejectReason ?? '—'} | ${s.candidateCount} |`,
+    ),
+    '',
+    'Merge outcome:',
+    `- Added: ${report.added.length}`,
+    `- Status changed: ${report.statusChanged.length}`,
+    `- Coordinate conflicts (>50km, kept existing): ${report.coordConflicts.length}`,
+    `- Flagged for removal (4+ consecutive misses): ${report.flaggedForRemoval.length}`,
     '',
   ];
 
@@ -829,15 +868,54 @@ function writeReport(report: ChangeReport): void {
     lines.push('No changes detected.', '');
   }
 
-  writeFileSync(REPORT_PATH, lines.join('\n'));
-  console.log(`Change report written to ${REPORT_PATH}`);
+  writeFileSync(reportPath, lines.join('\n'));
+  console.log(`Change report written to ${reportPath}`);
 }
 
 // ── Main ───────────────────────────────────────────────────────────────
 
-async function main() {
-  const existing = loadExisting();
-  const meta = loadMeta();
+export interface SourceSpec {
+  name: string;
+  fetch: () => Promise<StationCandidate[]>;
+}
+
+export interface RunUpdateOptions {
+  /** Sources to merge. Defaults to the two live sources. */
+  sources?: SourceSpec[];
+  dataPath?: string;
+  metaPath?: string;
+  reportPath?: string;
+  fetchPopCities?: () => Promise<Set<string>>;
+  geocodeFn?: (query: string) => Promise<{ lat: number; lon: number } | null>;
+}
+
+/**
+ * Run one full update: fetch all sources, classify each source's outcome,
+ * reconcile survivors against the existing data, and write the data, meta,
+ * and report files. Returns a verifiable conclusion of the run.
+ *
+ * Merge conventions (unchanged):
+ *  - operational status wins over planned;
+ *  - coordinate conflicts (>50km) keep the existing coordinates;
+ *  - same-type stations within 5km are deduped, never across gateway/pop;
+ *  - a source with fewer candidates than half the known stations is treated
+ *    as a scraping failure and excluded from the merge;
+ *  - when every source fails, data/ground-stations.json is left untouched
+ *    and only the report is updated.
+ */
+export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateConclusion> {
+  const sources: SourceSpec[] = options.sources ?? [
+    { name: 'starlinkinsider', fetch: fetchStarlinkInsider },
+    { name: 'starlink.sx', fetch: fetchStarlinkSx },
+  ];
+  const dataPath = options.dataPath ?? DATA_PATH;
+  const metaPath = options.metaPath ?? META_PATH;
+  const reportPath = options.reportPath ?? REPORT_PATH;
+  const getPopCities = options.fetchPopCities ?? fetchPopCities;
+  const geocodeFn = options.geocodeFn ?? geocode;
+
+  const existing = loadExisting(dataPath);
+  const meta = loadMeta(metaPath);
   console.log(
     `Existing: ${existing.stations.length} stations (last updated: ${existing.lastUpdated || 'never'})`,
   );
@@ -846,60 +924,61 @@ async function main() {
     added: [],
     statusChanged: [],
     coordConflicts: [],
-    sourcesUsed: [],
-    sourcesFailed: [],
+    sources: [],
     flaggedForRemoval: [],
     totalStations: 0,
   };
 
   // Fetch from all sources in parallel
-  const results = await Promise.allSettled([
-    fetchStarlinkInsider(),
-    fetchStarlinkSx(),
-  ]);
+  const results = await Promise.allSettled(sources.map((s) => s.fetch()));
 
-  const sourceNames = ['starlinkinsider', 'starlink.sx'];
   const allCandidates: StationCandidate[] = [];
 
   for (let i = 0; i < results.length; i++) {
+    const name = sources[i].name;
     const result = results[i];
     if (result.status === 'rejected') {
-      console.error(`[${sourceNames[i]}] Failed: ${result.reason}`);
-      report.sourcesFailed.push(sourceNames[i]);
+      console.error(`[${name}] Failed: ${result.reason}`);
+      report.sources.push({ name, adopted: false, rejectReason: 'fetch-error', candidateCount: 0 });
       continue;
     }
 
     const candidates = result.value;
     if (candidates.length === 0) {
-      report.sourcesFailed.push(sourceNames[i]);
+      report.sources.push({ name, adopted: false, rejectReason: 'empty', candidateCount: 0 });
       continue;
     }
 
     // Sanity check: reject if <50% of known stations
     if (!sanityCheck(candidates.length, existing.stations.length)) {
       console.warn(
-        `[${sourceNames[i]}] Sanity check failed: ${candidates.length} candidates vs ${existing.stations.length} known — treating as scraping failure`,
+        `[${name}] Sanity check failed: ${candidates.length} candidates vs ${existing.stations.length} known — treating as scraping failure`,
       );
-      report.sourcesFailed.push(sourceNames[i]);
+      report.sources.push({
+        name,
+        adopted: false,
+        rejectReason: 'sanity-check-failed',
+        candidateCount: candidates.length,
+      });
       continue;
     }
 
-    report.sourcesUsed.push(sourceNames[i]);
+    report.sources.push({ name, adopted: true, rejectReason: null, candidateCount: candidates.length });
     allCandidates.push(...candidates);
   }
 
   if (allCandidates.length === 0) {
     console.log('All sources failed or returned no data. No changes made.');
     report.totalStations = existing.stations.length;
-    writeReport(report);
-    return;
+    writeReport(report, reportPath);
+    return toConclusion(report, false);
   }
 
   // Fetch authoritative PoP list
-  const popCities = await fetchPopCities();
+  const popCities = await getPopCities();
 
   // Reconcile
-  const stations = await reconcile(existing.stations, allCandidates, report);
+  const stations = await reconcile(existing.stations, allCandidates, report, geocodeFn);
 
   // Tag PoPs from authoritative rDNS data
   tagPops(stations, popCities);
@@ -913,10 +992,11 @@ async function main() {
 
   // Update meta (lastSeen tracking)
   const updatedMeta = updateMeta(meta, existing.stations, seenKeys, report);
-  writeFileSync(META_PATH, JSON.stringify(updatedMeta, null, 2));
+  writeFileSync(metaPath, JSON.stringify(updatedMeta, null, 2));
 
   // Write updated data — but only when stations actually changed, so the
   // weekly workflow doesn't open a timestamp-only PR on no-op runs.
+  let dataFileWritten = false;
   if (stationsEqual(stations, existing.stations)) {
     console.log('\nNo station changes — leaving data/ground-stations.json untouched.');
   } else {
@@ -924,15 +1004,57 @@ async function main() {
       lastUpdated: new Date().toISOString(),
       stations,
     };
-    writeFileSync(DATA_PATH, JSON.stringify(output, null, 2));
+    writeFileSync(dataPath, JSON.stringify(output, null, 2));
+    dataFileWritten = true;
   }
 
   // Write change report
-  writeReport(report);
+  writeReport(report, reportPath);
 
+  return toConclusion(report, dataFileWritten);
+}
+
+function toConclusion(report: ChangeReport, dataFileWritten: boolean): UpdateConclusion {
+  return {
+    sources: report.sources,
+    added: report.added,
+    statusChanged: report.statusChanged,
+    coordConflicts: report.coordConflicts,
+    flaggedForRemoval: report.flaggedForRemoval,
+    totalStations: report.totalStations,
+    dataFileWritten,
+  };
+}
+
+/** Print the run conclusion to the console so it is auditable in CI logs. */
+function printConclusion(conclusion: UpdateConclusion): void {
+  console.log('\n══ Fetch conclusion ══');
+  for (const s of conclusion.sources) {
+    console.log(
+      `  ${s.name}: adopted=${s.adopted ? 'yes' : 'no'}, ` +
+        `rejectReason=${s.rejectReason ?? 'null'}, candidates=${s.candidateCount}`,
+    );
+  }
   console.log(
-    `\nDone. ${stations.length} total stations (${report.added.length} added, ${report.statusChanged.length} status changes).`,
+    `  Merge: ${conclusion.added.length} added, ${conclusion.statusChanged.length} status changed, ` +
+      `${conclusion.coordConflicts.length} coordinate conflicts, ` +
+      `${conclusion.flaggedForRemoval.length} flagged for removal`,
+  );
+  console.log(`  Data file: ${conclusion.dataFileWritten ? 'updated' : 'unchanged'}`);
+}
+
+async function main() {
+  const conclusion = await runUpdate();
+  printConclusion(conclusion);
+  console.log(
+    `\nDone. ${conclusion.totalStations} total stations (${conclusion.added.length} added, ${conclusion.statusChanged.length} status changes).`,
   );
 }
 
-main().catch(console.error);
+// Only run when executed directly (npx tsx scripts/update-ground-stations.ts),
+// not when imported by tests.
+const invokedAsScript =
+  !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedAsScript) {
+  main().catch(console.error);
+}
