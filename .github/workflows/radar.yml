@@ -1,0 +1,38 @@
+name: Radar de Preços
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+
+jobs:
+  rodar-radar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Criar config_telegram.json a partir dos Secrets
+        run: |
+          echo '{"token": "${{ secrets.TELEGRAM_TOKEN }}", "chat_id": ${{ secrets.TELEGRAM_CHAT_ID }}}' > config_telegram.json
+
+      - name: Rodar o rastreador
+        run: python rastreador_precos.py
+        
+      - name: Configurar identidade do Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Salvar histórico atualizado
+        run: |
+          git add historico.json
+          git commit -m "Atualiza histórico de preços" || echo "Nada para commitar"
+          git push
