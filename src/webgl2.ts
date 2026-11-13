@@ -686,11 +686,19 @@ export class WebGL2Backend implements Backend {
   /**
    * Instances for every sprite in the layer, in the format `write()` uses but with positions kept local and
    * `SNAP` set where `write()` would round, so the shader rounds after the replay transform. Undefined when a
-   * sprite was recorded under a scale, rotation or skew (`Draw` then replays the calls one by one).
+   * sprite was recorded under a scale, rotation or skew (`Draw` then replays the calls one by one). The gate
+   * covers both the record-time transform (`it.m`) and the sprite's own options: a per-sprite scale or
+   * rotation changes where the scaled landing point is, which a baked instance can't express the way
+   * `draw.sprite` would, so those layers fall back to the one-by-one path instead of forcing a batch.
    */
   private buildLayer(layer: Layer): BuiltLayer | undefined {
     const items = layer.items;
-    for (const it of items) if (it.m[0] !== 1 || it.m[1] !== 0 || it.m[2] !== 0 || it.m[3] !== 1) return undefined;
+    for (const it of items) {
+      if (it.m[0] !== 1 || it.m[1] !== 0 || it.m[2] !== 0 || it.m[3] !== 1) return undefined;
+      const o = it.o;
+      if ((o.rotation ?? 0) !== 0) return undefined;
+      if ((o.scaleX ?? 1) !== 1 || (o.scaleY ?? 1) !== 1) return undefined;
+    }
     const gl = this.gl;
     const built: BuiltLayer = { segments: [] };
     let start = 0;
