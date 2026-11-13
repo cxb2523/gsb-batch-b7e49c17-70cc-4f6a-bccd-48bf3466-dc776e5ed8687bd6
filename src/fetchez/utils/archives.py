@@ -110,13 +110,32 @@ def _claim_staging_path(
     that fold them. The staging directory lives inside outdir, so it folds
     names the same way the destination does.
     """
+    collision = UnsafeArchiveError(
+        f"Archive member collides with another member's output path: {member_name}"
+    )
+
     try:
         temp_path.parent.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as exc:
+        # Windows: an earlier member claimed this path as a file.
+        raise collision from exc
+    except NotADirectoryError as exc:
+        # POSIX: a parent path component is a file claimed earlier.
+        raise collision from exc
+
+    try:
         return temp_path.open("xb")
-    except (FileExistsError, IsADirectoryError, NotADirectoryError) as exc:
-        raise UnsafeArchiveError(
-            f"Archive member collides with another member's output path: {member_name}"
-        ) from exc
+    except FileExistsError as exc:
+        raise collision from exc
+    except (IsADirectoryError, NotADirectoryError) as exc:
+        raise collision from exc
+    except PermissionError as exc:
+        # Windows reports an existing directory at the member's own path as
+        # PermissionError rather than IsADirectoryError. Anything else is a
+        # genuine permission failure and is re-raised.
+        if os.path.lexists(temp_path):
+            raise collision from exc
+        raise
 
 
 def _check_member_limits(

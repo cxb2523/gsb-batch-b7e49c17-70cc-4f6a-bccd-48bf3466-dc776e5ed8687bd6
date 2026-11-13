@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Introduced fetchez.utils.identity with make_id(), canonicalize(), and canonical_json() for deterministic, namespaced identity generation across Fetchez and its extensions.
 - `p_f_extract()` (and `p_f_unzip()`, `p_f_untar()`, `p_f_gunzip()`) accept optional keyword-only `max_members` and `max_total_size` limits for untrusted archives. Both default to no limit. The size limit is enforced on the bytes actually decompressed, not only on header sizes (#530).
 - Added `fetchez.utils.UnsafeArchiveError`, a `ValueError` subclass raised when an archive fails a safety check. The `extract` hook now logs these instead of passing the archive through silently as an unsupported format (#530).
+- The `extract` hook accepts `max_members` and `max_total_size`, forwarded to `p_f_extract()` for untrusted archives, and documents the full archive-safety contract.
+- Added a reference page for the `extract`/`unzip` hooks covering the safety rules and hook arguments.
 
 ### CHANGED
 - Refactored core `run_fetchez` with re-usable stage functions and acquisition.
@@ -38,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added structured per-entry failure reporting for workflows using `ignore_failures=True`.
 - Expanded core regression tests covering HTTP failures, retry exhaustion, cancellation, download resumption, and error propagation.
 - **Breaking Change** Acquisition failures that previously returned nonzero status codes now raise exceptions. Downstream integrations should handle the appropriate `FetchError` subclasses or `FetchCancelled`. Successful file fetches continue to return `0`.
+- The `unzip` hook no longer extracts archives with bare `zipfile`/`tarfile` calls. It is now an alias of the `extract` hook and uses `p_f_extract()`, so both hooks reject path traversal, colliding member output paths and exceeded limits before publishing anything, and never create TAR links, devices or FIFOs. Arguments are unchanged, with `members`, `max_members` and `max_total_size` now also accepted. An unsafe archive is logged and the entry passes through instead of being partly extracted (#530).
 
 ### FIXED
 - `p_f_extract()` (and `p_f_unzip()`, `p_f_untar()`, `p_f_gunzip()`) now re-extracts every selected member when `overwrite=True`. ZIP and TAR previously kept existing files whose size matched, and GZIP ignored `overwrite` (#530).
@@ -47,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `p_f_extract()` rejects members such as `dir/..` that name a directory, instead of failing with `IsADirectoryError` (#530).
 - `p_unzip()` writes each file to a temporary file and moves it into place, so it no longer writes through an existing symlink (which could point outside `outdir`) or replace an existing file with bad data when a member fails its CRC check. Backslashes in member names now count as separators. When members flatten to the same file the last one still wins, but a warning is logged and the path is listed once (#530).
 - GZIP extraction now stages and publishes its output the same way as ZIP and TAR. The output gets the usual umask-derived permissions instead of `0600`, no temporary file is left behind when decompression is interrupted (for example by Ctrl+C), and the returned path is resolved like ZIP and TAR member paths (#530).
+- `p_f_extract()` reports a file that collides with a directory of the same name as a collision on Windows too, instead of crashing with `PermissionError` (#530).
 - An empty `.gz` file now raises `gzip.BadGzipFile` instead of publishing an empty output, and a `.gz` file with no name before the suffix (such as `.gz`) raises `ValueError` instead of replacing the source with its own decompressed contents (#530).
 
 ## [0.12.3 - 11-01-26]

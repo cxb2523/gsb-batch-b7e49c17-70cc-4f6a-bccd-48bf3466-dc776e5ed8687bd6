@@ -12,6 +12,7 @@ For an introduction to hook stages, presets, and usage, see [Hooks and Presets](
 :maxdepth: 2
 
 exec
+extract
 filename_filter
 remote_archive_footprint
 remote_raster_footprint
