@@ -37,8 +37,26 @@ export const STREAM_TICKET_PARAM = "ticket";
 /** Header the tray host already sends with its per-session secret (see http/core.ts). */
 const TRAY_TOKEN_HEADER = "x-devwebui-shutdown-token";
 
+// Machine-readable failure reasons a browser (or any API caller) can branch on. They deliberately
+// carry no secret material: never the code, never a key.
+/** Pairing verify failed for a reason the caller can distinguish. */
+export type PairingFailureReason =
+  | "unknown-request"
+  | "wrong-code"
+  | "request-exhausted"
+  | "globally-locked";
+/** A stream ticket presented to the live stream was refused. */
+export type StreamTicketRejection = "ticket-expired" | "ticket-used" | "ticket-never-issued";
+
+/** Read a positive integer env override; used only to shrink long windows in tests. */
+function positiveMsFromEnv(name: string, fallback: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
 /** How long a pairing code stays valid, and how many guesses one request gets. */
 export const PAIRING_TTL_MS = 5 * 60_000;
+const pairingTtlMs = () => positiveMsFromEnv("DEVWEBUI_TEST_PAIRING_TTL_MS", PAIRING_TTL_MS);
 const MAX_ATTEMPTS_PER_REQUEST = 5;
 /** At most this many open requests: a new one evicts the oldest, so spam cannot pile up codes. */
 const MAX_PENDING = 3;
@@ -49,8 +67,12 @@ const MAX_PENDING = 3;
  *  use the cookie file, are unaffected. */
 const MAX_FAILURES_PER_WINDOW = 10;
 const FAILURE_WINDOW_MS = 15 * 60_000;
+const failureWindowMs = () =>
+  positiveMsFromEnv("DEVWEBUI_TEST_FAILURE_WINDOW_MS", FAILURE_WINDOW_MS);
 /** A stream ticket is good for one EventSource connect within this long of being minted. */
 const STREAM_TICKET_TTL_MS = 30_000;
+const streamTicketTtlMs = () =>
+  positiveMsFromEnv("DEVWEBUI_TEST_STREAM_TICKET_TTL_MS", STREAM_TICKET_TTL_MS);
 const MAX_STREAM_TICKETS = 32;
 
 /** Routes a caller must reach WITHOUT a credential: liveness probes and the pairing handshake. */
@@ -199,11 +221,23 @@ interface PendingPairing {
   attempts: number;
 }
 const pending = new Map<string, PendingPairing>();
+// Requests whose per-request guesses ran out, kept until their original TTL so a further submit is
+// answered "exhausted" rather than the misleading "unknown request". Value = when to forget it.
+const exhausted = new Map<string, number>();
 let failures: number[] = [];
 
 function prunePending(now = Date.now()): void {
   for (const [id, p] of pending) if (p.expiresAt <= now) pending.delete(id);
-  failures = failures.filter((t) => now - t < FAILURE_WINDOW_MS);
+  for (const [id, expiresAt] of exhausted) if (expiresAt <= now) exhausted.delete(id);
+  failures = failures.filter((t) => now - t < failureWindowMs());
+}
+
+/** Seconds left on the global lock, or 0 when pairing is not locked. At least 1 while locked so a
+ *  caller never sees a zero/negative countdown alongside a "locked" answer. */
+function lockRetryAfterSeconds(now = Date.now()): number {
+  if (failures.length < MAX_FAILURES_PER_WINDOW) return 0;
+  const oldest = failures[0] as number;
+  return Math.max(1, Math.ceil((oldest + failureWindowMs() - now) / 1000));
 }
 
 /** Open a pairing request. The code is NOT returned to the requester: it is announced on the
@@ -211,18 +245,19 @@ function prunePending(now = Date.now()): void {
 export function startPairing(label: string): { requestId: string; expiresInSecs: number } {
   prunePending();
   while (pending.size >= MAX_PENDING) pending.delete(pending.keys().next().value as string);
+  const ttl = pairingTtlMs();
   const request: PendingPairing = {
     requestId: randomUUID(),
     label: label.trim().slice(0, 80) || "browser",
     code: String(randomInt(0, 1_000_000)).padStart(6, "0"),
-    expiresAt: Date.now() + PAIRING_TTL_MS,
+    expiresAt: Date.now() + ttl,
     attempts: 0,
   };
   pending.set(request.requestId, request);
   console.log(
-    `[devwebui] pairing code for "${request.label}": ${request.code} (valid ${PAIRING_TTL_MS / 60_000} min; also shown by \`devwebui pairing codes\`)`,
+    `[devwebui] pairing code for "${request.label}": ${request.code} (valid ${ttl / 60_000} min; also shown by \`devwebui pairing codes\`)`,
   );
-  return { requestId: request.requestId, expiresInSecs: PAIRING_TTL_MS / 1000 };
+  return { requestId: request.requestId, expiresInSecs: ttl / 1000 };
 }
 
 export interface PendingPairingView {
@@ -244,22 +279,30 @@ export function pendingPairings(): PendingPairingView[] {
 
 export type PairingResult =
   | { ok: true; client: PairedClient; key: string }
-  | { ok: false; reason: string };
+  | { ok: false; reason: PairingFailureReason; retryAfterSeconds?: number };
 
-/** Check a typed code; on success mint and persist a new paired client and return its key once. */
+/** Check a typed code; on success mint and persist a new paired client and return its key once.
+ *  On failure the reason is structured (never the code itself): the global lock outranks every
+ *  other check, an attempt-exhausted request is remembered as such until its TTL, and the failure
+ *  window is still counted globally. */
 export function completePairing(requestId: string, code: string): PairingResult {
   prunePending();
   if (failures.length >= MAX_FAILURES_PER_WINDOW)
-    return { ok: false, reason: "too many wrong codes; try again later" };
+    return { ok: false, reason: "globally-locked", retryAfterSeconds: lockRetryAfterSeconds() };
+  if (exhausted.has(requestId)) return { ok: false, reason: "request-exhausted" };
   const request = pending.get(requestId);
-  if (!request) return { ok: false, reason: "unknown or expired pairing request" };
+  if (!request) return { ok: false, reason: "unknown-request" };
   if (!safeEqual(request.code, String(code ?? "").trim())) {
     failures.push(Date.now());
     request.attempts += 1;
-    if (request.attempts >= MAX_ATTEMPTS_PER_REQUEST) pending.delete(requestId);
-    return { ok: false, reason: "wrong code" };
+    if (request.attempts >= MAX_ATTEMPTS_PER_REQUEST) {
+      pending.delete(requestId);
+      exhausted.set(requestId, request.expiresAt);
+    }
+    return { ok: false, reason: "wrong-code" };
   }
   pending.delete(requestId);
+  exhausted.delete(requestId);
   const key = randomBytes(32).toString("hex");
   const client: PairedClient = {
     id: randomUUID(),
@@ -270,33 +313,61 @@ export function completePairing(requestId: string, code: string): PairingResult 
   return { ok: true, client, key };
 }
 
-// Stream tickets live only in memory, keyed by the ticket, valued by its expiry.
-const streamTickets = new Map<string, number>();
+// Stream tickets live only in memory. Each ticket keeps its state AND its original expiry, so a
+// refused EventSource connect gets a specific answer — never issued, already used, or expired —
+// instead of an undifferentiated 401. A tombstone (used/expired) is retained for one TTL past its
+// expiry (the outer window in which a stale URL can still be replayed), then swept.
+interface StreamTicketState {
+  exp: number;
+  state: "live" | "used" | "expired";
+}
+const streamTickets = new Map<string, StreamTicketState>();
+/** Sweep tombstones older than a full TTL; live tickets and fresh tombstones stay. */
+function pruneStreamTickets(now: number, ttl: number): void {
+  for (const [t, s] of streamTickets)
+    if (s.state !== "live" && s.exp + ttl <= now) streamTickets.delete(t);
+}
 
 /** Mint a single-use ticket an authorized caller hands to EventSource as `?ticket=`. It opens only
  *  the stream route, once, within {@link STREAM_TICKET_TTL_MS}, so a URL that lands in a log or
  *  history is already dead. */
 export function mintStreamTicket(): { ticket: string; expiresInSecs: number } {
   const now = Date.now();
-  for (const [t, exp] of streamTickets) if (exp <= now) streamTickets.delete(t);
+  const ttl = streamTicketTtlMs();
+  pruneStreamTickets(now, ttl);
+  // Expired live tickets (never presented in time) become "expired" tombstones rather than being
+  // dropped: their late replay must say "expired", not "never issued".
+  for (const s of streamTickets.values())
+    if (s.state === "live" && s.exp <= now) s.state = "expired";
   while (streamTickets.size >= MAX_STREAM_TICKETS)
     streamTickets.delete(streamTickets.keys().next().value as string);
   const ticket = randomBytes(32).toString("hex");
-  streamTickets.set(ticket, now + STREAM_TICKET_TTL_MS);
-  return { ticket, expiresInSecs: STREAM_TICKET_TTL_MS / 1000 };
+  streamTickets.set(ticket, { exp: now + ttl, state: "live" });
+  return { ticket, expiresInSecs: ttl / 1000 };
 }
 
-/** Spend a stream ticket: true (and gone) when it was live, false otherwise. */
-function consumeStreamTicket(ticket: string): boolean {
-  const exp = streamTickets.get(ticket);
-  if (exp === undefined) return false;
-  streamTickets.delete(ticket);
-  return exp > Date.now();
+/** Spend a stream ticket on the stream route. Returns null when it opened the stream (and marks it
+ *  used, so it can never open a second one), or a structured rejection: never issued, already used,
+ *  or expired. Only this function validates a ticket and only the one stream path calls it. */
+export function consumeStreamTicket(ticket: string): StreamTicketRejection | null {
+  const now = Date.now();
+  const ttl = streamTicketTtlMs();
+  pruneStreamTickets(now, ttl);
+  const s = streamTickets.get(ticket);
+  if (!s) return "ticket-never-issued";
+  if (s.state === "used") return "ticket-used";
+  if (s.state === "expired" || s.exp <= now) {
+    s.state = "expired";
+    return "ticket-expired";
+  }
+  s.state = "used";
+  return null;
 }
 
 /** Test hook: forget open requests, the failure window and unspent stream tickets. */
 export function resetPairingState(): void {
   pending.clear();
+  exhausted.clear();
   failures = [];
   streamTickets.clear();
 }
@@ -325,13 +396,32 @@ export function isAuthorized(c: Context, options: LocalAuthOptions = {}): boolea
   return !!options.trayToken && !!tray && safeEqual(tray, options.trayToken);
 }
 
+/** Human-readable companion to each {@link StreamTicketRejection} for the JSON error body. */
+const STREAM_TICKET_MESSAGES: Record<StreamTicketRejection, string> = {
+  "ticket-expired": "stream ticket has expired; request a new one",
+  "ticket-used": "stream ticket has already been used; each ticket opens the stream once",
+  "ticket-never-issued": "no such stream ticket was ever issued",
+};
+
 /** Hono middleware for `/api/*`, mounted after loopbackGuard. A no-op unless enforcement is on. */
 export function createLocalAuth(options: LocalAuthOptions = {}): MiddlewareHandler {
   const required = options.required ?? authRequired;
   return async (c, next) => {
     if (!required() || OPEN_ROUTES.has(c.req.path) || isAuthorized(c, options)) return next();
     const ticket = c.req.query(STREAM_TICKET_PARAM);
-    if (c.req.path === ROUTES.stream && ticket && consumeStreamTicket(ticket)) return next();
+    if (c.req.path === ROUTES.stream && ticket) {
+      const rejection = consumeStreamTicket(ticket);
+      // A live ticket is consumed here and now, and still opens ONLY this one route.
+      if (rejection === null) return next();
+      return c.json(
+        {
+          error: STREAM_TICKET_MESSAGES[rejection],
+          reason: rejection,
+          pairing: ROUTES.pairingStatus,
+        },
+        401,
+      );
+    }
     return c.json(
       {
         error: "unauthorized: send the cookie file (devwebui CLI/MCP) or pair this browser",

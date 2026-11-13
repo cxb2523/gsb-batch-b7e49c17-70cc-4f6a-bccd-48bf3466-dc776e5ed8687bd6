@@ -11,9 +11,19 @@ import {
   pendingPairings,
   revokePairedClient,
   startPairing,
+  type PairingFailureReason,
 } from "../local-auth";
 import { ROUTES } from "../routes";
 import { type CreateAppOptions, fail, readBody } from "./core";
+
+/** Human-readable companion for each machine-readable pairing reason, for clients that only
+ *  display a message. The code itself never appears anywhere in a failure response. */
+const PAIRING_FAILURE_MESSAGES: Record<PairingFailureReason, string> = {
+  "unknown-request": "unknown or expired pairing request; start a new one",
+  "wrong-code": "wrong pairing code",
+  "request-exhausted": "this pairing request has used all its attempts; start a new one",
+  "globally-locked": "pairing is temporarily locked after too many wrong codes; try again later",
+};
 
 function handleStatus(c: Context, options: CreateAppOptions) {
   const required = options.requireAuth === true;
@@ -33,7 +43,26 @@ async function handleVerify(c: Context) {
   if (typeof body.requestId !== "string" || typeof body.code !== "string")
     return fail(c, "requestId and code are required");
   const result = completePairing(body.requestId, body.code);
-  if (!result.ok) return fail(c, result.reason, 403);
+  if (!result.ok) {
+    // Structured failure: `reason` is a stable code the GUI branches on; `error` stays the
+    // human-readable message older clients display. The global lock also carries the remaining
+    // wait as both a body field and the standard Retry-After header (whole seconds).
+    const headers =
+      result.reason === "globally-locked" && result.retryAfterSeconds !== undefined
+        ? { "retry-after": String(result.retryAfterSeconds) }
+        : undefined;
+    return c.json(
+      {
+        error: PAIRING_FAILURE_MESSAGES[result.reason],
+        reason: result.reason,
+        ...(result.retryAfterSeconds !== undefined
+          ? { retryAfterSeconds: result.retryAfterSeconds }
+          : {}),
+      },
+      403,
+      headers,
+    );
+  }
   // The key goes back in the body, once, for the GUI to keep in its own origin's localStorage and
   // send as a Bearer header. Deliberately not a cookie: cookies ignore the port, so every other
   // localhost server the browser visits (the user's dev servers) would receive it.
