@@ -14,8 +14,8 @@
             type="checkbox"
             name="pyramids"
             id="pyramids"
-            v-model="pyramidsVisible"
-            @click="togglePyramids"
+            :checked="store.pyramidsVisible"
+            @change="togglePyramids"
           />
         </p>
         <p class="flex items-center justify-between">
@@ -24,8 +24,8 @@
             type="checkbox"
             name="axis-lines"
             id="axis-lines"
-            v-model="axisLinesVisible"
-            @click="toggleAxisLines"
+            :checked="store.axisLinesVisible"
+            @change="toggleAxisLines"
           />
         </p>
       </div>
@@ -78,33 +78,26 @@ export default {
     const store = useThreeStore();
     return { store };
   },
-  data() {
-    return {
-      axisLinesVisible: true,
-      pyramidsVisible: true,
-    };
-  },
   methods: {
     resetCameraPosition() {
-      this.store.setCameraPosition({ x: 0, y: 0, z: 500 });
-      this.store.resetCameraRotation();
+      this.store.resetCamera();
     },
-    toggleAxisLines() {
-      if (this.axisLinesVisible) {
-        this.store.hideAxisLines();
-        this.axisLinesVisible = false;
-      } else {
+    // Bound to the change event (fired after the checkbox value has
+    // flipped). The store flags are the single source of truth, rendered via
+    // :checked, so the checkbox can never show "ticked" while the scene
+    // actually hides the object (or vice versa).
+    toggleAxisLines(event) {
+      if (event.target.checked) {
         this.store.showAxisLines();
-        this.axisLinesVisible = true;
+      } else {
+        this.store.hideAxisLines();
       }
     },
-    togglePyramids() {
-      if (this.pyramidsVisible) {
-        this.store.hidePyramids();
-        this.pyramidsVisible = false;
-      } else {
+    togglePyramids(event) {
+      if (event.target.checked) {
         this.store.showPyramids();
-        this.pyramidsVisible = true;
+      } else {
+        this.store.hidePyramids();
       }
     },
   },

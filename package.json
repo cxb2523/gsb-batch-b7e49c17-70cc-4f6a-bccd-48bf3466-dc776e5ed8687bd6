@@ -7,18 +7,23 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore"
   },
   "dependencies": {
+    "pinia": "^2.2.6",
     "three": "^0.169.0",
     "vue": "^3.5.44",
-    "vue-router": "^4.4.5",
-    "pinia": "^2.2.6"
+    "vue-router": "^4.4.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.7",
-    "vite": "^8.3.5",
+    "@vue/test-utils": "^2.5.1",
     "eslint": "^9.14.0",
-    "eslint-plugin-vue": "^10.11.1"
+    "eslint-plugin-vue": "^10.11.1",
+    "jsdom": "^31.0.1",
+    "vite": "^8.3.5",
+    "vitest": "^3.2.7"
   }
 }
