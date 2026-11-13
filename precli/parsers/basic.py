@@ -31,10 +31,17 @@ LANG_MAP = {
 class Basic(Parser):
     def __init__(self, lang: str, **config):
         super().__init__(lang)
+        # Languages without a dedicated parser are handled through this
+        # generic parser. Use a permissive suppression pattern for them and
+        # derive a rule prefix from the language name.
+        if lang in LANG_MAP:
+            suppress_pattern = (
+                rf"(?:({LANG_MAP[lang][1]}\d\d\dC|[a-z_]+),?)+"
+            )
+        else:
+            suppress_pattern = r"(?:([A-Z]{2}\d\d\dC|[a-z_]+),?)+"
         self.SUPPRESS_COMMENT = re.compile(r"suppress:? (?P<rules>[^#]+)?#?")
-        self.SUPPRESSED_RULES = re.compile(
-            rf"(?:({LANG_MAP[self.lexer][1]}\d\d\dC|[a-z_]+),?)+"
-        )
+        self.SUPPRESSED_RULES = re.compile(suppress_pattern)
 
         if "skip_tests" in config:
             self.skip_tests = config["skip_tests"]
@@ -42,10 +49,13 @@ class Basic(Parser):
         self.suppressions = {}
 
     def file_extensions(self) -> list[str]:
-        return LANG_MAP[self.lexer][0]
+        entry = LANG_MAP.get(self.lexer)
+        return entry[0] if entry is not None else []
 
     def rule_prefix(self) -> str:
-        return LANG_MAP[self.lexer][1]
+        if self.lexer in LANG_MAP:
+            return LANG_MAP[self.lexer][1]
+        return self.lexer[:2].upper()
 
     def get_file_encoding(self, file_contents: str) -> str:
         return "utf-8"

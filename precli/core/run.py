@@ -113,6 +113,19 @@ def parse_file(artifact: Artifact, config: dict) -> list[Result]:
     return results
 
 
+# Fields every custom rule must provide. A rule missing any of these
+# cannot be registered and is skipped with an error message.
+CUSTOM_RULE_REQUIRED_FIELDS = (
+    "id",
+    "name",
+    "description",
+    "cwe",
+    "message",
+    "query",
+    "location_node",
+)
+
+
 class Run:
     def __init__(
         self,
@@ -129,27 +142,116 @@ class Run:
 
         if custom_rules:
             for custom_rule in custom_rules:
-                if custom_rule["language"] not in parsers:
-                    parsers[custom_rule["language"]] = Basic(
-                        custom_rule["language"]
-                    )
-                parser = parsers[custom_rule["language"]]
+                self._register_custom_rule(custom_rule)
 
-                default_config = Config()
-                default_config.level = Level(
-                    custom_rule.get("severity", Level.WARNING)
+    @staticmethod
+    def _rule_label(custom_rule: Optional[dict]) -> str:
+        """Human-readable identifier for a (possibly invalid) custom rule."""
+        if isinstance(custom_rule, dict):
+            rule_id = custom_rule.get("id")
+            rule_name = custom_rule.get("name")
+            if rule_id and rule_name:
+                return f"{rule_id} ({rule_name})"
+            if rule_id:
+                return str(rule_id)
+            if rule_name:
+                return str(rule_name)
+        return "<unnamed custom rule>"
+
+    def _register_custom_rule(self, custom_rule: dict) -> None:
+        """Validate and register a single custom rule.
+
+        A rule that is missing required fields or that cannot be attached
+        to a parser is rejected with a readable error message and never
+        registered, without affecting the remaining custom rules.
+        """
+        label = self._rule_label(custom_rule)
+
+        if not isinstance(custom_rule, dict):
+            LOG.error(
+                "Skipping custom rule %s: rule definition must be a "
+                "mapping, got %s.",
+                label,
+                type(custom_rule).__name__,
+            )
+            return
+
+        missing = [
+            field
+            for field in CUSTOM_RULE_REQUIRED_FIELDS
+            if field not in custom_rule or custom_rule[field] is None
+        ]
+        if missing:
+            LOG.error(
+                "Skipping custom rule %s: missing required field(s) %s. "
+                "The rule was not registered.",
+                label,
+                ", ".join(missing),
+            )
+            return
+
+        language = custom_rule.get("language")
+        if language is None:
+            LOG.error(
+                "Skipping custom rule %s: 'language' is missing or empty, "
+                "so no parser can be selected. The rule was not registered.",
+                label,
+            )
+            return
+
+        unknown_language = language not in parsers
+        if unknown_language:
+            # Keep the existing Basic parser fallback, but make the
+            # unknown language visible in the diagnostics.
+            LOG.error(
+                "Custom rule %s uses unknown language '%s': no parser is "
+                "loaded for it, falling back to the Basic parser.",
+                label,
+                language,
+            )
+            try:
+                parsers[language] = Basic(language)
+            except Exception as e:
+                LOG.error(
+                    "Skipping custom rule %s: unable to create Basic parser "
+                    "for unknown language '%s' (%s: %s). The rule was not "
+                    "registered.",
+                    label,
+                    language,
+                    type(e).__name__,
+                    e,
                 )
-                rule = Rule(
-                    id=custom_rule["id"],
-                    name=custom_rule["name"],
-                    description=custom_rule["description"],
-                    cwe_id=custom_rule["cwe"],
-                    message=custom_rule["message"],
-                    config=default_config,
-                    query=custom_rule["query"],
-                    location_node=custom_rule["location_node"],
-                )
-                parser.rules[rule.name] = rule
+                return
+
+        parser = parsers[language]
+
+        try:
+            default_config = Config()
+            default_config.level = Level(
+                custom_rule.get("severity", Level.WARNING)
+            )
+            rule = Rule(
+                id=custom_rule["id"],
+                name=custom_rule["name"],
+                description=custom_rule["description"],
+                cwe_id=custom_rule["cwe"],
+                message=custom_rule["message"],
+                config=default_config,
+                query=custom_rule["query"],
+                location_node=custom_rule["location_node"],
+            )
+        except Exception as e:
+            LOG.error(
+                "Skipping custom rule %s: failed to construct rule (%s: %s). "
+                "The rule was not registered.",
+                label,
+                type(e).__name__,
+                e,
+            )
+            return
+
+        parser.rules[rule.name] = rule
+        LOG.debug("Registered custom rule %s on parser '%s'.", label, language)
 
     def _init_logger(self, log_level=logging.INFO):
         """Initialize the logger.

@@ -1,5 +1,6 @@
 # Copyright 2025 Secure Sauce LLC
 import importlib
+import logging
 from abc import ABC
 from abc import abstractmethod
 from importlib.metadata import entry_points
@@ -7,6 +8,8 @@ from typing import Optional
 
 import tree_sitter
 from tree_sitter import Node
+from tree_sitter import Query
+from tree_sitter import QueryCursor
 
 from precli.core.artifact import Artifact
 from precli.core.level import Level
@@ -15,6 +18,8 @@ from precli.core.result import Result
 from precli.core.suppression import Suppression
 from precli.core.symtab import Symbol
 from precli.rules import Rule
+
+LOG = logging.getLogger(__name__)
 
 
 class Parser(ABC):
@@ -158,13 +163,37 @@ class Parser(ABC):
         # Run any custom queries if defined
         custom_rules = [rule for rule in self.rules.values() if rule.query]
         for rule in custom_rules:
-            query = self.language.query(rule.query)
-            captures = query.captures(tree.root_node)
-            for location in captures.get(rule.location_node, []):
+            try:
+                query = Query(self.language, rule.query)
+                captures = QueryCursor(query).captures(tree.root_node)
+                for location in captures.get(rule.location_node, []):
+                    result = Result(
+                        rule_id=rule.id,
+                        location=Location(node=location),
+                        message=rule.message,
+                    )
+                    self.results.append(result)
+            except Exception as e:
+                # A malformed or otherwise failing query for one rule must
+                # not abort the scan of this file or interfere with the
+                # remaining rules. Record an ERROR result instead.
+                LOG.error(
+                    "Custom rule '%s' failed while scanning '%s': %s: %s",
+                    rule.id,
+                    artifact.file_name,
+                    type(e).__name__,
+                    e,
+                )
+                node = self.context.get("node", tree.root_node)
                 result = Result(
-                    rule_id=rule.id,
-                    location=Location(node=location),
-                    message=rule.message,
+                    rule_id=f"{self.rule_prefix()}000",
+                    location=Location(node=node),
+                    artifact=artifact,
+                    level=Level.ERROR,
+                    message=(
+                        f"Custom rule '{rule.id}' query raised "
+                        f"{type(e).__name__}: {e}"
+                    ),
                 )
                 self.results.append(result)
 
