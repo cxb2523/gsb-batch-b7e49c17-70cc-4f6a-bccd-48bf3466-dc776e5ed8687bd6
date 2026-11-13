@@ -35,11 +35,28 @@ def _cpp_scan_dir(dir_path: str, recursive: bool) -> dict:
 
 
 def _print_cpp_results(results: dict) -> None:
-    """Print C++ annotation-extraction results; exit 1 on invalid anchors."""
-    from anchorlaw_scanner.cpp import summarize_cpp
+    """Print C++ annotation-extraction results; exit 1 on invalid anchors
+    or files that fail to parse."""
+    from anchorlaw_scanner.cpp import CppParseError, summarize_cpp
 
     all_anchors = []
-    for filepath, anchors in results.items():
+    parse_errors = []
+    for filepath, items in results.items():
+        parse_error = next(
+            (item for item in items if isinstance(item, CppParseError)), None
+        )
+        if parse_error is not None:
+            # 解析失败的文件不产出任何 anchor，单独打印失败原因
+            parse_errors.append(parse_error)
+            print(f"\n{'=' * 70}")
+            print(f"FILE: {filepath}")
+            print(f"{'=' * 70}")
+            print(f"  [{parse_error.severity.upper()}] {parse_error.category} "
+                  f"at line {parse_error.line_number}")
+            print(f"  {parse_error.message}")
+            continue
+
+        anchors = items
         if not anchors:
             continue
         print(f"\n{'=' * 70}")
@@ -56,6 +73,12 @@ def _print_cpp_results(results: dict) -> None:
     print(f"Total: {summary['total']} anchors (across {len(results)} files)")
     print(f"  test={summary['test']} idk={summary['idk']} "
           f"invalid={len(summary['invalid'])}")
+    print(f"  parse-failed files={len(parse_errors)}")
+
+    if parse_errors:
+        print("ERROR: files that failed to parse (decode error); "
+              "no anchor results were produced for them")
+        sys.exit(1)
 
     if summary["invalid"]:
         print("ERROR: invalid anchors (e.g. @anchor.test without source) "

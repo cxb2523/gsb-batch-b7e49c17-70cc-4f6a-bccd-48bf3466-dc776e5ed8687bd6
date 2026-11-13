@@ -9,6 +9,7 @@ import pytest
 
 from anchorlaw_scanner.cpp import (
     CppAnchor,
+    CppParseError,
     is_cpp_file,
     scan_cpp_file,
     summarize_cpp,
@@ -226,3 +227,180 @@ class TestCommentFormGoJava:
         out = capsys.readouterr().out
         # 注释式模式（cpp/go/java）共享同一提取器，目录扫描覆盖全部注释式文件
         assert "Total: 2 anchors" in out  # App.java test + main.go idk
+
+
+class TestDecodeError:
+    """坏编码文件不得用替换字符吞掉非法字节：产出一条 parse-error，
+    且该文件不再产出任何 @anchor 结果。"""
+
+    def _write_bytes(self, tmp_path, name, raw):
+        p = tmp_path / name
+        p.write_bytes(raw)
+        return str(p)
+
+    def test_bad_encoding_yields_single_parse_error_and_no_anchor(self, tmp_path):
+        # 合法 anchor 行之后紧跟一个非法 UTF-8 字节：不能被报成“标注缺失”，
+        # 也不能产出残缺 anchor。
+        raw = (
+            b'// @anchor.test("valid", source="probe:x")\n'
+            b'int good();\n'
+            b'// bad byte follows: \xff\xfe\n'
+        )
+        f = self._write_bytes(tmp_path, "broken.cpp", raw)
+        items = scan_cpp_file(f)
+
+        assert len(items) == 1
+        err = items[0]
+        assert isinstance(err, CppParseError)
+        assert err.category == "parse-error"
+        assert err.severity == "info"
+        assert err.file_path == f
+        assert "decode error" in err.message
+        # 原始异常信息必须保留（UnicodeDecodeError 的编码名/位置/原因）
+        assert "UnicodeDecodeError" in err.message
+        assert not any(isinstance(i, CppAnchor) for i in items)
+
+    def test_parse_error_line_is_first_decode_failure_line(self, tmp_path):
+        # 前两行合法，第三行含非法字节
+        raw = b'// line one\n// line two\n// \xff broken\n'
+        f = self._write_bytes(tmp_path, "broken.go", raw)
+        items = scan_cpp_file(f)
+        assert len(items) == 1
+        assert isinstance(items[0], CppParseError)
+        assert items[0].line_number == 3
+
+    def test_valid_utf8_file_unchanged(self, tmp_path):
+        # 合法文件行为不变：test 缺 source、描述为空仍判 invalid 并列出 issues
+        f = _write(tmp_path, "a.h", '''
+            // @anchor.test("")
+            int f();
+        ''')
+        items = scan_cpp_file(f)
+        assert len(items) == 1
+        anchor = items[0]
+        assert isinstance(anchor, CppAnchor)
+        assert not anchor.valid
+        assert anchor.issues  # 描述为空 + 缺 source 均列出
+
+    def test_explicit_string_source_skips_decoding(self, tmp_path):
+        # 调用方直接给出已解码文本时，不再读盘、不触发 decode 失败
+        f = str(tmp_path / "virtual.java")
+        items = scan_cpp_file(f, source='// @anchor.idk("in-memory")\n')
+        assert len(items) == 1
+        assert isinstance(items[0], CppAnchor)
+
+
+class TestMultilineAnchor:
+    """跨行书写的标注必须被正确提取，行号取标注起始行；
+    相邻的独立单行标注不得被合并。"""
+
+    def test_multiline_anchor_extracted_with_start_line(self, tmp_path):
+        f = _write(tmp_path, "multi.cpp", '''
+            int before();
+            // @anchor.test("描述",
+            // source="probe:x")
+            int after();
+        ''')
+        anchors = scan_cpp_file(f)
+        assert len(anchors) == 1
+        a = anchors[0]
+        assert a.kind == "test"
+        assert a.description == "描述"
+        assert a.source == "probe:x"
+        assert a.valid
+        # 标注起始行：文件第 3 行（第 1 行为空行）
+        assert a.line_number == 3
+
+    def test_multiline_anchor_without_repeated_comment_marker(self, tmp_path):
+        # 续行不带 // 的写法同样应被识别
+        f = _write(tmp_path, "multi.h",
+                   '// @anchor.test("split",\n'
+                   'source="trace:y")\n')
+        anchors = scan_cpp_file(f)
+        assert len(anchors) == 1
+        assert anchors[0].valid
+        assert anchors[0].source == "trace:y"
+        assert anchors[0].line_number == 1
+
+    def test_two_adjacent_single_line_anchors_not_merged(self, tmp_path):
+        f = _write(tmp_path, "two.cpp", '''
+            // @anchor.test("first", source="probe:1")
+            // @anchor.idk("second")
+            int f();
+        ''')
+        anchors = scan_cpp_file(f)
+        assert len(anchors) == 2
+        first, second = anchors
+        assert first.kind == "test"
+        assert first.description == "first"
+        assert first.source == "probe:1"
+        assert first.line_number == 2
+        assert second.kind == "idk"
+        assert second.description == "second"
+        assert second.line_number == 3
+
+    def test_inline_comment_anchor_still_detected(self, tmp_path):
+        # 既有行为：行内注释中的标注仍被识别，行号取所在行
+        f = _write(tmp_path, "inline.java",
+                   'int x = 1;  // @anchor.idk("still a comment, ok")\n')
+        anchors = scan_cpp_file(f)
+        assert len(anchors) == 1
+        assert anchors[0].kind == "idk"
+        assert anchors[0].line_number == 1
+
+
+class TestCliParseFailure:
+    """CLI check 在注释式模式下遇到解析失败项：打印文件与原因，
+    汇总单独给出失败文件数，并以非零退出码结束。"""
+
+    def test_check_bad_encoding_file_exits_nonzero(self, tmp_path, capsys):
+        import argparse
+        from anchorlaw_scanner import cli
+        f = tmp_path / "broken.cpp"
+        f.write_bytes(b'// @anchor.test("x", source="probe:1")\n\xff broken\n')
+        ns = argparse.Namespace(command="check", path=str(f), lang="cpp",
+                                no_recursive=False)
+        with pytest.raises(SystemExit) as e:
+            cli._cmd_check(ns)
+        assert e.value.code != 0
+        out = capsys.readouterr().out
+        assert str(f) in out
+        assert "parse-error" in out
+        assert "decode error" in out
+        assert "parse-failed files=1" in out
+
+    def test_check_dir_mixes_parse_failure_and_valid_anchors(
+        self, tmp_path, capsys
+    ):
+        import argparse
+        from anchorlaw_scanner import cli
+        _write(tmp_path, "ok.go", '''
+            // @anchor.test("ok", source="trace:p#1")
+            func f() {}
+        ''')
+        (tmp_path / "broken.java").write_bytes(b'public class B {}\n\xff\n')
+        ns = argparse.Namespace(command="check", path=str(tmp_path), lang="java",
+                                no_recursive=False)
+        with pytest.raises(SystemExit) as e:
+            cli._cmd_check(ns)
+        assert e.value.code != 0
+        out = capsys.readouterr().out
+        # 合法文件的 anchor 照常列出
+        assert "Total: 1 anchors" in out
+        # 失败文件单独计数
+        assert "parse-failed files=1" in out
+        assert "decode error" in out
+
+    def test_check_valid_only_still_exits_zero(self, tmp_path, capsys):
+        import argparse
+        from anchorlaw_scanner import cli
+        _write(tmp_path, "ok.cpp", '''
+            // @anchor.test("ok", source="trace:p#1")
+            int f() { return 0; }
+        ''')
+        ns = argparse.Namespace(command="check", path=str(tmp_path), lang="cpp",
+                                no_recursive=False)
+        cli._cmd_check(ns)  # 不抛 SystemExit → 退出码 0
+        out = capsys.readouterr().out
+        assert "parse-failed files=0" in out
+        assert "Total: 1 anchors" in out
