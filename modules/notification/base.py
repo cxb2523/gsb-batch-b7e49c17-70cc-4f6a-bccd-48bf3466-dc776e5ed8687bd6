@@ -67,17 +67,17 @@ async def default_http(url: str, payload: dict) -> int:  # pragma: no cover - re
 
     The channel URL is user-supplied, so this must never be a plain aiohttp POST: a
     tenant could otherwise point a webhook at ``169.254.169.254`` or an internal
-    service and have the server fetch it on every alert. :func:`guarded_post` blocks any
-    non-public destination (incl. DNS rebinding); a blocked target is logged and treated
-    as a failed delivery, never contacted."""
-    from core.logging import logger
-    from modules.safe_http import ForbiddenTarget, guarded_post
+    service and have the server fetch it on every alert. :func:`guarded_post` runs the
+    request-independent preflight (bare-IP refusal + full DNS resolution check) before
+    any HTTP work and blocks every non-public destination (incl. DNS rebinding). A
+    blocked target raises :class:`~modules.safe_http.ForbiddenTarget` carrying the
+    refused host and hit IP; it propagates to the router, which records one
+    structured, query-string-free log line and treats the delivery as failed — the
+    forbidden host is never contacted.
+    """
+    from modules.safe_http import guarded_post
 
-    try:
-        return await guarded_post(url, payload)
-    except ForbiddenTarget as exc:
-        logger.warning("notify: refusing webhook to non-public address: {}", exc)
-        return 0
+    return await guarded_post(url, payload)
 
 
 def default_senders() -> Senders:

@@ -12,6 +12,7 @@ from core.models import ChannelType
 from core.severity import Severity
 from modules.notification import discord, email, slack, telegram, webhook
 from modules.notification.base import Alert, Senders
+from modules.safe_http import ForbiddenTarget
 
 _DISPATCH = {
     ChannelType.DISCORD: discord.send,
@@ -40,6 +41,25 @@ async def deliver(alert: Alert, channel: dict, senders: Senders) -> bool:
         return False
     try:
         return await fn(alert, channel.get("config") or {}, senders)
+    except ForbiddenTarget as exc:
+        # Auditable SSRF refusal (§3.10). Only the canonical host — urlsplit strips
+        # userinfo/port/query — plus the hit address and reason are logged, bound as
+        # structured fields. The full URL is never logged: its query string can carry
+        # a Telegram bot token or a signed webhook secret.
+        logger.bind(
+            notify_channel=str(channel.get("type")),
+            refused_host=exc.host,
+            hit_ip=exc.hit_ip,
+            reason=exc.reason,
+        ).warning(
+            "notify: refusing delivery to non-public target "
+            "(channel={}, host={}, hit_ip={}, reason={})",
+            channel.get("type"),
+            exc.host,
+            exc.hit_ip,
+            exc.reason,
+        )
+        return False
     except Exception as exc:  # noqa: BLE001 - a channel failure must not stop others
         # str(exc) is empty for timeout/connection errors — show the type so the
         # log is actionable ("TimeoutError" / "ClientConnectorError" vs blank).

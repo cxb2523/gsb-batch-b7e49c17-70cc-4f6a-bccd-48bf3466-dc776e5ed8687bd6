@@ -410,13 +410,21 @@ metric (target <5%).
   is treated as a literal that matches nothing (`tests/security/test_nosql_injection.py`).
   Models use `extra="ignore"`, so mass-assignment of unexpected fields is impossible.
 - **Outbound-webhook SSRF is closed.** A notification channel URL is user-supplied and
-  the server POSTs to it on every alert. Delivery goes through the SSRF-safe guarded
-  session (`modules/safe_http.guarded_post`): the filtering resolver blocks any host
-  that resolves to a non-public address (metadata/RFC1918/loopback — incl. DNS
-  rebinding) and redirects are off. Input-time validation additionally rejects non-http
-  schemes and forbidden IP literals, and constrains a Telegram bot token so it can't
-  rewrite the request host. This complements the in-process fetch guard (§3.10) used by
-  the takeover/secret/403-bypass modules.
+  the server POSTs to it on every alert. Before any HTTP work,
+  `modules/safe_http.assert_destination_allowed` validates the destination
+  independently of the HTTP client: a forbidden bare-IP host (incl. bracketed IPv6) is
+  refused outright, and a domain is resolved first so *any* non-public answer — or a
+  DNS failure / empty answer — blocks the request without a byte hitting the network
+  (fail-closed; case and a trailing FQDN dot do not change the verdict). Delivery then
+  goes through the SSRF-safe guarded session (`modules/safe_http.guarded_post`): the
+  filtering resolver blocks a connect-time DNS rebind and redirects are off. A refusal
+  raises `ForbiddenTarget` carrying the canonical host, the hit IP and a reason code;
+  the notification router logs those as structured fields — never the full URL, whose
+  query string may hold a token — and treats the delivery as failed. Input-time
+  validation additionally rejects non-http schemes and forbidden IP literals, and
+  constrains a Telegram bot token so it can't rewrite the request host. This
+  complements the in-process fetch guard (§3.10) used by the
+  takeover/secret/403-bypass modules.
 - **Request bodies are size-capped** (512 KiB) by middleware before buffering, so an
   oversized JSON payload is a 413, not a memory-DoS.
 - Prod refuses to boot with insecure default secrets (`Settings.assert_prod_safe`).
