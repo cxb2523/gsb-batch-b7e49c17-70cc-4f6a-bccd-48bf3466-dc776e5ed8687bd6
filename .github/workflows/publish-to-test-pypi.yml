@@ -1,0 +1,39 @@
+name: Publish to Test PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build-n-publish:
+    name: Build and publish to Test PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: test-pypi
+      url: https://test.pypi.org/project/precli
+    permissions:
+      id-token: write
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - name: Set up Python 3.15
+      uses: actions/setup-python@v7
+      with:
+        python-version: 3.15
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get install gettext
+        pip install setuptools wheel
+
+    - name: Build a binary wheel and a source tarball
+      run: |
+        sh -c 'for lang in de en_GB es fr it ja ko pt_BR ru zh_CN zh_TW; do msgfmt -o precli/locale/$lang/LC_MESSAGES/messages.mo precli/locale/$lang/LC_MESSAGES/messages.po; done'
+        python setup.py sdist bdist_wheel
+
+    - name: Publish distribution to Test PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
