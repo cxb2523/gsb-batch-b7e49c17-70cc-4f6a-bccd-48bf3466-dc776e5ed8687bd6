@@ -1,0 +1,1409 @@
+* { box-sizing: border-box; }
+/* Tokens. Measured against the desktop and hosted crawlers (2026-10 UI
+   research): a light grey canvas with white panels, one blue, cool greys,
+   red / amber / grey severity. Dark mode uses Chrome's dark greys, not navy.
+   Every text pair is at least 4.5:1. The names predate the restyle and stay,
+   so every var() in the markup keeps working. */
+:root, [data-theme="light"] {
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 20px;
+  --radius-sm: 4px; --radius: 6px; --radius-lg: 8px;
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface2: #f6f7f9;
+  --border: #d6dbe0;
+  --border-subtle: #e6e9ed;
+  --text: #1f2328;
+  --text-muted: #5f6872;
+  --accent: #0a5bc4;
+  --accent-hover: #084a9e;
+  --accent-bg: #e8f0fb;
+  --on-accent: #ffffff;
+  --err-fg: #c62828;  --err-bg: #fdecea;
+  --warn-fg: #b45309; --warn-bg: #fff4e5;
+  --info-fg: #5f6872; --info-bg: #eef0f3;
+  --ok-fg: #187a35;   --ok-bg: #e6f4ea;
+  --overlay: rgba(0, 0, 0, .4);
+  --shadow-pop: 0 4px 16px rgba(0, 0, 0, .12), 0 1px 3px rgba(0, 0, 0, .08);
+  --shadow-modal: 0 12px 32px rgba(0, 0, 0, .18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #18191b; --surface: #202124; --surface2: #292a2d; --border: #3c4043; --border-subtle: #303134;
+    --text: #e8eaed; --text-muted: #9aa0a6;
+    --accent: #8ab4f8; --accent-hover: #aecbfa; --accent-bg: #2b3442; --on-accent: #202124;
+    --err-fg: #f28b82; --err-bg: #423233; --warn-fg: #fdd663; --warn-bg: #433e2e;
+    --info-fg: #9aa0a6; --info-bg: #303134; --ok-fg: #81c995; --ok-bg: #303c36;
+    --overlay: rgba(0, 0, 0, .6); --shadow-pop: 0 4px 16px rgba(0, 0, 0, .5); --shadow-modal: 0 12px 32px rgba(0, 0, 0, .6);
+  }
+}
+[data-theme="dark"] {
+  --bg: #18191b; --surface: #202124; --surface2: #292a2d; --border: #3c4043; --border-subtle: #303134;
+  --text: #e8eaed; --text-muted: #9aa0a6;
+  --accent: #8ab4f8; --accent-hover: #aecbfa; --accent-bg: #2b3442; --on-accent: #202124;
+  --err-fg: #f28b82; --err-bg: #423233; --warn-fg: #fdd663; --warn-bg: #433e2e;
+  --info-fg: #9aa0a6; --info-bg: #303134; --ok-fg: #81c995; --ok-bg: #303c36;
+  --overlay: rgba(0, 0, 0, .6); --shadow-pop: 0 4px 16px rgba(0, 0, 0, .5); --shadow-modal: 0 12px 32px rgba(0, 0, 0, .6);
+}
+button, input, select, textarea { font: inherit; }
+.theme-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.theme-toggle:hover { color: var(--text); background: var(--surface2); }
+.theme-toggle svg { width: 15px; height: 15px; }
+.theme-toggle span {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.topbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.topbar-btn:hover { background: var(--surface2); }
+.topbar-btn svg { color: var(--text-muted); }
+/* Right-hand cluster: byline + build badge. margin-left:auto pushes it,
+   and the export / theme buttons after it, to the right edge. */
+.topbar-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+.byline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 3px 0;
+  transition: color .12s;
+}
+.byline svg { width: 12px; height: 12px; opacity: .8; }
+.byline:hover { color: var(--accent); }
+.byline:hover svg { opacity: 1; }
+.build-badge {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px 0;
+}
+.build-badge:hover { color: var(--text); text-decoration: underline; }
+
+/* Inline-style buttons can't be re-themed via tokens without !important.
+   These hardcoded #0f172a / #fff / #f1f5f9 patterns pre-date the dark
+   mode toggle — overriding them here keeps the markup untouched. */
+[data-theme="dark"] #crawler-load-btn,
+[data-theme="dark"] #crawler-save-btn,
+[data-theme="dark"] #crawler-compare-btn,
+[data-theme="dark"] #crawler-bulk-recrawl-btn,
+[data-theme="dark"] #crawler-export-sitemap-btn,
+[data-theme="dark"] #crawler-export-view-btn,
+[data-theme="dark"] #crawler-export-xlsx-btn,
+[data-theme="dark"] .export-btn {
+  background: var(--surface2) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+/* .url-cell is the clickable URL inside a regular table cell — must
+   stay transparent so it inherits the row's striping/hover bg.
+   Painting it surface2 made every URL look like a pill button. */
+[data-theme="dark"] .url-cell {
+  color: var(--accent) !important;
+}
+[data-theme="dark"] #crawler-empty {
+  color: var(--text-muted) !important;
+}
+[data-theme="dark"] #crawler-empty button {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawler-limit-banner > div {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+/* Saved crawls modal: the loader rows are built with deeply-nested
+   inline color:#0f172a / color:#64748b / background:#fff styles. Reach
+   into every descendant and pull onto the theme tokens. */
+[data-theme="dark"] #crawl-loader-body,
+[data-theme="dark"] #crawl-loader-body input {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] {
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] div {
+  color: var(--text) !important;
+}
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] [style*="color:#64748b"],
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] [style*="color: #64748b"] {
+  color: var(--text-muted) !important;
+}
+/* Header note + filter input above the rows — inline-styled with
+   background:#f8fafc / color:#0f172a / color:#64748b / border:#e2e8f0. */
+[data-theme="dark"] #crawl-loader-body > div[style*="background:#f8fafc"],
+[data-theme="dark"] #crawl-loader-body > div[style*="background: #f8fafc"] {
+  background: var(--surface2) !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawl-loader-body > div[style*="background:#f8fafc"] strong {
+  color: var(--text) !important;
+}
+[data-theme="dark"] #crawl-loader-search {
+  background: var(--surface2) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+/* The "Date / Time / Website / Saved by / Pages" header row */
+[data-theme="dark"] #crawl-loader-body > div[style*="background:#f1f5f9"],
+[data-theme="dark"] #crawl-loader-body > div[style*="background: #f1f5f9"] {
+  background: var(--surface2) !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border) !important;
+}
+/* One column of rows: top bar, progress strip when crawling, then the
+   panels fill what is left. Replaces calc(100vh - 49px), which broke as soon
+   as the top bar wrapped or the progress strip showed. */
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  font: 400 var(--fs-sm)/1.45 var(--font);
+  background: var(--bg);
+  color: var(--text);
+}
+.topbar {
+  flex: none;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+.brand {
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 8px;
+  color: var(--text);
+}
+.brand svg { width: 22px; height: 22px; border-radius: 5px; }
+.sub { display: none; }
+.wrap {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 300px 240px 1fr;
+}
+.wrap:has(#issues-sidebar[style*="display:none"]),
+.wrap.nosb {
+  grid-template-columns: 300px 1fr;
+}
+.sidebar, .issues-sidebar {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: var(--surface);
+  min-height: 0;  /* allow flex children to shrink so overflow-y:auto kicks in */
+}
+.sidebar { padding: 18px 16px; }
+.issues-sidebar { padding: 10px 8px; }
+.sidebar label { display: block; font-size: 12px; margin-bottom: 12px; }
+.sidebar input[type=url], .sidebar textarea {
+  width: 100%;
+  padding: 8px 10px;
+  /* Use surface2 (one step lighter than the sidebar's own surface) so
+     the field clearly sits above the panel background in dark mode.
+     Earlier --bg = same as page bg, --surface = same as sidebar; both
+     made the field invisible until focused. */
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  margin-top: 4px;
+  outline: none;
+  transition: border-color .12s, box-shadow .12s, background-color .12s;
+}
+.sidebar input[type=url]:hover,
+.sidebar textarea:hover {
+  border-color: var(--text-muted);
+}
+.sidebar input[type=url]:focus,
+.sidebar textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.sidebar input[type=url]::placeholder,
+.sidebar textarea::placeholder {
+  color: var(--text-muted);
+}
+[data-theme="dark"] .sidebar input[type=url],
+[data-theme="dark"] .sidebar textarea {
+  background: var(--surface2);
+}
+.sidebar textarea { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.slider-row input[type=range] { width: 100%; margin-top: 3px; }
+/* Block layout (not flex) so the label text + <small> flow as inline
+   text and wrap naturally — flex made each child its own column and
+   broke "Ignore noindex" / "Sitemap analysis" labels into stacked
+   blocks that wrapped weirdly. */
+/* Checkbox rows: box pinned left, label and helper text wrap as one
+   indented block so every row has the same rhythm. */
+.sidebar .check { display: block; position: relative; padding: 4px 0 4px 22px; margin-bottom: 6px; line-height: 1.45; cursor: pointer; font-size: var(--fs-sm); color: var(--text); }
+.sidebar .check input[type="checkbox"] { position: absolute; left: 0; top: 6px; margin: 0; width: 14px; height: 14px; accent-color: var(--accent); }
+.sidebar .check small { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 400; }
+.filters { margin: 10px 0; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.filters summary { font-size: var(--fs-sm); font-weight: 600; color: var(--text); padding: 8px 0; cursor: pointer; }
+.filters label { margin-top: 8px; }
+.filters small { color: var(--text-muted); font-size: var(--fs-xs); }
+/* Secondary buttons (Apply to current crawl etc.) — match the visual
+   weight of the primary CTA without competing with it. */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-secondary:hover:not(:disabled) { background: var(--surface2); }
+.btn-secondary:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.actions { display: flex; gap: 8px; margin-top: 8px; }
+.actions button {
+  flex: 1;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+.actions button:hover { background: var(--accent-hover); }
+#crawler-stop-btn { background: var(--err-fg); color: var(--surface); }
+/* The live counts moved to the progress strip; the block keeps its ids for
+   the code that writes them. */
+.stats { display: none !important; }
+
+/* Issues sidebar */
+.ci-cat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  margin: 0;
+  color: var(--text);
+}
+.ci-cat:hover { background: var(--surface2); }
+.ci-cat.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.ci-cat.active .ci-count { color: var(--accent); }
+.ci-cat[data-hidden="1"] { display: none; }
+.ci-count {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 24px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ci-count.err { color: var(--err-fg); }
+.ci-count.warn { color: var(--warn-fg); }
+
+/* Severity-coded checks that came back clean (count = 0) get tagged
+   data-clean="true" by the sort logic. Render a green tick instead of "0". */
+.ci-cat[data-clean="true"] > span:first-child {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.ci-cat[data-clean="true"] .ci-count {
+  color: var(--ok-fg);
+  font-size: 0;            /* hide the "0" textContent */
+  position: relative;
+}
+.ci-cat[data-clean="true"] .ci-count::before {
+  content: '✓';
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+}
+.ci-cat.active[data-clean="true"] .ci-count,
+.ci-cat.active[data-clean="true"] .ci-count::before { color: var(--accent); }
+/* Active state has to override the muted label colour from the clean-row
+   rule above (specificity 0,2,1) — otherwise the highlighted label reads
+   as low-contrast gray on the purple background. */
+.ci-cat.active[data-clean="true"] > span:first-child {
+  color: var(--accent);
+  font-weight: 600;
+}
+.cat-label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 16px 10px 4px;
+}
+.sitemap-status {
+  margin: 4px 8px 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.45;
+}
+.sitemap-status.is-loading { border-color: var(--accent); }
+.sitemap-status.is-error   { border-color: var(--warn-fg); background: var(--warn-bg); }
+.sitemap-status.is-skipped { color: var(--text-muted); font-style: italic; }
+.sitemap-status .ss-row { display: flex; align-items: center; gap: 6px; }
+.sitemap-status .ss-spinner {
+  width: 10px; height: 10px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: ss-spin 0.7s linear infinite;
+}
+@keyframes ss-spin { to { transform: rotate(360deg); } }
+.sitemap-status input.ss-input {
+  width: 100%; box-sizing: border-box; margin-top: 6px;
+  padding: 5px 7px; font-size: 11px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.sitemap-status .ss-btn-row { display: flex; gap: 6px; margin-top: 6px; }
+.sitemap-status button.ss-btn {
+  flex: 1; padding: 5px 8px; font-size: 11px; font-weight: 600;
+  border-radius: 4px; cursor: pointer; line-height: 1.2;
+}
+.sitemap-status button.ss-btn-primary {
+  background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent);
+}
+.sitemap-status button.ss-btn-primary:hover { filter: brightness(1.1); }
+.sitemap-status button.ss-btn-secondary {
+  background: transparent; color: var(--text-muted); border: 1px solid var(--border);
+}
+.sitemap-status button.ss-btn-secondary:hover { color: var(--text); border-color: var(--text-muted); }
+/* Errors / Warnings / Info: plain rows with the Lighthouse marks, not
+   coloured tiles. */
+.sev-grid { display: block; margin: 4px 0; }
+.sev-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sev-cell:hover { background: var(--surface2); }
+.sev-cell.active { background: var(--accent-bg); }
+.sev-lbl { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text); }
+.sev-lbl::before { content: ''; flex: none; width: 10px; height: 10px; }
+.sev-lbl.err::before { background: var(--err-fg); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.sev-lbl.warn::before { background: var(--warn-fg); width: 9px; height: 9px; border-radius: 1px; }
+.sev-lbl.info::before { background: var(--info-fg); border-radius: 50%; }
+.sev-num { font-size: var(--fs-xs); font-weight: 600; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sev-num.err { color: var(--err-fg); }
+.sev-num.warn { color: var(--warn-fg); }
+
+/* Main content — flex column: banner/info/results/dock stack, table scrolls inside results */
+.main { overflow: hidden; padding: 0; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+.results-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.detail-title {
+  padding: 10px 16px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.table-wrap { overflow: auto; flex: 1; min-height: 0; background: var(--surface); }
+.empty { color: var(--text-muted); text-align: center; padding: 60px; font-size: var(--fs-md); }
+#crawler-table {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  table-layout: fixed;
+  /* table-layout:fixed only honours <col> widths when the table has an
+     explicit pixel width. width:max-content lets Chrome ignore col widths
+     and expand cells to fit content (Title/Meta blew out to 400px+). JS
+     sets table.style.width = sum(col widths) instead — see _scSyncTableWidth. */
+  width: 0;
+}
+#crawler-table td {
+  height: 32px;
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#crawler-table thead th {
+  background: var(--surface2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  user-select: none;
+}
+#crawler-table thead th .th-label {
+  display: block;
+  padding: 8px 10px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#crawler-table thead th .th-label:hover { color: var(--accent); }
+#crawler-table thead th .th-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 3;
+}
+#crawler-table thead th .th-resize::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: 0;
+  width: 1px;
+  background: var(--border);
+  transition: background .12s, width .12s;
+}
+#crawler-table thead th .th-resize:hover::after,
+#crawler-table thead th .th-resize.is-dragging::after {
+  background: var(--accent);
+  width: 3px;
+}
+body.is-col-resizing { cursor: col-resize !important; user-select: none !important; }
+body.is-col-resizing * { cursor: col-resize !important; }
+.url-cell { color: var(--accent); cursor: pointer; }
+.url-cell:hover { text-decoration: underline; }
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  margin: 1px;
+  font-weight: 400;
+  line-height: 18px;
+}
+.badge.error { background: var(--err-bg); color: var(--err-fg); }
+.badge.warn  { background: var(--warn-bg); color: var(--warn-fg); }
+.badge.info  { background: var(--info-bg); color: var(--info-fg); }
+
+/* CMS banner + issue info */
+#crawler-cms-banner, #issue-info-box { padding: 10px 14px; }
+.cms-banner {
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.cms-banner strong { color: var(--accent); }
+.cms-banner button {
+  margin-left: 6px;
+  padding: 3px 8px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+/* The description under a view's title: a muted paragraph, no box. */
+#issue-info-box { padding: 0 16px 10px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.info-box {
+  max-width: 90ch;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.info-box > svg { display: none; }
+.info-box .sev-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  margin-right: 6px;
+}
+.info-box .sources {
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.info-box .sources a { color: var(--accent); text-decoration: none; margin: 0 3px; }
+
+.copy-icon, .open-icon {
+  color: var(--text-muted);
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 3px;
+  opacity: .7;
+}
+.copy-icon:hover, .open-icon:hover { opacity: 1; }
+
+/* Dock at the bottom — part of the flex column so the table shrinks when it opens */
+#crawler-dock {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 280px;
+  min-height: 140px;
+  max-height: 50vh;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+#crawler-dock[hidden] { display: none; }
+.dock-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.dock-url {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-tabs { display: flex; gap: 2px; }
+.dock-tab {
+  height: 30px;
+  padding: 0 10px;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: inset 0 -2px 0 transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.dock-tab:hover { color: var(--text); }
+.dock-tab.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.dock-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+.dock-body { flex: 1; overflow: auto; padding: 12px 14px; }
+.dock-pane .kv {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 4px 14px;
+  font-size: 12px;
+  margin: 0;
+}
+.dock-pane .kv dt { color: var(--text-muted); }
+.dock-pane .kv dd { margin: 0; word-break: break-word; }
+.dock-pane .issue-row {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.dock-pane .link-row {
+  padding: 3px 0;
+  font-size: 11.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dock-pane .link-row a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.dock-pane .link-row .anchor {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-style: italic;
+}
+.dock-pane .link-row .placement {
+  background: var(--surface2);
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* SEO Side Panel tip: one muted line along the foot of the dock */
+.dock-tip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.dock-tip-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.3;
+}
+.dock-tip-text { flex: 1; min-width: 0; }
+.dock-tip-text strong { color: var(--text); font-weight: 600; }
+.dock-tip-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.dock-tip-link:hover { text-decoration: underline; }
+.dock-tip-close {
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: .7;
+}
+.dock-tip-close:hover { opacity: 1; color: var(--text); }
+
+/* Column visibility per category — JS adds classes to #crawler-table.
+   Selectors target data-col on <col>, <th>, <td> so dynamically-injected
+   columns (e.g. H1 (2), H1 (3) in the Multiple H1s view) don't shift
+   nth-child indices and silently break the hide rules. */
+#crawler-table.hide-col-redirto [data-col="redirto"] { display: none; }
+#crawler-table.hide-col-inlinks [data-col="inlinks"] { display: none; }
+#crawler-table.hide-col-title [data-col="title"] { display: none; }
+#crawler-table.hide-col-tlen [data-col="tlen"] { display: none; }
+#crawler-table.hide-col-meta [data-col="meta"] { display: none; }
+#crawler-table.hide-col-h1 [data-col="h1"] { display: none; }
+#crawler-table.hide-col-words [data-col="words"] { display: none; }
+#crawler-table.hide-col-speed [data-col="speed"] { display: none; }
+
+/* Drag-select row highlighting */
+/* Row selection highlight — scope to any tbody, not just the main #crawler-tbody,
+   so report panels (sitemap orphans, all values, etc.) get the same blue tint
+   when drag-selected. */
+tbody tr.cr-selected { background: var(--accent-bg) !important; }
+tbody tr.cr-selected td { background: transparent !important; }
+#crawler-tbody { user-select: none; }
+/* Any tbody whose rows are drag-selectable — disables text selection so a
+   row drag doesn't double-select text. :has() lights up on Chrome/Safari/FF. */
+tbody:has(tr[data-url]) { user-select: none; }
+
+/* Column sort indicator */
+.sc-sort-ind {
+  font-size: 10px;
+  color: var(--accent);
+  margin-left: 2px;
+  font-weight: 700;
+}
+
+/* Double-click any cell to expand and read the full value. Inline styles
+   set max-width + ellipsis on most TDs, so we override with !important. */
+#crawler-tbody td.cs-cell-expanded {
+  white-space: normal !important;
+  overflow: visible !important;
+  max-width: none !important;
+  word-break: break-all;
+  background: var(--accent-bg) !important;
+}
+#crawler-tbody td.cs-cell-expanded > *,
+#crawler-tbody td.cs-cell-expanded span {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  max-width: none !important;
+}
+
+/* Report tables (.crawler-grid) and sitemap-panel anchors render URLs in
+   dark blue (var(--accent) inline / var(--accent) which is #3b82f6 in dark) on
+   the navy surface — unreadable. Force a brighter sky-blue in dark mode
+   and a darker blue in light. The !important is needed to beat inline
+   `style="color:..."` set by the JS row renderers. */
+.crawler-grid td a,
+#sitemap-panel a {
+  color: var(--accent) !important;
+  text-decoration: none;
+}
+.crawler-grid td a:hover,
+#sitemap-panel a:hover { text-decoration: underline; }
+
+/* Schema-by-Page filter chips — active state. Done in CSS (not inline JS) so the
+   accent background and white text always win over the chip's default inline
+   code colour (var(--text)), which left active-chip labels dark-on-purple. */
+.sc-schema-chip.active { background: var(--accent) !important; border-color: var(--accent) !important; }
+.sc-schema-chip.active code,
+.sc-schema-chip.active span { color: var(--on-accent) !important; }
+
+/* Crawler empty state — informative, on-brand pre-crawl canvas (ported from
+   SEO Studio's crawler). Headline + description + capability chips. */
+.crawler-empty-rich .ce-title {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.crawler-empty-rich .ce-sub {
+  max-width: 62ch;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.crawler-empty-rich .ce-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+  max-width: 540px;
+}
+.crawler-empty-rich .ce-chips span {
+  font-size: 11.5px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #f8fafc);
+  color: var(--text-muted, #64748b);
+}
+
+/* ── Crawl Budget view ───────────────────────────────────────────────── */
+.sc-views { display:flex; gap:4px; align-self:stretch; margin-left:8px; }
+.sc-view-btn {
+  height:48px; padding:0 10px; border:0; border-radius:0; background:none;
+  box-shadow: inset 0 -2px 0 transparent;
+  font-size:var(--fs-sm); font-weight:600; color:var(--text-muted); cursor:pointer;
+}
+.sc-view-btn:hover { color:var(--text); }
+.sc-view-btn.active { color:var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.cb-view { padding:28px 24px; overflow-y:auto; }
+.cb-inner { max-width:940px; margin:0 auto; }
+.cb-title { font-size:var(--fs-xl); font-weight:600; margin:0 0 4px; color:var(--text); }
+.cb-subtitle { color:var(--text-muted); font-size:13px; margin:0 0 20px; }
+.cb-input-row { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+.cb-input-row input {
+  flex:1; font-size:var(--fs-sm); height:36px; padding:0 12px; background:var(--surface);
+  border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);
+}
+.cb-btn-primary {
+  height:36px; padding:0 18px; font-size:var(--fs-sm); font-weight:600; white-space:nowrap;
+  background:var(--accent); color:var(--on-accent); border:none; border-radius:var(--radius-sm); cursor:pointer;
+}
+.cb-btn-primary:hover { background:var(--accent-hover); }
+.cb-btn-primary:disabled { opacity:.6; cursor:default; }
+.cb-status { font-size:12px; color:var(--text-muted); min-height:18px; margin-bottom:18px; }
+.cb-summary { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:18px; }
+.cb-stat {
+  flex:1; min-width:150px; background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius); padding:14px 16px;
+}
+.cb-stat .v { font-size:var(--fs-xl); font-weight:600; line-height:1.2; }
+.cb-stat .l { font-size:var(--fs-xs); color:var(--text-muted); margin-top:4px; }
+.cb-table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.cb-table thead tr { background:var(--surface2); font-size:var(--fs-xs); color:var(--text); }
+.cb-table th { padding:8px 10px; text-align:left; }
+.cb-table td { padding:9px 10px; border-top:1px solid var(--border); }
+.cb-badge { font-size:var(--fs-xs); font-weight:600; padding:1px 6px; border-radius:var(--radius-sm); text-transform:capitalize; }
+.cb-explainers { margin-top:30px; display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+.cb-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; }
+.cb-card h3 { font-size:13px; font-weight:700; margin:0 0 8px; color:var(--text); }
+.cb-card p { font-size:12px; color:var(--text-muted); line-height:1.6; margin:0; }
+.cb-card code { background:var(--surface); padding:1px 4px; border-radius:3px; font-size:11px; }
+.cb-robots-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.cb-robots-head h3 { font-size:13px; font-weight:700; margin:0; color:var(--text); }
+.cb-copy-btn { font-size:var(--fs-xs); height:28px; padding:0 10px; background:var(--accent); color:var(--on-accent); border:none; border-radius:var(--radius-sm); cursor:pointer; font-weight:600; }
+.cb-pre { background:#0f172a; color:#e2e8f0; font-size:12px; font-family:monospace; padding:14px; border-radius:8px; overflow-x:auto; margin:0; }
+.cb-note { font-size:11px; color:var(--text-muted); margin-top:6px; }
+
+/* ── Form select: match the URL input instead of the native control ── */
+.sidebar select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 30px 7px 10px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background-color: var(--surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  outline: none;
+  margin-bottom: 8px;
+  transition: border-color .12s, box-shadow .12s;
+}
+.sidebar select:hover { border-color: var(--text-muted); }
+.sidebar select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+[data-theme="dark"] .sidebar select { background-color: var(--surface2); }
+.sidebar input[type=range] { width: 100%; accent-color: var(--accent); }
+
+/* ── Narrow screens ─────────────────────────────────────────────────── */
+@media (max-width: 1180px) {
+  .sub { display: none; }
+}
+@media (max-width: 900px) {
+  body { height: auto; min-height: 100vh; overflow: auto; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 8px 16px; gap: 8px; white-space: normal; }
+  .sc-view-btn { height: 36px; }
+  .sc-views { margin-left: 0; }
+  .wrap, .wrap.nosb, .wrap:has(#issues-sidebar[style*="display:none"]) {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .sidebar, .issues-sidebar { border-right: 0; border-bottom: 1px solid var(--border); overflow-y: visible; }
+}
+@media (max-width: 520px) {
+  /* Second row: byline + build badge on the left, theme toggle right. */
+  .topbar-meta { order: 10; flex: 1; margin-left: 0; }
+  .theme-toggle { order: 11; }
+}
+
+/* Near-dup threshold field and preset chips carry hardcoded light inline
+   colours; re-theme them for dark mode. */
+[data-theme="dark"] #crawler-neardup-threshold,
+[data-theme="dark"] #crawler-user-agent-custom {
+  background: var(--surface2) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawler-neardup-cfg button {
+  background: var(--surface2) !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawler-neardup-cfg button:hover { color: var(--text) !important; border-color: var(--accent) !important; }
+#crawler-user-agent-custom {
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  margin-bottom: 8px;
+}
+#crawler-user-agent-custom:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+
+/* Empty state for a table category with no matching pages */
+#crawler-tbody tr.sc-empty-row td {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: default;
+  border-bottom: 0;
+}
+
+/* Report tables (.crawler-grid): headers line up with their left-aligned
+   cells (a bare <th> is centred by the browser), rows get the same rule
+   lines as the main table, and the column resize handle is visible. */
+.crawler-grid { width: 100%; border-collapse: collapse; }
+.crawler-grid { background: var(--surface); }
+.crawler-grid thead th {
+  text-align: left;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 0;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.crawler-grid thead th .th-label { display: block; padding: 6px 10px 6px 8px; }
+.crawler-grid thead th .th-label.th-center { text-align: center; }
+.crawler-grid td { padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+.crawler-grid thead th .th-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 100%;
+  cursor: col-resize;
+}
+.crawler-grid thead th .th-resize::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: 0;
+  width: 1px;
+  background: var(--border);
+}
+.crawler-grid thead th .th-resize:hover::after,
+.crawler-grid thead th .th-resize.is-dragging::after { background: var(--accent); width: 3px; }
+
+/* Keep the Export view label on one line next to long report titles */
+#crawler-export-view-btn { white-space: nowrap; flex-shrink: 0; }
+
+/* Site Structure panel: its markup carries light-theme colours inline
+   (white chart area, pale readout card, near-black headings), which left a
+   bright island in dark mode with an invisible "How to read" heading. Map
+   those inline colours onto the theme variables in dark mode. */
+[data-theme="dark"] #sitestructure-panel [style*="background:#fff"],
+[data-theme="dark"] #sitestructure-panel [style*="background:#f8fafc"],
+[data-theme="dark"] #sitestructure-panel [style*="background:#f1f5f9"],
+[data-theme="dark"] #sitestructure-panel [style*="background: rgb(255, 255, 255)"] {
+  background: var(--surface) !important;
+}
+[data-theme="dark"] #sitestructure-panel [style*="background:#e2e8f0"] { background: var(--surface2) !important; }
+[data-theme="dark"] #sitestructure-panel [style*="color:#0f172a"],
+[data-theme="dark"] #sitestructure-panel [style*="color:#1e293b"],
+[data-theme="dark"] #sitestructure-panel [style*="color:#334155"],
+[data-theme="dark"] #sitestructure-panel [style*="color: rgb(15, 23, 42)"] {
+  color: var(--text) !important;
+}
+/* Hover handlers rewrite these inline values, and the browser stores them
+   as rgb(), so both spellings are listed. */
+[data-theme="dark"] #sitestructure-panel [style*="#e2e8f0"],
+[data-theme="dark"] #sitestructure-panel [style*="rgb(226, 232, 240)"] { border-color: var(--border) !important; }
+[data-theme="dark"] #sitestructure-panel input {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+/* Visible keyboard focus. Several inputs and click targets set
+   outline:none inline and had no focus style at all. */
+#sc-url-search:focus-visible, #crawl-loader-search:focus-visible, #sv-search:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+[role="button"]:focus-visible, .ci-cat:focus-visible, .url-cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* "Viewing a saved crawl from ..." strip above the results */
+.saved-notice {
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.saved-notice b { color: var(--text); font-weight: 600; }
+.saved-notice.stale { background: var(--warn-bg); color: var(--warn-fg); }
+.saved-notice.stale b { color: var(--warn-fg); }
+
+/* AI brief dialog */
+.ai-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--overlay);
+}
+.ai-modal[hidden] { display: none; }
+.ai-modal-card {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-modal);
+}
+.ai-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.ai-modal-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+.ai-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ai-close:hover { color: var(--text); background: var(--surface2); }
+.ai-lede { margin: 12px 0 14px; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.5; }
+.ai-label { display: block; margin-bottom: 4px; font-size: var(--fs-xs); font-weight: 600; }
+/* Prompts are prose, so they use the body font; only commands and JSON are
+   set in monospace. */
+#ai-export-prompt {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--fs-sm)/1.5 var(--font);
+  resize: vertical;
+}
+#ai-export-prompt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ai-check { display: flex; align-items: center; gap: 6px; margin: 10px 0 6px; font-size: var(--fs-sm); }
+.ai-stats { min-height: 18px; color: var(--text-muted); font-size: var(--fs-xs); }
+.ai-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.ai-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ai-btn:hover { background: var(--surface2); }
+.ai-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.ai-primary:hover { background: var(--accent-hover); }
+.ai-spacer { flex: 1; }
+.ai-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Use with AI: tabs, steps, copyable code */
+.ai-tabs { display: flex; gap: 4px; margin: 10px 0 0; border-bottom: 1px solid var(--border); }
+.ai-tab {
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  box-shadow: inset 0 -2px 0 transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ai-tab:hover { color: var(--text); }
+.ai-tab[aria-selected="true"] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.ai-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.ai-pane { padding-top: 2px; }
+.ai-pane[hidden] { display: none; }
+.ai-empty {
+  margin: 4px 0 8px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.ai-empty .ai-link { margin: 0; padding: 0; font-size: var(--fs-sm); color: var(--accent); text-decoration: none; }
+.ai-warn {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  font-size: var(--fs-sm);
+}
+.ai-step { padding: 12px 0 14px; border-top: 1px solid var(--border); }
+.ai-step:first-of-type { border-top: 0; padding-top: 4px; }
+.ai-step-title { margin: 0 0 4px; font-size: var(--fs-md); font-weight: 600; }
+.ai-hint { margin: 0 0 8px; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.5; }
+.ai-hint a, .ai-foot a { color: var(--accent); }
+.ai-foot { margin: 4px 0 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.5; }
+#ai-mcp-prompt {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--fs-sm)/1.5 var(--font);
+  resize: vertical;
+}
+.ai-actions .ai-btn.ai-primary:first-child { margin-left: 0; }
+.ai-code-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.ai-code {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  color: var(--text);
+  font: 12.5px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ai-code.ai-say { font-family: var(--font); font-size: var(--fs-sm); }
+.ai-btn-sm { height: 28px; padding: 0 10px; font-size: var(--fs-xs); flex-shrink: 0; }
+.ai-manual { margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--border); }
+.ai-manual summary { cursor: pointer; font-size: var(--fs-sm); font-weight: 600; margin-bottom: 10px; }
+.ai-manual .ai-label { margin-top: 4px; }
+
+/* Crawl progress strip under the top bar: a solid bar with plain numbers
+   and a Stop button, the way the desktop crawlers show a running crawl. */
+.crawl-progress {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.crawl-progress[hidden] { display: none; }
+.crawl-progress-label { flex: none; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; max-width: 32ch; }
+.crawl-progress-track { flex: 1; min-width: 120px; max-width: 420px; height: 6px; border-radius: 3px; background: var(--border-subtle); overflow: hidden; }
+.crawl-progress-fill { width: 0; height: 100%; border-radius: 3px; background: var(--accent); transition: width .4s linear; }
+.crawl-progress-text { display: flex; align-items: baseline; gap: 14px; min-width: 0; overflow: hidden; color: var(--text-muted); }
+.crawl-progress-text .cp-num { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.crawl-progress-text .cp-err { color: var(--err-fg); }
+.crawl-progress-actions { display: flex; gap: 8px; margin-left: auto; flex: none; }
+.crawl-progress-actions[hidden] { display: none; }
+.crawl-progress[data-state="paused"] .crawl-progress-fill { background: var(--warn-fg); }
+.crawl-progress[data-state="done"] .crawl-progress-fill { background: var(--ok-fg); }
+.crawl-progress[data-state="stopped"] .crawl-progress-fill { background: var(--text-muted); }
+.crawl-progress[data-state="phase"] .crawl-progress-fill { width: 30% !important; animation: cp-slide 1.4s ease-in-out infinite; }
+@keyframes cp-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) {
+  .crawl-progress-fill { transition: none; }
+  .crawl-progress[data-state="phase"] .crawl-progress-fill { animation: none; transform: none; }
+}
+@media (max-width: 1100px) { .crawl-progress-text .cp-wide { display: none; } }
+
+/* Buttons shared by the new pieces */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; padding: 0 12px; white-space: nowrap; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font-size: var(--fs-sm); font-weight: 600;
+}
+.btn:hover { background: var(--surface2); }
+.btn-sm { height: 28px; padding: 0 10px; font-size: var(--fs-xs); }
+.btn-danger { color: var(--err-fg); }
+.link-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
+
+/* Settings column folds away once a crawl is on screen; Settings in the top
+   bar brings it back. Results get the width. */
+.wrap.settings-collapsed { grid-template-columns: 240px 1fr; }
+.wrap.settings-collapsed > .sidebar { display: none; }
+.wrap.settings-collapsed:has(#issues-sidebar[style*="display:none"]) { grid-template-columns: 1fr; }
+#topbar-settings[aria-expanded="true"] { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-bg); }
+#topbar-settings[hidden] { display: none; }
+
+/* Empty banner slots take no room; the title bar loses its rule when the
+   view's description sits right under it. */
+#crawler-cms-banner:empty, #issue-info-box:empty { display: none; }
+.detail-title:has(+ #issue-info-box:not(:empty)) { border-bottom: 0; }
+.cs-expand-hint { display: none; }
+/* Row actions show on hover or focus, as in the hosted crawlers. */
+#crawler-tbody .cs-cell-actions { opacity: 0; transition: opacity .12s; }
+#crawler-tbody tr:hover .cs-cell-actions, #crawler-tbody tr:focus-within .cs-cell-actions { opacity: 1; }
+@media (hover: none) { #crawler-tbody .cs-cell-actions { opacity: 1; } }
+/* Start crawl stays on screen however long the settings get. In this
+   column, flex: 1 would shrink the buttons to their text, so they keep
+   their own height; only Start and Stop are primary. */
+.sidebar > .actions button { flex: none; }
+.sidebar > .actions .btn { background: var(--surface); color: var(--text); border: 1px solid var(--border); font-weight: 600; }
+.sidebar > .actions .btn:hover { background: var(--surface2); }
+.sidebar > .actions {
+  position: sticky;
+  bottom: -18px;
+  z-index: 2;
+  margin: 16px -16px -18px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+/* Start screen */
+.crawler-empty-rich { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 40px 32px; max-width: 760px; }
+.crawler-empty-rich .ce-sub { margin: 0; }
+.crawler-empty-rich .ce-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.cb-view { flex: 1; min-height: 0; }
+
+/* Toasts: a neutral snackbar; the mark carries the kind. The colours are
+   the other theme's, because the toast inverts the page. */
+.sc-toast {
+  display: flex; align-items: flex-start; gap: 10px; max-width: 400px;
+  padding: 10px 14px; border-radius: var(--radius);
+  background: var(--text); color: var(--surface);
+  font-size: var(--fs-sm); line-height: 1.45; box-shadow: var(--shadow-pop); pointer-events: auto;
+  --t-err: #f28b82; --t-warn: #fdd663; --t-ok: #81c995;
+}
+[data-theme="dark"] .sc-toast { --t-err: #c62828; --t-warn: #b45309; --t-ok: #187a35; }
+.sc-toast.is-error::before, .sc-toast.is-warn::before, .sc-toast.is-ok::before {
+  content: ''; flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%;
+}
+.sc-toast.is-error::before { background: var(--t-err); }
+.sc-toast.is-warn::before { background: var(--t-warn); }
+.sc-toast.is-ok::before { background: var(--t-ok); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Summary and the Errors / Warnings / Info views */
+.sum { padding: 20px 24px 32px; max-width: 1200px; }
+.sum-head { margin-bottom: 16px; }
+.sum-head h2 { margin: 0; font-size: var(--fs-xl); font-weight: 600; }
+.sum-head p { margin: 4px 0 0; color: var(--text-muted); }
+.sum-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+@media (max-width: 1100px) { .sum-cards { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; min-width: 0; }
+.card + .card { margin-top: 0; }
+.card-title { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: var(--fs-md); font-weight: 600; }
+.card-title .muted, .muted { color: var(--text-muted); font-weight: 400; }
+.card-title .link-btn { margin-left: auto; font-size: var(--fs-xs); font-weight: 600; }
+.sum-big { font-size: var(--fs-xl); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stackbar { display: flex; height: 8px; margin: 10px 0 12px; border-radius: 4px; overflow: hidden; background: var(--border-subtle); }
+.stackbar span { height: 100%; }
+.kv-rows { margin: 0; padding: 0; list-style: none; }
+.kv-rows li { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border-subtle); }
+.kv-rows li:first-child { border-top: 0; }
+.kv-rows .v { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+.kv-rows .bar { flex: 0 0 38%; height: 6px; border-radius: 3px; background: var(--border-subtle); overflow: hidden; }
+.kv-rows .bar span { display: block; height: 100%; }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.sev-mark { display: inline-block; flex: none; width: 10px; height: 10px; }
+.sev-mark.error { background: var(--err-fg); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.sev-mark.warn { background: var(--warn-fg); width: 9px; height: 9px; border-radius: 1px; }
+.sev-mark.info { background: var(--info-fg); border-radius: 50%; }
+.issues-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.issues-table th { height: 32px; padding: 0 10px; background: var(--surface2); border-bottom: 1px solid var(--border); font-size: var(--fs-xs); font-weight: 600; text-align: left; }
+.issues-table td { height: 34px; padding: 4px 10px; border-bottom: 1px solid var(--border-subtle); }
+.issues-table tr:last-child td { border-bottom: 0; }
+.issues-table tbody tr:hover td { background: var(--surface2); }
+.issues-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.issues-table .mark { width: 28px; padding-right: 0; }
+.card-flush { margin: 0 -16px -16px; border-top: 1px solid var(--border-subtle); }
+.card-flush .issues-table th:first-child, .card-flush .issues-table td:first-child { padding-left: 16px; }
+.card-flush .issues-table th:last-child, .card-flush .issues-table td:last-child { padding-right: 16px; }
+.sum-more { padding: 10px 16px; border-top: 1px solid var(--border-subtle); margin: 0 -16px -16px; }
+.sum-empty { padding: 24px; color: var(--text-muted); text-align: center; }
+.sum-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+@media (max-width: 1100px) { .sum-grid2 { grid-template-columns: 1fr; } }
+.details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.details dt { color: var(--text-muted); }
+.details dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* Bot readability */
+.bots-cfg { display: flex; align-items: center; gap: 6px; padding: 2px 8px 6px 22px; margin-left: 4px; }
+.bots-cfg input { width: 54px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); text-align: right; }
+.bots-panel { flex: 1; overflow: auto; min-height: 0; padding: 14px 16px; font-size: 12.5px; }
+.bots-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bots-head h3 { margin: 0 0 4px; font-size: 15px; }
+.bots-head p { margin: 0; color: var(--text-muted); }
+.bots-caveat { margin: 10px 0 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.bots-note { margin: 0 0 10px; color: var(--warn-fg); font-size: 12px; }
+.bot-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.bot-card { padding: 9px 11px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; background: var(--surface); }
+.bot-card.ok { border-left-color: var(--ok-fg); }
+.bot-card.warn { border-left-color: var(--warn-fg); }
+.bot-card.err { border-left-color: var(--err-fg); }
+.bot-card-top { display: flex; align-items: center; gap: 6px; }
+.bot-sym { font-weight: 700; width: 14px; text-align: center; }
+.bot-card.ok .bot-sym { color: var(--ok-fg); }
+.bot-card.warn .bot-sym { color: var(--warn-fg); }
+.bot-card.err .bot-sym { color: var(--err-fg); }
+.bot-card-meta { margin: 2px 0 4px 20px; color: var(--text-muted); font-size: 11px; }
+.bot-card-text { margin-left: 20px; font-size: 12px; }
+.bot-robots { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.bot-robots-chip { padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--text-muted); }
+.bot-robots-chip.err { border-color: var(--err-fg); color: var(--err-fg); }
+.bots-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+.bots-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.bots-table th { position: sticky; top: 0; padding: 7px 8px; background: var(--surface); border-bottom: 2px solid var(--border); text-align: left; font-weight: 600; white-space: nowrap; }
+.bots-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.bots-table td.bots-url { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.bots-table td.bots-url a { color: var(--accent); text-decoration: none; }
+.bots-table td.ok { color: var(--ok-fg); }
+.bots-table td.warn { color: var(--warn-fg); font-weight: 600; }
+.bots-table td.err { color: var(--err-fg); font-weight: 700; }
+.bots-table td.muted { color: var(--text-muted); }
+.bot-cell { text-align: center; font-weight: 700; }
+.bot-dis { display: inline-block; margin-left: 3px; padding: 0 4px; border: 1px solid currentColor; border-radius: 3px; font-size: 9.5px; font-weight: 600; opacity: .8; }
+.bot-legends { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; color: var(--text-muted); font-size: 11px; }
+.bot-legend.ok { color: var(--ok-fg); }
+.bot-legend.warn { color: var(--warn-fg); }
+.bot-legend.err { color: var(--err-fg); }
