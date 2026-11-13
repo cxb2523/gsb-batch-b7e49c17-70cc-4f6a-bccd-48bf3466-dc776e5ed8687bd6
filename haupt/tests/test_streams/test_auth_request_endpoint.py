@@ -1,5 +1,6 @@
 import asyncio
 from datetime import timedelta
+import os
 import pytest
 from unittest.mock import patch
 
@@ -87,6 +88,64 @@ def test_auth_cache_expires_on_total_age(monkeypatch, response, age, expected):
     assert asyncio.run(auth_request_module._check_auth_cache("key")) is expected
 
 
+@pytest.mark.parametrize(
+    "response,interval",
+    [
+        (True, 60),  # allow entries live for 60 seconds
+        (False, 5),  # deny entries live for 5 seconds
+    ],
+)
+def test_auth_cache_ttl_boundaries(monkeypatch, response, interval):
+    current = now().replace(microsecond=0)
+
+    def entry_at(age):
+        key = "boundary-{}-{}".format(response, age.total_seconds())
+        monkeypatch.setattr(auth_request_module, "now", lambda: current - age)
+        asyncio.run(
+            auth_request_module._persist_auth_cache(key, response=response)
+        )
+        monkeypatch.setattr(auth_request_module, "now", lambda: current)
+        return asyncio.run(auth_request_module._check_auth_cache(key))
+
+    # One second before the boundary it is still a hit
+    assert entry_at(timedelta(seconds=interval - 1)) is response
+    # Exactly at the boundary it expires and becomes a miss
+    assert entry_at(timedelta(seconds=interval)) is None
+
+
+def test_auth_request_cache_key_covers_every_auth_input(monkeypatch):
+    seen = []
+
+    async def check_auth_cache(request_cache):
+        seen.append(request_cache)
+        return None
+
+    async def check_auth_service(headers):
+        return AuthResponse()
+
+    monkeypatch.setattr(auth_request_module, "_check_auth_cache", check_auth_cache)
+    monkeypatch.setattr(auth_request_module, "_check_auth_service", check_auth_service)
+
+    def fire(**kwargs):
+        asyncio.run(
+            auth_request_module.auth_request(make_auth_request(**kwargs))
+        )
+
+    base_uri = "/services/v1/ns/owner/project/runs/uuid/8000/path"
+    # Baseline request
+    fire()
+    # Change each auth-relevant input one at a time
+    fire(uri=base_uri + "/other")  # path
+    fire(method="POST")  # original method
+    fire(auth="token other")  # Authorization header
+    fire(HTTP_COOKIE="session=2")  # Cookie
+    fire(HTTP_X_POLYAXON_SERVICE="cli")  # X-Polyaxon-Service
+    fire(uri=base_uri + "?runs=u1")  # runs query param
+
+    assert len(seen) == 7
+    assert len(set(seen)) == 7
+
+
 def test_auth_request_cache_is_bound_to_credentials(monkeypatch):
     calls = []
 
@@ -149,14 +208,62 @@ def test_auth_cache_distinguishes_allow_deny_and_miss():
     assert asyncio.run(auth_request_module._check_auth_cache("missing")) is None
 
 
-def test_uri_family_uses_path_not_query_string():
-    assert (
-        auth_request_module._get_uri_family(
+@pytest.mark.parametrize(
+    "uri,expected",
+    [
+        # Forged family segments in the query string must not change the family
+        (
             "/services/v1/ns/owner/project/runs/uuid/8000/path"
-            "?next=/sandbox/v1/ns/owner/project/runs/uuid/ping"
-        )
-        == auth_request_module.URI_FAMILY_OTHER
-    )
+            "?next=/sandbox/v1/ns/owner/project/runs/uuid/ping",
+            auth_request_module.URI_FAMILY_OTHER,
+        ),
+        (
+            "/services/v1/ns/owner/project/runs/uuid/8000/path"
+            "?next=/k8s/v1/ns/owner/project/runs/uuid/k8s_exec/pod/main",
+            auth_request_module.URI_FAMILY_OTHER,
+        ),
+        (
+            "/streams/v1/ns/owner/project/runs/uuid/events?fake=/sandbox/v1/x",
+            auth_request_module.URI_FAMILY_OTHER,
+        ),
+        # Forged family segment at the start of the URI: a naive
+        # startswith on the full URI (instead of the path) would be fooled
+        # because the whole string now starts with the family location.
+        (
+            "/sandbox/v1/ns/owner/project/runs/uuid?/k8s/v1/x",
+            auth_request_module.URI_FAMILY_SANDBOX,
+        ),
+        (
+            "/k8s/v1/ns/owner/project/runs/uuid/k8s_exec/pod/main?sandbox/v1/x",
+            auth_request_module.URI_FAMILY_K8S,
+        ),
+        # Query-only URI: the path itself is empty, so the family must be
+        # OTHER even though the query carries a family location
+        (
+            "?sandbox/v1/ns/owner/project/runs/uuid/ping",
+            auth_request_module.URI_FAMILY_OTHER,
+        ),
+        (
+            "?k8s/v1/ns/owner/project/runs/uuid/k8s_exec/pod/main",
+            auth_request_module.URI_FAMILY_OTHER,
+        ),
+        # The family is derived from the path only
+        (
+            "/sandbox/v1/ns/owner/project/runs/uuid/ping?next=/k8s/v1/x",
+            auth_request_module.URI_FAMILY_SANDBOX,
+        ),
+        (
+            "/k8s/v1/ns/owner/project/runs/uuid/k8s_exec/pod/main?fake=/sandbox",
+            auth_request_module.URI_FAMILY_K8S,
+        ),
+        (
+            "/services/v1/ns/owner/project/runs/uuid/8000/path?runs=a&runs=b",
+            auth_request_module.URI_FAMILY_OTHER,
+        ),
+    ],
+)
+def test_uri_family_uses_path_not_query_string(uri, expected):
+    assert auth_request_module._get_uri_family(uri) == expected
 
 
 def test_check_auth_service_requests_json(monkeypatch):
@@ -580,3 +687,80 @@ def test_auth_request_k8s_cached_allow_rejects_pod_outside_run(monkeypatch, run_
     )
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_auth_cache_expired_and_future_entries_are_removed(monkeypatch):
+    current = now().replace(microsecond=0)
+
+    # An allow entry older than 60s and a deny entry stamped in the future
+    stale_key, future_key = "stale-allow", "future-deny"
+    monkeypatch.setattr(auth_request_module, "now", lambda: current - timedelta(days=1))
+    asyncio.run(auth_request_module._persist_auth_cache(stale_key, response=True))
+    asyncio.run(auth_request_module._persist_auth_cache(future_key, response=False))
+
+    stale_path = auth_request_module._get_auth_cache_path(stale_key)
+    future_path = auth_request_module._get_auth_cache_path(future_key)
+    assert os.path.isfile(stale_path)
+    assert os.path.isfile(future_path)
+
+    monkeypatch.setattr(auth_request_module, "now", lambda: current)
+
+    # Expired entry is a miss and gets cleaned up
+    assert asyncio.run(auth_request_module._check_auth_cache(stale_key)) is None
+    assert not os.path.isfile(stale_path)
+
+    # A timestamp in the future is treated as a miss and gets cleaned up
+    assert asyncio.run(auth_request_module._check_auth_cache(future_key)) is None
+    assert not os.path.isfile(future_path)
+
+
+def test_auth_request_ignores_query_params_other_than_runs(monkeypatch):
+    calls = []
+
+    async def check_auth_service(headers):
+        calls.append(headers.get("X-Origin-Uri"))
+        return AuthResponse()
+
+    monkeypatch.setattr(auth_request_module, "_check_auth_service", check_auth_service)
+
+    base = "/streams/v1/ns/owner/project/runs/uuid/events/metric"
+    # Only non-auth query params change: the cache key must stay identical
+    for suffix in ["?foo=1", "?foo=2", "?bar=anything&foo=1", ""]:
+        asyncio.run(
+            auth_request_module.auth_request(
+                make_auth_request(uri=base + suffix)
+            )
+        )
+
+    # Only the first request reaches the auth service, the rest are cache hits
+    assert calls == [base + "?foo=1"]
+
+
+def test_auth_request_runs_blank_and_duplicate_values_get_distinct_cache(monkeypatch):
+    keys = []
+
+    async def check_auth_cache(request_cache):
+        keys.append(request_cache)
+        return None
+
+    async def check_auth_service(headers):
+        return AuthResponse()
+
+    monkeypatch.setattr(auth_request_module, "_check_auth_cache", check_auth_cache)
+    monkeypatch.setattr(auth_request_module, "_check_auth_service", check_auth_service)
+
+    base = "/streams/v1/ns/owner/project/runs/multi/events/metric"
+    uris = [
+        base,  # no runs param -> None
+        base + "?runs=",  # blank runs value -> ['']
+        base + "?runs=a",  # single value
+        base + "?runs=a&runs=b",  # repeated values keep order
+        base + "?runs=b&runs=a",  # same values, different order
+    ]
+    for uri in uris:
+        asyncio.run(
+            auth_request_module.auth_request(make_auth_request(uri=uri))
+        )
+
+    # Every distinct runs shape (incl. blank/absent/repeated) gets its own key
+    assert len(keys) == len(set(keys)) == len(uris)
