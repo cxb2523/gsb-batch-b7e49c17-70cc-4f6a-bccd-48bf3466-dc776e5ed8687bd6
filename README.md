@@ -87,6 +87,19 @@ runCommand("toggle_pause") -> Toggles the game pause state
 runCommand("unpause_game") -> Unpauses the game
 ```
 
+Commands validate their arguments against the registered parameter specs before calling the handler. When the argument count does not match or an argument cannot be converted to the declared type (at least `float` and `String`), the handler is not called and an error is printed containing the command name, the expected usage and the arguments actually received. Re-registering a command name overwrites the previous definition, so it is still listed only once in `help`.
+
+## Tests
+
+The headless test suite [test_web_commands.gd](./godot/Tests/test_web_commands.gd) covers normal calls, argument-count / type-conversion / extra-argument failures, and duplicate command registration. It does not require a browser or a Web export:
+
+```bash
+# From the godot project directory
+godot --headless --path godot --script Tests/test_web_commands.gd
+# or
+godot/Tests/run_tests.sh
+```
+
 ## License
 
 * MIT (c) Johannes Deml - see [LICENSE](./LICENSE.md)
