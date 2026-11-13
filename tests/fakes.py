@@ -1,0 +1,172 @@
+"""In-memory fakes implementing just enough of the motor collection API to test
+the repository layer without a running MongoDB. Honors $setOnInsert/$set/upsert
+and $in filters — the semantics the repository relies on."""
+
+from __future__ import annotations
+
+import itertools
+from typing import Any
+
+
+class _UpdateResult:
+    def __init__(self, upserted_id: Any = None, modified: int = 0, deleted_count: int = 0) -> None:
+        self.upserted_id = upserted_id
+        self.modified_count = modified
+        self.deleted_count = deleted_count
+
+
+class _Cursor:
+    def __init__(self, items: list[dict]) -> None:
+        self._items = items
+
+    def sort(self, *args: Any, **_k: Any) -> _Cursor:
+        """Real ordering for the ``sort("field", -1)`` form, which is what the audit
+        log and scan-history readers use; anything else is left as inserted."""
+        if len(args) == 2 and isinstance(args[0], str):
+            field, direction = args
+            self._items = sorted(
+                self._items,
+                key=lambda d: (d.get(field) is None, d.get(field)),
+                reverse=(direction == -1),
+            )
+        return self
+
+    def limit(self, n: int) -> _Cursor:
+        self._items = self._items[:n]
+        return self
+
+    async def to_list(self, length: int | None = None) -> list[dict]:
+        return self._items if length is None else self._items[:length]
+
+
+#: Comparison operators the fake understands, so range queries (the retention purge
+#: uses `{"$lt": cutoff}`) behave the way real Mongo does rather than silently matching
+#: nothing — a fake that quietly returns no rows makes a broken query look like a
+#: working one.
+_COMPARATORS = {
+    "$lt": lambda v, o: v is not None and v < o,
+    "$lte": lambda v, o: v is not None and v <= o,
+    "$gt": lambda v, o: v is not None and v > o,
+    "$gte": lambda v, o: v is not None and v >= o,
+    "$ne": lambda v, o: v != o,
+}
+
+
+def _apply_set(doc: dict, fields: dict) -> None:
+    """``$set`` with Mongo's dotted-path semantics: ``{"raw.reason": x}`` nests, it does
+    not create a top-level key literally named ``raw.reason``."""
+    for key, val in fields.items():
+        if "." not in key:
+            doc[key] = val
+            continue
+        parts = key.split(".")
+        cur = doc
+        for part in parts[:-1]:
+            nxt = cur.get(part)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                cur[part] = nxt
+            cur = nxt
+        cur[parts[-1]] = val
+
+
+def _matches(doc: dict, flt: dict) -> bool:
+    for key, cond in flt.items():
+        if key == "$or":
+            if not any(_matches(doc, sub) for sub in cond):
+                return False
+            continue
+        value = doc.get(key)
+        if isinstance(cond, dict):
+            if "$in" in cond and value not in cond["$in"]:
+                return False
+            for op, compare in _COMPARATORS.items():
+                if op in cond and not compare(value, cond[op]):
+                    return False
+            if "$exists" in cond and (value is not None) != bool(cond["$exists"]):
+                return False
+        elif value != cond:
+            return False
+    return True
+
+
+class FakeCollection:
+    def __init__(self) -> None:
+        self.docs: dict[tuple, dict] = {}
+        self._counter = itertools.count()
+
+    def _key(self, doc: dict) -> tuple:
+        # Most specific identifier first: a scan run carries a program_id too, and
+        # keying on that collapsed every run of a program into one document.
+        ident = (
+            doc.get("fingerprint")
+            or doc.get("scan_id")
+            or doc.get("program_id")
+            or f"_auto{next(self._counter)}"
+        )
+        return (doc.get("tenant_id"), ident)
+
+    async def update_one(self, flt: dict, update: dict, upsert: bool = False) -> _UpdateResult:
+        found = next((d for d in self.docs.values() if _matches(d, flt)), None)
+        if found is None:
+            if not upsert:
+                return _UpdateResult()
+            doc: dict = {}
+            doc.update(flt)
+            doc.update(update.get("$setOnInsert", {}))
+            doc.update(update.get("$set", {}))
+            key = self._key(doc)
+            self.docs[key] = doc
+            return _UpdateResult(upserted_id=key)
+        _apply_set(found, update.get("$set", {}))  # $setOnInsert ignored on existing
+        for field in update.get("$unset", {}):
+            found.pop(field, None)
+        return _UpdateResult(modified=1)
+
+    async def insert_one(self, doc: dict) -> _UpdateResult:
+        key = (doc.get("tenant_id"), f"_ins{next(self._counter)}")
+        self.docs[key] = dict(doc)
+        return _UpdateResult(upserted_id=key)
+
+    async def update_many(self, flt: dict, update: dict) -> _UpdateResult:
+        n = 0
+        for d in self.docs.values():
+            if _matches(d, flt):
+                d.update(update.get("$set", {}))
+                n += 1
+        return _UpdateResult(modified=n)
+
+    async def delete_one(self, flt: dict) -> _UpdateResult:
+        for key, doc in list(self.docs.items()):
+            if _matches(doc, flt):
+                del self.docs[key]
+                return _UpdateResult(modified=1)
+        return _UpdateResult()
+
+    async def delete_many(self, flt: dict) -> _UpdateResult:
+        n = 0
+        for key, doc in list(self.docs.items()):
+            if _matches(doc, flt):
+                del self.docs[key]
+                n += 1
+        # motor's DeleteResult exposes `deleted_count`; mirror it so callers that read
+        # it (the retention purge) get a real number from the fake too.
+        return _UpdateResult(modified=n, deleted_count=n)
+
+    async def find_one(self, flt: dict) -> dict | None:
+        d = next((d for d in self.docs.values() if _matches(d, flt)), None)
+        return dict(d) if d else None
+
+    def find(self, flt: dict | None = None) -> _Cursor:
+        return _Cursor([dict(d) for d in self.docs.values() if _matches(d, flt or {})])
+
+    async def count_documents(self, flt: dict) -> int:
+        return sum(1 for d in self.docs.values() if _matches(d, flt))
+
+
+class FakeMongo:
+    def __init__(self) -> None:
+        self._collections: dict[str, FakeCollection] = {}
+
+    def collection(self, name: str) -> FakeCollection:
+        return self._collections.setdefault(name, FakeCollection())

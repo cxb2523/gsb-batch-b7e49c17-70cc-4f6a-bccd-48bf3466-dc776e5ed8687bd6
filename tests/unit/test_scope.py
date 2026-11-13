@@ -1,0 +1,291 @@
+"""Exhaustive tests for the central scope engine — the most important control.
+
+If any of these fail, ExactSurface could scan something it must never touch. Treat a
+failure here as a release blocker.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from core.errors import OutOfScope
+from core.scope import (
+    Action,
+    IpClass,
+    ProgramScope,
+    ScopeEngine,
+    assert_in_scope,
+)
+
+ENGINE = ScopeEngine.from_data_file()
+
+SCOPE = ProgramScope(
+    verified_apexes=("customer.com",),
+    excluded_hosts=frozenset({"legacy.customer.com"}),
+    excluded_cidrs=("45.55.99.0/24",),
+    authorized_dedicated_cidrs=("45.55.0.0/16",),
+)
+
+
+# --------------------------------------------------------------------------- #
+# classify_ip
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "ip,expected",
+    [
+        ("10.0.0.1", IpClass.PRIVATE),
+        ("172.16.5.4", IpClass.PRIVATE),
+        ("192.168.1.1", IpClass.PRIVATE),
+        ("127.0.0.1", IpClass.LOOPBACK),
+        ("169.254.169.254", IpClass.LINK_LOCAL),  # cloud metadata — must be caught
+        ("169.254.0.1", IpClass.LINK_LOCAL),
+        ("100.64.0.1", IpClass.CGNAT),
+        ("224.0.0.1", IpClass.MULTICAST),
+        ("0.0.0.0", IpClass.UNSPECIFIED),
+        ("104.16.5.5", IpClass.CDN),  # cloudflare
+        ("151.101.1.1", IpClass.CDN),  # fastly
+        ("8.8.8.8", IpClass.PUBLIC),  # routable, ownership unknown
+        ("not-an-ip", IpClass.RESERVED),  # fail closed
+    ],
+)
+def test_classify_ip(ip, expected):
+    assert ENGINE.classify_ip(ip) == expected
+
+
+def test_classify_never_returns_dedicated():
+    # DEDICATED is an ownership decision, not an address property.
+    for ip in ("8.8.8.8", "45.55.1.1", "104.16.5.5"):
+        assert ENGINE.classify_ip(ip) != IpClass.DEDICATED
+
+
+# --------------------------------------------------------------------------- #
+# evaluate — denials
+# --------------------------------------------------------------------------- #
+def test_out_of_scope_host_denied():
+    d = ENGINE.evaluate("app.attacker.com", ["45.55.1.1"], SCOPE)
+    assert not d.allowed and "verified apex" in d.reason
+
+
+def test_excluded_host_denied():
+    d = ENGINE.evaluate("legacy.customer.com", ["45.55.1.1"], SCOPE)
+    assert not d.allowed and "exclusion" in d.reason
+
+
+def test_excluded_cidr_denied():
+    d = ENGINE.evaluate("x.customer.com", ["45.55.99.5"], SCOPE)
+    assert not d.allowed and "exclusion" in d.reason
+
+
+@pytest.mark.parametrize("ip", ["169.254.169.254", "10.0.0.5", "127.0.0.1", "100.64.0.9"])
+def test_internal_ip_poisons_host(ip):
+    # Even a legitimately in-scope subdomain is denied if it resolves internal.
+    d = ENGINE.evaluate("app.customer.com", [ip], SCOPE)
+    assert not d.allowed
+
+
+def test_one_bad_ip_among_good_denies_all():
+    d = ENGINE.evaluate("app.customer.com", ["45.55.1.1", "169.254.169.254"], SCOPE)
+    assert not d.allowed
+
+
+# --------------------------------------------------------------------------- #
+# evaluate — action sets
+# --------------------------------------------------------------------------- #
+def test_dedicated_gets_full_actions():
+    d = ENGINE.evaluate("app.customer.com", ["45.55.1.1"], SCOPE)
+    assert d.allowed and d.ip_class == IpClass.DEDICATED
+    for a in (Action.PORT_SCAN, Action.ACTIVE_SCAN, Action.CONTENT_DISCOVERY):
+        assert d.permits(a)
+
+
+def test_cdn_is_http_only():
+    d = ENGINE.evaluate("www.customer.com", ["104.16.5.5"], SCOPE)
+    assert d.allowed and d.ip_class == IpClass.CDN
+    assert d.permits(Action.HTTP_PROBE)
+    assert not d.permits(Action.PORT_SCAN)
+    assert not d.permits(Action.ACTIVE_SCAN)
+
+
+def test_unconfirmed_public_is_http_only():
+    d = ENGINE.evaluate("api.customer.com", ["8.8.8.8"], SCOPE)
+    assert d.allowed and not d.permits(Action.PORT_SCAN)
+
+
+def test_mixed_dedicated_and_cdn_is_http_only():
+    d = ENGINE.evaluate("cdn.customer.com", ["45.55.1.1", "104.16.5.5"], SCOPE)
+    assert d.allowed and not d.permits(Action.PORT_SCAN)
+
+
+# --------------------------------------------------------------------------- #
+# scan_shared_infra opt-in (§9b) — unlocks cloud/public, never CDN or hard-deny
+# --------------------------------------------------------------------------- #
+SHARED_SCOPE = ProgramScope(verified_apexes=("customer.com",), scan_shared_infra=True)
+
+
+def test_shared_infra_optin_grants_full_actions_to_public():
+    # unconfirmed public IP would normally be HTTP-only; opt-in unlocks it
+    d = ENGINE.evaluate("api.customer.com", ["8.8.8.8"], SHARED_SCOPE)
+    assert d.allowed and d.permits(Action.PORT_SCAN) and d.permits(Action.ACTIVE_SCAN)
+
+
+def test_shared_infra_optin_still_blocks_cdn():
+    # third-party CDN edge (Cloudflare) is never the customer's → stays HTTP-only
+    d = ENGINE.evaluate("www.customer.com", ["104.16.5.5"], SHARED_SCOPE)
+    assert d.allowed and not d.permits(Action.PORT_SCAN)
+
+
+@pytest.mark.parametrize("ip", ["10.0.0.5", "169.254.169.254", "127.0.0.1"])
+def test_shared_infra_optin_never_overrides_hard_deny(ip):
+    d = ENGINE.evaluate("app.customer.com", [ip], SHARED_SCOPE)
+    assert not d.allowed  # RFC1918/metadata/loopback denied even with the opt-in
+
+
+def test_no_resolved_ips_is_passive_only():
+    d = ENGINE.evaluate("ghost.customer.com", [], SCOPE)
+    assert d.allowed and d.permits(Action.PASSIVE_RECON)
+    assert not d.permits(Action.HTTP_PROBE)
+
+
+def test_apex_itself_in_scope():
+    d = ENGINE.evaluate("customer.com", ["45.55.1.1"], SCOPE)
+    assert d.allowed
+
+
+# --------------------------------------------------------------------------- #
+# decision.require + assert_in_scope
+# --------------------------------------------------------------------------- #
+def test_require_raises_when_action_not_permitted():
+    d = ENGINE.evaluate("www.customer.com", ["104.16.5.5"], SCOPE)
+    with pytest.raises(OutOfScope):
+        d.require(Action.PORT_SCAN)
+    d.require(Action.HTTP_PROBE)  # permitted → no raise
+
+
+def test_lab_mode_allows_private_but_still_denies_metadata():
+    lab = ScopeEngine.from_data_file(allow_private=True)
+    lab_scope = ProgramScope(verified_apexes=("lab.local",))
+    # RFC1918 private target is now scannable with the full action set
+    d = lab.evaluate("box.lab.local", ["192.168.64.5"], lab_scope)
+    assert d.allowed and d.permits(Action.PORT_SCAN) and d.permits(Action.ACTIVE_SCAN)
+    # but the metadata IP and loopback are STILL denied, even in lab mode
+    assert not lab.evaluate("x.lab.local", ["169.254.169.254"], lab_scope).allowed
+    assert not lab.evaluate("x.lab.local", ["127.0.0.1"], lab_scope).allowed
+
+
+def test_private_denied_by_default():
+    d = ENGINE.evaluate("app.customer.com", ["192.168.1.10"], SCOPE)
+    assert not d.allowed  # default engine (no lab mode) hard-denies private
+
+
+async def test_assert_in_scope_allows_and_denies():
+    async def resolver_ok(_host):
+        return ["45.55.1.1"]
+
+    async def resolver_bad(_host):
+        return ["169.254.169.254"]
+
+    decision = await assert_in_scope("app.customer.com", SCOPE, resolver_ok, ENGINE)
+    assert decision.permits(Action.PORT_SCAN)
+
+    with pytest.raises(OutOfScope):
+        await assert_in_scope("app.customer.com", SCOPE, resolver_bad, ENGINE)
+
+
+# --------------------------------------------------------------------------- #
+# scope_override — the deliberate waiver. Off by default; when on it is total,
+# except for the two things the operator themselves declared.
+# --------------------------------------------------------------------------- #
+OVERRIDE_SCOPE = ProgramScope(
+    verified_apexes=("customer.com",),
+    excluded_hosts=frozenset({"legacy.customer.com"}),
+    excluded_cidrs=("45.55.99.0/24",),
+    scope_override=True,
+)
+
+
+def test_override_is_off_by_default():
+    """The one property that must never regress: nothing gets this behaviour by
+    accident. Every other test in this file assumes the default."""
+    assert ProgramScope(verified_apexes=("customer.com",)).scope_override is False
+
+
+@pytest.mark.parametrize("ip", ["10.0.0.5", "127.0.0.1", "100.64.0.1", "224.0.0.1", "240.0.0.1"])
+def test_override_reaches_the_overridable_hard_denied_classes(ip):
+    d = ENGINE.evaluate("app.customer.com", [ip], OVERRIDE_SCOPE)
+    assert d.allowed and d.permits(Action.PORT_SCAN) and d.permits(Action.ACTIVE_SCAN)
+
+
+@pytest.mark.parametrize("ip", ["169.254.169.254", "169.254.0.1"])
+def test_override_never_reaches_link_local_or_the_metadata_address(ip):
+    """The one address the override cannot buy. 169.254.169.254 is not a property of
+    the target — it is the *worker's own* cloud metadata service, so reaching it would
+    make ExactSurface an SSRF vector against the machine running it and report that
+    instance's IAM credentials as a finding on someone else's domain. Every other
+    hard-denied class describes the target and is the operator's call; this one
+    describes us."""
+    d = ENGINE.evaluate("app.customer.com", [ip], OVERRIDE_SCOPE)
+    assert not d.allowed
+    assert "override" in d.reason.lower() and "metadata" in d.reason.lower()
+
+
+def test_a_mixed_result_set_containing_metadata_is_refused_under_override():
+    """DNS-rebinding guard: one poisoned answer must sink the host even with the
+    override on, or the carve-out is trivially defeated by adding a second A record."""
+    d = ENGINE.evaluate("app.customer.com", ["8.8.8.8", "169.254.169.254"], OVERRIDE_SCOPE)
+    assert not d.allowed
+
+
+def test_override_reaches_hosts_outside_the_verified_apex():
+    d = ENGINE.evaluate("somewhere-else.example.net", ["8.8.8.8"], OVERRIDE_SCOPE)
+    assert d.allowed and d.permits(Action.ACTIVE_SCAN)
+
+
+def test_override_promotes_a_third_party_cdn_edge():
+    """scan_shared_infra deliberately never does this; the override does. That
+    difference is the reason both switches exist."""
+    d = ENGINE.evaluate("www.customer.com", ["104.16.5.5"], OVERRIDE_SCOPE)
+    assert d.allowed and d.permits(Action.PORT_SCAN)
+
+
+def test_override_says_so_in_the_reason():
+    """Run logs are where somebody works out why a scan touched what it touched."""
+    d = ENGINE.evaluate("app.customer.com", ["10.0.0.5"], OVERRIDE_SCOPE)
+    assert "override" in d.reason.lower()
+
+
+# -- what the override does NOT waive ---------------------------------------
+def test_override_still_honours_an_excluded_host():
+    """The exclusion list is the operator's own instruction. Their override must not
+    outrank it, or 'never touch this' would mean nothing."""
+    d = ENGINE.evaluate("legacy.customer.com", ["45.55.1.1"], OVERRIDE_SCOPE)
+    assert not d.allowed and "exclusion" in d.reason
+
+
+def test_override_still_honours_an_excluded_cidr():
+    d = ENGINE.evaluate("app.customer.com", ["45.55.99.7"], OVERRIDE_SCOPE)
+    assert not d.allowed and "exclusion" in d.reason
+
+
+def test_override_does_not_leak_between_programs():
+    """One program's waiver must not widen another's. They are separate scopes and
+    nothing is cached across them."""
+    plain = ProgramScope(verified_apexes=("customer.com",))
+    assert not ENGINE.evaluate("app.customer.com", ["10.0.0.5"], plain).allowed
+    assert ENGINE.evaluate("app.customer.com", ["10.0.0.5"], OVERRIDE_SCOPE).allowed
+    assert not ENGINE.evaluate("app.customer.com", ["10.0.0.5"], plain).allowed
+
+
+@pytest.mark.asyncio
+async def test_assert_in_scope_raises_without_override_and_passes_with_it():
+    """The pipelines call assert_in_scope, not evaluate, so the waiver has to reach
+    the wrapper too."""
+
+    async def resolver(_host):
+        return ["10.0.0.5"]
+
+    plain = ProgramScope(verified_apexes=("customer.com",))
+    with pytest.raises(OutOfScope):
+        await assert_in_scope("app.customer.com", plain, resolver, ENGINE)
+
+    decision = await assert_in_scope("app.customer.com", OVERRIDE_SCOPE, resolver, ENGINE)
+    assert decision.allowed and decision.permits(Action.PORT_SCAN)

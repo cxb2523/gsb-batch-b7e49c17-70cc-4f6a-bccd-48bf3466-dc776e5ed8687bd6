@@ -1,0 +1,244 @@
+# Changelog
+
+Versions follow [semantic versioning](https://semver.org/). Each release publishes
+`api`, `frontend` and `pipeline` images to GHCR, tagged `X.Y.Z` and `latest`, plus a
+GitHub Release recording the image digests.
+
+```bash
+docker pull ghcr.io/whxitte/api:1.4.3
+docker pull ghcr.io/whxitte/frontend:1.4.3
+docker pull ghcr.io/whxitte/pipeline:1.4.3
+```
+
+## 1.4.3 — 2026-09-18
+
+A correctness release from auditing every module against a real scan. Findings a later
+scan stops reproducing now retire across the whole pipeline, and the cross-module
+correlation that leads the dashboard counts only signals that are still live, in scope,
+and at their real severity.
+
+**Fixed**
+
+- **Findings from every module now age out, not just four.** Gone-detection was wired
+  for nuclei, TLS, dork and takeover only, so a fixed issue — or a transient false
+  positive — from any other module (email spoofability, JS mining, HTTP misconfig, API
+  surface, CVEs, typosquats, cloud buckets) stayed live forever. A false "No SPF" finding
+  filed by one flaky DNS run survived a later scan that saw the domain's real SPF records,
+  because nothing could retire it. Every finding-writing module is now mapped to its scan
+  phase, with a test that fails if a new one is added without wiring.
+
+- **Correlation counts only live, in-scope, real-severity signals.** The "what an
+  attacker sees" view had three faults: it read aged-out records (a retired secret
+  rebuilt a chain that no longer existed), it treated any host named in a finding — a
+  search-result URL, a hijackable outbound link, a registered typosquat — as one of your
+  assets and ranked them (some as "critical") above your own apex, and it forced every
+  secret to HIGH, inflating a public-by-design Firebase web key into a high-risk host. It
+  now drops resolved data, emits only hosts you own, and respects each secret's assigned
+  severity.
+
+- **Cloud-bucket scans report their probes honestly.** The run summary showed
+  `checked: 0` after probing ~45 permuted names, because it counted only buckets
+  confirmed to exist. It now reports probes attempted and buckets found separately, so a
+  normal "none of the guesses were real" outcome no longer reads as "nothing was checked".
+
+## 1.4.2 — 2026-09-17
+
+**Fixed**
+
+- **Broken-link hijacking no longer flags live third-party domains.** A real scan
+  reported `js.stripe.com`, `api-iam.intercom.io` and `js.intercomcdn.com` as
+  registerable takeovers — all resolve fine. The check now runs on the registrable apex
+  (a dead subdomain of a live domain is a takeover, not this), fires only on a confirmed
+  NXDOMAIN rather than any failed lookup, rejects non-domain JS fragments, and retires
+  findings a re-run cannot reproduce.
+
+## 1.4.1 — 2026-09-15
+
+Signal-quality release, entirely from running 1.4.0 against a real domain. Three
+modules were rating false positives at high severity; each now verifies before it
+files, and re-checks retire what an earlier, unverifying run had stored.
+
+**Fixed**
+
+- **Search dorks are verified against the page** before they are rated, and scoped to
+  the program's apex first of all. Google's loose matching (and its habit of ignoring
+  `site:`/`inurl:`) was filing prose pages and third-party results as critical
+  credential exposures. Verified → the category's severity; unverified → dropped;
+  unreachable → kept low and labelled.
+- **Hidden-parameter discovery is far stricter.** A host that echoes its request URL,
+  varies its body by hundreds of KB between identical fetches, or flaps under
+  bot-detection was making every probed name look accepted — "high" privilege parameters
+  like `?admin=` on two marketing pages. Now: a control parameter (one nothing could
+  handle) is probed first; reflection is void where the control reflects; a length
+  signal must be *growth* past the page's measured noise; and an endpoint that will not
+  answer two requests consistently is skipped, not guessed at.
+- **arjun is bounded to half the parameter-discovery budget** (max 10 min). On a
+  rate-limiting host it would otherwise spend the whole stage — 36 minutes on one domain
+  — finding nothing, with the built-in probe queued behind it.
+- Both modules **retire findings a clean re-run cannot reproduce**, moving them to
+  false-positive with the reason on the record — gone-detection alone never would,
+  because it distrusts a run that reports nothing.
+- **Findings come back most severe first.** Every consumer takes the head of the list,
+  and an unsorted head could hide the highs behind a screen of infos.
+- **Playground nodes have a hard timeout.** A node whose module overran its budget could
+  run indefinitely with no way to stop it.
+
+**Note**
+
+- API keys minted before 1.4.0 keep every scope their creator can grant; keys minted
+  since default to read-only.
+
+## 1.4.0 — 2026-09-14
+
+**Added**
+
+- **API-key scopes.** A key inherits its creator's permissions and narrows them:
+  `read` (implicit, and the default), `scans:run`, `programs:write`, `playground:run`,
+  `settings:write`. Bounded by the creator at creation *and* on every use. The right
+  posture for CI, integrations and AI agents: least authority, and never a way up.
+- **Human-only actions.** Verification, authorization records, the scan-scope
+  switches, program deletion, member/group management and key management are refused
+  for any API key regardless of scopes. A non-human caller cannot widen what may be
+  scanned or change who may act.
+- **Audit log.** Every mutating API call — succeeded or refused — is recorded with
+  actor, action, program, outcome and client address. `GET /audit`, and a card on the
+  Settings page. Passwords and raw keys never enter it.
+- **CLI** (`exactsurface`, in the same `exactsurface-client` package). Tables or
+  `--json`, programs by id or domain, config from flags/env/file, and stable exit codes:
+  3 refused, 4 not found, 5 `--fail-on` threshold hit, 6 unreachable. `scan run --wait
+  --fail-on high` turns it into a CI gate.
+- **MCP server** (`exactsurface-mcp`, same package). 23 tools over
+  the API for Claude, Cursor, Copilot and any agent framework: read findings, assets,
+  endpoints, attack paths, changes and the audit log; start and cancel scans; run
+  Playground graphs. Authenticates with one scoped key. Human-only actions are not
+  offered as tools at all. Results carrying target-authored text are labelled as data.
+  `/auth/me` now reports a key's scopes so an agent can learn its own limits.
+- API keys can now be listed and revoked (`GET`/`DELETE /auth/api-keys`), and record
+  when they were last used. Previously a leaked key needed a database session to kill.
+
+**Changed**
+
+- New API keys are prefixed `exs_` (was `vnt_`). Existing keys are unaffected.
+- **Upgrade note.** Keys minted before 1.4.0 keep every scope their creator can grant —
+  the behaviour they always had — so nothing that works today stops on upgrade. Keys
+  minted from 1.4.0 on default to read-only. To narrow a legacy key, revoke it and mint
+  a new one.
+
+## 1.3.2 — 2026-09-12
+
+**Fixed**
+
+- **The published frontend image could not reach the API.** Next.js bakes the `/api/*`
+  rewrite destination at build time, and the release runner built without
+  `API_PROXY_TARGET`, so every published image from 1.0.0 to 1.3.1 proxied `/api` to
+  `http://localhost:8000` — itself — and failed with `ECONNREFUSED`. The dev stack
+  never showed it because it builds the other Dockerfile stage. Found by doing a
+  clean install from the published images, which is the only way it could have been
+  found. Both Dockerfile stages now refuse a bundle pointing at localhost, and a wiring
+  test asserts the runner sets the variable.
+- `deploy/docker-compose.yml` pins the three pipeline-image services to
+  `linux/amd64`, so Apple-silicon and Graviton hosts run them under emulation without
+  four platform warnings.
+- `deploy/README.md` still referred to a licence token, a licence to breach and "the
+  version you were given". Corrected, and it now says how to evaluate on a laptop
+  (`DOMAIN=localhost`).
+
+## 1.3.1 — 2026-09-12
+
+**Security**
+
+- **Next.js 15.5.22 → 15.5.25.** Two unauthenticated RCE advisories against 15.5.22
+  ([GHSA-p293-qw3h-jr36](https://github.com/advisories/GHSA-p293-qw3h-jr36),
+  [GHSA-2xp9-vwfh-vxw4](https://github.com/advisories/GHSA-2xp9-vwfh-vxw4)). Neither
+  path is reachable in ExactSurface's configuration — one affects Windows-hosted servers
+  and we ship Linux containers, the other is the Image Optimization API which
+  `next.config.mjs` disables — but a known unauthenticated RCE on the framework is not
+  something to reason around. Upgrade.
+- Build-toolchain advisories cleared: `sharp` (optional, never installed in the image),
+  `browserslist`, `baseline-browser-mapping`, `js-yaml`. None ship in the runtime image.
+
+**Changed**
+
+- README rebuilt around a banner, screenshots and the conventional section order.
+- Dependabot alerts, secret scanning and push protection are enabled on the repository.
+
+## 1.3.0 — 2026-09-07
+
+**Added**
+
+- **Scope override** — a per-program setting, off by default, that waives the scope
+  engine for that domain: hosts outside the verified apex, every hard-denied class
+  (internal, loopback, CGNAT, multicast, reserved) and third-party CDN edges all become
+  fully scannable. Untouched: the program's own exclusion lists, the politeness cap, the
+  requirement to be verified and authorized, and link-local `169.254.0.0/16` — the
+  metadata address is the worker's own, so no override can reach it. Both edges are logged at WARNING. See `docs/SECURITY.md` §2d for what
+  it costs, including the two rows that reach beyond your own estate.
+- `SECURITY.md` (vulnerability disclosure, with GitHub private reporting enabled) and
+  `CONTRIBUTING.md`.
+
+**Fixed**
+
+- The project site's logo 404'd on GitHub Pages: it used an absolute `/favicon.png`,
+  but a project site is served from `/exact-surface/`.
+- `make lint` now runs `ruff format --check` as well as `ruff check`, matching CI — the
+  README told contributors to run it before a PR, and it could pass while CI failed.
+
+## 1.2.0 — 2026-09-07
+
+**Added**
+
+- **The Playground** (`/playground`) — a drag-and-drop canvas for running modules by
+  hand: 36 nodes (28 pipeline modules, 6 utility transforms, a target source, an output
+  viewer), typed ports, and validation that refuses cycles and mismatched wires before
+  anything runs. It executes through the same dispatch table a scheduled scan uses, so
+  the canvas and the scheduler cannot drift apart.
+- Playground runs execute on the worker and report per-node progress onto the canvas.
+
+**Fixed**
+
+- **The published frontend image could not start.** `1.0.0` and `1.1.0` both shipped a
+  Next.js standalone bundle whose `node_modules` a blanket `.dockerignore` rule had
+  stripped, so every container exited with `Cannot find module 'next'`. Both runtime
+  stages now assert the bundle is intact at build time, and a wiring test keeps the
+  `.dockerignore` negation in place.
+- The local dev stack built the wrong Dockerfile stage, so code changes never reached
+  the image it ran.
+
+**Changed**
+
+- Licensed under **Apache-2.0**.
+- README rewritten for a public audience; the local-testing walkthrough moved to
+  `docs/FAQ.md`.
+- `deploy/` version pins moved from `1.0.0` to `1.2.0`.
+
+## 1.1.0 — 2026-08-12
+
+**Changed**
+
+- **Became a free, unrestricted self-hosted edition.** Licence keys, the control plane,
+  tier gating, the licence-minting scripts and every `402 Payment Required` path were
+  removed. No keys, no subscription checks, no domain or scan limits, and no read-only
+  degradation.
+- Multi-arch release builds reworked to reuse one pre-built frontend bundle across
+  architectures.
+- Dark-mode palette updated; theme toggle now persists.
+
+**Fixed**
+
+- `nanoid` advisory (CVE-2026-67213).
+- A client-side exception on the demo program page.
+
+## 1.0.0 — 2026-08-02
+
+First release. Continuous external attack-surface intelligence, detection only:
+
+- 28 scan modules, from passive domain intelligence through subdomain discovery,
+  probing, crawling, content discovery, vulnerability scanning, secrets, CVE/KEV
+  matching and risk correlation.
+- Scheduler and stateless arq workers with cascade, per-module cadence and a fairness
+  cap.
+- The central scope engine, DNS-TXT domain verification and the §9b authorisation gate
+  with ASN-confirmed IP ranges.
+- Fleet-shared politeness limiter, degrading when Redis is unavailable.
+- Multi-tenant API with RBAC, a Next.js dashboard, Prometheus/Grafana observability,
+  encrypted Mongo backups and a self-contained `deploy/` bundle.

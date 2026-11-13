@@ -1,0 +1,666 @@
+"use client";
+
+import { ApiError, request } from "./transport";
+
+export { ApiError };
+
+// -- types -------------------------------------------------------------------
+export interface TokenResponse { access_token: string; tenant_id: string }
+// -- Playground -------------------------------------------------------------
+export interface NodePort {
+  name: string;
+  type: "hosts" | "urls" | "records" | "text" | "json" | "any";
+  label: string;
+  required: boolean;
+}
+export interface NodeParam {
+  name: string;
+  kind: "str" | "int" | "bool" | "select";
+  label: string;
+  default: unknown;
+  required: boolean;
+  help: string;
+  choices: string[];
+}
+export interface NodeSpec {
+  key: string;
+  tier: "pipeline" | "utility" | "source" | "output";
+  label: string;
+  summary: string;
+  group: string;
+  inputs: NodePort[];
+  outputs: NodePort[];
+  params: NodeParam[];
+  pipeline: string;
+  impl: string;
+  caution: string;
+}
+/** A canvas as the API stores it. Positions are the UI's business, carried opaquely. */
+export interface WorkflowGraph {
+  nodes: Record<string, { type: string; params?: Record<string, unknown>; x?: number; y?: number }>;
+  edges: { source: string; sourceHandle: string; target: string; targetHandle: string }[];
+}
+export interface SavedWorkflow {
+  workflow_id: string;
+  name: string;
+  graph: WorkflowGraph;
+  program_id?: string;
+  updated_at?: string;
+}
+export interface NodeRunReport {
+  status: "running" | "success" | "failed" | "skipped";
+  label?: string;
+  error?: string;
+  note?: string;
+  ms?: number;
+  outputs?: Record<string, unknown>;
+}
+/** POST /playground/run only queues — the worker does the work. */
+export interface QueuedRun {
+  run_id: string;
+  status: string;
+}
+/** GET /playground/runs/{id} — polled while a run is in flight. */
+export interface WorkflowRun {
+  run_id: string;
+  status: "queued" | "running" | "success" | "failed" | "cancelled" | string;
+  nodes: Record<string, NodeRunReport>;
+  error?: string | null;
+  finished_at?: string | null;
+}
+
+export interface Program {
+  program_id: string;
+  apex_domain: string;
+  verified: boolean;
+  enabled: boolean;
+  scan_shared_infra?: boolean;
+  scope_override?: boolean;
+  enabled_modules?: string[];
+  verification_method?: string | null;
+  created_at?: string;
+}
+export interface Finding {
+  fingerprint: string;
+  check_id: string;
+  module: string;
+  name: string;
+  location: string;
+  locator?: string; // what matched (e.g. detected tech for Wappalyzer)
+  severity: string;
+  state: string;
+  is_new: boolean;
+  first_seen?: string;
+  last_seen?: string; // last scan that re-confirmed it (still live)
+  description?: string;
+  references?: string[];
+  cvss?: number | null;
+  reproduction?: string; // module-provided repro (e.g. the exact dork query to search)
+  raw?: Record<string, unknown>; // full tool output (nuclei request/response/curl/tags)
+  gone?: boolean; // no longer reported by its module's latest run (resolved)
+}
+export interface Asset {
+  fingerprint: string;
+  hostname: string;
+  resolved_ips: string[];
+  ip_class?: string | null;
+  is_ephemeral: boolean;
+  monitored?: boolean;
+  interest?: string; // critical | high | medium | low | noise — attacker-interest triage
+  interest_reasons?: string[]; // why it was flagged (e.g. "Jenkins CI/CD exposed")
+  dns_records?: Record<string, string[]>; // a/aaaa/cname/ns/mx/txt
+  takeover_risk?: string | null; // service name if takeover-vulnerable
+  first_seen?: string; // when the subdomain first appeared on the internet
+  last_seen?: string; // last time it was observed alive (stops advancing when it goes down)
+  gone?: boolean; // not re-observed in the latest scan sweep
+}
+export interface BypassEntry {
+  technique: string; // method | header | path
+  label: string; // e.g. "X-Original-URL: /admin"
+  method: string;
+  url: string;
+  request_headers: Record<string, string>;
+  status: number;
+  length: number;
+  confidence: string; // high | medium
+  evidence: string;
+  curl: string; // ready-to-run reproduction
+}
+export interface Endpoint {
+  fingerprint: string;
+  url: string;
+  method: string;
+  status_code?: number | null;
+  title?: string | null;
+  tech: string[];
+  source?: string; // probe | crawl | feroxbuster
+  risk_tags?: string[]; // auth | admin | api | idor | ssrf | payment | exposure | …
+  first_seen?: string;
+  last_seen?: string; // last scan that re-confirmed it live
+  gone?: boolean; // not re-observed in the latest sweep
+  bypass_attempted?: boolean; // the 403-bypass module has run against this endpoint
+  bypasses?: BypassEntry[]; // successful 403/401 bypasses (blue "403 bypassed" label)
+  bypass_checked_at?: string;
+}
+export interface DomainIntel {
+  email?: {
+    spf?: string | null;
+    spf_present?: boolean;
+    dmarc?: string | null;
+    dmarc_present?: boolean;
+    dmarc_policy?: string | null;
+    dkim_selectors?: string[];
+    spoofable?: boolean;   // no enforcing DMARC ⇒ phishing "from" this domain works
+  };
+  registration?: {
+    registrar?: string | null;
+    created_at?: string | null;
+    expires_at?: string | null;
+    days_to_expiry?: number | null;
+    statuses?: string[];
+    nameservers?: string[];
+    dnssec?: boolean;
+    transfer_locked?: boolean;
+  };
+  checked_at?: string;
+}
+export interface ModuleInfo {
+  name: string;
+  label: string;
+  summary: string;
+  requires: string[];
+  required_by: string[];   // modules that stop working if this one is off
+  essential: boolean;      // the spine — cannot be turned off
+  schedulable: boolean;
+  opt_in: boolean;         // off by default
+  opt_in_reason: string;
+  enabled: boolean;        // resolved: honours dependencies, not just the toggle
+  turned_off: boolean;     // explicitly disabled by the user
+  skip_reason: string;     // why it will not run
+}
+/** One step of an attack path. `finding_id` links back to the evidence. */
+export interface AttackStep {
+  phase: string;
+  text: string;
+  finding_id: string;
+  check_id: string;
+  severity: string;
+}
+export interface AttackPath {
+  host: string;
+  headline: string;
+  summary: string;
+  steps: AttackStep[];
+  severity: string;
+  risk_score: number;
+}
+export interface JsItem {
+  value: string;        // the path/URL exactly as it appeared in the bundle
+  kind: string;         // path | url
+  tags: string[];       // admin, api, internal, auth, graphql, own-domain, …
+  absolute?: string | null;
+}
+export interface JsFile {
+  fingerprint: string;
+  url: string;          // the bundle we mined
+  size: number;
+  items: JsItem[];
+  hostnames: string[];  // hosts named inside the bundle
+  source_map?: string | null;
+  interesting_count: number;
+  first_seen?: string;
+  last_seen?: string;
+}
+export interface Port {
+  fingerprint: string;
+  ip: string;
+  port: number;
+  protocol: string;
+  service?: string | null;
+  product?: string | null;
+  version?: string | null;
+  first_seen?: string;
+  last_seen?: string; // last scan that re-confirmed the port open
+  gone?: boolean; // not re-observed in the latest port sweep
+}
+export interface Leak {
+  fingerprint: string;
+  kind: string;
+  masked: string;
+  source: string;
+  repo?: string | null;
+  url?: string | null;
+  severity: string;
+  first_seen?: string;
+}
+export interface Stats {
+  programs: number;
+  assets: number;
+  endpoints: number;
+  secrets: number;
+  findings: number;
+  new_findings: number;
+  findings_by_severity: Record<string, number>;
+  // signal quality
+  open_actionable: number;
+  informational: number;
+  findings_by_state: Record<string, number>;
+  false_positive_rate: number | null;
+  false_positives: number;
+  decided: number;
+}
+export interface ScanStage {
+  name: string;
+  status: string; // queued | running | success | failed | skipped
+  started_at?: string;
+  finished_at?: string;
+  stats?: Record<string, number>;
+  note?: string; // why skipped / short explanation
+}
+export interface ScanRun {
+  scan_id: string;
+  program_id: string;
+  pipeline: string;
+  status: string; // queued | running | success | failed | skipped
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  updated_at?: string; // last heartbeat/save — liveness signal
+  error?: string;
+  note?: string; // why skipped (single-pipeline runs)
+  stats?: Record<string, number>;
+  stages?: ScanStage[];
+  cancel_requested?: boolean; // a stop was asked for; the worker is winding down
+}
+export interface Verification { method: string; token: string; instructions: string }
+export interface Channel {
+  channel_id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  min_severity: string;
+  config: Record<string, string>;
+}
+export interface Secret {
+  fingerprint: string;
+  kind: string;
+  masked: string;
+  source_locator: string;
+  severity: string;
+}
+export interface Cve {
+  fingerprint: string;
+  cve_id: string;
+  cpe: string;
+  asset_fingerprint: string;
+  cvss?: number | null;
+  on_kev: boolean;
+  confidence: string; // low | medium | high
+  severity: string;
+  first_seen?: string;
+  last_seen?: string; // last scan that re-confirmed the match
+  gone?: boolean; // no longer matched by the latest cve-watch run (resolved)
+}
+export interface CorrelatedIssue {
+  host: string;
+  risk_score: number;
+  highest_severity: string;
+  is_chain: boolean;
+  signals: string[];
+}
+export interface Correlation {
+  count: number;
+  chains: number;
+  issues: CorrelatedIssue[];
+}
+export interface AlertPolicyValues {
+  finding_min_severity: string;
+  alert_findings: boolean;
+  alert_secrets: boolean;
+  alert_leaks: boolean;
+  alert_cves: boolean;
+  cve_min_cvss: number;
+  alert_new_assets: boolean;
+  alert_new_ports: boolean;
+  port_filter: string;
+}
+export interface AlertPolicy {
+  alert_policy: Partial<AlertPolicyValues>; // this scope's own overrides
+  effective?: AlertPolicyValues; // defaults←tenant←program (program endpoint only)
+  defaults: AlertPolicyValues;
+  tenant_defaults?: Partial<AlertPolicyValues>; // program endpoint only
+  severities: string[];
+}
+export interface SchedulePhase {
+  pipeline: string;
+  interval_seconds: number;
+  last_run_at?: string | null;
+  next_due_at?: string | null;
+  source: "program" | "tenant" | "default";
+}
+export interface Schedule {
+  program_id: string;
+  initial_scan_completed_at?: string | null;
+  last_full_run?: {
+    scan_id: string;
+    status: string;
+    started_at?: string | null;
+    finished_at?: string | null;
+  } | null;
+  phases: SchedulePhase[];
+}
+export interface ScheduleDefaults {
+  cadence_overrides: Record<string, number>;
+  pipelines: { pipeline: string; label: string; default_seconds: number }[];
+  min_interval_seconds?: number;
+}
+export interface TimeoutStage {
+  stage: string;
+  timeout_seconds: number;
+  source: "program" | "tenant" | "default";
+}
+export interface TimeoutConfig {
+  program_id: string;
+  stages: TimeoutStage[];
+}
+export interface TimeoutDefaults {
+  timeout_overrides: Record<string, number>;
+  stages: { stage: string; label: string; default_seconds: number }[];
+  min_seconds?: number;
+  max_seconds?: number;
+}
+export interface SurfaceCount {
+  total: number;
+  [severity: string]: number;
+}
+export interface SurfaceChange {
+  opened: number;
+  resolved: number;
+}
+export interface SurfaceSeriesPoint {
+  at: string;
+  total: number;
+  assets: number;
+  endpoints: number;
+  ports: number;
+  findings: number;
+  secrets: number;
+  leaks: number;
+}
+export interface SurfaceEvent {
+  kind: "opened" | "resolved";
+  type: string;
+  label: string;
+  at: string;
+  severity: string | null;
+}
+export interface AttackSurface {
+  generated_at: string;
+  latest_scan_at: string | null;
+  previous_scan_at: string | null;
+  scan_count: number;
+  current: {
+    total: number;
+    assets: SurfaceCount;
+    endpoints: SurfaceCount;
+    ports: SurfaceCount;
+    findings: SurfaceCount;
+    secrets: SurfaceCount;
+    leaks: SurfaceCount;
+  };
+  change: {
+    opened: number;
+    resolved: number;
+    net: number;
+    assets: SurfaceChange;
+    endpoints: SurfaceChange;
+    ports: SurfaceChange;
+    findings: SurfaceChange;
+    secrets: SurfaceChange;
+    leaks: SurfaceChange;
+  };
+  series: SurfaceSeriesPoint[];
+  recent: SurfaceEvent[];
+}
+export interface Delta {
+  kind: string; // status_change | title_change | tech_change | cert_change | new_port | new_asset
+  before?: string | null;
+  after?: string | null;
+  observed_at?: string;
+  asset_fingerprint?: string;
+}
+export interface Integration {
+  name: string;
+  label: string;
+  help: string;
+  secret: boolean;
+  configured: boolean;
+  masked: string;
+}
+// -- API keys & audit --------------------------------------------------------
+export interface ApiKeyInfo {
+  key_id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  created_by: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+export interface ScopeInfo {
+  scope: string;
+  label: string;
+  description: string;
+  grantable: boolean;
+}
+export interface AuditEvent {
+  event_id: string;
+  ts: string;
+  actor_type: "user" | "apikey";
+  actor_id: string | null;
+  key_id: string | null;
+  action: string;
+  method: string;
+  path: string;
+  status: number;
+  program_id: string | null;
+  detail: Record<string, unknown>;
+  client_ip: string | null;
+}
+
+// -- access control (RBAC) ---------------------------------------------------
+export interface ScanConfig {
+  program_id: string;
+  scan_shared_infra: boolean;
+  scope_override: boolean;
+}
+
+export interface PermissionInfo { key: string; label: string; description: string }
+export interface Group {
+  group_id: string;
+  name: string;
+  permissions: string[];
+  is_default: boolean;
+}
+export interface Member {
+  user_id: string;
+  email: string | null;
+  role: string; // owner | member
+  group_ids: string[];
+  email_verified: boolean;
+}
+
+const json = (b: unknown) => ({ method: "POST", body: JSON.stringify(b) });
+
+export const api = {
+  signupOpen: () => request<{ open: boolean }>("/auth/signup-open"),
+  signup: (email: string, password: string, tenant_name: string) =>
+    request<TokenResponse>("/auth/signup", json({ email, password, tenant_name })),
+  login: (email: string, password: string) =>
+    request<TokenResponse>("/auth/login", json({ email, password })),
+  me: () =>
+    request<{
+      tenant_id: string;
+      role: string;
+      auth: string;
+      email: string | null;
+      email_verified: boolean | null;
+      is_owner?: boolean;
+      permissions?: string[];
+    }>("/auth/me"),
+  verifyEmail: (token: string) =>
+    request<{ verified: boolean; email: string }>("/auth/verify-email", json({ token })),
+  resendVerification: () => request<void>("/auth/resend-verification", { method: "POST" }),
+  createApiKey: (name: string, scopes: string[] = []) =>
+    request<{ key_id: string; name: string; api_key: string; prefix: string; scopes: string[] }>(
+      "/auth/api-keys",
+      json({ name, scopes }),
+    ),
+  listApiKeys: () => request<ApiKeyInfo[]>("/auth/api-keys"),
+  revokeApiKey: (keyId: string) =>
+    request<void>(`/auth/api-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" }),
+  apiKeyScopes: () => request<{ scopes: ScopeInfo[] }>("/auth/api-keys/scopes"),
+  auditEvents: (limit = 50) => request<{ events: AuditEvent[] }>(`/audit?limit=${limit}`),
+
+  stats: () => request<Stats>("/stats"),
+  activity: () => request<ScanRun[]>("/activity"),
+  scanLogs: (programId: string, scanId: string) =>
+    request<{ scan_id: string; lines: string[] }>(
+      `/programs/${programId}/scan-runs/${scanId}/logs`,
+    ),
+
+  listPrograms: () => request<Program[]>("/programs"),
+  // -- Playground --
+  playgroundNodes: () => request<{ nodes: NodeSpec[] }>("/playground/nodes"),
+  listWorkflows: () => request<{ workflows: SavedWorkflow[] }>("/playground/workflows"),
+  saveWorkflow: (id: string, body: { name: string; graph: WorkflowGraph; program_id?: string }) =>
+    request<SavedWorkflow>(`/playground/workflows/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteWorkflow: (id: string) =>
+    request<void>(`/playground/workflows/${id}`, { method: "DELETE" }),
+  validateWorkflow: (graph: WorkflowGraph) =>
+    request<{ ok: boolean; order?: string[]; message?: string; node?: string }>(
+      "/playground/validate", json({ graph })),
+  runWorkflow: (program_id: string, graph: WorkflowGraph) =>
+    request<QueuedRun>("/playground/run", json({ program_id, graph })),
+  workflowRun: (runId: string) => request<WorkflowRun>(`/playground/runs/${runId}`),
+  createProgram: (apex_domain: string) =>
+    request<Program>("/programs", json({ apex_domain })),
+  getProgram: (id: string) => request<Program>(`/programs/${id}`),
+  deleteProgram: (id: string) => request<void>(`/programs/${id}`, { method: "DELETE" }),
+  setMonitoring: (id: string, enabled: boolean) =>
+    request<{ program_id: string; enabled: boolean }>(
+      `/programs/${id}/monitoring?enabled=${enabled}`,
+      { method: "POST" },
+    ),
+  setAssetMonitoring: (id: string, fingerprint: string, enabled: boolean) =>
+    request<{ fingerprint: string; monitored: boolean }>(
+      `/programs/${id}/assets/${fingerprint}/monitoring?enabled=${enabled}`,
+      { method: "POST" },
+    ),
+  requestVerify: (id: string, method: string) =>
+    request<Verification>(`/programs/${id}/verify/request?method=${method}`, { method: "POST" }),
+  checkVerify: (id: string) =>
+    request<{ verified: boolean; detail: string }>(`/programs/${id}/verify/check`, { method: "POST" }),
+  createAuthorization: (id: string) =>
+    request<unknown>(`/programs/${id}/authorization`, json({})),
+  getAuthorization: (id: string) =>
+    request<{ apex_verified: boolean; revoked?: boolean; authorized_by?: string }>(
+      `/programs/${id}/authorization`,
+    ),
+  triggerScan: (id: string) =>
+    request<{ status: string; detail?: string }>(`/programs/${id}/scan`, { method: "POST" }),
+  listScanRuns: (id: string) => request<ScanRun[]>(`/programs/${id}/scan-runs`),
+  cancelScanRun: (id: string, scanId: string) =>
+    request<{ status: string; detail?: string }>(
+      `/programs/${id}/scan-runs/${scanId}/cancel`,
+      { method: "POST" },
+    ),
+  triggerBypass403: (id: string) =>
+    request<{ status: string; scan_id: string; detail?: string }>(`/programs/${id}/bypass-403`, {
+      method: "POST",
+    }),
+  setScanSharedInfra: (id: string, value: boolean) =>
+    request<ScanConfig>(`/programs/${id}/scan-config?scan_shared_infra=${value}`, {
+      method: "POST",
+    }),
+  setScopeOverride: (id: string, value: boolean) =>
+    request<ScanConfig>(`/programs/${id}/scan-config?scope_override=${value}`, {
+      method: "POST",
+    }),
+  getModules: (id: string) =>
+    request<{ program_id: string; modules: ModuleInfo[] }>(`/programs/${id}/modules`),
+  setModules: (id: string, enabled: string[], disabled: string[]) =>
+    request<{ program_id: string; modules: ModuleInfo[] }>(`/programs/${id}/modules`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled, disabled }),
+    }),
+  getAttackPaths: (id: string) =>
+    request<{ count: number; paths: AttackPath[] }>(`/programs/${id}/attack-paths`),
+  getSchedule: (id: string) => request<Schedule>(`/programs/${id}/schedule`),
+  setSchedule: (id: string, overrides: Record<string, number>) =>
+    request<Schedule>(`/programs/${id}/schedule`, json({ overrides })),
+  getScheduleDefaults: () => request<ScheduleDefaults>("/schedule/defaults"),
+  setScheduleDefaults: (overrides: Record<string, number>) =>
+    request<ScheduleDefaults>("/schedule/defaults", json({ overrides })),
+  getTimeouts: (id: string) => request<TimeoutConfig>(`/programs/${id}/timeouts`),
+  setTimeouts: (id: string, overrides: Record<string, number>) =>
+    request<TimeoutConfig>(`/programs/${id}/timeouts`, json({ overrides })),
+  getTimeoutDefaults: () => request<TimeoutDefaults>("/schedule/timeout-defaults"),
+  setTimeoutDefaults: (overrides: Record<string, number>) =>
+    request<TimeoutDefaults>("/schedule/timeout-defaults", json({ overrides })),
+  getAlertPolicy: (id: string) => request<AlertPolicy>(`/programs/${id}/alert-policy`),
+  setAlertPolicy: (id: string, policy: Partial<AlertPolicyValues>) =>
+    request<AlertPolicy>(`/programs/${id}/alert-policy`, json({ policy })),
+  getAlertPolicyDefaults: () => request<AlertPolicy>("/schedule/alert-policy"),
+  setAlertPolicyDefaults: (policy: Partial<AlertPolicyValues>) =>
+    request<AlertPolicy>("/schedule/alert-policy", json({ policy })),
+
+  listFindings: (id: string, q: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(q).toString();
+    return request<Finding[]>(`/programs/${id}/findings${qs ? `?${qs}` : ""}`);
+  },
+  getAttackSurface: (id: string) => request<AttackSurface>(`/programs/${id}/attack-surface`),
+  listAssets: (id: string) => request<Asset[]>(`/programs/${id}/assets`),
+  listEndpoints: (id: string) => request<Endpoint[]>(`/programs/${id}/endpoints`),
+  listPorts: (id: string) => request<Port[]>(`/programs/${id}/ports`),
+  listJsFiles: (id: string) => request<JsFile[]>(`/programs/${id}/js-files`),
+  getDomainIntel: (id: string) => request<DomainIntel>(`/programs/${id}/domain-intel`),
+  listLeaks: (id: string) => request<Leak[]>(`/programs/${id}/leaks`),
+  listCves: (id: string) => request<Cve[]>(`/programs/${id}/cves`),
+  getCorrelation: (id: string) => request<Correlation>(`/programs/${id}/correlation`),
+  listSecrets: (id: string) => request<Secret[]>(`/programs/${id}/secrets`),
+  listDeltas: (id: string) => request<Delta[]>(`/programs/${id}/deltas`),
+
+  listChannels: () => request<Channel[]>("/notifications"),
+  createChannel: (body: {
+    name: string;
+    type: string;
+    min_severity: string;
+    config: Record<string, string>;
+  }) => request<Channel>("/notifications", json(body)),
+  deleteChannel: (id: string) =>
+    request<void>(`/notifications/${id}`, { method: "DELETE" }),
+
+  listIntegrations: () => request<Integration[]>("/integrations"),
+  setIntegration: (name: string, value: string) =>
+    request<void>(`/integrations/${name}`, { method: "PUT", body: JSON.stringify({ value }) }),
+  clearIntegration: (name: string) =>
+    request<void>(`/integrations/${name}`, { method: "DELETE" }),
+
+  // Access control (owner-only). 403 from any of these means the caller isn't the owner.
+  listPermissions: () => request<PermissionInfo[]>("/members/permissions"),
+  listGroups: () => request<Group[]>("/members/groups"),
+  createGroup: (name: string, permissions: string[]) =>
+    request<Group>("/members/groups", json({ name, permissions })),
+  updateGroup: (id: string, body: { name?: string; permissions?: string[] }) =>
+    request<Group>(`/members/groups/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteGroup: (id: string) => request<void>(`/members/groups/${id}`, { method: "DELETE" }),
+  listMembers: () => request<Member[]>("/members"),
+  createMember: (email: string, password: string, group_ids: string[]) =>
+    request<Member>("/members", json({ email, password, group_ids })),
+  setMemberGroups: (id: string, group_ids: string[]) =>
+    request<Member>(`/members/${id}`, { method: "PATCH", body: JSON.stringify({ group_ids }) }),
+  deleteMember: (id: string) => request<void>(`/members/${id}`, { method: "DELETE" }),
+};
+
+export { downloadReport } from "./transport";

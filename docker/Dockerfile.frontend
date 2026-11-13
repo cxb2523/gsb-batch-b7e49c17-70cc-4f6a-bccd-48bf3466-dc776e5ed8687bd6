@@ -1,0 +1,75 @@
+# ExactSurface frontend image — Next.js 14 (App Router). Multi-arch (works on arm64).
+# Build context is the repo root (so it matches the api/pipeline images).
+
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json ./
+# --omit=optional drops `sharp` (see frontend/next.config.mjs: image optimisation is
+# off, and sharp's bundled libvips has unfixed high-severity CVEs).
+RUN npm ci --omit=optional
+COPY frontend/ ./
+# Next.js bakes the /api/* rewrite destination at BUILD time (into routes-manifest),
+# so API_PROXY_TARGET must be set here — not just at runtime. Defaults to the
+# compose service address; override with --build-arg for other topologies.
+ARG API_PROXY_TARGET=http://api:8000
+ENV API_PROXY_TARGET=${API_PROXY_TARGET}
+RUN npm run build
+
+FROM node:20-alpine AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+# Patch the OS packages, then delete npm and yarn. We start the server with
+# `node server.js` and never install anything at runtime, so npm is not a dependency —
+# it is just its own large tree of vulnerable packages (tar, glob, sigstore, minimatch)
+# sitting in a shipped image. Trivy reports them because they really are there.
+RUN apk upgrade --no-cache \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+              /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+# Standalone output only: the traced server plus the modules it genuinely imports.
+# The build toolchain never reaches the runtime image, which is both smaller and a far
+# smaller vulnerability surface — nothing that only runs at build time can be a
+# production CVE if it is not shipped.
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
+# Same assertions as the `prebuilt` stage below, for the same reasons.
+RUN test -d node_modules/next || { echo "FATAL: standalone bundle has no node_modules"; exit 1; }
+RUN ! grep -q 'localhost:8000' .next/routes-manifest.json \
+    || { echo "FATAL: /api rewrite points at localhost — API_PROXY_TARGET was not set at build time"; exit 1; }
+EXPOSE 3000
+ENV PORT=3000 HOSTNAME=0.0.0.0
+# API_PROXY_TARGET (set in compose to http://api:8000) routes /api/* to the backend.
+CMD ["node", "server.js"]
+
+# --- Fast runtime image using pre-built artifacts (used in CI for multi-arch) ---
+FROM node:20-alpine AS prebuilt
+ENV NODE_ENV=production
+WORKDIR /app
+RUN apk upgrade --no-cache \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+              /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+COPY frontend/.next/standalone ./
+COPY frontend/.next/static ./.next/static
+COPY frontend/public ./public
+# The standalone bundle carries its own traced node_modules, and it arrives here from
+# the BUILD CONTEXT -- so .dockerignore decides whether it survives. Its
+# `**/node_modules` rule matched this one too, and the image shipped a server.js with
+# no `next` module: a build that succeeded and a container that died at startup with
+# "Cannot find module 'next'". A `!frontend/.next/standalone/node_modules` negation
+# (last, so it wins) restores it. Assert it here so a context regression is a loud
+# build failure rather than a runtime one somebody else discovers.
+RUN test -d node_modules/next || { \
+      echo "FATAL: .next/standalone/node_modules is missing from the build context."; \
+      echo "Check the '!frontend/.next/standalone/node_modules' negation in .dockerignore."; \
+      exit 1; }
+# The /api/* rewrite destination is baked into routes-manifest.json when `next build`
+# runs — on the CI runner, for this stage. If API_PROXY_TARGET was not set there, Next
+# defaulted to http://localhost:8000, which inside this container is this container:
+# every /api call fails with ECONNREFUSED and the product cannot reach its own API.
+# That shipped in 1.0.0 through 1.3.1 and was invisible locally, where the `runtime`
+# stage sets the ARG. A bundle pointing at localhost is not a valid product image.
+RUN ! grep -q 'localhost:8000' .next/routes-manifest.json \
+    || { echo "FATAL: /api rewrite points at localhost:8000 — the runner built without API_PROXY_TARGET=http://api:8000."; exit 1; }
+EXPOSE 3000
+ENV PORT=3000 HOSTNAME=0.0.0.0
+CMD ["node", "server.js"]

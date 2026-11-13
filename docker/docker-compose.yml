@@ -1,0 +1,171 @@
+# Full local dev stack. `docker compose -f docker/docker-compose.yml up` gives the
+# whole platform on any OS. MongoDB is self-hosted here (free) — no Atlas required.
+#
+# Project name is DELIBERATELY distinct from deploy/docker-compose.yml (which is
+# "exactsurface" -- the customer stack). Compose scopes containers, networks and
+# volumes by project name via the com.docker.compose.project label, not by file path.
+# Two compose files sharing a name are the same project as far as compose is
+# concerned: bringing this dev stack up after the customer stack was already running
+# under "exactsurface" would see those containers as belonging to ITS project, detect
+# the config differs (this one builds locally and publishes 8000/3000; the customer
+# one pulls from GHCR and publishes nothing but Caddy), and recreate them to match --
+# destroying whatever the customer-stack test was doing, silently.
+name: exactsurface-dev
+
+# Inside the compose network Mongo/Redis are reached by SERVICE NAME (not localhost).
+# These override the localhost defaults from ../.env for the backend services.
+x-backend-env: &backend-env
+  EXACTSURFACE_MONGO_URI: mongodb://mongo:27017
+  EXACTSURFACE_REDIS_URI: redis://redis:6379/0
+
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Heavy image with all recon tooling; built once, reused by scheduler + workers.
+  pipeline:
+    image: exactsurface/pipeline:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pipeline
+    command: ["python", "-m", "daemon.main", "--dry-run"]
+    env_file: ../.env
+    environment: *backend-env
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  scheduler:
+    image: exactsurface/pipeline:latest
+    command: ["python", "-m", "daemon.main"]
+    env_file: ../.env
+    environment: *backend-env
+    restart: unless-stopped
+    depends_on:
+      pipeline: { condition: service_started }
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  worker:
+    image: exactsurface/pipeline:latest
+    command: ["arq", "taskqueue.worker.WorkerSettings"]
+    env_file: ../.env
+    environment:
+      <<: *backend-env
+      # Must track `replicas` below. If Redis is down each worker falls back to a
+      # local bucket at 1/this of the per-target ceiling; set it under the real
+      # replica count and a degraded fleet scans over the cap (ADR-0012).
+      EXACTSURFACE_WORKER_FLEET_SIZE: "2"
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+    depends_on:
+      pipeline: { condition: service_started }
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    env_file: ../.env
+    environment: *backend-env
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  frontend:
+    image: exactsurface/frontend:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      # MUST be explicit. Dockerfile.frontend ends with the `prebuilt` stage (CI uses
+      # it to reuse a .next built on the runner), and Docker builds the LAST stage when
+      # no target is given — so omitting this silently built `prebuilt` locally, which
+      # copies frontend/.next/standalone from the host. `.dockerignore` strips
+      # `**/node_modules`, which also matches that directory's bundled deps, so the
+      # image shipped server.js with no `next` module and died at startup with
+      # "Cannot find module 'next'". `runtime` builds from source — which is what a
+      # local stack should do anyway, or your edits never reach the image at all.
+      target: runtime
+    environment:
+      # Inside the compose network the API is reachable by service name.
+      - API_PROXY_TARGET=http://api:8000
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      api: { condition: service_started }
+
+  # -- observability (§7 Phase G) --------------------------------------------
+  # Each process keeps its own in-memory registry, so Prometheus scrapes each one
+  # separately: the API from its own app, the scheduler and every worker replica
+  # from daemon.metrics_server. Neither of these publishes a port to the host —
+  # reach them through Grafana, which is the only exposed entry point.
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 15d of local TSDB is enough to investigate an unattended run without
+      # unbounded disk growth on a single box.
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ../deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      api: { condition: service_started }
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      # Dev-stack default. Change it (or set it in ../.env) before exposing this
+      # anywhere reachable — Grafana can query every metric the platform emits.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - ../deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      prometheus: { condition: service_started }
+
+volumes:
+  mongo_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

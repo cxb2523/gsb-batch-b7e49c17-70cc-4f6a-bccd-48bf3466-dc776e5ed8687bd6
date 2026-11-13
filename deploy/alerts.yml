@@ -1,0 +1,78 @@
+# Prometheus alert rules.
+#
+# These are deliberately few. Every rule here corresponds to something that is
+# either an AUP/compliance breach or a silent stop of the product — an alert that
+# fires for anything less trains an operator to ignore the channel.
+#
+# Thresholds reference real configured limits (core.config.Settings), NOT round
+# numbers. If you change the setting, change the rule: they are duplicated here
+# because Prometheus cannot read the app's config.
+groups:
+  - name: exactsurface-compliance
+    rules:
+      # §15 exit criterion: "naabu never exceeds the global rate cap (verified by
+      # metrics)". Now covers EVERY scanner subprocess, not just naabu — httpx,
+      # katana, nuclei, feroxbuster and ffuf all defaulted to 150 rps or unlimited
+      # until ADR-0013, so the {{ $labels.tool }} label is what tells you which one
+      # slipped. Pages because exceeding the cap is an AUP breach against a third
+      # party, not a degraded-service issue.
+      - alert: SubprocessRateExceedsPolitenessCap
+        expr: exactsurface_subprocess_per_target_pps > 10
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.tool }} exceeded the per-target politeness cap"
+          description: >-
+            {{ $labels.tool }} was handed {{ $value }} req/pps per target, above the
+            EXACTSURFACE_GLOBAL_RATE_PER_TARGET cap of 10. A token bucket cannot govern a
+            subprocess, so this means the derived rate flag was wrong. Threshold must
+            match global_rate_per_target.
+
+      # Sustained throttling means the limiter is doing its job, but it also means
+      # scans are being slowed — worth knowing, not worth waking someone.
+      - alert: PolitenessThrottlingSustained
+        expr: |
+          rate(exactsurface_politeness_decisions_total{decision="throttled"}[15m])
+            / clamp_min(rate(exactsurface_politeness_decisions_total[15m]), 0.001) > 0.5
+        for: 30m
+        labels: { severity: warn }
+        annotations:
+          summary: "Over half of politeness decisions have been throttled for 30m"
+
+  - name: exactsurface-liveness
+    rules:
+      # The scheduler is the single point whose silent death stops ALL scanning.
+      # run_forever() swallows tick exceptions so the process stays up and the port
+      # keeps answering while nothing is ever enqueued again — a plain "is it up?"
+      # check cannot see this. Tick is 60s; 10m is ~10 missed ticks.
+      - alert: SchedulerNotTicking
+        expr: time() - exactsurface_scheduler_last_success_timestamp > 600
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "No successful scheduler tick in over 10 minutes"
+          description: >-
+            The scheduler process may be up and still enqueueing nothing. Check
+            exactsurface_scheduler_ticks_total{status="failed"} and the process logs.
+
+      # Absent (not just failing) — covers the crashed/unscheduled case that the
+      # gauge above cannot report, because a dead process reports nothing at all.
+      - alert: ExactSurfaceProcessDown
+        expr: up{job=~"exactsurface-.*"} == 0
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} is unreachable"
+
+  - name: exactsurface-pipeline-health
+    rules:
+      # A stage that quietly starts timing out is the Phase G failure mode: scans
+      # "succeed" with missing data and nobody notices for days.
+      - alert: ScanStageFailureRateHigh
+        expr: |
+          sum by (stage) (rate(exactsurface_scan_stage_total{status=~"failed|timeout"}[1h]))
+            / clamp_min(sum by (stage) (rate(exactsurface_scan_stage_total[1h])), 0.001) > 0.25
+        for: 1h
+        labels: { severity: warn }
+        annotations:
+          summary: "Stage {{ $labels.stage }} is failing/timing out >25% of runs"

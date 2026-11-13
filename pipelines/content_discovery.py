@@ -1,0 +1,228 @@
+"""Content-discovery pipeline (modules 15–17).
+
+Runs feroxbuster against confirmed-dedicated hosts only (CONTENT_DISCOVERY is part
+of the full action set, withheld from CDN/cloud-shared per §9b), choosing the
+wordlist from each host's fingerprinted tech. Discovered paths are upserted as
+Endpoints for the scan pipeline to pick up.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+from urllib.parse import urlsplit
+
+from core.config import get_settings
+from core.endpoint_risk import classify_endpoint
+from core.errors import ToolNotFound
+from core.hashing import endpoint_fingerprint
+from core.logging import logger
+from core.models import Endpoint
+from core.ratelimit import derive_subprocess_rate
+from core.scope import Action, ProgramScope, ScopeEngine
+from core.tenant import TenantContext
+from db.assets import AssetRepo
+from db.endpoints import EndpointRepo
+from modules.content_discovery.feroxbuster import TargetUnreachable
+from modules.content_discovery.feroxbuster import discover as ferox_discover
+from modules.content_discovery.wordlist_selector import select_wordlist
+
+#: feroxbuster is slow per host (a big wordlist = minutes); run many hosts at once
+#: and bound each so the stage stays well inside its budget.
+CONCURRENCY = 10
+PER_HOST_TIMEOUT = 120.0
+
+
+# Statuses worth recording as discovered content. A 429 is the server throttling us —
+# not a path that exists; 400/404/5xx are non-discoveries. 401/403 mean "exists but
+# protected", which is interesting in ones and twos but, in the hundreds, is a WAF or
+# CDN answering everything the same way — surface inflation, not discovery — so those
+# are capped per host.
+_CONTENT_STATUSES = frozenset({200, 201, 202, 203, 204, 206, 301, 302, 307, 308, 401, 403, 405})
+_PROTECTED_STATUSES = frozenset({401, 403})
+_MAX_PROTECTED_PER_HOST = 40
+
+
+def _keep_real_hits(hits: list[dict]) -> tuple[list[dict], int, int]:
+    """Filter one host's raw hits to genuine discoveries.
+
+    Returns (kept, throttled, waf_dropped). *throttled* counts 429s (a politeness
+    signal); *waf_dropped* counts 401/403s dropped because the host returned more than
+    the cap, which means the WAF is refusing everything rather than guarding real paths.
+    """
+    throttled = sum(1 for h in hits if h.get("status") == 429)
+    candidates = [h for h in hits if h.get("status") in _CONTENT_STATUSES]
+    protected = [h for h in candidates if h.get("status") in _PROTECTED_STATUSES]
+    if len(protected) > _MAX_PROTECTED_PER_HOST:
+        kept = [h for h in candidates if h.get("status") not in _PROTECTED_STATUSES]
+        return kept, throttled, len(protected)
+    return candidates, throttled, 0
+
+
+async def run_content_discovery(
+    *,
+    mongo: Any,
+    engine: ScopeEngine,
+    scope: ProgramScope,
+    tenant: TenantContext,
+    program_id: str,
+    timeout: float,
+    discover=ferox_discover,
+    wordlist_for=select_wordlist,
+) -> dict:
+    tid = tenant.tenant_id
+    # Real content discovery needs wordlists installed; without them feroxbuster
+    # silently finds nothing. Report that honestly (only when using the real tool).
+    if discover is ferox_discover:
+        from modules.content_discovery.wordlist_selector import wordlist_base, wordlists_installed
+
+        if not wordlists_installed():
+            logger.warning("content-discovery: no wordlists in {} — skipping", wordlist_base())
+            return {
+                "hosts": 0,
+                "paths": 0,
+                "new": 0,
+                "skipped": True,
+                "note": "content-discovery wordlists not installed",
+            }
+
+    assets = await AssetRepo.from_mongo(mongo).list(tid, program_id, limit=100_000)
+    assets = [a for a in assets if a.get("monitored", True)]  # skip user-muted assets
+    endpoints = await EndpointRepo.from_mongo(mongo).list(tid, program_id, limit=100_000)
+
+    # tech per host, taken from the host's root endpoint if we probed one
+    tech_by_host: dict[str, list[str]] = {}
+    # The URL/scheme the host actually answered on during probe. feroxbuster does a
+    # pre-flight connection and aborts the whole run with "Could not connect to any
+    # target provided" if handed https:// for a host that only serves http — or has no
+    # web server at all. So we only fuzz hosts we PROBED alive, at their working URL,
+    # instead of blindly hitting https://<every dedicated host>.
+    root_by_host: dict[str, str] = {}
+    for ep in endpoints:
+        host = urlsplit(ep["url"]).hostname or ""
+        if ep.get("tech") and host not in tech_by_host:
+            tech_by_host[host] = ep["tech"]
+        parts = urlsplit(ep["url"])
+        if not host or not parts.scheme:
+            continue
+        root = f"{parts.scheme}://{parts.netloc}"
+        cur = root_by_host.get(host)
+        # prefer https when a host answered on both schemes
+        if cur is None or (root.startswith("https://") and not cur.startswith("https://")):
+            root_by_host[host] = root
+
+    scannable = [
+        a["hostname"]
+        for a in assets
+        if a["hostname"] in root_by_host  # probed alive — has a working web root
+        and engine.evaluate(a["hostname"], a.get("resolved_ips", []), scope).permits(
+            Action.CONTENT_DISCOVERY
+        )
+    ]
+    if not scannable:
+        logger.info("content-discovery {}: no probed-alive dedicated hosts to scan", program_id)
+        return {
+            "hosts": 0,
+            "paths": 0,
+            "new": 0,
+            "skipped": True,
+            "note": "no probed-alive dedicated hosts (bruteforce withheld on shared infra §9b)",
+        }
+
+    per_host = min(timeout, PER_HOST_TIMEOUT)
+    logger.info(
+        "content-discovery: feroxbuster on {} host(s) (≤{:.0f}s each, {} at a time)",
+        len(scannable),
+        per_host,
+        CONCURRENCY,
+    )
+    sem = asyncio.Semaphore(CONCURRENCY)
+    # §3.8b: both tools are subprocesses, and BOTH default to no rate limit at all —
+    # they empty a wordlist at the host as fast as it answers, which makes this the
+    # most abusive stage we run. Each invocation targets ONE host, so the flag IS the
+    # per-target rate: pass the cap itself, not an aggregate (ADR-0013).
+    cap = get_settings().global_rate_per_target
+    ferox_rate = derive_subprocess_rate(1, cap, tool="feroxbuster")
+    ffuf_rate = derive_subprocess_rate(1, cap, tool="ffuf")
+
+    def _tag(hits: list[dict], tool: str) -> list[dict]:
+        # Record which tool actually found each path so the endpoint's source is
+        # honest — a host that fell back to ffuf must not be attributed to feroxbuster.
+        for h in hits:
+            h["_tool"] = tool
+        return hits
+
+    async def _ffuf(target: str, wordlist: str, reason: str) -> list[dict]:
+        # ffuf uses Go's HTTP stack (the same one httpx probed this host with), so it
+        # connects where feroxbuster's client can't (IPv6/TLS quirks).
+        try:
+            from modules.content_discovery.ffuf import fuzz as ffuf_fuzz
+
+            hits = await ffuf_fuzz(f"{target}/FUZZ", wordlist, per_host, rate=ffuf_rate.aggregate)
+            return _tag(hits, "ffuf")
+        except ToolNotFound:
+            logger.warning("content-discovery: {} ({}), and ffuf not installed", target, reason)
+            return []
+
+    async def _scan_host(host: str) -> list[dict]:
+        # Each host isolated + bounded: a slow/failing feroxbuster yields nothing for
+        # that host but never sinks the (concurrent) stage.
+        target = root_by_host[host]  # the scheme/host that answered during probe
+        wordlist = wordlist_for(tech_by_host.get(host, []))
+        async with sem:
+            try:
+                hits = await discover(target, wordlist, per_host, rate=ferox_rate.aggregate)
+                return _tag(hits, "feroxbuster")
+            except ToolNotFound:  # feroxbuster missing entirely
+                return await _ffuf(target, wordlist, "feroxbuster not installed")
+            except TargetUnreachable as exc:  # feroxbuster's client couldn't connect
+                logger.info("content-discovery: feroxbuster can't reach {} — trying ffuf", target)
+                return await _ffuf(target, wordlist, str(exc))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("content-discovery: feroxbuster failed for {}: {}", host, exc)
+                return []
+
+    per_host_hits = await asyncio.gather(*(_scan_host(h) for h in scannable))
+
+    # Keep only genuine discoveries; drop throttling (429) and WAF floods (bulk 401/403).
+    throttled_total = 0
+    waf_dropped_total = 0
+    filtered_hits: list[list[dict]] = []
+    for hits in per_host_hits:
+        kept, throttled, waf_dropped = _keep_real_hits(hits)
+        filtered_hits.append(kept)
+        throttled_total += throttled
+        waf_dropped_total += waf_dropped
+    if throttled_total:
+        logger.warning(
+            "content-discovery: {} response(s) were HTTP 429 — the target throttled the "
+            "scan; discovery on those hosts is incomplete. Not recorded as endpoints.",
+            throttled_total,
+        )
+    if waf_dropped_total:
+        logger.info(
+            "content-discovery: dropped {} bulk 401/403 response(s) — a WAF/CDN refusing "
+            "everything, not real protected paths.",
+            waf_dropped_total,
+        )
+
+    found_models = [
+        Endpoint(
+            tenant_id=tid,
+            program_id=program_id,
+            fingerprint=endpoint_fingerprint(program_id, "GET", hit["url"]),
+            url=hit["url"],
+            method="GET",
+            status_code=hit.get("status"),
+            source=hit.get("_tool", "feroxbuster"),  # ffuf or feroxbuster — whichever found it
+            risk_tags=classify_endpoint(hit["url"]),  # content discovery finds the /admin, .bak, …
+        )
+        for hits in filtered_hits
+        for hit in hits
+    ]
+
+    total, new = await EndpointRepo.from_mongo(mongo).upsert_many(found_models)
+    logger.info(
+        "content-discovery {}: {} hosts, {} paths, {} new", program_id, len(scannable), total, new
+    )
+    return {"hosts": len(scannable), "paths": total, "new": new}

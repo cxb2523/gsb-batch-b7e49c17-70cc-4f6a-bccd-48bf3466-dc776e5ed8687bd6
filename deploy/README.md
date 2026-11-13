@@ -1,0 +1,223 @@
+# ExactSurface — deployment
+
+**This folder is the entire product as an operator receives it.** Copy it to a server,
+fill in `.env`, and start it. There is no source code here and nothing is compiled: the
+application ships as three pre-built container images, and everything in this directory
+is configuration.
+
+```bash
+cp .env.example .env      # then edit it — see "Filling in .env" below
+docker compose up -d
+docker compose ps
+```
+
+---
+
+## What is in here
+
+| File | What it does | Do you edit it? |
+|---|---|---|
+| `docker-compose.yml` | The whole stack — ten services, wired together. | No |
+| `.env.example` | Every setting, commented. | Copy to `.env`, then yes |
+| `Caddyfile` | TLS termination and routing. Gets a Let's Encrypt certificate automatically. | No |
+| `prometheus.yml` | What metrics get scraped. | No |
+| `alerts.yml` | Alert rules (stuck scans, dead workers, rate-cap breaches). | Rarely |
+| `grafana/` | A pre-built operations dashboard, provisioned automatically. | No |
+
+**All of these files must stay together.** `docker-compose.yml` mounts the other four by
+relative path, so moving or renaming any of them breaks startup — Caddy in particular
+fails in a confusing way, because Docker helpfully creates a *directory* where it
+expected a config file.
+
+---
+
+## What comes up
+
+Ten services, all wired for you. You start one thing and get the whole platform.
+
+| Service | What it is | Reachable from outside? |
+|---|---|---|
+| `caddy` | The only public entry point. TLS + routing. | **Yes — 80/443** |
+| `frontend` | The web UI. | No — through Caddy |
+| `api` | The application API. | No — through Caddy |
+| `worker` ×3 | Runs the scans. | No |
+| `scheduler` | Decides what to scan and when. | No |
+| `pipeline` | Startup gate: validates config, then exits. | No |
+| `mongo` | Your data — assets, findings, everything. | **No host port at all** |
+| `redis` | Job queue and rate-limit state. | **No host port at all** |
+| `prometheus` | Metrics storage. | No |
+| `grafana` | Operations dashboard. | Loopback only (see below) |
+
+Mongo and Redis deliberately publish **no ports**. They are reachable only by the other
+containers. An exposed, unauthenticated datastore is the most common way a self-hosted
+deployment gets breached, and this shape makes it impossible rather than unlikely — they
+are password-protected *as well*, but the port simply is not there.
+
+`pipeline` runs once with `--dry-run` and exits. That is intentional: it validates your
+configuration and the bundled scope feeds *before* anything else starts, so a broken
+setup fails immediately instead of halfway through your first scan. Seeing it in
+`Exited (0)` is correct.
+
+Grafana binds to `127.0.0.1` only. Reach it through an SSH tunnel:
+
+```bash
+ssh -L 3001:127.0.0.1:3001 you@your-server     # then open http://localhost:3001
+```
+
+---
+
+## Before you start
+
+1. **A server.** 4 vCPU / 8 GB RAM minimum, 8/16 recommended. Any Linux with Docker
+   Engine 24+ and the Compose plugin.
+2. **A DNS A-record** pointing at that server, created **before** you start the stack.
+   Caddy requests a certificate on first boot; with no DNS the request fails and you
+   will be looking at TLS errors instead of the product.
+3. **Outbound internet access.** The scanner has to reach the internet to see your
+   attack surface the way an attacker does.
+
+**Evaluating on a laptop instead?** Set `DOMAIN=localhost`. Caddy issues itself a
+local certificate for that name, so there is no DNS to arrange — your browser will warn
+about the self-signed certificate once, and everything else works. On Apple silicon the
+scanning image runs under emulation (it is built for amd64); fine for a look around,
+slow for real scanning.
+
+---
+
+## Filling in `.env`
+
+Generate real secrets. The stack refuses to start with placeholder values, and compose
+will tell you exactly which one is missing rather than booting insecurely.
+
+```bash
+openssl rand -hex 24                                             # for the two below
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"    # for everything else
+```
+
+Required, no defaults:
+
+| Variable | Notes |
+|---|---|
+| `DOMAIN` | The hostname this instance serves. Must already resolve to this server. |
+| `MONGO_ROOT_PASSWORD` | **Use `openssl rand -hex 24`, not base64.** This value goes into a Mongo connection URI unescaped; a `base64` password containing `+`, `/` or `=` breaks authentication with an error that never mentions the password. |
+| `REDIS_PASSWORD` | Same rule, same reason — it goes into a Redis URI the same way. |
+| `GRAFANA_ADMIN_PASSWORD` | Random — not URI-embedded, any generator is fine. |
+| `EXACTSURFACE_JWT_SECRET` | Random. Signs your users' sessions. |
+| `EXACTSURFACE_SECRET_HASH_KEY` | Random. See the warning below. |
+
+> **Two of these cannot be changed freely later.** Rotating `EXACTSURFACE_JWT_SECRET`
+> logs everyone out. Rotating `EXACTSURFACE_SECRET_HASH_KEY` makes every previously
+> reported leaked-credential finding look brand new, because that key is what lets the
+> platform recognise a secret it has seen before *without storing the secret itself*.
+> Set both once, back up `.env`, and leave them alone.
+
+> **`.env` holds every secret for this deployment.** `chmod 600` it, keep it out of
+> version control, and back it up somewhere private.
+
+---
+
+## Starting it
+
+```bash
+docker compose up -d
+```
+
+First start pulls a few GB — the scanning image carries a full recon toolchain and the
+detection-template corpus. Give it a few minutes.
+
+### Verification
+
+```bash
+docker compose ps          # every service healthy? (pipeline Exited (0) is correct)
+docker compose logs -f api
+```
+
+Open `https://your-domain` and **create the first account — it becomes the owner** of
+your organisation. Public signup closes automatically after that; add teammates under
+*Settings → members*.
+
+---
+
+## Your first scan
+
+ExactSurface will not scan a domain you have not proven you control. This is not a
+formality — it is what keeps your usage lawful and defensible.
+
+1. **Programs → add** your domain.
+2. **Verify ownership** — place the DNS TXT record or HTTP file it gives you, then check.
+3. **Authorise scanning** — create the authorization record.
+4. **Scan**, and watch it live under **Activity**.
+
+Findings arrive progressively: subdomains, then live hosts, then exposures.
+
+> Only add domains you own or are contractually authorised to test. Scanning third
+> parties without authorisation is illegal in most jurisdictions.
+
+---
+
+## Day-to-day
+
+```bash
+docker compose ps                          # health
+docker compose logs -f worker              # what the scanner is doing
+docker compose restart api                 # safe any time
+docker compose down                        # stop (your data lives in named volumes)
+docker compose exec api python -m scripts.backup    # back up the database
+```
+
+**Upgrading.** Change `EXACTSURFACE_VERSION` in `.env` to a version from the
+[releases page](https://github.com/whxitte/exact-surface/releases) — the changelog says
+what each one changes — then:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Images are pinned to a version rather than `latest` on purpose: an image that changes
+underneath a running scan is not something you should have to debug.
+
+---
+
+## Troubleshooting
+
+### `api` keeps restarting, logs show "Authentication failed" against Mongo
+
+`MONGO_ROOT_PASSWORD` or `REDIS_PASSWORD` contains a character with special meaning in a
+URI — most often `+`, `/`, `=`, `@` or `%`, which is exactly what `openssl rand -base64`
+can produce. Both values are placed straight into a connection string with no encoding,
+so this fails authentication in a way that never mentions the password. Regenerate both
+with `openssl rand -hex 24` (hex only — always URI-safe) and `docker compose up -d`.
+
+### Caddy will not start / no certificate
+
+Your A-record almost certainly does not point here yet. Confirm with
+`dig +short your-domain`, then `docker compose restart caddy`. Let's Encrypt also rate
+limits repeated failures, so fix DNS first rather than retrying.
+
+### Scans find nothing
+
+Check the domain is **verified and authorised**, not merely added — an unverified domain
+is never scanned. Then check outbound access: `docker compose exec worker curl -sI https://example.com`.
+
+### Everything is slow
+
+Workers are the scaling knob. Raise `replicas:` under the `worker` service in
+`docker-compose.yml`, **and** set `EXACTSURFACE_WORKER_FLEET_SIZE` in `.env` to the same
+number. They must match: if Redis becomes unreachable each worker falls back to
+enforcing 1/fleet-size of the rate cap locally, so a fleet size below the real replica
+count lets a degraded fleet scan *over* your ceiling.
+
+---
+
+## A note on politeness
+
+`EXACTSURFACE_GLOBAL_RATE_PER_TARGET` (default 10/sec) is the most important operational
+setting here. It is what keeps a scan of your own infrastructure from looking like an
+attack to your own monitoring — and from actually degrading a small service. Raise it
+only for infrastructure you operate and have capacity for.
+
+---
+
+Full manual: `INSTALL.md` in the release bundle (`docs/OPERATIONS.md` in the
+repository). Questions: [GitHub Discussions](https://github.com/whxitte/exact-surface/discussions).
+Bugs: [GitHub Issues](https://github.com/whxitte/exact-surface/issues).

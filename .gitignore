@@ -1,0 +1,63 @@
+# Secrets — never commit
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+.next/
+frontend/out/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Runtime data / scan output. Anchored to the repo root: an unanchored `data/` also
+# matched `core/data/`, which silently kept the scope engine's bundled CDN/cloud
+# ranges out of git. Local builds worked because Docker copies the working tree; a
+# release built from a clean checkout would have shipped without it and crashed on
+# startup. See tests/unit/test_wiring.py::test_the_bundled_scope_feed_is_committed.
+/data/
+*.log
+scope_feeds_cache/
+for-claude-referece/
+
+# -- keys and local operator secrets (NEVER commit) --
+*.pem
+*.vlic
+license-keys/
+docker/cp-secrets/
+docker/cp.env
+cp-data/
+age-identity*.txt
+
+# Raw scan logs kept locally as a working reference. Never commit these: a real scan
+# log is a full external attack-surface map of whatever was scanned (hostnames, live
+# URLs, technologies), and this repo is public. It was committed once and had to be
+# removed from history.
+logs-for-claue.txt
+*-logs.txt
+
+# Kept locally, deliberately not in the public repository.
+# The project site lives on the `site` branch, not here.
+website/
+context.md
+EXACTSURFACE_BUILD_SPEC.md
+.claude/

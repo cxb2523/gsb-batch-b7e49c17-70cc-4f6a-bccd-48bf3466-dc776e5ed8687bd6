@@ -1,0 +1,176 @@
+# ExactSurface pipeline image: all recon tooling + Python runtime + app code.
+# Reused (with different commands) by the daemon, scheduler, and workers.
+# masscan is installed but DISABLED at the application layer in v1 (ADR-0004).
+
+# ---- stage 1: build Go-based tooling --------------------------------------
+# Go 1.24+ is required by recent ProjectDiscovery releases (e.g. subfinder 2.14).
+# GOTOOLCHAIN=auto lets `go install` fetch an even newer toolchain if a tool needs it.
+FROM golang:1.24-bookworm AS gotools
+ENV GOBIN=/tools GOFLAGS=-buildvcs=false GOTOOLCHAIN=auto
+RUN apt-get update && apt-get install -y --no-install-recommends libpcap-dev && rm -rf /var/lib/apt/lists/*
+# Pinned tool versions for reproducible builds (verified real release tags).
+# Bump by overriding a build-arg: `docker build --build-arg NUCLEI_VERSION=v3.10.1 ...`
+# To refresh all pins from upstream, see scripts/tool_versions.sh.
+ARG SUBFINDER_VERSION=v2.14.0
+ARG DNSX_VERSION=v1.2.3
+ARG HTTPX_VERSION=v1.9.0
+ARG NAABU_VERSION=v2.6.1
+ARG KATANA_VERSION=v1.6.1
+ARG NUCLEI_VERSION=v3.10.0
+ARG TLSX_VERSION=v1.2.2
+ARG ASNMAP_VERSION=v1.1.1
+ARG CLOUDLIST_VERSION=v1.4.0
+ARG UNCOVER_VERSION=v1.2.1
+ARG ALTERX_VERSION=v0.1.0
+ARG FFUF_VERSION=v2.1.0
+ARG GAU_VERSION=v2.2.4
+# age encrypts the Mongo backups (scripts/backup.py). A Go single-binary, so it
+# fits this stage — and it is a real encryption tool rather than a hand-rolled
+# chunked-AES file format, which is not something to invent in a security product.
+ARG AGE_VERSION=v1.2.1
+# waybackurls has no release tags; pin to a commit if reproducibility is critical.
+ARG WAYBACKURLS_VERSION=latest
+# ProjectDiscovery suite (JSON-native, rate-limit-aware) + companions.
+RUN go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@${SUBFINDER_VERSION} && \
+    go install github.com/projectdiscovery/dnsx/cmd/dnsx@${DNSX_VERSION} && \
+    go install github.com/projectdiscovery/httpx/cmd/httpx@${HTTPX_VERSION} && \
+    go install github.com/projectdiscovery/naabu/v2/cmd/naabu@${NAABU_VERSION} && \
+    go install github.com/projectdiscovery/katana/cmd/katana@${KATANA_VERSION} && \
+    go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@${NUCLEI_VERSION} && \
+    go install github.com/projectdiscovery/tlsx/cmd/tlsx@${TLSX_VERSION} && \
+    go install github.com/projectdiscovery/asnmap/cmd/asnmap@${ASNMAP_VERSION} && \
+    go install github.com/projectdiscovery/cloudlist/cmd/cloudlist@${CLOUDLIST_VERSION} && \
+    go install github.com/projectdiscovery/uncover/cmd/uncover@${UNCOVER_VERSION} && \
+    go install github.com/projectdiscovery/alterx/cmd/alterx@${ALTERX_VERSION} && \
+    go install github.com/ffuf/ffuf/v2@${FFUF_VERSION} && \
+    go install github.com/lc/gau/v2/cmd/gau@${GAU_VERSION} && \
+    go install github.com/tomnomnom/waybackurls@${WAYBACKURLS_VERSION} && \
+    go install filippo.io/age/cmd/age@${AGE_VERSION}
+# Deliberately NOT installed. Every binary in this image must have a caller
+# (tests/unit/test_wiring.py enforces it) — an unused tool is dead weight in the
+# image and a false promise in the docs:
+#   gitleaks   — secret detection is regex-based (core/secrets_policy.py) plus
+#                trufflehog; nothing shells out to gitleaks. Its module path also
+#                mismatches its repo, breaking `go install @latest`.
+#   notify     — superseded by our own senders (modules/notification/), which are
+#                pure HTTP and let us template, dedupe and rate-limit per channel.
+#   masscan    — see docs/ADRs/0004; naabu covers port discovery and there is no
+#                masscan wrapper to enable.
+
+# ---- stage 2: runtime ------------------------------------------------------
+FROM python:3.11-slim-bookworm AS runtime
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH="/tools:${PATH}"
+
+# nmap + libpcap runtime + feroxbuster (prebuilt). Also WeasyPrint's native deps
+# (pango/cairo/gdk-pixbuf/ffi + fonts) so worker-side PDF rendering works.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        nmap libpcap0.8 ca-certificates curl unzip gnupg \
+        libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
+        libffi8 shared-mime-info fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# mongodump/mongorestore for scripts/backup.py — used ONLY by the backup job, never
+# by scanning. Non-fatal by design: a failure to install these (e.g. the MongoDB apt
+# repo not resolving the tools for this arch/suite) must never block the scanning
+# image, exactly like feroxbuster below. If it doesn't install, backups are
+# unavailable and every scan path is unaffected. MongoDB ships these outside Debian's
+# repos, so we add its repo; the whole block is wrapped so any step failing just logs
+# a warning and the build continues.
+RUN ARCH="$(dpkg --print-architecture)" \
+    && ( curl -fsSL https://pgp.mongodb.com/server-7.0.asc \
+           | gpg --dearmor -o /usr/share/keyrings/mongodb.gpg \
+         && echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/mongodb.gpg] \
+https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
+           > /etc/apt/sources.list.d/mongodb.list \
+         && apt-get update \
+         && apt-get install -y --no-install-recommends mongodb-database-tools ) \
+       || echo "WARNING: mongodb-database-tools not installed — backups (scripts/backup.py) unavailable; scanning is unaffected" ; \
+    rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/mongodb.list
+
+# feroxbuster (content discovery). Arch-aware AND non-fatal: if the download fails
+# the image still builds — ffuf (installed via Go above) covers content-discovery.
+# NOTE: aarch64/arm64 Linux only ships a `.zip` (no `.tar.gz`), so we use the `.zip`
+# for BOTH arches — requesting the arm64 tarball 404s and silently loses feroxbuster.
+# `curl -f` fails on 404 rather than piping an HTML error page into unzip.
+RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+         amd64) FB=x86_64-linux-feroxbuster.zip ;; \
+         arm64) FB=aarch64-linux-feroxbuster.zip ;; \
+         *) FB="" ;; \
+       esac \
+    && if [ -n "$FB" ] && curl -fsSL \
+         "https://github.com/epi052/feroxbuster/releases/latest/download/$FB" \
+         -o /tmp/ferox.zip; then \
+         unzip -o /tmp/ferox.zip feroxbuster -d /usr/local/bin \
+         && chmod +x /usr/local/bin/feroxbuster \
+         && rm -f /tmp/ferox.zip \
+         && echo "feroxbuster installed for $ARCH"; \
+       else \
+         echo "WARN: feroxbuster unavailable for $ARCH; content discovery will use ffuf only"; \
+       fi
+
+# trufflehog — robust, live-verified secret detection (800+ detectors). Primary secret
+# engine; our regex detector stays as the always-on fallback. Non-fatal: the official
+# install script is arch-aware (amd64/arm64) and the image still builds if it fails.
+RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+      | sh -s -- -b /usr/local/bin \
+    && trufflehog --version \
+    || echo "WARN: trufflehog unavailable; secret scan will use regex only"
+
+# Content-discovery wordlists (SecLists). Without these feroxbuster is handed a bare
+# filename, fails instantly, and content discovery silently finds nothing. Referenced
+# by name in modules/content_discovery/wordlist_selector.py; keep in sync.
+RUN mkdir -p /opt/wordlists \
+    && base="https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content" \
+    && for w in raft-medium-directories.txt raft-medium-files.txt common.txt; do \
+         curl -fsSL "$base/$w" -o "/opt/wordlists/$w" \
+           && echo "wordlist $w installed" \
+           || echo "WARN: wordlist $w unavailable"; \
+       done
+
+COPY --from=gotools /tools/ /tools/
+
+WORKDIR /app
+COPY requirements.txt .
+# arjun — hidden-parameter discovery (MIT, free). Primary engine for the
+# param_discovery module; modules/scanning/params.py stays as the always-on fallback
+# so a failed install degrades the module rather than silently finding nothing.
+ARG ARJUN_VERSION=2.2.7
+RUN pip install --no-cache-dir "arjun==${ARJUN_VERSION}" \
+    || echo "WARN: arjun unavailable; parameter discovery will use the built-in probe only"
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY core/ core/
+COPY db/ db/
+COPY modules/ modules/
+COPY pipelines/ pipelines/
+COPY taskqueue/ taskqueue/
+COPY daemon/ daemon/
+COPY api/ api/
+COPY scripts/ scripts/
+
+# Stamp the build identity.
+ARG BUILD_ID=dev
+ARG GIT_COMMIT=unknown
+RUN python scripts/stamp_build.py \
+        --version "${BUILD_ID}" --commit "${GIT_COMMIT}"
+
+# Non-root: scanning does not need root (naabu falls back to connect-scan).
+RUN useradd -m -u 10001 exactsurface && chown -R exactsurface:exactsurface /app
+USER exactsurface
+
+# Pre-fetch nuclei templates AS THE RUNTIME USER so scans actually run. Running
+# this as root (previously) put templates in /root, invisible to `exactsurface` →
+# nuclei found no templates and exited in <1s without scanning anything.
+RUN nuclei -update-templates -silent || true
+
+# Vendor build stamps — see docker/Dockerfile.api for the rationale.
+ARG BUILD_ID=dev
+ENV EXACTSURFACE_BUILD_ID=${BUILD_ID}
+
+# Health check validates binaries + config + scope feeds (no network).
+HEALTHCHECK --interval=60s --timeout=20s --retries=3 \
+    CMD python -m daemon.main --dry-run || exit 1
+
+CMD ["python", "-m", "daemon.main"]

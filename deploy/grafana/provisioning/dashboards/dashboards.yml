@@ -1,0 +1,12 @@
+apiVersion: 1
+providers:
+  - name: exactsurface
+    orgId: 1
+    folder: ExactSurface
+    type: file
+    disableDeletion: false
+    # Dashboards are version-controlled in git, so the file on disk is the source
+    # of truth; UI edits are not persisted back.
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
