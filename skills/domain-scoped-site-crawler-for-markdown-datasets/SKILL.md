@@ -98,6 +98,36 @@ curl -s "https://api.apify.com/v2/datasets/$DATASET/items?format=json" -H "Autho
 - Apify bills the Actor's usage on your account; the Actor's Pricing tab shows the current price.
 - Keep the limit in the input small for a first run.
 
+## Local run with an auditable summary
+
+The `local/` folder contains a dependency-free Node.js (20+) implementation of
+this same input contract that runs entirely on your machine, against a local
+fixture site or any public site. It exists for one problem: a crawl that looks
+complete but quietly missed or duplicated pages. Every URL it sees ends up in
+exactly one bucket — stored, skipped under a reason, left for the depth cap, or
+still queued when the page cap stopped the run — and the run summary says
+which condition ended it.
+
+```bash
+cd local
+node --test test/crawler.test.mjs      # offline fixture tests
+node scripts/serve-fixture.mjs 3000    # sample site, terminal 1
+node ../scripts/crawl-local.mjs example-input.json   # terminal 2
+```
+
+- Records (stdout, one JSON line each): `url`, `title`, `depth`, `wordCount`,
+  `httpStatusCode`.
+- Summary (stderr): `stopReason` (`max_pages_reached`, `max_depth_reached`,
+  `all_filtered`, or `no_more_links`), `pagesCrawled`, and per-group
+  `skippedCounts` / `skippedUrls` for `robots`, `offDomain`, `filtered`,
+  `canonicalDuplicate`, and `fetchFailed`.
+- Start URLs are always fetched, even when robots.txt disallows them; pages
+  they discover are filtered as usual. Only the first start URL's hostname
+  is crawled.
+
+See `local/README.md` for the full contract, the fixture-site layout, and the
+limits (plain HTTP, no JavaScript rendering, `<a>` links only).
+
 ## Guardrails
 
 - Public data only. Do not pass cookies, sessions or private account data.

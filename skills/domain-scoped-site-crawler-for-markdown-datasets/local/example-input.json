@@ -1,0 +1,16 @@
+{
+  "startUrls": [
+    { "url": "http://127.0.0.1:3000/" }
+  ],
+  "maxCrawlDepth": 2,
+  "maxCrawlPages": 20,
+  "useSitemaps": false,
+  "useLlmsTxt": false,
+  "respectRobotsTxtFile": true,
+  "includeUrlGlobs": [],
+  "excludeUrlGlobs": ["*/filter/*"],
+  "includeUrlRegexps": [],
+  "excludeUrlRegexps": [],
+  "keepUrlFragments": false,
+  "ignoreCanonicalUrl": false
+}

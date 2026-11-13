@@ -1,0 +1,3 @@
+# Fixture site for LLM crawlers
+
+- [LLMs Guide](llms/guide.html): a page only listed here.

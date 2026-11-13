@@ -1,0 +1,15 @@
+{
+  "name": "domain-scoped-site-crawler-local",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local, dependency-free implementation of the domain-scoped site crawler with a reconcilable run summary.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/crawler.test.mjs",
+    "fixture": "node scripts/serve-fixture.mjs",
+    "crawl": "node ../scripts/crawl-local.mjs"
+  }
+}

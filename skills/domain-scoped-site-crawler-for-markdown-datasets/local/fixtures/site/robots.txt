@@ -1,0 +1,7 @@
+# Local fixture robots file
+User-agent: *
+Disallow: /private/
+Disallow: /hidden/
+Allow: /private/public-note.html
+
+Sitemap: /sitemap.xml
