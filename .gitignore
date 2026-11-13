@@ -1,2 +1,4 @@
 config_telegram.json
 radar.log
+__pycache__/
+*.pyc
