@@ -1,0 +1,387 @@
+import { WGSL_COLOR, WGSL_CONSTANTS, WGSL_TONEMAP } from './common';
+import { assembleShader } from './wgsl';
+
+/**
+ * Reproject & accumulate — the core temporal upscaling pass (FSR2/3's
+ * "accumulate" stage, with luminance-stability locks, reactive-mask handling,
+ * and the shading-change response wired in; per-stage fidelity notes live in
+ * the shaders README).
+ *
+ * Per display pixel:
+ * 1. Upsample the current jittered frame with a jitter-aware separable
+ *    Lanczos2 kernel over the 3×3 render-texel footprint. Because the
+ *    jitter moves the sample grid every frame, integrating these kernels
+ *    over time converges to a super-sampled image.
+ * 2. Reproject last frame's history through the dilated motion vector with
+ *    a Catmull-Rom filter (sharper than bilinear, avoids history blur).
+ * 3. Rein in stale history: clip it to the YCoCg variance AABB of the
+ *    current neighborhood, and cut its weight by the disocclusion mask.
+ * 4. Blend, tracking the accumulated sample count in the alpha channel so
+ *    fresh regions converge fast while stable ones stay smooth.
+ *
+ * Accumulation happens in invertible-tonemap space (see `WGSL_TONEMAP`) so
+ * HDR fireflies cannot dominate the running average.
+ *
+ * The caller's alpha is resolved alongside the color — same Lanczos taps,
+ * same blend weight — and stored in the locks buffer's spare `.a`, because
+ * the history's own `.a` is the accumulation age. The color history's age
+ * therefore keeps its exact Catmull-Rom reprojection; alpha reprojects
+ * bilinearly with the locks. An opaque input (alpha 1 everywhere) resolves
+ * to exactly 1: every tap, box bound and history value is 1, so the blend
+ * cannot move it.
+ *
+ * Bindings:
+ * - 1: scene color, render size (linear HDR)
+ * - 2: dilated motion, render size (UV delta in .xy)
+ * - 3: masks, render size (r = disocclusion)
+ * - 4: history in, display size (rgba16float; rgb tonemapped, a = age)
+ * - 5: linear clamp sampler
+ * - 6: history out (rgba16float storage, display size)
+ * - 7: locks in, display size (rgba16float; r = lifetime, g = locked luma,
+ *      a = resolved alpha)
+ * - 8: locks out (rgba16float storage, display size)
+ * - 9: exposure, 1×1 (rgba16float; r = conditioning pre-exposure for this
+ *      frame, b = host pre-exposure)
+ * - 10: reactive mask, render size (r = reactivity; 1×1 dummy when absent)
+ * - 11: previous frame's exposure, 1×1 (b = last frame's host pre-exposure,
+ *       for FSR3-style DeltaPreExposure history correction)
+ * - 12: shading-change response, ceil(render/2) (r32float from
+ *       shadingChange.ts; 1×1 zero dummy when the detector is off)
+ */
+export const ACCUMULATE_SHADER = assembleShader(
+    WGSL_CONSTANTS,
+    WGSL_COLOR,
+    WGSL_TONEMAP,
+    /* wgsl */ `
+@group(0) @binding(1) var inputColor : texture_2d<f32>;
+@group(0) @binding(2) var dilatedMotion : texture_2d<f32>;
+@group(0) @binding(3) var masks : texture_2d<f32>;
+@group(0) @binding(4) var historyIn : texture_2d<f32>;
+@group(0) @binding(5) var linearSampler : sampler;
+@group(0) @binding(6) var historyOut : texture_storage_2d<rgba16float, write>;
+@group(0) @binding(7) var locksIn : texture_2d<f32>;
+@group(0) @binding(8) var locksOut : texture_storage_2d<rgba16float, write>;
+@group(0) @binding(9) var exposureTex : texture_2d<f32>;
+@group(0) @binding(10) var reactiveMask : texture_2d<f32>;
+@group(0) @binding(11) var exposurePrevTex : texture_2d<f32>;
+@group(0) @binding(12) var shadingChangeTex : texture_2d<f32>;
+
+const PI : f32 = 3.14159265358979;
+// How hard a fully-reactive pixel snaps to the current frame in the blend.
+const REACTIVE_STRENGTH : f32 = 0.9;
+// Variance-clip gamma: how many standard deviations of the current
+// neighborhood the history may stray before being clipped.
+const CLIP_GAMMA : f32 = 1.0;
+
+//* Luminance-stability lock tuning (FSR2/3's thin-feature protection).
+// A "lock" marks a stable sub-pixel luminance outlier (a wire, a fence
+// picket) and shields it from the variance clip that would otherwise drag its
+// bright/dark history toward the darker/brighter neighborhood — the exact
+// cause of thin features dimming and shimmering under motion.
+const LOCK_DECAY : f32 = 0.08;         // lifetime lost per frame when no feature present
+const LOCK_GROW : f32 = 0.5;           // lifetime gained per frame while a feature is present
+const LOCK_CONTRAST_LO : f32 = 0.02;   // YCoCg-Y contrast to start treating a pixel as a thin feature
+const LOCK_CONTRAST_HI : f32 = 0.12;
+const LOCK_PEAK_LO : f32 = 0.6;        // how many neighborhood std-devs marks an outlier
+const LOCK_PEAK_HI : f32 = 2.0;
+const LOCK_CLAMP_RELAX : f32 = 12.0;   // how much a full lock widens the variance AABB
+const LOCK_HISTORY_BOOST : f32 = 0.7;  // how much a full lock favors history in the blend
+
+//* Still-scene convergence relax.
+// The variance AABB is built from ONE jitter phase's 3×3 taps, so on
+// high-frequency content (sub-texel grid lines, moiré regions) the CONVERGED
+// supersampled mean falls outside some phases' boxes — and because the blend
+// stores the clipped history back, the buffer is re-snapped to each phase's
+// box forever: the still image never stops churning no matter how small alpha
+// gets (measured on Q1: disabling the clip drops the same-phase frame diff
+// from 0.18 to 0.005). Where rectification has nothing legitimate to catch —
+// no motion, converged history, no disocclusion/shading-change/reactivity —
+// widen the box so the converged mean survives; any of those signals returns
+// the pixel to full rectification. This is the locks mechanism generalized
+// (softly, ×9 vs the locks' ×13) from thin features to everywhere.
+// Q1-measured (consecutive / same-phase diff): no relax 0.116/0.038 at ×4,
+// 0.112/0.018 at ×8, rectification fully off 0.109/0.005.
+const STILL_CLAMP_RELAX : f32 = 8.0;   // box widening at full stillness + convergence
+const STILL_MOTION_LO : f32 = 0.05;    // render-texel motion where the relax starts fading
+const STILL_MOTION_HI : f32 = 0.5;     // ...and where it is fully off
+
+//* Shading-change aging (FSR2/3's "luminance instability").
+// The detection itself lives in the dedicated signed-difference pyramid pass
+// (shadingChange.ts) — a coarse-mip signal that fires on coherent regional luma
+// changes and cancels alias flicker. Where it fires, history is aged so the
+// surface re-converges to its new shading instead of ghosting the old.
+const SHADING_AGE : f32 = 0.75;        // max fraction of accumulation dropped on a full change
+
+// Lanczos2 kernel (the same window FSR2 uses for its upsample taps).
+fn lanczos2(x : f32) -> f32 {
+    let ax = abs(x);
+    if (ax < 1.0e-4) { return 1.0; }
+    if (ax >= 2.0) { return 0.0; }
+    let px = PI * ax;
+    return 2.0 * sin(px) * sin(px * 0.5) / (px * px);
+}
+
+// Catmull-Rom history sampling via 5 bilinear fetches (Jimenez SIGGRAPH'16).
+// Bicubic keeps reprojected history crisp where bilinear would smear it.
+fn sampleHistoryCatmullRom(uv : vec2f) -> vec4f {
+    let samplePos = uv * C.displaySize;
+    let texPos1 = floor(samplePos - 0.5) + 0.5;
+    let f = samplePos - texPos1;
+
+    let w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    let w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    let w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    let w3 = f * f * (-0.5 + 0.5 * f);
+    let w12 = w1 + w2;
+    let offset12 = w2 / w12;
+
+    let texPos0 = (texPos1 - 1.0) * C.displaySizeInv;
+    let texPos3 = (texPos1 + 2.0) * C.displaySizeInv;
+    let texPos12 = (texPos1 + offset12) * C.displaySizeInv;
+
+    var result =
+        textureSampleLevel(historyIn, linearSampler, vec2f(texPos0.x, texPos12.y), 0.0) * (w0.x * w12.y) +
+        textureSampleLevel(historyIn, linearSampler, vec2f(texPos12.x, texPos0.y), 0.0) * (w12.x * w0.y) +
+        textureSampleLevel(historyIn, linearSampler, texPos12, 0.0) * (w12.x * w12.y) +
+        textureSampleLevel(historyIn, linearSampler, vec2f(texPos3.x, texPos12.y), 0.0) * (w3.x * w12.y) +
+        textureSampleLevel(historyIn, linearSampler, vec2f(texPos12.x, texPos3.y), 0.0) * (w12.x * w3.y);
+    // Corner taps are dropped, so renormalize by the weight actually used.
+    let wSum = w0.x * w12.y + w12.x * w0.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    result = result / wSum;
+    return max(result, vec4f(0.0));
+}
+
+// Clips a color toward the AABB center (Playdead's variance clipping) —
+// gentler than a hard clamp, no hue snapping at box corners.
+// The epsilon sits on the extents too (Playdead's form): an axis with zero
+// extent AND zero offset must not constrain the clip. Without it a perfectly
+// achromatic 3×3 (Co/Cg variance exactly 0 — black backgrounds, empty canvas,
+// greyscale content) gave t = 0/1e-6 = 0 on the chroma axes, snapping history
+// to the box mean every frame however wide the luma box was: no accumulation
+// at all there, just the current frame's 3×3 average (issue #51).
+fn clipToAABB(center : vec3f, extents : vec3f, color : vec3f) -> vec3f {
+    let dir = color - center;
+    let scale = (extents + 1.0e-6) / max(abs(dir), vec3f(1.0e-6));
+    let t = min(1.0, min(scale.x, min(scale.y, scale.z)));
+    return center + dir * t;
+}
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid : vec3u) {
+    if (any(vec2f(gid.xy) >= C.displaySize)) { return; }
+
+    let uv = (vec2f(gid.xy) + 0.5) * C.displaySizeInv;
+    let renderCoord = clamp(vec2i(uv * C.renderSize), vec2i(0), vec2i(C.renderSize) - 1);
+    let motion = textureLoad(dilatedMotion, renderCoord, 0).xy;
+    let disocclusion = textureLoad(masks, renderCoord, 0).r;
+    // Pre-exposure for this frame (auto or manual) — divided back out at output.
+    // .b carries the app's host pre-exposure (1.0 when none is supplied).
+    let frameInfo = textureLoad(exposureTex, vec2i(0), 0);
+    let exposure = max(frameInfo.r, 1.0e-4);
+    // Reactive mask: pixels the caller flags (particles, transparents) should
+    // lean on the current frame instead of ghosting through history.
+    var reactivity = 0.0;
+    if (hasFlag(FLAG_REACTIVE)) {
+        let rdim = vec2i(textureDimensions(reactiveMask));
+        reactivity = clamp(textureLoad(reactiveMask, clamp(renderCoord, vec2i(0), rdim - 1), 0).r, 0.0, 1.0);
+    }
+
+    //* Current Frame Upsample (jitter-aware Lanczos2)
+    // srcPos is the display pixel in render texel-index space, shifted by
+    // the jitter so distances are measured to where samples actually landed.
+    let srcPos = uv * C.renderSize - 0.5 - C.jitter;
+    let baseTexel = vec2i(round(srcPos));
+    let maxCoord = vec2i(C.renderSize) - 1;
+
+    var colorSum = vec3f(0.0);
+    var alphaSum = 0.0;
+    var weightSum = 0.0;
+    var m1 = vec3f(0.0); // YCoCg first moment
+    var m2 = vec3f(0.0); // YCoCg second moment
+    var boxMin = vec3f(1.0e5);
+    var boxMax = vec3f(-1.0e5);
+    var alphaMin = 1.0e5;
+    var alphaMax = -1.0e5;
+
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let coord = clamp(baseTexel + vec2i(x, y), vec2i(0), maxCoord);
+            let d = srcPos - vec2f(coord);
+            let w = lanczos2(d.x) * lanczos2(d.y);
+            let src = textureLoad(inputColor, coord, 0);
+            let c = tonemapInvertible(src.rgb * exposure);
+            colorSum += c * w;
+            // Alpha takes the same weights but none of the conditioning — it is
+            // already bounded, and tonemapping a coverage value is meaningless.
+            alphaSum += src.a * w;
+            weightSum += w;
+
+            let ycc = rgbToYCoCg(c);
+            m1 += ycc;
+            m2 += ycc * ycc;
+            boxMin = min(boxMin, ycc);
+            boxMax = max(boxMax, ycc);
+            alphaMin = min(alphaMin, src.a);
+            alphaMax = max(alphaMax, src.a);
+        }
+    }
+
+    // Lanczos lobes go negative — dering by clamping into the local box.
+    var current = yCoCgToRgb(clamp(
+        rgbToYCoCg(colorSum / max(weightSum, 1.0e-4)),
+        boxMin, boxMax,
+    ));
+    let currentAlpha = clamp(alphaSum / max(weightSum, 1.0e-4), alphaMin, alphaMax);
+
+    // Confidence in the current sample: 1 when a jittered sample landed on
+    // this display pixel, lower when we're interpolating between samples.
+    let sampleDist = length(srcPos - vec2f(baseTexel));
+    let confidence = clamp(1.0 - sampleDist, 0.25, 1.0);
+
+    //* History Reprojection
+    let prevUV = uv - motion;
+    let offscreen = any(prevUV < vec2f(0.0)) || any(prevUV > vec2f(1.0));
+
+    if (hasFlag(FLAG_RESET) || offscreen) {
+        textureStore(historyOut, gid.xy, vec4f(current, 1.0 / C.maxAccumulation));
+        textureStore(locksOut, gid.xy, vec4f(0.0, 0.0, 0.0, currentAlpha));
+        return;
+    }
+
+    var history = sampleHistoryCatmullRom(prevUV);
+
+    //* Host Pre-Exposure Delta (FSR3's DeltaPreExposure)
+    // If the app changed the pre-exposure baked into its render since last
+    // frame, the reprojected history is in the old brightness domain and would
+    // read as a full-screen shading change — ratio-correct it in linear space.
+    // Without a preExposureTexture input both texels publish 1.0 and this is
+    // skipped, leaving the pass bit-identical. Conditioning exposure is
+    // deliberately not corrected here: it adapts smoothly by design.
+    let hostPrev = textureLoad(exposurePrevTex, vec2i(0), 0).b;
+    var hostRatio = 1.0;
+    if (hostPrev > 1.0e-4 && frameInfo.b > 1.0e-4) { hostRatio = frameInfo.b / hostPrev; }
+    if (abs(hostRatio - 1.0) > 1.0e-3) {
+        history = vec4f(tonemapInvertible(tonemapInvert(history.rgb) * hostRatio), history.a);
+    }
+
+    var sampleCount = history.a * C.maxAccumulation;
+
+    //* Neighborhood Statistics (YCoCg)
+    let mean = m1 / 9.0;
+    let variance = max(m2 / 9.0 - mean * mean, vec3f(0.0));
+    let curY = rgbToYCoCg(current).x;
+    let contrast = boxMax.x - boxMin.x;
+
+    //* Shading Change (from the signed-difference pyramid pass)
+    // Half-render-resolution response in [0,1]; a zero dummy is bound when the
+    // detector is disabled.
+    var shadingChange = 0.0;
+    if (hasFlag(FLAG_SHADING_CHANGE)) {
+        let scDim = vec2i(textureDimensions(shadingChangeTex));
+        let scCoord = clamp(renderCoord / 2, vec2i(0), scDim - 1);
+        shadingChange = clamp(textureLoad(shadingChangeTex, scCoord, 0).r, 0.0, 1.0);
+    }
+
+    //* Luminance-Stability Lock
+    // Detect a thin feature (a luminance outlier vs the neighborhood) that is
+    // temporally stable, and grow a lock on it; the lock then shields the
+    // feature from rectification below. Locks reproject through motion just
+    // like the color history.
+    //
+    // The fetch is hoisted out of the branch because the alpha history shares
+    // it (locks .a); with locks on — the default — that costs nothing new.
+    let lockPrev = textureSampleLevel(locksIn, linearSampler, prevUV, 0.0);
+    var lockLife = 0.0;
+    var lockedLuma = curY;
+    if (hasFlag(FLAG_LOCKS)) {
+        // Thin feature = a luminance outlier vs its neighborhood with real
+        // local contrast. Creation does NOT require frame-to-frame stability
+        // (thin features alias under motion); instability is what breaks it.
+        let peakiness = abs(curY - mean.x) / max(sqrt(variance.x), 1.0e-3);
+        let featureStrength =
+            smoothstep(LOCK_PEAK_LO, LOCK_PEAK_HI, peakiness) *
+            smoothstep(LOCK_CONTRAST_LO, LOCK_CONTRAST_HI, contrast);
+
+        lockedLuma = select(lockPrev.g, curY, lockPrev.r < 0.05);
+        // Grow the lock while a feature is present, decay it otherwise.
+        lockLife = lockPrev.r + select(-LOCK_DECAY, LOCK_GROW * featureStrength, featureStrength > 0.1);
+        // Break on disocclusion or a shading change measured against the lock's
+        // OWN tracked luma — not the neighborhood-mean detector, which on a thin
+        // bright feature always disagrees with the (background-dominated) mean
+        // and would break every lock. The mean-based detector only ages
+        // non-locked history below.
+        let lockShading = smoothstep(max(contrast, 1.0e-3), max(contrast, 1.0e-3) * 2.0, abs(curY - lockedLuma));
+        lockLife = clamp(lockLife * (1.0 - disocclusion) * (1.0 - lockShading), 0.0, 1.0);
+        // Reactive pixels (particles/transparents) are not stable thin features
+        // to protect — don't let them form locks.
+        lockLife = lockLife * (1.0 - reactivity);
+    }
+
+    //* History Rectification
+    // Variance AABB of the current neighborhood in YCoCg; clip history into
+    // it so shading changes cannot ghost. A lock widens the box so a protected
+    // thin feature keeps its accumulated value instead of being pulled toward
+    // the (darker/brighter) neighborhood mean.
+    let motionTexels = length(motion * C.renderSize);
+    let stillRelax = STILL_CLAMP_RELAX *
+        (1.0 - smoothstep(STILL_MOTION_LO, STILL_MOTION_HI, motionTexels)) *
+        clamp(sampleCount / C.maxAccumulation, 0.0, 1.0) *
+        (1.0 - disocclusion) * (1.0 - shadingChange) * (1.0 - reactivity);
+    let extents = sqrt(variance) * CLIP_GAMMA *
+        (1.0 + lockLife * LOCK_CLAMP_RELAX + stillRelax);
+    let historyYcc = rgbToYCoCg(history.rgb);
+    let clippedYcc = clipToAABB(mean, extents, historyYcc);
+    let rectifiedHistory = yCoCgToRgb(clippedYcc);
+
+    // Disocclusion discards history outright. Deliberately NO aging by clip
+    // magnitude (an earlier form aged by clipAmount): the neighborhood box is
+    // built from the current jitter phase's taps, so at any contrasty edge the
+    // CONVERGED history sits outside some phases' boxes and a clip-driven age
+    // makes convergence unreachable — sample count saturates at a low
+    // equilibrium and the still-scene output shimmers forever (consumer
+    // report 3's rolling accumulation age). Stale shading is already handled
+    // by the clip itself plus the shading-change detector's SHADING_AGE path;
+    // this matches FSR2, which never ages history on rectification strength.
+    sampleCount *= (1.0 - disocclusion);
+    // A detected shading change ages history so the new shading converges fast;
+    // a lock protects its thin feature from this (aliasing there is not a change).
+    sampleCount *= (1.0 - SHADING_AGE * shadingChange * (1.0 - lockLife));
+    // Reactive pixels keep almost no history so fast transparent motion doesn't
+    // smear a trail behind it.
+    sampleCount *= (1.0 - REACTIVE_STRENGTH * reactivity);
+
+    //* Blend — locked features lean on the accumulated history so sub-pixel
+    //* detail persists under motion instead of dimming.
+    let newCount = min(sampleCount + 1.0, C.maxAccumulation);
+    let baseAlpha = clamp(confidence / newCount, 1.0 / C.maxAccumulation, 1.0);
+    var alpha = max(baseAlpha * (1.0 - LOCK_HISTORY_BOOST * lockLife), 1.0 / (C.maxAccumulation * 2.0));
+    // Snap reactive pixels toward the current frame regardless of accumulation.
+    alpha = mix(alpha, 1.0, REACTIVE_STRENGTH * reactivity);
+    let result = mix(rectifiedHistory, current, alpha);
+
+    //* Alpha Resolve
+    // Alpha gets the color blend weight, so a coverage edge converges on the
+    // same schedule as the color it belongs to. Its rectification is the local
+    // 3x3 alpha range rather than a variance AABB: at a coverage edge the
+    // jittered taps span the whole 0..1 range, so history passes untouched and
+    // accumulates; on a flat region the range collapses and stale alpha cannot
+    // ghost.
+    // Still-scene relax, as for color: a feature thinner than a render texel
+    // leaves some jitter phases with an all-0 (or all-1) 3x3, which would
+    // re-snap the converged coverage every cycle. Where the color box is
+    // widened because rectification has nothing legitimate to catch (still,
+    // converged, no disocclusion / shading change / reactivity), the alpha
+    // history passes unclamped; any of those signals restores the clamp.
+    // The max() keeps this defined when the relax is tuned to 0 (stillRelax
+    // is then 0 too, so the clamp stays hard); for any positive constant it
+    // folds to the constant itself.
+    let alphaRelax = stillRelax / max(STILL_CLAMP_RELAX, 1.0e-6);
+    let rectifiedAlpha = mix(clamp(lockPrev.a, alphaMin, alphaMax), lockPrev.a, alphaRelax);
+    let resultAlpha = clamp(mix(rectifiedAlpha, currentAlpha, alpha), 0.0, 1.0);
+
+    textureStore(historyOut, gid.xy, vec4f(result, newCount / C.maxAccumulation));
+    // b = shading-change factor (for the debug view); a = resolved alpha.
+    textureStore(locksOut, gid.xy, vec4f(lockLife, lockedLuma, shadingChange, resultAlpha));
+}
+`,
+);

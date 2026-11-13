@@ -1,0 +1,34 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+jobs:
+    verify:
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@v4
+            # Version comes from package.json `packageManager`.
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+            # Same npm as publish.yml: the build's artifact check nests `npm pack`
+            # (pnpm installs and runs; npm still packs and publishes),
+            # whose output shape varies by npm major. Keep the specs identical.
+            - run: npm install -g npm@^11.5.1
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm lint
+            - run: pnpm typecheck
+            - run: pnpm test
+            - run: pnpm build
+            - run: pnpm verify:packed-guides
+            # Each subpath from the packed tarball, with only its own engine installed.
+            - run: pnpm verify:packed-subpaths --skip-build

@@ -1,0 +1,164 @@
+# pixi.js adapter (experimental)
+
+`@pmndrs/upscaler/pixi` runs the upscaler on pixi.js v8's `WebGPURenderer`. It is
+the same `UpscalerCore` the three and Babylon adapters wrap. It's **experimental**
+and verified on pixi.js 8.22 on Chrome. It **ships the spatial (FSR1) path**
+for now: pixi has no depth, motion vectors or camera of its own, and the temporal
+path needs all three (see [Temporal](#temporal)).
+
+The live reference is [`examples/pixi/hello`](../examples/pixi/hello/main.ts).
+It renders a pixi stage into a reduced-size `RenderTexture`, upscales it with
+FSR1, and shows the output on a `Sprite`.
+
+## Requirements
+
+```bash
+npm install @pmndrs/upscaler pixi.js
+```
+
+- `pixi.js` `>=8.22.0 <9` (an optional peer dependency of `@pmndrs/upscaler`), with
+  the **WebGPU** renderer (`preference: 'webgpu'`). A WebGL renderer is rejected.
+- A color input at render resolution, exactly `upscaler.renderWidth ×
+  renderHeight`, any filterable float or unorm format (`rgba16float` keeps HDR,
+  `rgba8unorm` is fine for LDR content). FSR1 expects **anti-aliased** input, so
+  give the `RenderTexture` `antialias: true`. pixi resolves the MSAA to a
+  single-sample texture before the upscaler reads it.
+
+## Usage
+
+pixi submits one command encoder per `renderer.render()`. The adapter's
+`dispatch()` submits its own, so call it **between** renders: after the one that
+fills the input, before the one that presents the output.
+
+```ts
+import { QualityMode, Upscaler } from '@pmndrs/upscaler/pixi';
+
+const upscaler = new Upscaler({ renderer: app.renderer });
+upscaler.configure({ displayWidth: renderer.width, displayHeight: renderer.height,
+                     path: 'spatial', qualityMode: QualityMode.Quality });
+await upscaler.init();
+
+const lowRes = RenderTexture.create({ width: upscaler.renderWidth, height: upscaler.renderHeight,
+                                      resolution: 1, format: 'rgba16float', antialias: true });
+const present = app.stage.addChild(new Sprite(upscaler.outputTexture));
+present.setSize(renderer.screen.width, renderer.screen.height);   // the output is physical pixels
+
+app.ticker.add(() => {
+    renderer.render({ container: scene, target: lowRes });
+    upscaler.dispatch({ color: lowRes });   // the app's own render then presents the Sprite
+});
+```
+
+- `outputTexture` (and `guides.*`) are pixi `Texture`s backed by `storage` texture
+  sources. The core writes them on the GPU and pixi samples them, from one
+  allocation. They're excluded from pixi's texture GC, because pixi never sees the
+  core's writes.
+- `configure()` reallocates the output and frees the old one. Re-read
+  `outputTexture`, and point anything that showed the old one at the new one.
+- Values stay in the input's color domain. pixi 2D content is display-encoded,
+  so it upscales and presents as is. Linear HDR input (a 3D renderer with tone
+  mapping deferred) needs a tone-mapping filter on the presenting `Sprite`.
+- **Inside a render** (a custom render pipe, a 3D layer's post stage),
+  `dispatch()`'s separate submit would run *before* pixi's frame. Use
+  `encode(inputs)` instead. It closes pixi's open render pass
+  (`renderer.renderTarget.finishRenderPass()`) and records into pixi's frame
+  encoder (`renderer.encoder.commandEncoder`), so the upscale lands in order.
+  The caller's engine must rebind its render target before drawing again. Only
+  one `encode()` per frame: the passes share one constants buffer.
+
+## 3D content (pixi-3d)
+
+A 3D layer that draws through pixi's renderer can be upscaled the same way:
+render it into the reduced `RenderTexture` and dispatch. The input must be
+exactly render-sized. A pooled or power-of-two texture that only *contains* a
+render-sized image needs a copy into an exact-size texture first.
+
+[`examples/pixi3d/hello`](../examples/pixi3d/hello/main.ts) does this with
+pixi-3d: a `View3D`, sized to the render resolution with `setSize()` and never
+added to the stage, renders straight into the reduced target.
+
+```ts
+view3d.setSize(upscaler.renderWidth, upscaler.renderHeight);
+renderer.render({ container: view3d, target: lowRes });
+upscaler.dispatch({ color: lowRes });
+```
+
+pixi-3d tone-maps inside the view (ACES by default), so its output is
+display-ready and the presenting `Sprite` needs nothing more. Don't
+`await app.init()` at a module's top level in a pixi-3d app: its renderer hook
+dynamically imports a backend chunk during `init()`, and in a production build
+that chunk imports back from the entry chunk, so the two wait on each other and
+the app never starts (dev serves modules separately and hides it). Start from an
+`async function main()` instead, as the example does. pixi-3d is in
+closed beta and isn't on npm; the example runs once the beta tarball is unpacked
+locally ([examples/pixi3d/README.md](../examples/pixi3d/README.md)). Verified on
+`@pixi/3d` 0.1.0-beta.2, pixi.js 8.22, Chrome, 2026-10-24: spatial, bilinear and
+native render upright with no WebGPU or pixi warnings, and FSR1 is visibly
+sharper than bilinear on the fence slats.
+
+## Temporal
+
+The adapter already carries the temporal surface: `beginFrame()` returns the
+jitter, `dispatch(inputs, camera)` takes a `FrameCamera`, and the `motionScale`
+option sets the motion convention. It is **not verified**, because nothing in
+pixi produces the inputs yet:
+
+- **Depth:** a depth texture of the scene, at render resolution.
+- **Motion vectors:** per-pixel `current − previous` screen motion, jitter-free,
+  which needs previous-frame model and view-projection matrices.
+- **Jitter:** the projection offset by `beginFrame()`'s jitter every frame.
+- **Camera facts:** near, far and projection type in a `FrameCamera`, with the
+  depth convention ([Engine contract](engine-contract.md)).
+
+A 3D layer that adds these can drive the temporal path through this adapter.
+Without them, the temporal path throws when it gets no camera rather than
+guessing.
+
+### What pixi-3d still needs
+
+Checked against the `@pixi/3d` beta source on 2026-10-24 (beta.2). The camera
+facts are there and depth is close; jitter and motion vectors need pixi-3d
+changes.
+
+| Input | pixi-3d today | Gap |
+| --- | --- | --- |
+| Camera facts | `Camera3D` has public `near`, `far` and `mode` (`'perspective'`/`'orthographic'`); depth is standard (`less`), not reversed | none |
+| Depth | the render graph keeps scene depth (`depth24plus-stencil8`) and hands a `Pass3D` an `opaqueDepth` copy | no public way to reach its `GPUTexture` from app code; the core already takes stencil formats (it binds a depth-only view) |
+| Jitter | — | `buildProjection()` rebuilds `camera.projection` from the camera's settings on every render, with no hook for a sub-pixel offset afterwards |
+| Motion vectors | — | no previous-frame model or view-projection matrices, and no velocity output. Skinned, morphed and particle meshes need their own previous-frame data |
+
+Once pixi-3d has a jitter hook and a velocity output, our side is small: the
+adapter already takes depth, motion and a `FrameCamera`. What's left is an
+example plus GPU checks of the jitter sign and the motion convention
+(`motionScale`), A/B'd against native the way the Babylon adapter was. Two
+settings change for temporal input: `View3D({ toneMapping: 'none' })` into an
+`rgba16float` target (the upscaler accumulates linear HDR, so tone-map after it),
+and `antialias: false`, because the temporal path is the anti-aliaser.
+
+A camera-viewport shift could fake the jitter today: `buildProjection()` keeps
+every pixel in place when the viewport rect moves, so a sub-pixel move of
+`camera.viewport` would shift the image by that amount. It's untested, and it
+clips a sub-pixel strip at one edge each frame. It still leaves motion vectors
+missing, so it isn't a path to temporal on its own.
+
+## pixi APIs the adapter depends on
+
+All public `WebGPURenderer` API:
+- `renderer.gpu.device`;
+- `renderer.texture.getGpuSource()`, the documented way to reach the `GPUTexture`
+  behind a `storage` texture source;
+- `TextureSource` `storage`, `autoGarbageCollect` and `unload()`;
+- `renderer.renderTarget.finishRenderPass()`;
+- `renderer.encoder.commandEncoder`.
+
+The core's old textures are freed with `source.unload()` rather than `destroy()`.
+pixi keeps batch bind groups after a `Sprite` switches textures, and warns when a
+source they reference is destroyed. `unload()` releases the `GPUTexture` without
+that warning.
+
+## Verification
+
+GPU-verified on Chrome (Apple Metal-3), pixi.js 8.22, 2026-10-19:
+`examples/pixi/hello` renders upright on all three modes (spatial, bilinear,
+native) with no WebGPU or pixi warnings. On thin anti-aliased strokes, FSR1 is
+visibly sharper than bilinear from the same half-resolution input.

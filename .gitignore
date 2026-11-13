@@ -1,0 +1,11 @@
+node_modules/
+dist/
+bench/dist/
+*.log
+.DS_Store
+
+bench/results/windows-local/
+
+# pixi-3d closed beta: unpack its release tarball here (examples/pixi3d/README.md).
+# Never commit it — the beta asks testers to keep its code and builds private.
+examples/pixi3d/vendor/

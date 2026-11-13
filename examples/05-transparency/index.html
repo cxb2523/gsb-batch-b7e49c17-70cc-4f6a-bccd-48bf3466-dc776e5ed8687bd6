@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>05 · Transparency &amp; particles</title>
+        <style>
+            html,
+            body {
+                margin: 0;
+                height: 100%;
+                overflow: hidden;
+                background: #0b0d10;
+            }
+            canvas {
+                display: block;
+            }
+            #note {
+                position: fixed;
+                left: 12px;
+                bottom: 12px;
+                max-width: 460px;
+                padding: 10px 12px;
+                background: rgba(8, 10, 14, 0.82);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                color: #cfd8e3;
+                font: 11px/1.6 ui-monospace, Menlo, monospace;
+                pointer-events: none;
+            }
+            #note b {
+                color: #7dd3fc;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="note">
+            Particles and transparent surfaces write no reliable depth or motion vectors, so
+            FSR3's temporal history smears them into ghost trails while the opaque scene stays
+            crisp. The fix is a <b>reactive mask</b>: this demo renders the transparents' coverage
+            into a render-res mask and hands it to FSR3, so those pixels favour the current frame
+            instead of trailing. Toggle <b>reactive mask</b> off to bring the trails back, and the
+            <b>Reactivity</b> / <b>Accumulation age</b> debug views to see the mechanism.
+        </div>
+        <script type="module" src="./main.ts"></script>
+    </body>
+</html>

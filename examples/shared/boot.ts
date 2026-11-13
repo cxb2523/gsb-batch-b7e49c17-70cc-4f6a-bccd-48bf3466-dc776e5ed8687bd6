@@ -1,0 +1,81 @@
+import * as THREE from 'three/webgpu';
+
+/**
+ * Shared WebGPU bootstrap for the examples. Guards for WebGPU support, creates
+ * a `WebGPURenderer` configured to present the upscaler's linear/HDR output,
+ * and awaits `init()` — throwing loudly if three falls back to WebGL.
+ *
+ * @param options.parent - Canvas parent (defaults to `document.body`)
+ * @param options.alpha - Canvas transparency, passed straight through to
+ *   `WebGPURenderer`. Omitted, three's own default applies — `true`: a
+ *   premultiplied canvas cleared to alpha 0, so the page shows through
+ *   wherever the render is not fully opaque
+ * @param options.trackTimestamp - Passed straight through to `WebGPURenderer`:
+ *   lets the app time three's own render and compute passes
+ *   (`renderer.resolveTimestampsAsync`) next to `upscaler.gpuTimings`
+ * @returns The initialized renderer and the capped device-pixel-ratio used
+ */
+export async function bootRenderer(
+    options: { parent?: HTMLElement; alpha?: boolean; trackTimestamp?: boolean } = {},
+): Promise<{
+    renderer: THREE.WebGPURenderer;
+    dpr: number;
+}> {
+    if (!navigator.gpu) {
+        showFatal(
+            'WebGPU is not available in this browser. These FSR3 examples are ' +
+                'WebGPU-only — try Chrome/Edge 113+, or enable the flag in Safari/Firefox.',
+        );
+        throw new Error('WebGPU unavailable');
+    }
+
+    // Cap DPR — an upscaler demo is about controlling pixel counts, not chasing
+    // the panel's native density.
+    const dpr = Math.min(window.devicePixelRatio, 2);
+
+    // Left at three's default (`alpha: true`) unless asked, so the examples run
+    // the way a default app does: the upscale carries alpha unconditionally, and
+    // an opaque scene stays opaque by painting `scene.background`.
+    const renderer = new THREE.WebGPURenderer({
+        antialias: false,
+        alpha: options.alpha,
+        trackTimestamp: options.trackTimestamp,
+    });
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    // The upscaler does not own presentation; examples choose ACES + sRGB.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    (options.parent ?? document.body).appendChild(renderer.domElement);
+
+    await renderer.init();
+    const backend = renderer.backend as { isWebGPUBackend?: boolean };
+    if (backend.isWebGPUBackend !== true) {
+        showFatal('three fell back to the WebGL backend — these examples need real WebGPU.');
+        throw new Error('WebGL fallback active');
+    }
+
+    return { renderer, dpr };
+}
+
+/** Physical-pixel display size for the current window at a given DPR. */
+export function displaySize(dpr: number): { width: number; height: number } {
+    return {
+        width: Math.floor(window.innerWidth * dpr),
+        height: Math.floor(window.innerHeight * dpr),
+    };
+}
+
+/** Renders a full-screen fatal-error message (used by the WebGPU guards). */
+export function showFatal(message: string): void {
+    let el = document.getElementById('fatal');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'fatal';
+        document.body.appendChild(el);
+    }
+    el.style.cssText =
+        'position:fixed;inset:0;display:grid;place-items:center;color:#fda4af;' +
+        'font:14px/1.5 ui-monospace,Menlo,monospace;text-align:center;padding:24px;z-index:50;';
+    el.textContent = message;
+}

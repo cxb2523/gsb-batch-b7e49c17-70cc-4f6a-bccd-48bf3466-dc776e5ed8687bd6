@@ -1,0 +1,30 @@
+{
+    "$schema": "https://json.schemastore.org/tsconfig",
+    "compilerOptions": {
+        "strict": true,
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "esModuleInterop": true,
+        "forceConsistentCasingInFileNames": true,
+        "skipLibCheck": true,
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true,
+        "isolatedModules": true,
+        "resolveJsonModule": true,
+        "noEmit": true,
+        "lib": ["ES2022", "DOM", "DOM.Iterable"],
+        "types": ["@webgpu/types", "vite/client"],
+        "baseUrl": ".",
+        "paths": {
+            "@pmndrs/upscaler": ["src/index.ts"],
+            "@pmndrs/upscaler/three": ["src/three.ts"],
+            "@pmndrs/upscaler/core": ["src/core.ts"],
+            "@pmndrs/upscaler/babylon": ["src/babylon.ts"],
+            "@pmndrs/upscaler/pixi": ["src/pixi.ts"]
+        }
+    },
+    "include": ["src", "packages/*/src", "bench/src", "examples", "test"],
+    "exclude": ["node_modules", "dist", "examples/vite.config.ts", "examples/pixi3d/hello", "examples/pixi3d/vendor"]
+}
