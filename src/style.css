@@ -1,0 +1,1281 @@
+/* ============================================================
+   NOCTIS GP - menu + HUD design system
+   Voice: lunar-night instrument cluster. One accent, white opacity
+   steps, an arc dial with a needle, letterbox framing, scrims
+   only - no panels, no blur. Legibility comes from gradient
+   scrims over the live 3D scene, never from opaque surfaces.
+   ============================================================ */
+
+/* ---- Fonts: Geist Mono via jsDelivr (@fontsource) ---- */
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-mono@latest/latin-200-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-mono@latest/latin-300-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-mono@latest/latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-mono@latest/latin-500-normal.woff2") format("woff2");
+}
+
+/* ---- Tokens ---- */
+:root {
+  --snow: #eef5fc;
+  --dim: rgba(226, 238, 250, 0.62);
+  --faint: rgba(226, 238, 250, 0.34);
+  --acc: #9fd4ff;
+  --ink: #060b14;
+  --font: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --ease-out: cubic-bezier(0.22, 0.9, 0.3, 1);
+  --ease-frame: cubic-bezier(0.6, 0.05, 0.25, 1);
+}
+
+/* ---- Reset ---- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--snow);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+#scene {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none; /* children opt back in */
+}
+
+/* ---- Loading ---- */
+.loader {
+  position: fixed;
+  inset: 0;
+  background: #060b14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  color: #eef5fc;
+  font: 500 11px var(--font);
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  transition: opacity 0.8s;
+}
+.loader.error {
+  color: #ff8080;
+  letter-spacing: 0.2em;
+  text-align: center;
+  padding: 0 8vw;
+  line-height: 2;
+}
+
+/* ============================================================
+   Letterbox
+   ============================================================ */
+.letterbox {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 5.5vh;
+  background: rgba(6, 11, 20, 0.96);
+  z-index: 40;
+  pointer-events: none;
+  transition: height 0.8s var(--ease-frame);
+}
+.letterbox-top {
+  top: 0;
+}
+.letterbox-bottom {
+  bottom: 0;
+}
+#ui.playing .letterbox {
+  height: 0;
+}
+
+/* ============================================================
+   Menu layer
+   ============================================================ */
+.menu-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background:
+    linear-gradient(to top, rgba(6, 11, 20, 0.9) 0%, rgba(6, 11, 20, 0.5) 20%, rgba(6, 11, 20, 0) 38%),
+    linear-gradient(to bottom, rgba(6, 11, 20, 0.66) 0%, rgba(6, 11, 20, 0) 16%),
+    linear-gradient(
+      255deg,
+      rgba(6, 11, 20, 0.94) 0%,
+      rgba(6, 11, 20, 0.78) 22%,
+      rgba(6, 11, 20, 0.46) 42%,
+      rgba(6, 11, 20, 0) 62%
+    );
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.5s ease, visibility 0s linear 0s;
+}
+#ui.playing .menu-layer {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.5s ease, visibility 0s linear 0.5s;
+}
+
+/* Wordmark */
+.wordmark {
+  position: absolute;
+  left: 4vw;
+  top: 8.8vh;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+.wm-gauge {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.wm-gauge .ring {
+  fill: none;
+  stroke: rgba(226, 238, 250, 0.42);
+  stroke-width: 1.4;
+}
+.wm-gauge .hand {
+  stroke: var(--acc);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+.wm-gauge .hub {
+  fill: var(--acc);
+}
+.wm-title {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--snow);
+  text-shadow: 0 1px 10px rgba(4, 8, 16, 0.9);
+}
+.wm-sub {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(226, 238, 250, 0.46);
+  padding-left: 12px;
+  border-left: 1px solid rgba(226, 238, 250, 0.18);
+  text-shadow: 0 1px 10px rgba(4, 8, 16, 0.9);
+}
+
+.footer {
+  position: absolute;
+  left: 4vw;
+  top: 90.8vh;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* Author credit, bottom-right. Sits at the same weight as the footer hint so
+   it is always present but never competes with something the player reads. */
+.credit {
+  position: absolute;
+  right: 4vw;
+  top: 90.8vh;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* Inspiration credit. Only on the front screen, and deliberately quieter than
+   the author line - it is attribution, not a call to action. */
+.attrib {
+  position: absolute;
+  left: 4vw;
+  top: 94.2vh;
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(226, 238, 250, 0.26);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+.attrib.show {
+  opacity: 1;
+}
+.attrib a {
+  color: rgba(226, 238, 250, 0.42);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(226, 238, 250, 0.2);
+  pointer-events: auto;
+}
+.attrib a:hover {
+  color: var(--acc);
+}
+
+/* Telemetry tape on the right edge */
+.telemetry {
+  position: absolute;
+  right: 2.4vw;
+  top: 9vh;
+  height: 82vh;
+  width: 96px;
+  pointer-events: none;
+}
+
+/* ============================================================
+   Screens
+   Dial geometry: the pivot sits just inside the right edge and the
+   radius is in vmin, so the arc's vertical span is stable across
+   aspect ratios.
+   ============================================================ */
+.screen {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.5s ease, visibility 0s linear 0.5s;
+  --cx: 96vw;
+  --cy: 50vh;
+  --dial-r: 46vmin;
+}
+.screen.active {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.5s ease, visibility 0s linear 0s;
+}
+
+.needle {
+  position: absolute;
+  left: calc(var(--cx) - var(--dial-r));
+  top: var(--cy);
+  width: 30px;
+  height: 2px;
+  translate: -110% -50%;
+  background: var(--acc);
+  box-shadow: 0 0 10px rgba(159, 212, 255, 0.55);
+}
+
+.dial {
+  position: absolute;
+  left: var(--cx);
+  top: var(--cy);
+  width: 0;
+  height: 0;
+  transition: transform 0.3s var(--ease-out);
+}
+.dial::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--dial-r));
+  top: calc(-1 * var(--dial-r));
+  width: calc(2 * var(--dial-r));
+  height: calc(2 * var(--dial-r));
+  border: 1px solid rgba(226, 238, 250, 0.08);
+  border-radius: 50%;
+}
+
+.tick {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 9px;
+  height: 1px;
+  transform-origin: 0 0;
+  background: rgba(226, 238, 250, 0.22);
+}
+.tick.major {
+  width: 20px;
+  background: rgba(226, 238, 250, 0.45);
+  transition: background 0.25s ease;
+}
+.tick.major.on {
+  background: var(--acc);
+}
+
+.arc-item {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+  /* manipulation kills the 300 ms double-tap wait, so a tap feels immediate
+     on a touchscreen. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.3s var(--ease-out);
+}
+.arc-item:active .item-label {
+  color: var(--snow);
+}
+.arc-item:focus {
+  outline: none;
+}
+.arc-line {
+  position: absolute;
+  right: 46px;
+  top: 0;
+  translate: 0 -50%;
+  display: flex;
+  align-items: baseline;
+  gap: 1.5em;
+  white-space: nowrap;
+  padding: 14px 0;
+  /* The attract camera can put a bright car body right under the dial. */
+  text-shadow: 0 1px 10px rgba(4, 8, 16, 0.95), 0 0 24px rgba(4, 8, 16, 0.8);
+}
+
+.item-label {
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--dim);
+  transition: color 0.25s ease;
+}
+.arc-item.selected .item-label {
+  color: var(--snow);
+}
+
+.item-val {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5em;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--acc);
+  white-space: nowrap;
+}
+.item-val .chev {
+  opacity: 0;
+  color: var(--acc);
+  transition: opacity 0.25s ease;
+}
+.arc-item.selected .item-val .chev {
+  opacity: 1;
+}
+
+.dial.stagger .tick {
+  animation: tickIn 0.5s ease both;
+}
+@keyframes tickIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.dial.stagger .arc-line {
+  animation: itemIn 0.55s var(--ease-out) both;
+}
+@keyframes itemIn {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Digital readout */
+.readout {
+  position: absolute;
+  left: 4vw;
+  bottom: 12.5vh;
+}
+.screen.active .readout {
+  animation: roIn 0.6s var(--ease-out) both;
+}
+@keyframes roIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.ro-num {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  font-size: clamp(48px, 5.6vw, 96px);
+  font-weight: 200;
+  line-height: 0.95;
+  color: var(--snow);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ro-num.pulse {
+  animation: roPulse 0.26s ease-out;
+}
+@keyframes roPulse {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.ro-u {
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.24em;
+  color: var(--faint);
+}
+.ro-l {
+  margin-top: 1.4vh;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* Static rows (controls briefing) */
+.rows {
+  position: absolute;
+  top: 19vh;
+  left: 4vw;
+  display: flex;
+  flex-direction: column;
+  gap: 1.55vh;
+  min-width: min(40vw, 420px);
+}
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 3vw;
+}
+.row .k {
+  font-size: 12px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.row .v {
+  font-size: 12.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--snow);
+  white-space: nowrap;
+}
+.note {
+  margin-top: 1vh;
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* Results */
+.results-body {
+  position: absolute;
+  top: 16.5vh;
+  left: 4vw;
+  width: min(52vw, 560px);
+}
+.stat-grid {
+  display: flex;
+  gap: 4vw;
+  margin-bottom: 2.4vh;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5vh;
+}
+.stat .k {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.stat .v {
+  font-size: 17px;
+  font-weight: 300;
+  letter-spacing: 0.06em;
+  color: var(--snow);
+  font-variant-numeric: tabular-nums;
+}
+.lap-times {
+  display: flex;
+  gap: 1.4vw;
+  margin-bottom: 2.6vh;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.lap-times .lt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4vh;
+}
+.lap-times .lt .k {
+  font-size: 9px;
+  letter-spacing: 0.24em;
+  color: var(--faint);
+  text-transform: uppercase;
+}
+.lap-times .lt .v {
+  color: var(--snow);
+}
+
+.standings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7vh;
+}
+.standings .srow {
+  display: grid;
+  grid-template-columns: 2.4em 1fr auto;
+  align-items: baseline;
+  gap: 1.2em;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+.standings .srow .pos {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.standings .srow .name {
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.standings .srow .time {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.standings .srow.player .pos,
+.standings .srow.player .name,
+.standings .srow.player .time {
+  color: var(--acc);
+}
+
+/* Center notices */
+.notice-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.center-notice {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%) scale(1.35);
+  opacity: 0;
+  filter: blur(6px);
+  font-weight: 200;
+  text-transform: uppercase;
+  color: var(--snow);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  text-align: center;
+  transition: opacity 0.32s ease, transform 0.4s var(--ease-out), filter 0.32s ease;
+}
+.center-notice.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  filter: blur(0);
+}
+.center-notice.countdown {
+  font-size: clamp(90px, 17vh, 220px);
+  letter-spacing: 0.02em;
+}
+.center-notice.countdown.go {
+  color: var(--acc);
+  font-weight: 300;
+}
+.center-notice.alert {
+  font-size: clamp(30px, 5vw, 64px);
+  font-weight: 300;
+  letter-spacing: 0.18em;
+  color: var(--acc);
+}
+
+/* ============================================================
+   HUD
+   ============================================================ */
+.hud-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.6s ease, visibility 0s linear 0.6s;
+}
+#ui.playing .hud-layer {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.6s ease, visibility 0s linear 0s;
+}
+
+.hud-top {
+  position: absolute;
+  top: 4.5vh;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 3.2vw;
+}
+.hud-top .pos,
+.hud-top .lap {
+  font-size: 12px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hud-clock {
+  font-size: clamp(28px, 3vw, 40px);
+  font-weight: 200;
+  letter-spacing: 0.02em;
+  color: var(--snow);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hud-progress {
+  position: absolute;
+  right: 26px;
+  top: 26vh;
+  height: 48vh;
+  width: 2px;
+  background: var(--faint);
+  overflow: hidden;
+}
+.hud-progress-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0%;
+  background: var(--acc);
+  transition: height 0.25s linear;
+}
+
+.hud-standings {
+  position: absolute;
+  left: 4vw;
+  top: 12vh;
+  min-width: 190px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 10px rgba(2, 4, 10, 0.85);
+}
+.hud-standings .stand-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2.5px 0;
+  color: var(--dim);
+}
+.hud-standings .stand-row .pos {
+  width: 14px;
+  color: var(--faint);
+  font-weight: 500;
+}
+.hud-standings .stand-row i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.hud-standings .stand-row.me {
+  color: var(--snow);
+}
+.hud-standings .stand-row .lapinfo {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.hud-item {
+  position: absolute;
+  left: 50%;
+  top: 9vh;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 0.3s ease;
+}
+.hud-item.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.hud-item-glyph {
+  width: 78px;
+  height: 78px;
+  padding: 12px;
+  border-radius: 6px;
+  background: radial-gradient(circle, rgba(6, 11, 20, 0.55) 0%, rgba(6, 11, 20, 0) 78%);
+  border: 1px solid rgba(159, 212, 255, 0.45);
+}
+.hud-item-key {
+  position: absolute;
+  right: -7px;
+  bottom: 20px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: #060b14;
+  background: var(--snow);
+}
+.hud-item-name {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.4em;
+  color: var(--snow);
+  text-transform: uppercase;
+}
+.hud-item.pop {
+  animation: itemPop 0.45s cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+@keyframes itemPop {
+  0% {
+    transform: translateX(-50%) scale(1.35);
+    filter: blur(6px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+
+.hud-speed {
+  position: absolute;
+  right: 4vw;
+  bottom: 6vh;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.hud-speed-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+}
+.hud-speed-val {
+  font-size: clamp(48px, 6vw, 64px);
+  font-weight: 200;
+  line-height: 0.9;
+  color: var(--snow);
+  font-variant-numeric: tabular-nums;
+}
+.hud-speed-unit {
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  color: var(--faint);
+}
+.hud-boost {
+  margin-top: 1.4vh;
+  width: min(20vw, 220px);
+  height: 3px;
+  background: var(--faint);
+  overflow: hidden;
+  align-self: stretch;
+}
+.hud-boost-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--acc);
+  transform-origin: right center;
+  transform: scaleX(1);
+  transition: transform 0.12s linear, background 0.2s ease;
+}
+.hud-boost.empty .hud-boost-fill {
+  animation: boostFlash 0.7s ease-in-out infinite;
+}
+@keyframes boostFlash {
+  0%,
+  100% {
+    background: var(--acc);
+    opacity: 1;
+  }
+  50% {
+    background: var(--snow);
+    opacity: 0.35;
+  }
+}
+
+.hud-bottomleft {
+  position: absolute;
+  left: 4vw;
+  bottom: 6vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1.6vh;
+  align-items: flex-start;
+}
+.minimap {
+  width: 150px;
+  height: 150px;
+  display: block;
+  opacity: 0.92;
+}
+.hud-hints {
+  display: flex;
+  gap: 1.6em;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+  transition: opacity 1s ease;
+}
+.hud-hints.faded {
+  opacity: 0;
+}
+.hud-hints b {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.hud-layer.hidden {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+/* ============================================================
+   Touch controls
+
+   Hidden unless the device actually reports touch, so a desktop browser
+   never shows them. Only visible while racing (#ui.playing), because that
+   is the only time they mean anything.
+
+   Sizes use min() against both viewport axes so the buttons stay thumb-sized
+   on a 800x360 phone landscape and do not balloon on a tablet.
+   ============================================================ */
+.touch-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events: none;
+}
+html.has-touch #ui.playing .touch-layer {
+  display: block;
+}
+
+.tpad,
+.ttop {
+  position: absolute;
+  display: flex;
+  gap: clamp(8px, 1.6vmin, 18px);
+  pointer-events: none;
+}
+.tpad > *,
+.ttop > * {
+  pointer-events: auto;
+}
+
+.tpad--left {
+  left: max(14px, env(safe-area-inset-left));
+  bottom: max(14px, env(safe-area-inset-bottom));
+}
+.tpad--right {
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  align-items: flex-end;
+}
+.ttop {
+  right: max(14px, env(safe-area-inset-right));
+  top: max(14px, env(safe-area-inset-top));
+  align-items: center;
+}
+
+.tbtn {
+  --size: clamp(56px, 13vmin, 108px);
+  width: var(--size);
+  height: var(--size);
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  border: 1px solid rgba(226, 238, 250, 0.3);
+  background: rgba(8, 13, 22, 0.42);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  color: rgba(238, 245, 252, 0.92);
+  font-family: var(--font);
+  font-size: calc(var(--size) * 0.4);
+  line-height: 1;
+  /* Stops the browser scrolling, double-tap zooming or selecting on press. */
+  touch-action: none;
+  transition: background 0.1s ease, transform 0.1s ease, opacity 0.15s ease;
+}
+.tbtn.is-down {
+  background: rgba(159, 212, 255, 0.34);
+  border-color: rgba(159, 212, 255, 0.85);
+  transform: scale(0.94);
+}
+.tbtn:disabled {
+  opacity: 0.3;
+}
+
+/* Throttle is the button you hold most, so it gets the extra size. */
+.tbtn--go {
+  --size: clamp(74px, 17vmin, 136px);
+  border-color: rgba(159, 212, 255, 0.6);
+  background: rgba(159, 212, 255, 0.16);
+}
+.tbtn--boost {
+  border-color: rgba(159, 212, 255, 0.55);
+}
+.tbtn--boost.is-empty {
+  opacity: 0.3;
+}
+.tbtn--item.is-ready {
+  border-color: var(--acc);
+  background: rgba(159, 212, 255, 0.3);
+  animation: itemReady 1.1s ease-in-out infinite;
+}
+@keyframes itemReady {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(159, 212, 255, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(159, 212, 255, 0);
+  }
+}
+/* Pause and handbrake are secondary, but the 44px minimum touch target is not
+   negotiable: a 40px button is a mis-tap waiting to happen, and a mis-tap on
+   pause drops you out of the race. */
+.tbtn--pause {
+  --size: clamp(48px, 8vmin, 64px);
+  font-size: calc(var(--size) * 0.3);
+}
+.tbtn--hand {
+  --size: clamp(48px, 9vmin, 72px);
+  font-size: calc(var(--size) * 0.3);
+}
+
+.tbtn__glyph {
+  pointer-events: none;
+}
+
+/* Portrait phones: the circuit needs width, so nudge rather than block. */
+.rotate-hint {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 45;
+  display: none;
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  background: rgba(6, 11, 20, 0.9);
+  border-top: 1px solid rgba(226, 238, 250, 0.14);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: center;
+}
+html.has-touch #ui.playing .rotate-hint {
+  display: none;
+}
+@media (orientation: portrait) and (hover: none) and (pointer: coarse) {
+  html.has-touch #ui.playing .rotate-hint {
+    display: block;
+  }
+}
+
+/* Short viewports: drop the least important chrome rather than overlap it.
+   The narrower breakpoints that follow are deliberately more specific and
+   come later, so they win wherever the two overlap. */
+@media (max-height: 620px) {
+  .rows {
+    top: 17vh;
+    gap: 1vh;
+  }
+  .note {
+    display: none;
+  }
+  .hud-hints {
+    display: none;
+  }
+}
+@media (max-width: 720px) {
+  .telemetry {
+    display: none;
+  }
+  .hud-standings {
+    min-width: 140px;
+    font-size: 10px;
+  }
+}
+
+/* ============================================================
+   Touch-device menu
+
+   The arc dial is a desktop flourish and it does not survive a phone.
+   Two problems, both measured:
+
+     1. Each .arc-item is a 0x0 anchor whose visible label is an absolutely
+        positioned child. A real finger can still hit the label, but the
+        button itself has no hit area, so anything targeting the button
+        (assistive tech, automation) finds nothing there.
+     2. On a 390 px phone the dial radius is ~179 px and the items are 10
+        degrees apart, which puts their centres 31 px apart. That is below
+        any usable touch target.
+
+   So on touch/narrow screens the same buttons, labels and values are
+   re-flowed into a bottom toolbar. The inline transforms the dial writes
+   per item are cleared with !important, because an inline style otherwise
+   beats any stylesheet rule.
+   ============================================================ */
+@media (max-width: 620px), (hover: none) and (pointer: coarse) {
+  .needle {
+    display: none;
+  }
+
+  .dial {
+    transform: none !important;
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: max(14px, env(safe-area-inset-bottom));
+    width: auto;
+    height: auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 max(12px, env(safe-area-inset-left));
+  }
+  .dial::before {
+    content: none;
+  }
+  .tick {
+    display: none;
+  }
+
+  .arc-item {
+    transform: none !important;
+    position: relative;
+    left: auto;
+    top: auto;
+    flex: 1 1 26vw;
+    min-width: min(30vw, 150px);
+    max-width: 46vw;
+    height: 58px;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(226, 238, 250, 0.22);
+    border-radius: 12px;
+    background: rgba(8, 13, 22, 0.44);
+  }
+  .arc-item.selected {
+    border-color: var(--acc);
+    background: rgba(159, 212, 255, 0.18);
+  }
+
+  .arc-line {
+    position: static;
+    right: auto;
+    top: auto;
+    translate: none;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.85em;
+    padding: 0;
+  }
+  .item-label,
+  .item-val {
+    font-size: 11px;
+    letter-spacing: 0.2em;
+  }
+
+  /* Everything that used to sit at the bottom now has to clear the toolbar. */
+  .readout {
+    left: 5vw;
+    right: 5vw;
+    top: 17vh;
+    bottom: auto;
+  }  .ro-num {
+    font-size: clamp(38px, 13vw, 66px);
+  }
+  .rows {
+    left: 5vw;
+    right: 5vw;
+    top: 30vh;
+    max-width: none;
+    min-width: 0;
+  }
+  .row {
+    gap: 2em;
+  }
+  .row .k,
+  .row .v {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+  }
+  .results-body {
+    left: 5vw;
+    right: 5vw;
+    width: auto;
+    top: 14vh;
+  }
+  .footer,
+  .credit {
+    top: auto;
+    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 76px);
+  }
+  .telemetry {
+    display: none;
+  }
+  .hud-standings {
+    min-width: 0;
+    font-size: 9px;
+    left: 3vw;
+    top: 4vh;
+  }
+  .minimap {
+    width: 78px;
+    height: 78px;
+  }
+  /* The bottom-right corner belongs to throttle/brake/handbrake, so the
+     speed and its boost meter move up and left of that stack rather than
+     being drawn underneath it. */
+  .hud-speed {
+    right: 4vw;
+    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 152px);
+  }
+  .hud-speed-val {
+    font-size: clamp(30px, 9vw, 46px);
+  }
+  .hud-boost {
+    width: min(34vw, 170px);
+  }
+  /* Minimap sits above the steering pair instead of behind it. */
+  .hud-bottomleft {
+    left: 3vw;
+    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 80px);
+  }
+  .hud-hints {
+    display: none;
+  }
+}
+
+/* Very short landscape (phone on its side): drop the least useful chrome. */
+@media (max-height: 430px) {
+  .rows {
+    top: 15vh;
+    gap: 0.6vh;
+  }
+  .note {
+    display: none;
+  }
+  .hud-hints {
+    display: none;
+  }
+  .readout {
+    bottom: 24vh;
+  }
+  .hud-bottomleft {
+    bottom: 15vh;
+  }
+  .minimap {
+    width: 76px;
+    height: 76px;
+  }
+}
+
