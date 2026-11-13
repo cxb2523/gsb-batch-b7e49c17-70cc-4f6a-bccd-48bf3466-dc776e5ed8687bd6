@@ -34,3 +34,21 @@ export const npmFixture = {
     },
   },
 };
+
+// Service whose OSV lookup fails in tests/mock-fetch-partial.js.
+export const flakyFixture = {
+  'package.json': {
+    name: 'flaky-app',
+    version: '1.0.0',
+    dependencies: { 'flaky-pkg': '1.0.0' },
+  },
+  'package-lock.json': {
+    name: 'flaky-app',
+    version: '1.0.0',
+    lockfileVersion: 3,
+    packages: {
+      '': { name: 'flaky-app', version: '1.0.0', dependencies: { 'flaky-pkg': '1.0.0' } },
+      'node_modules/flaky-pkg': { version: '1.0.0' },
+    },
+  },
+};

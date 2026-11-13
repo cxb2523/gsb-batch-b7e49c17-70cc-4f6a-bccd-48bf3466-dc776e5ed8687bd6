@@ -94,7 +94,10 @@ export function buildDashboard({ services, scannedAt, noOsv, scanStatus }, versi
 
   // Build service nav
   const serviceNav = services.map((svc, i) => {
-    const dot = svc.severity.critical > 0 ? 'var(--red)' : svc.vulns.length > 0 ? 'var(--orange)' : 'var(--green)';
+    const incomplete = svc.scanStatus?.complete === false;
+    const dot = incomplete
+      ? 'var(--muted)'
+      : svc.severity.critical > 0 ? 'var(--red)' : svc.vulns.length > 0 ? 'var(--orange)' : 'var(--green)';
     const ecoIcons = svc.ecosystems.map(e => {
       if (e === 'npm') return '🟨';
       if (e === 'PyPI') return '🐍';
@@ -105,10 +108,15 @@ export function buildDashboard({ services, scannedAt, noOsv, scanStatus }, versi
       if (e === 'RubyGems') return '💎';
       return '📦';
     }).join('');
+    const failedBadge = incomplete
+      ? `<span title="Scan incomplete: ${esc(svc.scanStatus.error || '')}" style="font-size:10px;color:var(--red);flex-shrink:0">⚠</span>`
+      : '';
+    const countLabel = incomplete ? '?' : svc.vulns.length;
     return `<div class="nav-item ${i === 0 ? 'active' : ''}" onclick="showService(${i}, this)" data-svc="${i}">
       <span style="width:7px;height:7px;border-radius:50%;background:${dot};display:inline-block;flex-shrink:0"></span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(svc.name)}</span>
-      <span style="font-size:10px;color:var(--muted);flex-shrink:0">${ecoIcons} ${svc.vulns.length}</span>
+      ${failedBadge}
+      <span style="font-size:10px;color:var(--muted);flex-shrink:0">${ecoIcons} ${countLabel}</span>
     </div>`;
   }).join('');
 
@@ -117,7 +125,7 @@ export function buildDashboard({ services, scannedAt, noOsv, scanStatus }, versi
 
   const scanWarning = scanStatus?.complete === false
     ? `<div style="background:var(--sev-critical-bg);border:1px solid var(--sev-critical-c);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--sev-critical-c);margin-bottom:16px">
-        ❌ The latest scan is incomplete. Showing the last successful result. ${esc(scanStatus.error || '')}
+        ❌ The latest scan is incomplete — some services could not be scanned, so their results are missing or stale. ${esc(scanStatus.error || '')}
       </div>`
     : '';
   const osvNote = scanWarning + (noOsv
@@ -372,6 +380,7 @@ tr.clickable:hover td{background:var(--table-row-border)}
   </nav>
 
   <div class="content">
+    ${osvNote}
     ${servicePanels}
   </div>
 </div>
@@ -552,6 +561,12 @@ window.addEventListener('load', () => {
 function buildServicePanel(svc, i) {
   const sev = svc.severity;
   const rc = riskColor(svc.riskScore);
+  const incomplete = svc.scanStatus?.complete === false;
+  const incompleteReason = incomplete ? String(svc.scanStatus.error || 'Unknown error') : '';
+
+  const failBadge = incomplete
+    ? `<span title="${esc(incompleteReason)}" style="font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--sev-critical-bg);color:var(--sev-critical-c);border:1px solid var(--sev-critical-c)">⚠ Scan incomplete</span>`
+    : '';
 
   // Ecosystem badges
   const ecoBadges = svc.ecosystems.map(e => {
@@ -707,25 +722,35 @@ function buildServicePanel(svc, i) {
   <div class="svc-header" style="margin-bottom:20px">
     <span class="svc-title">${esc(svc.name)}</span>
     ${ecoBadges}
+    ${failBadge}
     <span style="font-size:11px;color:var(--muted)">${manifestInfo}</span>
   </div>
 
+  ${incomplete
+      ? `<div style="background:var(--sev-critical-bg);border:1px solid var(--sev-critical-c);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--sev-critical-c);line-height:1.5">
+          ❌ <strong>This service could not be scanned.</strong> Vulnerability data for <strong>${esc(svc.name)}</strong> is unavailable, so its results are not trustworthy — do not treat it as clean.
+          <div style="margin-top:4px"><code>${esc(incompleteReason)}</code></div>
+        </div>`
+      : ''}
+
   <div class="stats-grid">
     <div class="sc"><div class="v">${svc.totalPackages.toLocaleString()}</div><div class="l">Packages</div></div>
-    <div class="sc"><div class="v" style="color:var(--green)">${svc.directCount}</div><div class="l">Direct</div></div>
-    <div class="sc"><div class="v" style="color:var(--red)">${sev.critical}</div><div class="l">Critical</div></div>
-    <div class="sc"><div class="v" style="color:var(--orange)">${sev.high}</div><div class="l">High</div></div>
-    <div class="sc"><div class="v" style="color:var(--yellow)">${sev.moderate}</div><div class="l">Moderate</div></div>
-    <div class="sc"><div class="v" style="color:var(--blue)">${sev.low}</div><div class="l">Low</div></div>
+    <div class="sc"><div class="v" style="color:var(--green)">${incomplete ? '—' : svc.directCount}</div><div class="l">Direct</div></div>
+    <div class="sc"><div class="v" style="color:var(--red)">${incomplete ? '—' : sev.critical}</div><div class="l">Critical</div></div>
+    <div class="sc"><div class="v" style="color:var(--orange)">${incomplete ? '—' : sev.high}</div><div class="l">High</div></div>
+    <div class="sc"><div class="v" style="color:var(--yellow)">${incomplete ? '—' : sev.moderate}</div><div class="l">Moderate</div></div>
+    <div class="sc"><div class="v" style="color:var(--blue)">${incomplete ? '—' : sev.low}</div><div class="l">Low</div></div>
   </div>
 
   <div class="risk-card">
     <div class="risk-row">
       <span style="font-weight:600">Risk score</span>
-      <span style="font-size:15px;font-weight:700;color:${rc}">${svc.riskScore}/100</span>
+      ${incomplete
+      ? `<span style="font-size:15px;font-weight:700;color:var(--muted)">N/A</span>`
+      : `<span style="font-size:15px;font-weight:700;color:${rc}">${svc.riskScore}/100</span>`}
     </div>
     <div class="risk-track">
-      <div class="risk-fill" data-score="${svc.riskScore}" style="width:0;background:${rc}"></div>
+      <div class="risk-fill" data-score="${incomplete ? 0 : svc.riskScore}" style="width:0;background:${incomplete ? 'var(--muted)' : rc}"></div>
     </div>
   </div>
 
@@ -761,7 +786,9 @@ function buildServicePanel(svc, i) {
 
   <!-- VULNERABILITIES TAB -->
   <div class="tab-content active" data-tab="vulns">
-    ${svc.vulns.length === 0
+    ${incomplete
+      ? `<div class="tbl-wrap"><div class="empty" style="color:var(--sev-critical-c)"><div class="icon">⚠</div><div style="font-size:16px;font-weight:600">Vulnerability data unavailable</div><div style="color:var(--muted);margin-top:4px">The scan for ${esc(svc.name)} did not complete, so no "clean" result can be shown.</div><div style="color:var(--sev-critical-c);margin-top:8px;font-family:'SF Mono',monospace;font-size:11px">${esc(incompleteReason)}</div><div style="color:var(--muted);margin-top:8px">Fix the error above and re-run the scan to get results for this service.</div></div></div>`
+      : svc.vulns.length === 0
       ? `<div class="tbl-wrap"><div class="empty"><div class="icon">✅</div><div style="font-size:16px;font-weight:600">No vulnerabilities found</div><div style="color:var(--muted);margin-top:4px">${svc.totalPackages} packages all clean</div></div></div>`
       : `<div class="filters-row">
             <div class="filters">
@@ -782,7 +809,9 @@ function buildServicePanel(svc, i) {
 
   <!-- FIX GUIDE TAB (Dependabot-style) -->
   <div class="tab-content" data-tab="fixes">
-    ${uniqueFixes.length === 0
+    ${incomplete
+      ? `<div class="tbl-wrap"><div class="empty" style="color:var(--sev-critical-c)"><div class="icon">⚠</div><div style="font-size:14px;font-weight:600">No upgrade guidance available</div><div style="color:var(--muted);font-size:12px;margin-top:4px">The scan for ${esc(svc.name)} did not complete.</div></div></div>`
+      : uniqueFixes.length === 0
       ? `<div class="tbl-wrap"><div class="empty"><div class="icon">${svc.vulns.length === 0 ? '✅' : '⚠'}</div><div style="font-size:14px;font-weight:600">${svc.vulns.length === 0 ? 'No vulnerabilities!' : 'No auto-fixable vulnerabilities found'}</div><div style="color:var(--muted);font-size:12px;margin-top:4px">${svc.vulns.length > 0 ? 'Transitive deps may need upstream fixes.' : ''}</div></div></div>`
       : `<div class="upgrade-card">
           <div class="uc-header">💊 ${uniqueFixes.length} direct ${uniqueFixes.length === 1 ? 'package' : 'packages'} can be upgraded to fix CVEs</div>

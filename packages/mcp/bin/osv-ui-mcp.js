@@ -173,6 +173,16 @@ async function handleScanProject({ path: dir = '.', severity_filter = 'all', off
   const sevOrder = { critical: 0, high: 1, moderate: 2, low: 3 };
   const filterRank = sevOrder[severity_filter] ?? 4;
 
+  // A service whose scan did not complete has no trustworthy CVE data; never
+  // present it as clean.
+  if (result.scanStatus?.complete === false) {
+    return err(
+      `Scan incomplete for ${result.name} (${absDir}): ${result.scanStatus.error}\n\n` +
+      'No vulnerability data is available, so this result must not be treated as clean. ' +
+      'Check that the manifest files are valid and that OSV.dev is reachable, then retry.'
+    );
+  }
+
   const filtered = result.vulns.filter(v => (sevOrder[v.severity] ?? 4) <= filterRank);
 
   // Build a clean, LLM-readable summary
@@ -285,6 +295,9 @@ async function handleOpenDashboard({ path: dir = '.', port }) {
 async function handleGetFixCommands({ path: dir = '.', packages, severity_filter = 'all' }) {
   const absDir = resolve(dir);
   const result = await scanService(absDir, { noOsv: false });
+  if (result.scanStatus?.complete === false) {
+    return err(`Scan incomplete for ${result.name} (${absDir}): ${result.scanStatus.error}`);
+  }
   const sevOrder = { critical: 0, high: 1, moderate: 2, low: 3 };
   const filterRank = sevOrder[severity_filter] ?? 4;
 
@@ -319,6 +332,9 @@ async function handleGetFixCommands({ path: dir = '.', packages, severity_filter
 async function handleApplyFixes({ path: dir = '.', packages, dry_run = false }) {
   const absDir = resolve(dir);
   const result = await scanService(absDir, { noOsv: false });
+  if (result.scanStatus?.complete === false) {
+    return err(`Scan incomplete for ${result.name} (${absDir}): ${result.scanStatus.error}. Refusing to apply fixes without complete vulnerability data.`);
+  }
 
   const fixable = getFixableGroups(result.vulns, packages);
   const requested = packages.map(p => p.toLowerCase());

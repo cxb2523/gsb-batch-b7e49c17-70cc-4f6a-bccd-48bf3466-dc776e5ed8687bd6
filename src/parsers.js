@@ -532,6 +532,7 @@ function parseCargoLock(dir) {
 // ── Main parser: detect ecosystem ─────────────────────────────────────────────
 export function parseManifests(dir) {
   const results = [];
+  let firstParseError = null;
   const categories = [
     {
       id: 'java',
@@ -678,10 +679,14 @@ export function parseManifests(dir) {
             break;
           }
         } catch (e) {
+          if (!firstParseError) firstParseError = new Error(`Failed to parse ${entry.file}: ${e.message}`, { cause: e });
           console.error(`Error parsing ${entry.file} in ${dir}:`, e);
         }
       }
     }
   }
+  // A manifest exists but produced nothing because parsing it threw (e.g. a
+  // truncated lockfile). Surface that instead of a misleading "no manifests".
+  if (results.length === 0 && firstParseError) throw firstParseError;
   return results;
 }

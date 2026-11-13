@@ -76,10 +76,29 @@ export function buildMarkdownReport(currentPayload, diffReport = null) {
   const totalPackages = (currentPayload.services || []).reduce((sum, svc) => sum + (svc.totalPackages || 0), 0);
   const totalVulns = flattenVulns(currentPayload).length;
   const severity = aggregateSeverity(currentPayload);
+  const incompleteServices = (currentPayload.services || []).filter(svc => svc.scanStatus?.complete === false);
+  const scanIncomplete = currentPayload.scanStatus?.complete === false || incompleteServices.length > 0;
   const lines = [
     '## osv-ui CVE report',
     '',
     `Scanned ${totalServices} service(s), ${totalPackages} package(s), ${totalVulns} vulnerability finding(s).`,
+  ];
+
+  if (scanIncomplete) {
+    lines.push(
+      '',
+      '> ⚠ **Scan incomplete.** Some services could not be scanned, so their results are not trustworthy and the report does not cover them.',
+      `> ${escapeMarkdownCell(currentPayload.scanStatus?.error || incompleteServices.map(svc => `${svc.name}: ${svc.scanStatus?.error || 'unknown error'}`).join('; '))}`,
+    );
+    if (incompleteServices.length > 0) {
+      lines.push('', '| Service | Status | Error |', '|---|---|---|');
+      for (const svc of incompleteServices) {
+        lines.push(`| ${escapeMarkdownCell(svc.name)} | incomplete | ${escapeMarkdownCell(svc.scanStatus?.error || 'unknown error')} |`);
+      }
+    }
+  }
+
+  lines.push(
     '',
     '| Severity | Count |',
     '|---|---:|',
@@ -88,7 +107,7 @@ export function buildMarkdownReport(currentPayload, diffReport = null) {
     `| Moderate | ${severity.moderate} |`,
     `| Low | ${severity.low} |`,
     `| Unknown | ${severity.unknown} |`,
-  ];
+  );
 
   if (diffReport) {
     lines.push(

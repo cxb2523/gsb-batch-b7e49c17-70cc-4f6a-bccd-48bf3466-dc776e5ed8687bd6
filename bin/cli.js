@@ -204,31 +204,80 @@ if (serviceDirs.length === 0) {
 }
 
 // ── Scan all services ────────────────────────────────────────────────────────
+// scanService never throws for a single service: parse and OSV failures are
+// reported through result.scanStatus. Keep collecting results so a broken
+// service does not hide the findings of the services that did scan.
 async function scanAllServices() {
   const services = [];
+  const failures = [];
   for (const dir of serviceDirs) {
     log(dim(`  → Scanning ${dir}`));
+    let result;
     try {
-      const result = await scanService(dir, { noOsv });
-      services.push(result);
-      const v = result.vulns.length;
-      const crit = result.severity.critical;
-      const statusIcon = crit > 0 ? red('●') : v > 0 ? yellow('●') : green('●');
-      log(`    ${statusIcon} ${bold(result.name)} ${dim(`(${result.ecosystem})`)} — ${v} vuln${v !== 1 ? 's' : ''}`);
+      result = await scanService(dir, { noOsv });
     } catch (e) {
+      // Defensive: an unexpected throw is still scoped to this service.
+      result = null;
+      failures.push({ dir, error: e });
       log(red(`    ✖ Failed: ${e.message}`));
-      throw new Error(`Scan incomplete for ${dir}: ${e.message}`, { cause: e });
+      continue;
     }
+    services.push(result);
+    if (result.scanStatus?.complete === false) {
+      failures.push({ dir, error: result.scanStatus.error, name: result.name });
+      log(yellow(`    ⚠ ${bold(result.name)} ${dim(`(${result.ecosystem || 'unknown'})`)} — scan incomplete: ${result.scanStatus.error}`));
+      continue;
+    }
+    const v = result.vulns.length;
+    const crit = result.severity.critical;
+    const statusIcon = crit > 0 ? red('●') : v > 0 ? yellow('●') : green('●');
+    log(`    ${statusIcon} ${bold(result.name)} ${dim(`(${result.ecosystem})`)} — ${v} vuln${v !== 1 ? 's' : ''}`);
   }
-  return services;
+
+  return {
+    services,
+    scanStatus: summarizeScanStatus(services, failures),
+  };
 }
 
-let services;
-try {
-  services = await scanAllServices();
-} catch (err) {
-  log(red(`  ✖ ${err.message}`));
+/**
+ * Aggregate per-service scan status into the payload-level status.
+ * complete is true only when every service finished successfully.
+ */
+function summarizeScanStatus(services, failures) {
+  if (failures.length === 0 && services.every(s => s.scanStatus?.complete !== false)) {
+    return { complete: true, error: null };
+  }
+  const incomplete = failures.length > 0
+    ? failures
+    : services
+      .filter(s => s.scanStatus?.complete === false)
+      .map(s => ({ dir: s.dir, name: s.name, error: s.scanStatus.error }));
+  const error = incomplete
+    .map(({ name, dir, error: reason }) => `${name || dir}: ${reason?.message || reason}`)
+    .join('; ');
+  return { complete: false, error: error || 'Scan incomplete' };
+}
+
+const scanResult = await scanAllServices();
+const services = scanResult.services;
+const { scanStatus } = scanResult;
+const completedServices = services.filter(s => s.scanStatus?.complete !== false);
+
+// Only bail out when nothing could be scanned — partial results are still
+// written out so the user can see what did complete.
+if (completedServices.length === 0) {
+  log('');
+  log(red(`  ✖ Scan incomplete: none of the ${serviceDirs.length} service(s) could be scanned.`));
+  if (scanStatus.error) log(dim(`    ${scanStatus.error}`));
   process.exit(EXIT_SCAN_INCOMPLETE);
+}
+
+if (!scanStatus.complete) {
+  log('');
+  log(yellow(`  ⚠ Scan incomplete — some services could not be scanned.`));
+  log(dim(`    ${scanStatus.error}`));
+  log(dim(`    Reports below include the services that did complete; failed services are marked incomplete.`));
 }
 
 log('');
@@ -243,7 +292,7 @@ const payload = {
   services,
   scannedAt: new Date().toISOString(),
   noOsv,
-  scanStatus: { complete: true, error: null },
+  scanStatus,
 };
 const baselinePayload = baselineFile ? readJsonFile(baselineFile) : null;
 const diffReport = baselinePayload ? buildDiffReport(payload, baselinePayload) : null;
@@ -288,6 +337,9 @@ try {
 
 if (diffReport) {
   log(dim(`  Diff: ${diffReport.summary.added} new · ${diffReport.summary.resolved} resolved · ${diffReport.summary.unchanged} unchanged`));
+  if (!scanStatus.complete) {
+    log(yellow(`  ⚠ Diff is unreliable: services that could not be scanned may appear as resolved.`));
+  }
 }
 
 const failPayload = diffReport || payload;
@@ -328,6 +380,7 @@ function readJsonFile(file) {
     const payload = JSON.parse(readFileSync(file, 'utf8'));
     if (!Array.isArray(payload.services)) throw new Error('missing services array');
     if (payload.scanStatus?.complete === false) throw new Error('baseline scan is incomplete');
+    if (payload.services.some(svc => svc.scanStatus?.complete === false)) throw new Error('baseline contains services with incomplete scans');
     return payload;
   } catch (err) {
     log(red(`  ✖ Failed to read baseline ${file}: ${err.message}`));
@@ -342,15 +395,19 @@ function startWatch(payload) {
     clearTimeout(timer);
     timer = setTimeout(async () => {
       log(dim('\n  Manifest changed; re-scanning...'));
-      try {
-        const services = await scanAllServices();
-        payload.services.splice(0, payload.services.length, ...services);
-        payload.scannedAt = new Date().toISOString();
-        payload.scanStatus = { complete: true, error: null };
+      const result = await scanAllServices();
+      if (result.services.length === 0) {
+        payload.scanStatus = result.scanStatus;
+        log(red(`  ✖ Re-scan incomplete; keeping the last successful result: ${result.scanStatus.error}\n`));
+        return;
+      }
+      payload.services.splice(0, payload.services.length, ...result.services);
+      payload.scannedAt = new Date().toISOString();
+      payload.scanStatus = result.scanStatus;
+      if (result.scanStatus.complete) {
         log(dim('  Re-scan complete. Refresh the browser to see the latest dashboard.\n'));
-      } catch (err) {
-        payload.scanStatus = { complete: false, error: err.message };
-        log(red(`  ✖ Re-scan incomplete; keeping the last successful result: ${err.message}\n`));
+      } else {
+        log(yellow(`  ⚠ Re-scan incomplete: ${result.scanStatus.error}\n`));
       }
     }, 300);
   };

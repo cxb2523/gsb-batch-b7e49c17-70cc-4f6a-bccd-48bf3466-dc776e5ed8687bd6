@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { createProject, npmFixture, removeProject } from './helpers.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -48,7 +48,7 @@ test('CLI exits with scan-incomplete status when OSV is unavailable', () => {
   const project = createProject(npmFixture);
   try {
     assert.throws(() => execFileSync(process.execPath, [
-      '--import', join(root, 'tests/mock-fetch-failure.js'),
+      '--import', pathToFileURL(join(root, 'tests/mock-fetch-failure.js')).href,
       join(root, 'bin/cli.js'),
       project,
       '--json',
