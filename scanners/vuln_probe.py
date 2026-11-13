@@ -49,6 +49,16 @@ class CpeMapError(Exception):
     """The map file is missing, unreadable or holds a malformed entry."""
 
 
+def _text(value: object) -> str:
+    """An NVD string field as a stripped string; absent or null reads as empty.
+
+    The feed fields matching reads (`criteria`, the four version bounds) are
+    strings in the 2.0 schema, but a hand-built or converted feed may carry
+    nulls; treating them as empty keeps the bound checks on strings alone.
+    """
+    return "" if value is None else str(value).strip()
+
+
 @dataclass(frozen=True)
 class CpeVersion:
     """A CPE version string, compared segment by segment.
@@ -80,6 +90,8 @@ class CpeName:
 
     def as_firmware(self) -> "CpeName":
         """The same device read as the firmware CPE NVD hangs the flaw on."""
+        if self.product.endswith(_FIRMWARE_SUFFIX):
+            return self
         return CpeName(
             vendor=self.vendor,
             product=f"{self.product}{_FIRMWARE_SUFFIX}",
@@ -88,12 +100,13 @@ class CpeName:
 
     @classmethod
     def parse(cls, criteria: str) -> "CpeName":
+        criteria = criteria.strip()
         if not criteria.startswith(_CPE_PREFIX):
             raise MalformedCpeError(f"not a CPE 2.3 name: {criteria!r}")
         parts = criteria.split(":")
         if len(parts) <= _CPE_VERSION_INDEX:
             raise MalformedCpeError(f"CPE has no version field: {criteria!r}")
-        version = parts[_CPE_VERSION_INDEX]
+        version = parts[_CPE_VERSION_INDEX].strip()
         return cls(
             vendor=parts[_CPE_VENDOR_INDEX].lower(),
             product=parts[_CPE_PRODUCT_INDEX].lower(),
@@ -120,20 +133,29 @@ class CpeMatchRange:
             vendor=cpe.vendor,
             product=cpe.product,
             version=cpe.version,
-            start_including=node.get("versionStartIncluding", ""),
-            start_excluding=node.get("versionStartExcluding", ""),
-            end_including=node.get("versionEndIncluding", ""),
-            end_excluding=node.get("versionEndExcluding", ""),
+            start_including=_text(node.get("versionStartIncluding")),
+            start_excluding=_text(node.get("versionStartExcluding")),
+            end_including=_text(node.get("versionEndIncluding")),
+            end_excluding=_text(node.get("versionEndExcluding")),
         )
 
     def covers(self, device: CpeName) -> bool:
+        """Whether this range covers the device, version policy included.
+
+        The version policy lives here and nowhere else, so a later change
+        cannot loosen or tighten it by accident:
+
+        - a pattern that names an exact version covers exactly that version;
+        - a device with no version is covered only by a pattern that states no
+          range at all: a bounded range cannot be shown to contain a version
+          nobody read, so it never covers an unknown version;
+        - a known version has to sit inside every bound the pattern states.
+        """
         if (self.vendor, self.product) != (device.vendor, device.product):
             return False
         if self.version:
             return self.version == device.version
         if not device.version:
-            # An unknown version cannot be shown to sit inside a bounded range;
-            # it only matches a pattern that names no range at all.
             return not self._has_bounds()
         return self._within_bounds(device.version)
 
@@ -388,8 +410,9 @@ class VulnProbe:
         A scan may report a CPE 2.2 URI (Shodan does), which carries no version
         in the 2.3 layout, so only a 2.3 name is used directly.
         """
-        if device.cpe.startswith(_CPE_PREFIX):
-            return self._carried(CpeName.parse(device.cpe))
+        cpe = device.cpe.strip()
+        if cpe.startswith(_CPE_PREFIX):
+            return self._carried(CpeName.parse(cpe))
         return self._carried(self._named_pair(device) or self._mapped_pair(device))
 
     def _carried(self, identified: CpeName | None) -> CpeName | None:
@@ -408,12 +431,18 @@ class VulnProbe:
         return firmware if self._feed.entries_for(firmware) else identified
 
     def _named_pair(self, device: DeviceFingerprint) -> CpeName | None:
-        """The pair brands.yaml already read off the device, if it named one."""
-        if not (device.vendor and device.product):
+        """The pair brands.yaml already read off the device, if it named one.
+
+        The feed is indexed by the lower-case fields of the CPE names it
+        carries, so the pair has to be normalised the same way: a banner that
+        reports the model in another case or with stray whitespace must reach
+        the same product, and the same firmware retry.
+        """
+        vendor = device.vendor.strip().lower()
+        product = device.product.strip().lower()
+        if not (vendor and product):
             return None
-        return CpeName(
-            vendor=device.vendor, product=device.product, version=device.version
-        )
+        return CpeName(vendor=vendor, product=product, version=device.version.strip())
 
     def _mapped_pair(self, device: DeviceFingerprint) -> CpeName | None:
         """The pair the product -> CPE map gives for the scanned product string."""
@@ -421,7 +450,7 @@ class VulnProbe:
         if mapped is None:
             return None
         return CpeName(
-            vendor=mapped.vendor, product=mapped.product, version=device.version
+            vendor=mapped.vendor, product=mapped.product, version=device.version.strip()
         )
 
     def _to_match(
