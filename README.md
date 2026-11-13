@@ -1,0 +1,181 @@
+# Anchorlaw — Code Verification on DeepSeek Harness
+
+**[English](README.md) | [中文](README_zh.md)**
+
+> **"Any claim must have a verifiable practice anchor."**
+>
+> — First Law, Materialist Practice Theory
+
+Anchorlaw is a **code verification toolchain for AI-assisted (vibe) coding**, maintained as a **DeepSeek Harness (DSH) host adaptation**: the `dsh/` subtree ships 11 protocol skills, 4 model tools, and the `anchorlaw` agent preset — install once, and every DSH session gets scan / report / noise-card / AI-context tooling. The underlying protocol (`spec/`, `python/`, `typescript/`) is language-neutral and drives the DSH tools. The Reasonix host format is **archived, not maintained** — see [Reasonix Version Archive](#reasonix-version-archive).
+
+---
+
+## Quick Start (DSH)
+
+```powershell
+# 1. install once (host-level default): preset + user skills + global tool mount
+pwsh dsh/scripts/install.ps1
+# 2. six-item self-check: toolchain / skill manifest / self-scan / installed artifacts / tool schemas / preset rows
+pwsh dsh/scripts/selfcheck.ps1
+# 3. open a NEW DSH session → 4 anchorlaw_* tools + 11 anchor-* skills in every session
+```
+
+Project-scoped skills need no installer: place them under `<projectRoot>/.dsh/skills/` (DSH's native project root, rank 100) and any preset discovers them. DSH has no project-level plugin/preset mechanism, so the `anchorlaw` preset and the 4 tools are host-level only.
+
+> Tools appear in **new** sessions (session composition is fixed at creation). The global mount is gated by a tool-schema check (2026-08-13 incident guard) — a malformed schema can never be installed.
+
+## What You Get (DSH)
+
+### 4 model tools — global, every session
+
+| Tool | What it does |
+|------|--------------|
+| `anchorlaw_scan` | Level-1 defensive-pattern scanner (P1-P6; `lang` cpp/go/java → annotation extraction) |
+| `anchorlaw_report` | Health report (scan findings + noise backlog + verdict) |
+| `anchorlaw_ai_context` | Noise cards + curriculum export for LLM context injection |
+| `anchorlaw_status` | Toolchain versions + discovered `anchor-*` skills |
+
+### 11 protocol skills (`anchor-*`, DSH format)
+
+L0-L4 action skills + execution roles (scout/worker/judge), loaded per scenario; skill bodies live in `dsh/skills/` (single source of truth, protocol §14 is the host-neutral spec). Trigger index and tool-call conventions: `dsh/AGENTS.md`.
+
+### anchorlaw agent preset
+
+Judge-driven four-stage pipeline persona (protocol §15.4): input contract → implementation spec → plan → parallel implementation → delivery. Acceptance criteria first, 3-round hard stop, `confirmed` granted **only by the human**; scout/worker/judge delegated through isolated subagents.
+
+---
+
+## Protocol Core (language-neutral backend)
+
+The protocol itself lives at the repo root and is host-neutral — the DSH tools drive its CLI:
+
+| Component | Where | State |
+|-----------|-------|-------|
+| **Spec** | `spec/protocol-v0.26.md` | Language-agnostic code-verification protocol (current) |
+| **Python** | `python/anchorlaw-scanner` + `python/anchorlaw` | Scanner (verified) + anchors/noise/CLI (experimental) — the DSH tool backend |
+| **TypeScript** | `typescript/anchorlaw-scanner` | TS/JS scanner (in development) |
+
+### Component Maturity
+
+| Component | Python | TypeScript | Maturity |
+|-----------|--------|-----------|----------|
+| **Scanner** | ✅ [anchorlaw-scanner](python/anchorlaw-scanner/) | ✅ [anchorlaw-scanner](typescript/anchorlaw-scanner/) | **VERIFIED** — tested on real projects |
+| **Anchors** | ✅ [anchorlaw](python/anchorlaw/) | — | **EXPERIMENTAL** — API stable, no efficacy data |
+| **Source Provenance (v0.3/v0.7)** | ✅ `source` param + probe type (v0.7) | — | **SCOPED** — implemented in Python; 1 project (CoreSwap) produced sourced anchors |
+| **Noise Cards** | ✅ [anchorlaw](python/anchorlaw/) | — | **UNVERIFIED** — schema defined, no accumulated data |
+| **AI Context** | ✅ [anchorlaw](python/anchorlaw/) | — | **CONJECTURE** — format defined, no A/B test |
+| **Degraded Verification (v0.3)** | — | — | **CONJECTURE** — modes defined, not exercised beyond the reference host |
+
+> **Honesty notice**: Components marked EXPERIMENTAL, UNVERIFIED, or CONJECTURE are working hypotheses. Their value has not been demonstrated through practice. Use them to help us test the hypotheses — not because we claim they work.
+
+### Changelog
+
+> **v0.26 (2026-11-13):** DSH Desktop support — the DSH adaptation now maintains **two host surfaces at once** instead of trading one for the other. ① `install.ps1` installs into every profile in one run; the Electron-owned `desktop` profile is written directly (link dependency + `dsh.profile.bundles` entry + `node_modules` link) because the CLI refuses that profile name, so `web` and `desktop` stay in sync from the same command. ② Both fail-closed gates and the self-check now detect the harness layout: a source checkout keeps using `node`, while an asar install runs the **same** scripts under `ELECTRON_RUN_AS_NODE=1 "<app>.exe"` — plain Node's `fs` cannot read `app.asar`, so on a Desktop-only machine both gates would otherwise have reported themselves unrunnable. The row gate then resolves packages from `node_modules/@deepseek-ai/*` and the prompt-variable gate scans their compiled `lib/`. Verified the same day in **both** layouts: 27 preset rows, 0 unresolvable; registered variables `model`, `provider`; 102 baseline tests; both profiles selected with the bundle, the global tool row and the 11 user-global skills intact; `web` boots with zero warnings. The protocol core is unchanged — this is §16 host-adaptation scope.
+>
+> **v0.25 (2026-10-24):** DSH host-adaptation follow-ups for 0.2.1 — ① Upstream removed the `./list-agents` subpath export from `@deepseek-ai/dsh-tool-subagent-control` (it registered the shared control tools together in the package's main entry), so the preset's `tool-subagent-list-agents` row resolved to nothing (`ERR_PACKAGE_PATH_NOT_EXPORTED`). The row is gone; the `list_agents` tool stays available through the `tool-subagent-control` row, matching upstream's own preset. The fail-closed row gate caught this at maintenance time rather than at session mount — exactly why it exists. ② The DSH bundle now declares `engines.dsh` (`^0.2.0`): the runtime prefers an own `engines.dsh` over `peerDependencies`, so an incompatible harness fails closed instead of loading the bundle against silently wrong host APIs — the failure mode behind both the 0.1.7 and the 0.2.x incidents. (`^0.2.1` was rejected as a range: a `0.2.1-rc.N` prerelease sorts before its release and would not match.) The protocol core is unchanged — this is §16 host-adaptation scope.
+>
+> **v0.24 (2026-10-17):** DSH host-adaptation follow-ups for 0.2.x — two pieces of stale host configuration, both of which the existing gates reported as green. ① Upstream DSH 0.2.x deleted the `cwd` prompt variable, while persona templates interpolate **strictly at assembly**, so the `anchorlaw` preset failed on every request with `unknown prompt variable "{{cwd}}" in section "deployment:persona-prefix"`; the working directory now arrives as the `working-directory:current` runtime context, and a new fail-closed gate (`dsh/tests/audit_prompt_variables.mjs`, self-check item 7) requires every `{{variable}}` in a preset template to be registered by the running harness — the preset-row gate could not see this class, because rows resolved and packages mounted while the template variable was already dead. ② The `backgroundMode` key on the subagent rows no longer exists in `@deepseek-ai/dsh-tool-subagent`; Schemastery ignores unknown keys, so it was silently dropped and never had any effect — removed. The protocol core is unchanged — this is §16 host-adaptation scope.
+>
+> **v0.23 (2026-09-23):** DSH host-adaptation carrier migration — upstream DeepSeek Harness 0.1.7 replaced the agent-preset carrier: a preset is no longer a `$DSH_HOME/.agent-presets/<id>/` directory but a `@deepseek-ai/dsh-agent-preset` declaration row carried by a **bundle patch**, and nothing reads the legacy directory any more (sessions whose header recorded such a preset could no longer be resumed). The DSH adaptation (`dsh/`) therefore became a first-class bundle package; its preset's plugin row is addressed by **bare package subpath** (rows inside `config.plugins[]` are not path-anchored, and the preset subtree's `baseUrl` is the profile directory, not the bundle); and the 11 anchor-* skills install to the user-global root instead of being embedded in the preset. The project-level (Reasonix-style) install mode is **withdrawn** — DSH has no project-level plugin/preset mechanism, so a project-scoped install could deliver the skills but never the preset persona or the four tools; project-scoped skills remain available through DSH's own `<projectRoot>/.dsh/skills` root. The preset-row gate now walks the bundle-patch carrier and `config.plugins[]` (the previous walk missed 27 of 28 rows — the exact reason a green self-check coexisted with a failing resume). The protocol core is unchanged — this is §16 host-adaptation scope.
+>
+> **v0.22 (2026-09-15):** Verification temporality, criterion preconditions, equivalence tiers, process invariants — five clauses closing gaps practice had already paid for (CoreSwap #156/#160/#161/#162 + M11/M16): ① **§9.8 verification temporality** — a verification action's in-place side effects MUST carry an addressable inverse or an explicit irreversible declaration (registration only; automatic rollback is forbidden because failed-round evidence is the more valuable artifact); ② **criterion preconditions** — an acceptance criterion declares the external facts it depends on, and a lapsed premise **suspends** the criterion while never auto-changing any status; ③ **§9.7.1 equivalence tiers** — E1 same-carrier / E2 cross-carrier (compare only the mutually declared key set `S`) / E3 interleaving-unknown, plus the partial-equivalence honesty clause and an invalid-declaration list (named on its own axis, not reusing the §9.1 capability modes); ④ **§15.4 PI-1** — a halted pipeline is terminal and MUST NOT be silently inherited (PI-2 is registered unverified with its acyclicity premise stated); ⑤ **§14.7 reference integrity** — the protocol audits its own live citations at the decidable layer only. Evidence status is registered per clause in §8/§11 — most are `scoped` by design: the clause exists so hosts have one authoritative target to implement and to falsify.
+>
+> **v0.21 (2026-09-15):** DSH host-adaptation capability parity + fail-closed preset gate — the `anchorlaw` agent preset now tracks the upstream standard preset's row surface (`command-goal`, `tool-subagent-codex`, `tool-subagent-claude-code`, `tool-ralph`, `present`; the three optional external-agent/workflow rows stay `disabled: true` exactly as upstream ships them — enabling requires installing the matching Bundle). A composition `name:` that no longer resolves makes the whole preset fail to mount (sessions cannot be created/resumed), so preset-row resolvability is now a fail-closed self-check item (`dsh/tests/audit_preset_rows.mjs`, item 6) catching upstream renames/removals at maintenance time instead of at resume time; the outstanding rename (`dsh-workflow-worker-thread` → `dsh-workflow-ptc`) is closed. The protocol core is unchanged — this is §16 host-adaptation scope.
+>
+> **v0.20 (2026-09-01):** Evidence/conclusion continuity (from CoreSwap M11/M14/M16 practice) — three new clauses: ① **conclusion supersession chain** (§15.4): an overturned candidate+ conclusion is expressed as a supersession record (bidirectional links + reason; original text never rewritten), mechanically answering "what is the currently valid conclusion + its history"; ② **verification comparability statement** (§9.7): quantitative metrics MUST declare the comparison basis (carrier / coverage / comparability with prior metrics); ③ **host handover validation** (§16.3 checklist): handover items distinguish verified conclusions from unverified hypotheses, and the inheritor MUST run one cheap independent verification before using a direction-level conclusion as a premise. Evidence persistence and compaction process stay host/framework scope.
+>
+> **v0.19 (2026-08-15):** Verification-scope clarification — Anchorlaw is a VERIFICATION protocol, not a knowledge-accumulation protocol. The noise-card `discovery`/`curriculum` fields are reframed from "knowledge accumulation duty" to verification backtracking; §15.2 artifacts are the verification-reproducibility carrier (not "cross-session memory"); §14 is explicitly NOT the knowledge sink (that is a host / separate knowledge mechanism's job). The verification core (`@anchor.test` / `source` / staleness / health states / §9) is unchanged — it was the actual guard that let the seed contamination be traced, not misjudged as "Rust has no bug".
+>
+> **v0.18 (2026-08-13):** DSH host adaptation — DSH is the first host implementing the full §16 Host Integration Contract interface surface (11 skills, 4 tools, anchorlaw preset, host-level global tool mount, project-level install). Fix (2026-08-15): `anchorlaw noise resolve` accepts the short suffix id printed by `noise list`; 4 new unit tests. **v0.18 also archives the Reasonix host format** (`.reasonix/skills/` → `archive/reasonix/`); `dsh/skills/` became the single skill source of truth.
+>
+> **v0.17 (2026-08-12):** §12 challenge outcomes (Reasonix/Go audit) — parse-error marker (INFO, never a P1-P6 pattern); comment-form language claims downgraded (annotation-extraction ONLY); P7-P10 reliability-risk patterns defined.
+>
+> **v0.16 (2026-08-10):** Go/Java registered as comment-form languages; Rust declared not supported by design.
+>
+> **v0.15 (2026-08-10):** C-gate halted escalation — 3 unmet iterations on the same criterion MUST halt the pipeline; the Judge hands the full report to the human.
+>
+> **v0.14 (2026-08-10):** Input-contract layering — contract = confirmed requirements + technical constraints; architecture design is pipeline stage-1 output; §16.1 handover generalized to a protocol-neutral confirmation criterion.
+>
+> **v0.13 (2026-08-10):** §12 challenge outcome — constructiveness scoped to the input-contract domain (RE outside); §16.1 RE handover criterion; §9.4 retry cap → evidence saturation (3 rounds without new data-layer evidence).
+>
+> **v0.12 (2026-08-10):** C-gate mechanical fallback restored — iteration on the same criterion capped at 3, mechanical escalation to the human on iteration 4.
+>
+> **v0.11 (2026-08-10):** Input-contract boundary — requirements discovery removed from Anchorlaw (separate requirements protocol); four-stage Judge-driven pipeline.
+>
+> **v0.10 (2026-08-10):** Judge-driven programming — acceptance-criteria-first (§15.4); AGENTS.md became index-only.
+>
+> **v0.9 (2026-08-08):** Judge institutionalization — review gate mandatory at decision points; verification termination gates (external test set, three-tier opinions, 3-round cap).
+>
+> **v0.8 (2026-08-08):** Convergence-gate model — judge-only subagent role; `anchor.write`/`anchor.test` inline.
+>
+> **v0.7 (2026-08-08):** First-host practice feedback (CoreSwap 8576-24blocks) — source artifact + `probe` type (§5.5), retry-cap scope, executor separation, judge three-source baseline.
+>
+> **v0.6 (2026-08-08):** Agent Execution Topology (§15) + Host Integration Contract (§16).
+>
+> **v0.5 (2026-08-08):** Agent Skill Manifest (§14) — reference implementation then shipped in `.reasonix/skills/` (now archived).
+>
+> **v0.3 (2026-06-18):** Source Provenance, Degraded Verification modes, Verify retry cap. See [Protocol Spec v0.3](spec/protocol-v0.3.md).
+
+---
+
+## Reasonix Version Archive
+
+The Reasonix host format (`.reasonix/skills/` — 11 `anchor.*` skills — and the Reasonix AGENTS.md) is **no longer maintained** since v0.18. It is archived under `archive/reasonix/`.
+
+If you need to iterate on the Reasonix version: **fork this repository**, then run
+
+```powershell
+pwsh archive/reasonix/restore-reasonix.ps1
+```
+
+which restores `.reasonix/skills/` + the Reasonix `AGENTS.md` to the repo root — a complete Reasonix working copy to iterate from (see [`archive/reasonix/RESTORE.md`](archive/reasonix/RESTORE.md)). Upstream does not update it anymore.
+
+---
+
+## Project Structure
+
+```
+anchorlaw/
+├── dsh/                           # DSH host adaptation (MAINTAINED)
+│   ├── skills/                    # 11 anchor-* skills (single source of truth)
+│   ├── plugins/                   # anchorlaw-tools.js — 4 model tools
+│   ├── preset/                    # anchorlaw agent preset (Judge-driven pipeline)
+│   ├── scripts/                   # install.ps1 / selfcheck.ps1
+│   └── AGENTS.md                  # DSH maintenance entry
+├── spec/
+│   └── protocol-v0.26.md          # Language-neutral protocol (current)
+├── python/                        # Protocol implementation (DSH tool backend)
+│   ├── anchorlaw-scanner/         # Standalone scanner (Level 1, VERIFIED)
+│   └── anchorlaw/                 # Anchors / noise / CLI (Level 2-4, EXPERIMENTAL)
+├── typescript/
+│   └── anchorlaw-scanner/         # TS/JS scanner (Level 1, IN DEVELOPMENT)
+└── archive/
+    └── reasonix/                  # Reasonix host format archive (unmaintained; fork & restore)
+```
+
+---
+
+## Contributing
+
+This project is actively seeking **practice data**, not pull request debates.
+
+The most valuable contribution right now:
+1. **Run the scanner** (`anchorlaw_scan` in DSH, or `anchorlaw-scanner check` from CLI) on your codebase. Report false positives.
+2. **Use the anchors** on a real project for 2+ weeks. Tell us if they helped or hurt.
+3. **Accumulate noise cards**. We need projects with 30+ cards to test AI context injection.
+
+Start a discussion on [GitHub Discussions]() or open an issue with your findings.
+
+---
+
+## References
+
+- [Protocol Specification v0.18](spec/protocol-v0.26.md)
+- Degraded Verification: [§9 of the spec](spec/protocol-v0.26.md#9-degraded-verification-v03-draft)
+- [Materialist Practice Theory](https://github.com/unknowbug/anchorlaw/wiki) — the philosophical foundation
+
+---
+
+> "This project does not promise eternal truth. It promises a set of tools forged in current historical conditions, open to being replaced by better ones. Its highest commitment is to make its users capable of questioning, improving, and ultimately transcending it."
+>
+> — First Law, Applied Reflexively

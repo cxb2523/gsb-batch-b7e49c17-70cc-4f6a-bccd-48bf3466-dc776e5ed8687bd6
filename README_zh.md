@@ -1,0 +1,181 @@
+# Anchorlaw — DeepSeek Harness 上的代码验证工具链
+
+**[English](README.md) | [中文](README_zh.md)**
+
+> **"任何声称都必须有可验证的实践锚点。"**
+>
+> —— 唯物实践论 第一律（实践锚定剃刀）
+
+Anchorlaw 是一套**面向 AI 辅助（vibe）开发的代码验证工具链**，当前以 **DeepSeek Harness（DSH）宿主适配**形态维护：`dsh/` 子树提供 11 个协议技能、4 个模型工具与 `anchorlaw` agent preset——安装一次，每个 DSH 会话都能获得 扫描 / 报告 / 噪声卡 / AI 上下文注入 能力。底层协议（`spec/`、`python/`、`typescript/`）语言无关，是 DSH 工具的执行后端。Reasonix 宿主格式**已归档、不再维护**——见 [Reasonix 版存档](#reasonix-版存档)。
+
+---
+
+## 快速开始（DSH）
+
+```powershell
+# 1. 安装一次（宿主级默认）：preset + 用户技能 + 全局工具挂载
+pwsh dsh/scripts/install.ps1
+# 2. 六项自检：工具链 / 技能 manifest / 自扫 / 安装产物 / 工具 schema / preset 行解析
+pwsh dsh/scripts/selfcheck.ps1
+# 3. 新开 DSH 会话 → 每个会话都有 4 个 anchorlaw_* 工具 + 11 个 anchor-* 技能
+```
+
+按项目使用技能无需安装器：把技能放进 `<项目>/.dsh/skills/`（DSH 原生项目级根，rank 100），任何 preset 都会发现它。DSH 没有项目级插件/preset 机制，所以 `anchorlaw` preset 与 4 个工具只能是宿主级。
+
+> 工具在**新会话**出现（会话 composition 创建时固定）。全局挂载前有工具 schema 校验门禁（2026-08-13 事故门禁）——坏 schema 不可能被装进全局。
+
+## 你能获得什么（DSH）
+
+### 4 个模型工具——全局、每个会话可用
+
+| 工具 | 作用 |
+|------|------|
+| `anchorlaw_scan` | L1 防御模式扫描器（P1-P6；`lang` 可选 cpp/go/java 注释式提取） |
+| `anchorlaw_report` | 健康报告（扫描发现 + 噪声卡积压 + 诊断结论） |
+| `anchorlaw_ai_context` | 噪声卡 + 课程导出（LLM 上下文注入） |
+| `anchorlaw_status` | 工具链版本 + 已发现 `anchor-*` 技能 |
+
+### 11 个协议技能（`anchor-*`，DSH 格式）
+
+L0-L4 动作技能 + 执行角色（scout/worker/judge），按场景加载；技能正文在 `dsh/skills/`（唯一事实源，协议 §14 是宿主无关的技能规范）。触发索引与工具调用约定见 `dsh/AGENTS.md`。
+
+### anchorlaw agent preset
+
+Judge 驱动四段流水线人格（协议 §15.4）：输入契约 → 实施规范 → 计划 → 并行实施 → 交付。判据先行、3 轮硬停止、`confirmed` **只能由人类授予**；scout/worker/judge 经隔离 subagent 委派。
+
+---
+
+## 协议核心（语言无关后端）
+
+协议本体在仓库根、宿主中立——DSH 工具驱动它的 CLI：
+
+| 组件 | 位置 | 状态 |
+|------|------|------|
+| **协议正文** | `spec/protocol-v0.26.md` | 语言无关代码验证协议（当前版） |
+| **Python** | `python/anchorlaw-scanner` + `python/anchorlaw` | 扫描器（已验证）+ 锚点/噪声/CLI（实验性）——DSH 工具后端 |
+| **TypeScript** | `typescript/anchorlaw-scanner` | TS/JS 扫描器（开发中） |
+
+### 各组件成熟度
+
+| 组件 | Python | TypeScript | 成熟度 |
+|-----------|--------|-----------|--------|
+| **扫描器** | ✅ [anchorlaw-scanner](python/anchorlaw-scanner/) | ✅ [anchorlaw-scanner](typescript/anchorlaw-scanner/) | **已验证** — 在真实项目上测试通过 |
+| **锚点系统** | ✅ [anchorlaw](python/anchorlaw/) | — | **实验性** — API 稳定，缺乏实践效能数据 |
+| **Source Provenance (v0.3/v0.7)** | ✅ `source` 参数 + probe 类型（v0.7） | — | **SCOPED** — Python 已实现；1 个项目（CoreSwap）产出过带 source 的 anchor |
+| **噪声卡** | ✅ [anchorlaw](python/anchorlaw/) | — | **未验证** — schema 已定义，无项目积累 |
+| **AI 上下文注入** | ✅ [anchorlaw](python/anchorlaw/) | — | **猜想** — 格式已定义，未做 A/B 对照实验 |
+| **降级验证 (v0.3)** | — | — | **猜想** — 三种模式已定义，无参考宿主之外的项目走过 |
+
+> **诚实声明**：标记为"实验性""未验证""猜想"的组件是工作假设。它们的价值尚未通过实践检验。邀请你帮助我们检验这些假设——而非因为我们声称它们有效。
+
+### 更新日志
+
+> **v0.26 (2026-11-13):** 支持 DSH Desktop——DSH 适配层现在**同时维护两种宿主形态**，而不是用一个换掉另一个。① `install.ps1` 一条命令装进所有 profile；Electron 独占的 `desktop` profile 直接写入（link 依赖 + `dsh.profile.bundles` 条目 + `node_modules` 链接），因为 CLI 按名字拒绝它，这样 `web` 与 `desktop` 由同一条命令保持一致。② 两个 fail-closed 门禁与自检都会探测 harness 布局：源码 checkout 继续用 `node`，asar 安装则用 `ELECTRON_RUN_AS_NODE=1 "<app>.exe"` 跑**同一批脚本**——普通 Node 的 `fs` 读不到 `app.asar`，否则在只装了 Desktop 的机器上两个门禁都会自报无法运行。行门禁改为从 `node_modules/@deepseek-ai/*` 解析包，提示词变量门禁改为扫其编译产物 `lib/`。当天在**两种布局**下均验证：27 条 preset 行 0 不可解析；注册变量仍只有 `model`、`provider`；基线 102 测试通过；两个 profile 都选中 bundle、带全局工具行、11 个用户级技能完好；`web` 启动零告警。协议核心不变——本次属 §16 宿主适配范围。
+>
+> **v0.25 (2026-10-24):** DSH 0.2.1 宿主适配收尾——① 上游移除了 `@deepseek-ai/dsh-tool-subagent-control` 的 `./list-agents` 子路径导出（它把共享控制工具合并进了包主入口），我们 preset 里的 `tool-subagent-list-agents` 行因此解析不到任何东西（`ERR_PACKAGE_PATH_NOT_EXPORTED`）。该行已删除；`list_agents` 工具仍由 `tool-subagent-control` 那行提供，与上游自己的 preset 一致。fail-closed 行门禁在**维护期**就抓住了它，而不是等会话挂载时才炸——这正是它存在的理由。② DSH bundle 现在声明 `engines.dsh`（`^0.2.0`）：运行时优先采用自声明的 `engines.dsh` 而非 `peerDependencies`，因此不兼容的 harness 会 fail-closed 明确拒绝，而不是在错误的宿主 API 上静默加载本 bundle——这正是 0.1.7 与 0.2.x 两次事故的共同失效形态。（`^0.2.1` 不可用：`0.2.1-rc.N` 预发布版排序在正式版之前，匹配不上。）协议核心不变——本次属 §16 宿主适配范围。
+>
+> **v0.24 (2026-10-17):** DSH 0.2.x 宿主适配收尾——两处陈旧宿主配置，且既有门禁都报绿。① 上游 DSH 0.2.x 删除了 `cwd` 提示词变量，而 persona 模板在**组装期严格解析**，于是 `anchorlaw` preset 每次请求都失败：`unknown prompt variable "{{cwd}}" in section "deployment:persona-prefix"`；工作目录现由 `working-directory:current` 运行时上下文提供，并新增 fail-closed 门禁（`dsh/tests/audit_prompt_variables.mjs`，自检第 7 项）要求 preset 模板里的每个 `{{变量}}` 都必须是运行中 harness 注册过的——preset 行门禁看不见这一类：行能解析、包能挂载，模板变量却已死。② 子代理行上的 `backgroundMode` 键在 `@deepseek-ai/dsh-tool-subagent` 中已不存在；Schemastery 忽略未知键，所以它一直被静默丢弃、从未生效——已删除。协议核心不变——本次属 §16 宿主适配范围。
+>
+> **v0.23 (2026-09-23):** DSH 宿主适配载体迁移——上游 DeepSeek Harness 0.1.7 换掉了 agent preset 的载体：preset 不再是 `$DSH_HOME/.agent-presets/<id>/` 目录，而是 bundle patch 里的一条 `@deepseek-ai/dsh-agent-preset` 声明行，旧目录**已无人读取**（会话头记录了这类 preset 的会话因此无法 resume）。DSH 适配层（`dsh/`）随之成为**一等 bundle 包**；其 preset 内的插件行改用**裸包名子路径**寻址（`config.plugins[]` 内的相对路径不会被锚定，且 preset 子树的 `baseUrl` 是 profile 目录而非 bundle）；11 个 anchor-* 技能改为装到用户级全局根，不再内嵌于 preset。**项目级（Reasonix 式）安装模式撤回**——DSH 没有项目级插件/preset 机制，项目级只能给技能、给不了 preset 人格与 4 个工具；项目级技能仍可通过 DSH 原生的 `<项目>/.dsh/skills` 根获得。preset 行门禁现在会走 bundle patch 载体与 `config.plugins[]`（旧实现漏检 28 行中的 27 行——这正是"自检全绿却 resume 报错"的确切原因）。协议核心不变——本次属 §16 宿主适配范围。
+>
+> **v0.22 (2026-09-15):** 验证的 temporality、判据前置集、等价档位、流程不变量——五条条款，补的都是**实践已经付过代价**的缺口（CoreSwap #156/#160/#161/#162 + M11/M16）：① **§9.8 验证的 temporality**——验证动作的 in-place 副作用 MUST 带可寻址的逆或显式不可逆声明（**只登记、不自动回滚**：失败轮证据才是更有价值的产物）；② **判据前置集**——每条判据声明它依赖的外部事实，前置失效则判据 **suspended**，且**绝不自动改任何 status**；③ **§9.7.1 等价档位**——E1 同载体 / E2 跨载体（只比双方共同声明的 key 集 `S`）/ E3 交错未知，附偏等价诚实条款与无效声明清单（该轴另起名，不复用 §9.1 能力档，避免同号不同义）；④ **§15.4 PI-1**——halt 是终止态，MUST NOT 被静默继承（PI-2 标注未验证并写明其无环前提）；⑤ **§14.7 引用完整性**——协议对自己的活引用做检查，仅限可判定层。各条款证据状态已在 §8/§11 如实登记——多数为 `scoped`，这是设计使然：**条款先立，下游才有唯一权威目标去实现、也才有东西可证伪**。
+>
+> **v0.21 (2026-09-15):** DSH 宿主适配能力补齐 + fail-closed preset 门禁——`anchorlaw` agent preset 现与上游 standard preset 的行能力面对齐（补 `command-goal`、`tool-subagent-codex`、`tool-subagent-claude-code`、`tool-ralph`、`present`；其中三个可选外部 agent/workflow 行按上游默认保持 `disabled: true`，启用需装对应 Bundle）。composition 里一个无法解析的 `name:` 会让整个 preset 挂载失败（会话无法创建/恢复），故 preset 行解析性现为 fail-closed 自检项（`dsh/tests/audit_preset_rows.mjs`，第 6 项），把上游改名/移除拦在维护时而非用户 resume 时；遗留的插件改名（`dsh-workflow-worker-thread` → `dsh-workflow-ptc`）一并关闭。协议核心不变——本次属 §16 宿主适配范围。
+>
+> **v0.20 (2026-09-01):** 证据/结论的持续性（源自 CoreSwap M11/M14/M16 实战）——新增三条款：① **结论取代链**（§15.4）：被推翻的 candidate+ 结论以取代记录表达（双向链接 + 一行理由；原文永不改写），可机械回答"当前有效结论 + 演化史"；② **验证对比口径声明**（§9.7）：量化指标 MUST 声明对比口径（载体 / 覆盖面 / 与历史口径可比性）；③ **宿主交接验证**（§16.3 checklist）：交接文档区分已验证结论与未验证假设，继承方在使用方向级结论作推理前提前 MUST 做一次廉价独立验证。证据持久性与压实流程仍属宿主/框架层。
+>
+> **v0.19 (2026-08-15):** 验证职责范围澄清——Anchorlaw 是**验证协议**，不是知识沉淀协议。噪声卡片 `discovery`/`curriculum` 字段从"知识沉淀义务"改为**验证回溯**；§15.2 artifact 定位为验证可复核性载体（非"跨会话记忆"）；§14 明确**不是知识库**（那是宿主/独立知识机制的职责）。验证核心（`@anchor.test`/`source`/staleness/健康状态/§9）不变——正是它让"种子污染"能被溯源，而非被误判为"Rust 无 bug"。
+>
+> **v0.18 (2026-08-13):** DSH 宿主适配——DSH 成为首个完整实现 §16 宿主接入契约全部接口点的宿主（11 技能、4 工具、anchorlaw preset、宿主级全局工具挂载、项目级安装）。修复（2026-08-15）：`anchorlaw noise resolve` 接受 `noise list` 打印的短后缀 ID；补 4 个单元测试。**v0.18 同时归档 Reasonix 宿主格式**（`.reasonix/skills/` → `archive/reasonix/`）；`dsh/skills/` 成为技能唯一事实源。
+>
+> **v0.17 (2026-08-12):** §12 挑战裁决（Reasonix/Go 实测）——parse-error 标记（INFO，绝不归入 P1-P6）；注释式语言声称降级（仅标注提取）；P7-P10 可靠性风险模式定义。
+>
+> **v0.16 (2026-08-10):** Go/Java 登记为注释式语言；Rust 声明不需要支持。
+>
+> **v0.15 (2026-08-10):** C 门禁硬停止——同一判据 3 轮未达标 MUST 停止流水线；Judge 提交完整报告交人类判定。
+>
+> **v0.14 (2026-08-10):** 输入契约分层——契约 = 已确认需求 + 技术约束；架构设计属 stage-1 产出；§16.1 交接判据通用化为协议中立确认判据。
+>
+> **v0.13 (2026-08-10):** §12 挑战裁决——构造性限定到输入契约域（RE 在域外）；§16.1 RE 交接判据；§9.4 retry cap 升级为证据饱和（3 轮无新数据层证据）。
+>
+> **v0.12 (2026-08-10):** C 门禁机械防呆恢复——同一判据迭代封顶 3 轮，第 4 轮机械升级人类。
+>
+> **v0.11 (2026-08-10):** 输入契约边界——需求发掘从 Anchorlaw 摘出（独立需求协议）；四段 Judge 驱动流水线。
+>
+> **v0.10 (2026-08-10):** Judge 驱动编程——判据先行（§15.4）；AGENTS.md 改为只索引不复制。
+>
+> **v0.9 (2026-08-08):** judge 制度化——审查门成为决策点强制检查点；验证终止门禁（外部测试集、三层意见分级、3 轮上限）。
+>
+> **v0.8 (2026-08-08):** 收敛门模型——唯一 subagent 角色为 judge；`anchor.write`/`anchor.test` 改 inline。
+>
+> **v0.7 (2026-08-08):** 首个宿主实践反馈（CoreSwap 8576-24blocks）——source 落盘 + `probe` 类型（§5.5）、retry cap 范围、执行者分离、judge 三源交叉核对。
+>
+> **v0.6 (2026-08-08):** Agent Execution Topology（§15）+ Host Integration Contract（§16）。
+>
+> **v0.5 (2026-08-08):** Agent Skill Manifest（§14）——参考实现当时随 `.reasonix/skills/` 提供（现已归档）。
+>
+> **v0.3 (2026-06-18):** Source Provenance、降级验证模式、Verify 重试上限。详见 [协议规范 v0.3](spec/protocol-v0.3.md)。
+
+---
+
+## Reasonix 版存档
+
+Reasonix 宿主格式（`.reasonix/skills/`——11 个 `anchor.*` 技能——与 Reasonix 版 AGENTS.md）自 v0.18 起**不再维护**，归档在 `archive/reasonix/`。
+
+如需基于 Reasonix 版本继续迭代：**Fork 本仓库**后运行
+
+```powershell
+pwsh archive/reasonix/restore-reasonix.ps1
+```
+
+脚本会把 `.reasonix/skills/` + Reasonix 版 `AGENTS.md` 恢复到仓库根——得到完整的 Reasonix 工作副本自行迭代（详见 [`archive/reasonix/RESTORE.md`](archive/reasonix/RESTORE.md)）。上游不再更新它。
+
+---
+
+## 项目结构
+
+```
+anchorlaw/
+├── dsh/                           # DSH 宿主适配层（当前维护）
+│   ├── skills/                    # 11 个 anchor-* 技能（唯一事实源）
+│   ├── plugins/                   # anchorlaw-tools.js — 4 个模型工具
+│   ├── preset/                    # anchorlaw agent preset（Judge 驱动流水线）
+│   ├── scripts/                   # install.ps1 / selfcheck.ps1
+│   └── AGENTS.md                  # DSH 维护入口
+├── spec/
+│   └── protocol-v0.26.md          # 语言无关协议（当前版）
+├── python/                        # 协议实现（DSH 工具后端）
+│   ├── anchorlaw-scanner/         # 独立扫描器（Level 1, 已验证）
+│   └── anchorlaw/                 # 锚点 / 噪声 / CLI（Level 2-4, 实验性）
+├── typescript/
+│   └── anchorlaw-scanner/         # TS/JS 扫描器（Level 1, 开发中）
+└── archive/
+    └── reasonix/                  # Reasonix 宿主格式存档（不再维护；Fork 后可恢复）
+```
+
+---
+
+## 参与贡献
+
+本项目目前最需要的不是 PR 辩论，而是**实践数据**。
+
+最有价值的贡献方式：
+1. **跑扫描器**（DSH 里用 `anchorlaw_scan`，或命令行 `anchorlaw-scanner check`）——在你的项目上跑，报告误报
+2. **使用锚点系统**——在真实项目上用 2 周以上，告诉我们它帮助了还是阻碍了
+3. **积累噪声卡**——我们需要有 30+ 张噪声卡的项目来测试 AI 上下文注入的效果
+
+在 GitHub Discussions 开启讨论，或在 Issues 提交你的发现。
+
+---
+
+## 参考
+
+- [协议规范 v0.18](spec/protocol-v0.26.md)
+- 降级验证：[协议 §9](spec/protocol-v0.26.md#9-degraded-verification-v03-draft)
+- 唯物实践论方法论——本协议的哲学基础
+
+---
+
+> "这个项目不承诺永恒的真理。它承诺一套在当前历史条件下锻造的最趁手的工具，并对更好的工具保持开放。它的最高承诺，是让使用者最终有能力质疑、改进、乃至超越它本身。"
+>
+> —— 第一律，反身性应用

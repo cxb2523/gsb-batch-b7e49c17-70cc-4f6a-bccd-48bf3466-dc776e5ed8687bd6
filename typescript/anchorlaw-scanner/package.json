@@ -1,0 +1,37 @@
+{
+  "name": "anchorlaw-scanner",
+  "version": "0.1.0",
+  "description": "Defensive code pattern scanner for TypeScript/JavaScript — Anchorlaw Protocol Level 1",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "anchorlaw-scanner": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "static-analysis",
+    "code-quality",
+    "defensive-patterns",
+    "vibe-coding",
+    "anchorlaw",
+    "typescript",
+    "ast"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "dist/**/*"
+  ]
+}
