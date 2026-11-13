@@ -1,0 +1,181 @@
+[[tool.astroproject.members]]
+name = "astrobasis"
+description = "Pure mechanism layer — zero hard dependencies"
+
+[[tool.astroproject.members]]
+name = "astrocrawl"
+description = "Async web crawler powered by Playwright + AI"
+
+[[tool.astroproject.members]]
+name = "astroframe"
+description = "Universal plugin platform runtime — Protocol + registry + sandbox"
+
+[[tool.astroproject.members]]
+name = "astroweave"
+description = "Workflow engine — orchestrate crawl, AI, and rules pipelines as composable DAGs"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = ["__pycache__/", ".pytest_cache/", ".mypy_cache/", "build/"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+asyncio_mode = "auto"
+addopts = ["-v", "--tb=short", "--strict-markers"]
+markers = [
+    "gui: GUI tests requiring QApplication (offscreen QPA)",
+    "plugin_migration: Plugin system migration tests — requires ASTROCRAWL_PLUGINS=1",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+exclude = ["__pycache__", ".git", ".pytest_cache", ".mypy_cache"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # pydocstyle — No comments by default
+    "ANN",     # flake8-annotations — mypy disallow_untyped_defs=false
+    "SLF",     # private member access — Private by default principle
+    "RUF001",  # ambiguous unicode in strings — Chinese codebase
+    "RUF002",  # ambiguous unicode in docstrings — Chinese codebase
+    "RUF003",  # ambiguous unicode in comments — Chinese codebase
+    "CPY",     # copyright notice — not required
+    "COM812",  # trailing comma — ruff format handles
+    "PLC0415", # deferred imports — all intentional (Provider-agnostic, circular-deps, heavy imports)
+    "E501",    # line too long — Chinese content + f-strings, 16 violations at 0.01% rate
+    "E402",    # module-level import not at top — same pattern as PLC0415 (conftest, path setup)
+    "S101",    # assert — all 9 are valid internal invariant checks, no -O in production
+    "ARG001",  # unused function args — Qt callbacks, Protocol signatures, mock side_effects
+    "ARG002",  # unused method args — Qt delegates, Protocol overrides, supervisor base class
+    "ARG005",  # unused lambda args — same reasoning as ARG001/ARG002
+    "FBT001",  # boolean positional arg in definition — project convention
+    "FBT002",  # boolean default positional arg — project convention
+    "FBT003",  # boolean positional arg in call — project convention
+    "TRY003",  # long exception message — external strings, not a bug
+    "TRY300",  # try in loop — architectural pattern
+    "TRY301",  # raise within try — architectural pattern
+    "TRY400",  # try-except in loop — architectural pattern
+    "EM101",   # raw string in exception — project convention
+    "EM102",   # f-string in exception — project convention
+    "SIM105",  # contextlib.suppress — style preference
+    "C901",    # McCabe complexity — arbitrary threshold, 137 files don't need gating
+    "PLR0911", # too many return statements — arbitrary threshold
+    "PLR0912", # too many branches — arbitrary threshold
+    "PLR0913", # too many arguments — arbitrary threshold
+    "PLR0915", # too many statements — arbitrary threshold
+    "PLR0917", # too many positional arguments — arbitrary threshold
+    "PLR2004", # magic value — test config data
+    "N802",    # function name convention — Qt/compat naming conflicts
+    "N806",    # variable name convention — Qt/compat naming conflicts
+    "PERF401", # list comprehension in loop — micro-optimization
+    "PLW0108", # lambda in loop — style preference
+    "PLW0603", # global statement — used for singletons
+    "ASYNC110", # async subprocess pattern
+    "S603",    # subprocess shell injection — we never use shell=True
+    "S105",    # hardcoded password — test data strings
+    "RSE102",  # unnecessary parens in raise — style preference
+    "RUF059",  # unnecessary list/dict — requires --unsafe-fixes (project policy)
+    "PLW2901", # for loop variable overwritten — all are normal .strip()/.lower() processing
+    "PLE2515", # zero-width-space in test data — C5 sanitization test fixtures
+    "S106",    # hardcoded password — all test fixtures with password/token param names
+    "S311",    # standard pseudo-random — non-crypto contexts
+    "INP001",  # implicit namespace package — monorepo subdir structure
+    "SIM",     # simplify — requires --unsafe-fixes
+    "RET",     # return — style preference
+    "ASYNC",   # async patterns — style preference
+    "FURB",    # refurb — style preference
+    "RUF005",  # collection literal concatenation — style preference
+    "RUF006",  # store a reference (asyncio.create_task)
+    "RUF015",  # unnecessary iter() — requires --unsafe-fixes
+    "RUF021",  # unnecessary sum() — style
+    "RUF022",  # __all__ not sorted — already fixed
+    "RUF023",  # __slots__ not sorted — already fixed
+    "RUF043",  # unnecessary isinstance — style preference
+    "RUF012",  # mutable class attribute — already handled inline
+    "ARG004",  # unused static method arg — same as ARG001/ARG002
+    "PLR1714", # merge isinstance calls — style preference
+    "N817",    # camelcase imported as constant — Qt compat
+    "N814",    # camelcase imported as constant — Qt compat
+    "EXE001",  # shebang — scripts with #! python
+    "S324",    # hashlib — non-security contexts
+    "PLE2502", # chain comparison — style preference
+    "G004",    # logging f-string — project logging convention
+    "TRY002",  # bare except — same family as BLE001 (per-package-ignored)
+    "S314",    # xml — style
+    "PLW0602", # global statement — singletons
+    "PLC0207", # dict key iteration — style preference
+    "PERF102", # dict.items() → dict.values() — micro-optimization
+    "PIE810",  # unnecessary pass — style preference
+    "N801",    # class name convention
+    "N803",    # argument name convention
+    "N805",    # first arg of method
+    "N813",    # camelcase imported as lowercase
+    "N818",    # exception name suffix
+    "DTZ",     # datetime timezone — project convention
+    "TC004",   # type checking — style
+    "S607",    # partial executable path — style
+    "PYI",     # pyi conventions
+    "E731",    # lambda assignment — style
+    "S112",    # try-except-continue — style
+    "PLR5501", # else after return — style
+    "PLR1730", # if instead of min/max — style
+    "PLE1700", # yield from — style
+    "PERF402", # dict comprehension — micro-optimization
+    "LOG014",  # exc_info outside handler — style
+    "LOG015",  # exception logging — style
+    "S108",    # tempfile — intentional sandbox paths
+    "TRY004",  # TypeError vs ValueError — already fixed all real cases; remaining are false positives (RuntimeError after isinstance)
+    "AIR",     # Airflow rules — project has no Airflow code
+    "PD",      # Pandas rules — project has no Pandas code
+    "DJ",      # Django rules — project has no Django code
+    "DOC",     # pydoclint — same rationale as D (No comments by default)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# ── T201 (print) — allowed in specific files ──
+"astrocrawl/astrocrawl/main.py" = ["T201"]
+"astrocrawl/astrocrawl/config.py" = ["T201"]
+"astrocrawl/astrocrawl/crawler/progress.py" = ["T201"]
+"astrocrawl/astrocrawl/cli/**/*.py" = ["T201"]
+"astrobasis/astrobasis/_logging.py" = ["T201"]
+"astrocrawl/tests/manual/**/*.py" = ["T201"]
+# ── ERA+PT+B008 + BLE001+S110 — source code ──
+"astrocrawl/astrocrawl/**/*.py" = ["ERA", "PT", "B008", "BLE001", "S110"]
+"astroframe/astroframe/**/*.py" = ["ERA", "PT", "B008", "BLE001", "S110"]
+"astroweave/astroweave/**/*.py" = ["ERA", "PT", "B008"]
+# ── ERA+PT+B017 + BLE001+S110 + test conveniences — test code ──
+"astrocrawl/tests/**/*.py" = ["ERA", "PT", "B017", "BLE001", "S110"]
+"astrobasis/tests/**/*.py" = ["ERA", "PT", "BLE001", "S110"]
+"astroframe/tests/**/*.py" = ["ERA", "PT", "B017", "BLE001", "S110"]
+"astroweave/tests/**/*.py" = ["ERA", "PT", "B017"]
+# ── Scripts/docs + BLE001+S110 ──
+"scripts/**/*.py" = ["ERA", "T201", "B007", "BLE001", "S110"]
+"docs/**/*.py" = ["T201", "B007", "BLE001", "S110"]
+# ── T201 (print) — IPC protocol, test fake ──
+"astroframe/astroframe/_host.py" = ["T201"]
+"astroframe/tests/_fakes_plugin.py" = ["T201"]
+# ── One-off exceptions ──
+"astrocrawl/astrocrawl/crawler/outcomes.py" = ["TC001"]
+"astrocrawl/tests/test_gui_mainwindow_behavior.py" = ["B015"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["astroproject", "astrocrawl", "astrobasis", "astroframe", "astroweave"]
+required-imports = ["from __future__ import annotations"]
+split-on-trailing-comma = false
+
+[tool.coverage.run]
+source = ["astrobasis", "astrocrawl", "astroframe", "astroweave"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

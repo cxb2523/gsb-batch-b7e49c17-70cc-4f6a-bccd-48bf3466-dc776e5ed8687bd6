@@ -1,0 +1,320 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["*/*"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install "ruff>=0.16.0,<0.17.0" "mypy>=1.20,<2.0" build twine
+
+      - name: Install astrobasis (mypy dependency resolution)
+        run: pip install --config-settings editable_mode=compat -e astrobasis/
+
+      - name: ruff format (check)
+        run: ruff format --check .
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff check --preview (non-blocking)
+        continue-on-error: true
+        run: ruff check --preview .
+
+      - name: codespell
+        run: |
+          # finshed: test_signals.py:39 + 2 archive docs 故意保留此拼写
+          # （测试/文档引述属性名拼写错误的行为，非笔误）
+          pip install codespell && codespell --ignore-words-list=finshed
+
+      - name: mypy
+        run: mypy astrocrawl/astrocrawl/ astrobasis/astrobasis/ astroframe/astroframe/ astroweave/astroweave/
+
+      - name: Build check (astroproject)
+        run: |
+          cd astroproject && python -m build
+          twine check dist/*
+
+      - name: Build check (astrobasis)
+        run: |
+          cd astrobasis && python -m build
+          twine check dist/*
+
+      - name: Build check (astroweave)
+        run: |
+          cd astroweave && python -m build
+          twine check dist/*
+
+      - name: Build check (astroframe)
+        run: |
+          cd astroframe && python -m build
+          twine check dist/*
+
+      - name: Build check (astrocrawl)
+        run: |
+          cd astrocrawl && python -m build
+          twine check dist/*
+
+      - name: Commit message check
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request)
+              RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+              ;;
+            push)
+              if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+                RANGE="HEAD"
+              else
+                RANGE="${{ github.event.before }}..${{ github.event.after }}"
+              fi
+              ;;
+          esac
+          BAD=$(git log --format=%s $RANGE | grep -v '^Merge' | grep -vE '^(feat|fix|refactor|docs|test|chore|style|perf|ci|build|revert|release): .+' | head -1)
+          if [ -n "$BAD" ]; then
+            echo "::error::Commit message does not match 'type: description' format: $BAD"
+            exit 1
+          fi
+
+      - name: i18n hardcoded string check (中英文双层)
+        run: find astrocrawl/astrocrawl/gui astrocrawl/astrocrawl/cli -name '*.py' | xargs python scripts/check_i18n.py
+
+      - name: Install Qt tools (lupdate6)
+        if: always()
+        run: |
+          pip install PySide6
+          # PySide6 pip wheel does not guarantee lupdate6 — install from system package manager
+          sudo apt-get update -qq
+          for pkg in qt6-tools-dev qttools6-dev qt6-l10n-tools libqt6linguist6-dev; do
+            if apt-cache show "$pkg" &>/dev/null; then
+              sudo apt-get install -y -qq "$pkg" && break
+            fi
+          done
+          LU=""
+          for cand in lupdate6 lupdate-pro6 lupdate lupdate-qt6; do
+            LU=$(command -v "$cand" 2>/dev/null) && break
+          done
+          if [ -z "$LU" ]; then
+            for cand in /usr/lib/qt6/bin/lupdate6 /usr/lib/qt6/bin/lupdate; do
+              [ -x "$cand" ] && LU="$cand" && break
+            done
+          fi
+          if [ -z "$LU" ]; then
+            echo "::error::Cannot find lupdate binary after installing packages"
+            echo "Installed packages:"
+            dpkg -l | grep -i qt6.*tool | awk '{print $2}'
+            echo "Searching for lupdate in system:"
+            find /usr -name 'lupdate*' -type f 2>/dev/null || true
+            exit 1
+          fi
+          echo "LUPD_BIN=$LU" >> $GITHUB_ENV
+          LR=$(dirname "$LU")/lrelease
+          [ -x "$LR" ] || LR=$(command -v lrelease6 2>/dev/null) || LR=$(command -v lrelease 2>/dev/null)
+          echo "LREL_BIN=$LR" >> $GITHUB_ENV
+
+      - name: i18n TS sanity — no vanished/unfinished in committed file
+        if: always()
+        run: |
+          TS_FILE=astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.ts
+          VANISHED=$(grep -c 'type="vanished"' "$TS_FILE" || true)
+          UNFINISHED=$(grep -c 'type="unfinished"' "$TS_FILE" || true)
+          if [ "$VANISHED" -gt 0 ]; then
+            echo "::error::TS file has $VANISHED vanished translations. Run: lupdate6 -extensions py astrocrawl/astrocrawl/gui/ astrocrawl/astrocrawl/cli/ -ts astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.ts"
+            grep -B1 'type="vanished"' "$TS_FILE" | head -20
+            exit 1
+          fi
+          if [ "$UNFINISHED" -gt 0 ]; then
+            echo "::error::TS file has $UNFINISHED unfinished translations. Edit .ts to fill translations."
+            grep -B1 'type="unfinished"' "$TS_FILE" | head -20
+            exit 1
+          fi
+          echo "TS sanity: clean (0 vanished, 0 unfinished)"
+
+      - name: i18n lupdate coverage — new source strings need translations
+        if: always()
+        run: |
+          TS_FILE=astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.ts
+          TS_TMP=$(mktemp --suffix=.ts)
+          cp "$TS_FILE" "$TS_TMP"
+          TR_FILES=$(grep -rl '\.tr(\|tr("' astrocrawl/astrocrawl/gui/ astrocrawl/astrocrawl/cli/ --include='*.py' | grep -v test_ | grep -v __init__ | tr '\n' ' ')
+          $LUPD_BIN $TR_FILES -ts "$TS_TMP" 2>&1
+          python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('${TS_TMP}')
+          root = tree.getroot()
+          for ctx in root.findall('context'):
+              for msg in list(ctx.findall('message')):
+                  src = msg.find('source')
+                  if src is not None and src.text and src.text.strip().startswith('_'):
+                      ctx.remove(msg)
+              if not ctx.findall('message'):
+                  root.remove(ctx)
+          tree.write('${TS_TMP}', encoding='utf-8', xml_declaration=True)
+          "
+          python3 scripts/check_ts_dicts.py --fix-vanished "$TS_TMP"
+          UNFINISHED=$(grep -c 'type="unfinished"' "$TS_TMP" || true)
+          if [ "$UNFINISHED" -gt 0 ]; then
+            echo "::error::$UNFINISHED new source string(s) need translation. Run lupdate6 -extensions py astrocrawl/astrocrawl/gui/ astrocrawl/astrocrawl/cli/ -ts $TS_FILE, then fill translations."
+            grep -B2 'type="unfinished"' "$TS_TMP" | head -30
+            rm "$TS_TMP"
+            exit 1
+          fi
+          VANISHED=$(grep -c 'type="vanished"' "$TS_TMP" || true)
+          if [ "$VANISHED" -gt 0 ]; then
+            echo "::error::$VANISHED obsolete source string(s) in TS. Remove them from $TS_FILE or update check_ts_dicts.py REGISTRY."
+            grep -B2 'type="vanished"' "$TS_TMP" | head -30
+            rm "$TS_TMP"
+            exit 1
+          fi
+          rm "$TS_TMP"
+          echo "lupdate coverage: complete"
+
+      - name: i18n QM staleness — .qm must match .ts
+        if: always()
+        run: |
+          QM_TMP=$(mktemp)
+          $LREL_BIN astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.ts -qm "$QM_TMP" 2>&1
+          if ! cmp -s "$QM_TMP" astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.qm; then
+            echo "::error::.qm is out of sync with .ts. Run: lrelease6 astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.ts -qm astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.qm"
+            rm "$QM_TMP"
+            exit 1
+          fi
+          rm "$QM_TMP"
+          echo "QM staleness: in sync"
+
+      - name: i18n dict-based TS coverage check
+        if: always()
+        run: python scripts/check_ts_dicts.py
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python-version }}"
+          cache: pip
+
+      - run: sudo apt-get install -y libxcb-cursor0 libegl1
+
+      - run: |
+          pip install --config-settings editable_mode=compat -e astrobasis/
+          pip install --config-settings editable_mode=compat -e astroweave/
+          pip install --config-settings editable_mode=compat -e astroframe/
+          pip install --config-settings editable_mode=compat -e "astrocrawl/[dev,gui,full,yaml,fast,monitor]"
+          pip install pip-audit
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - run: playwright install --with-deps chromium
+
+      - name: Non-GUI tests (astroproject)
+        run: pytest astroproject/tests/ --cov -q || [ $? -eq 5 ]
+
+      - name: Non-GUI tests (astrobasis)
+        run: pytest astrobasis/tests/ --cov -q
+
+      - name: Non-GUI tests (astroframe)
+        run: pytest astroframe/tests/ --cov-append -q
+
+      - name: Non-GUI tests (astrocrawl)
+        run: cd astrocrawl && pytest -m "not gui" --cov-append -q
+
+      - name: Non-GUI tests (astroweave)
+        # exit 5 = no tests collected (acceptable for skeleton package)
+        run: pytest astroweave/tests/ --cov-append -q || [ $? -eq 5 ]
+
+      - name: GUI tests
+        run: |
+          # PySide6 进程退出时 C++/Python 内存管理互释导致 SIGSEGV (exit 139)。
+          # 非项目 bug，测试数据在其前已完成落盘。容忍 139，其他非零正常报错。
+          # TODO: PySide6 上游修复此 bug 后移除此例外。
+          set +e
+          cd astrocrawl && QT_QPA_PLATFORM=offscreen pytest -m "gui" --cov-append -q
+          EXIT=$?
+          if [ $EXIT -ne 0 ] && [ $EXIT -ne 139 ]; then exit $EXIT; fi
+
+      - name: Coverage report
+        run: |
+          coverage report --fail-under=0
+          coverage xml
+
+      - name: Dependency audit
+        run: pip-audit
+
+  publish:
+    needs: [lint, test]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install build
+
+      - name: Extract package and version from tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          PKG="${TAG%%/*}"
+          VERSION="${TAG#*/}"
+          VERSION="${VERSION#v}"
+          KNOWN="astroproject astrobasis astroframe astrocrawl astroweave astroguard astrostaff astroforum astrocraft astrovault astroguild"
+          if ! echo "$KNOWN" | grep -qw "$PKG"; then
+            echo "::error::Unknown package in tag: $TAG (expected one of: $KNOWN)"
+            exit 1
+          fi
+          echo "PKG=$PKG" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Build
+        run: |
+          cd "$PKG"
+          python -m build
+
+      - name: Verify version matches tag
+        run: |
+          pip install --config-settings editable_mode=compat -e "$PKG/"
+          ACTUAL=$(python -c "import ${PKG}._version; print(${PKG}._version.__version__)")
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::Version mismatch: tag says v$VERSION but ${PKG}/_version.py says $ACTUAL"
+            exit 1
+          fi
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ env.PKG }}/dist/

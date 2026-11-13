@@ -1,0 +1,50 @@
+# AstroCrawl .gitignore
+
+# Build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+*.egg
+*.manifest
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+*.conda/
+
+# Testing & coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.local
+*.local.toml
+
+# Crawler output (generated when testing from repo root)
+*.db
+*.db-journal
+*.db-wal
+crawler_output.jsonl
+crawler_output.report.json

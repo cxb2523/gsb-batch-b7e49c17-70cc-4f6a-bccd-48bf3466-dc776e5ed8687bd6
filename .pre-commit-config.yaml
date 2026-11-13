@@ -1,0 +1,60 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.0
+    hooks:
+      - id: codespell
+        # finshed: test_signals.py:39 + 2 archive docs 故意保留
+        # （测试/文档引述属性名拼写错误的行为，非笔误）
+        args: [--write-changes, --ignore-words-list=finshed]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+      - id: ruff-format
+        name: ruff-format (markdown)
+        args: [--preview]
+        types_or: [markdown]
+
+  - repo: local
+    hooks:
+      - id: i18n-check
+        name: i18n-check
+        entry: python scripts/check_i18n.py
+        language: system
+        types: [python]
+        files: ^astrocrawl/astrocrawl/
+      - id: logfmt-check
+        name: logfmt-check
+        entry: python scripts/check_logfmt.py
+        language: system
+        types: [python]
+        files: ^(astrocrawl/astrocrawl/|astroframe/astroframe/|astroweave/astroweave/)
+      - id: i18n-ts-dicts
+        name: i18n-ts-dicts
+        entry: python scripts/check_ts_dicts.py astrocrawl/astrocrawl/gui/translations/astrocrawl_gui_zh_CN.ts
+        language: system
+        files: ^astrocrawl/astrocrawl/gui/translations/.*\.ts$
+        pass_filenames: false
+      - id: i18n-qm-fresh
+        name: i18n-qm-fresh
+        entry: python scripts/check_qm_fresh.py
+        language: system
+        files: ^astrocrawl/astrocrawl/gui/translations/
+        pass_filenames: false
