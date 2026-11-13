@@ -274,6 +274,8 @@ test('renderer replaces only the player once per change, preserves motion and fr
     assert.equal(renderer.playerSkin, id);
     assert.equal(cars.get(1), rival);
     assert.equal(scene.children.length, 2);
+    assert.equal(previous.parent, null, 'the replaced car leaves the scene immediately');
+    assert.equal(scene.children.filter(child => child.userData.isPlayer).length, 1, 'exactly one player car remains');
     assert.deepEqual(player.position.toArray(), previous.position.toArray());
     assert.deepEqual(player.quaternion.toArray(), previous.quaternion.toArray());
     assert.deepEqual(player.userData.wheels.map((wheel: THREE.Object3D) => wheel.quaternion.toArray()),
@@ -287,4 +289,86 @@ test('renderer replaces only the player once per change, preserves motion and fr
     assert.equal(cars.get(0), player, 'reselecting a skin never rebuilds its car');
     assert.ok([...counts.values()].every(count => count === 1));
   }
+});
+
+test('a detached or hidden player car is replaced exactly once and keeps its visibility', () => {
+  const player = carFor();
+  player.visible = false;
+  const scene = new THREE.Scene();
+  const cars = new Map<number, THREE.Group>([[0, player]]);
+  const renderer = Object.assign(Object.create(RaceRenderer.prototype) as RaceRenderer, {
+    scene, cars, selectedSkin: DEFAULT_SKIN,
+  });
+  const counts = watchDisposals(player);
+  assert.equal(renderer.setPlayerSkin('glacier'), true);
+  const replacement = cars.get(0)!;
+  fixtures.push(replacement);
+  assert.notEqual(replacement, player);
+  assert.equal(replacement.parent, scene, 'the replacement rebinds to the scene');
+  assert.equal(replacement.visible, false, 'car-level visibility survives the switch');
+  assert.equal(player.parent, null);
+  assert.ok([...counts.values()].every(count => count === 1));
+  assert.equal(scene.children.filter(child => child.userData.isPlayer).length, 1);
+});
+
+function watchResources(list: (THREE.BufferGeometry | THREE.Material | THREE.Texture)[]) {
+  const counts = new Map(list.map(resource => [resource, 0]));
+  for (const resource of list) {
+    resource.addEventListener('dispose', () => counts.set(resource, counts.get(resource)! + 1));
+  }
+  return counts;
+}
+
+test('renderer teardown releases every car, pickup and particle GPU asset exactly once', () => {
+  const player = carFor('neon');
+  const rival = carFor('sandstorm', false);
+  const scene = new THREE.Scene();
+  scene.add(player, rival);
+  const cars = new Map<number, THREE.Group>([[0, player], [1, rival]]);
+  const playerCounts = watchDisposals(player);
+  const rivalCounts = watchDisposals(rival);
+
+  // Mirror createPickup / the particle system without a WebGL context.
+  const canvas = document.createElement('canvas');
+  const pickupTexture = new THREE.CanvasTexture(canvas);
+  const particleTexture = new THREE.CanvasTexture(canvas);
+  const pickup = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ map: pickupTexture }));
+  const pickupGroup = new THREE.Group();
+  pickupGroup.add(pickup);
+  scene.add(pickupGroup);
+  const particleGeometry = new THREE.BufferGeometry();
+  const particleMaterial = new THREE.PointsMaterial({ map: particleTexture });
+  scene.add(new THREE.Points(particleGeometry, particleMaterial));
+  const sharedCounts = watchResources([
+    pickupTexture, particleTexture, pickup.geometry, pickup.material, particleGeometry, particleMaterial,
+  ]);
+
+  const calls = { disconnect: 0, world: 0, renderer: 0, dom: 0 };
+  const pickups = new Map<number, THREE.Group>([[7, pickupGroup]]);
+  const tex = new Map([['nitro', pickupTexture]]);
+  const renderer = Object.assign(Object.create(RaceRenderer.prototype) as RaceRenderer, {
+    scene, cars, pickups, tex, particleTexture,
+    projectiles: new Map(),
+    resizeObserver: { disconnect: () => { calls.disconnect++; } },
+    world: { dispose: () => { calls.world++; } },
+    sun: new THREE.DirectionalLight(),
+    renderer: { dispose: () => { calls.renderer++; }, domElement: { remove: () => { calls.dom++; } } },
+  });
+
+  renderer.dispose();
+  assert.equal(cars.size, 0);
+  assert.equal(player.parent, null);
+  assert.equal(rival.parent, null);
+  assert.equal(pickups.size, 0);
+  assert.equal(tex.size, 0);
+  assert.ok([...playerCounts.values()].every(count => count === 1), 'player car assets released once');
+  assert.ok([...rivalCounts.values()].every(count => count === 1), 'rival car assets released once');
+  assert.ok([...sharedCounts.values()].every(count => count === 1), 'pickup and particle assets released once');
+  assert.deepEqual(calls, { disconnect: 1, world: 1, renderer: 1, dom: 1 });
+
+  // A repeated teardown must not throw or release anything a second time.
+  renderer.dispose();
+  assert.ok([...playerCounts.values(), ...rivalCounts.values(), ...sharedCounts.values()]
+    .every(count => count === 1));
+  assert.deepEqual(calls, { disconnect: 1, world: 1, renderer: 1, dom: 1 });
 });

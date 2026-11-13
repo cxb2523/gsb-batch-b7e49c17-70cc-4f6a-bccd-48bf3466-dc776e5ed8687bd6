@@ -34,6 +34,7 @@ export class RaceRenderer {
   private particleTexture: THREE.CanvasTexture;
   private particleCursor = 0;
   private highQuality = true;
+  private disposed = false;
   private readonly tex = new Map<ItemType, THREE.CanvasTexture>();
   private readonly targetPosition = new THREE.Vector3();
   private readonly targetLook = new THREE.Vector3();
@@ -392,6 +393,9 @@ export class RaceRenderer {
   }
 
   dispose() {
+    // Tearing down twice (HMR, error recovery) must not release anything twice.
+    if (this.disposed) return;
+    this.disposed = true;
     this.resizeObserver.disconnect();
     this.cars.forEach(car => disposeCarVisual(car));
     this.cars.clear();
@@ -403,7 +407,10 @@ export class RaceRenderer {
         for (const mat of mats) mat.dispose();
       }
     });
+    this.pickups.clear();
+    this.projectiles.clear();
     this.tex.forEach(t => t.dispose());
+    this.tex.clear();
     this.particleTexture.dispose();
     this.sun.shadow.dispose();
     this.renderer.dispose();
