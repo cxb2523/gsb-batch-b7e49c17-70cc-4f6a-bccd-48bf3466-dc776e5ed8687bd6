@@ -521,8 +521,10 @@ describe('POST /v1/search', () => {
     expect(data.data.total).toBe(data.data.results.length)
     if (data.data.fallbackFrom) console.log(`  Fallbacks: ${JSON.stringify(data.data.fallbackFrom)}`)
 
-    // Google throttles IPs that search heavily; then the fallback engine must still deliver
-    const googleBlocked = data.data.fallbackFrom?.some((f) => f.engine === 'google' && /captcha/i.test(f.reason))
+    // Google throttles IPs that search heavily; then the fallback engine must still deliver.
+    // A previous CAPTCHA can also leave Google cooling down, which skips it without a network attempt.
+    const googleBlocked = data.data.engine !== 'google' &&
+      data.data.fallbackFrom?.some((f) => f.engine === 'google' && /captcha|cooling down/i.test(f.reason))
     if (googleBlocked) console.log('  Google is blocking this IP right now — verifying the fallback instead')
     else expect(data.data.engine).toBe('google')
     expect(data.data.results.length).toBeGreaterThanOrEqual(3)

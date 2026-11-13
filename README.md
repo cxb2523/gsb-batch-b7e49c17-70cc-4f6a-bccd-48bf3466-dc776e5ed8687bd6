@@ -341,6 +341,12 @@ How Google is queried:
 
 A blocked path is skipped for 10 minutes. `GET /health` shows each path's state. If every engine is blocked, the response has `blocked: true` and empty `results`. Heavy automated searching from one IP gets throttled by Google; set `PROXY_URL` to spread the load.
 
+The response says where the results came from:
+
+- `engine` — the engine that actually produced them, including on a cache hit.
+- `cached: true` — the results were served from the search cache, no network request was made.
+- `fallbackFrom` — engines that were tried or deliberately skipped before `engine`. A path still in its cooldown window appears here as `skipped: still cooling down after a bot check (... until <ISO time>); retry in <duration>` — it is reported as a skip, not as a network failure. When a cached fallback answer skips the primary engine, `fallbackFrom` explains that too.
+
 ### Map URLs (no content fetch)
 
 ```bash

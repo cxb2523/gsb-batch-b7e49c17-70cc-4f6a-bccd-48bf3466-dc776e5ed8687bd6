@@ -8,6 +8,7 @@ import { config } from '../../lib/config.js'
 import { logger } from '../../lib/logger.js'
 
 export type SearchEngine = 'google' | 'duckduckgo'
+export type SearchStrategy = 'google-http' | 'google-browser' | 'duckduckgo'
 
 export interface SearchOptions {
   query: string
@@ -25,11 +26,17 @@ export interface SearchOptions {
 
 export interface SearchResponse {
   results: SearchResult[]
+  /** Engine that actually produced these results — also for a cache hit. */
   engine: SearchEngine
-  /** Engines that were tried before `engine` and why they were skipped. */
+  /**
+   * Engines tried (or deliberately skipped) before `engine`, with a readable reason.
+   * A strategy that is cooling down after a bot check shows up here as `skipped: ...`
+   * together with its cooldown end / remaining time — never as a network failure.
+   */
   fallbackFrom?: { engine: SearchEngine; reason: string }[]
-  /** Every engine tried was blocked (CAPTCHA / anomaly page). */
+  /** Every engine tried was blocked (CAPTCHA / anomaly page / still cooling down). */
   blocked?: boolean
+  /** Results were served from the cache instead of a fresh request. */
   cached?: boolean
 }
 
@@ -40,25 +47,92 @@ const GOOGLE_READY_SELECTOR = '#rso, #search, #botstuff, #captcha-form, form[act
 // Google still serves its lightweight no-JS results page to Opera Mini: plain HTTP, ~0.5s, real /url?q= links
 const GOOGLE_BASIC_UA = 'Opera/9.80 (J2ME/MIDP; Opera Mini/9.80 (S60; SymbOS; Opera Mobi/23.348; U; en) Presto/2.5.25 Version/10.54'
 
-type Strategy = 'google-http' | 'google-browser' | 'duckduckgo'
-
 // After a CAPTCHA, skip that strategy for a while: retrying immediately is slow and prolongs the block
-const BLOCK_COOLDOWN_MS = 10 * 60 * 1000
-const blockedUntil = new Map<Strategy, number>()
+export const SEARCH_BLOCK_COOLDOWN_MS = 10 * 60 * 1000
+const blockedUntil = new Map<SearchStrategy, number>()
 
-function isCoolingDown(s: Strategy): boolean {
-  return (blockedUntil.get(s) ?? 0) > Date.now()
+// Injectable clock so tests can exercise cooldown expiry without sleeping.
+let clock: () => number = () => Date.now()
+
+/** Test seam: replace the clock used for cooldown decisions; call without an argument to restore the real clock. */
+export function setSearchClock(fn?: () => number): void {
+  clock = fn ?? (() => Date.now())
 }
 
-function markBlocked(s: Strategy): void {
-  blockedUntil.set(s, Date.now() + BLOCK_COOLDOWN_MS)
-  logger.warn({ strategy: s, minutes: BLOCK_COOLDOWN_MS / 60000 }, 'Search strategy blocked; cooling down')
+/** Test seam: clear all cooldown state and restore the real clock. */
+export function resetSearchState(): void {
+  blockedUntil.clear()
+  clock = () => Date.now()
+}
+
+export function isStrategyCoolingDown(s: SearchStrategy): boolean {
+  return (blockedUntil.get(s) ?? 0) > clock()
+}
+
+/** Mark a strategy as blocked for the cooldown window. Exported so tests can seed cooldown state. */
+export function markStrategyBlocked(s: SearchStrategy): void {
+  blockedUntil.set(s, clock() + SEARCH_BLOCK_COOLDOWN_MS)
+  logger.warn({ strategy: s, minutes: SEARCH_BLOCK_COOLDOWN_MS / 60000 }, 'Search strategy blocked; cooling down')
 }
 
 /** Per-strategy availability, for /health. */
-export function searchStatus(): Record<Strategy, string> {
-  const status = (s: Strategy) => (isCoolingDown(s) ? `blocked until ${new Date(blockedUntil.get(s) ?? 0).toISOString()}` : 'ok')
+export function searchStatus(): Record<SearchStrategy, string> {
+  const status = (s: SearchStrategy) =>
+    isStrategyCoolingDown(s) ? `blocked until ${new Date(blockedUntil.get(s) ?? 0).toISOString()}` : 'ok'
   return { 'google-http': status('google-http'), 'google-browser': status('google-browser'), duckduckgo: status('duckduckgo') }
+}
+
+/** Every strategy that can serve an engine; the engine is skipped only when all of them are cooling down. */
+const ENGINE_STRATEGIES: Record<SearchEngine, readonly SearchStrategy[]> = {
+  google: ['google-http', 'google-browser'],
+  duckduckgo: ['duckduckgo'],
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+  if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+  return `${seconds}s`
+}
+
+/** Strategies of `engine` that are still inside their cooldown window at `at`. */
+function coolingStrategies(engine: SearchEngine, at: number): Array<{ strategy: SearchStrategy; until: number }> {
+  return ENGINE_STRATEGIES[engine]
+    .map((strategy) => ({ strategy, until: blockedUntil.get(strategy) ?? 0 }))
+    .filter(({ until }) => until > at)
+}
+
+function cooldownDetail(cooling: Array<{ strategy: SearchStrategy; until: number }>, at: number): string {
+  const availableAt = Math.min(...cooling.map(({ until }) => until))
+  const detail = cooling.map(({ strategy, until }) => `${strategy} until ${new Date(until).toISOString()}`).join(', ')
+  // The earliest path to recover decides when an engine-level retry makes sense
+  const retry = availableAt - at
+  return `still cooling down after a bot check (${detail}); retry in ${formatDuration(retry)}`
+}
+
+/**
+ * Why an engine was skipped without any network attempt, or null if it is still usable.
+ * Only reported when *all* of the engine's strategies are cooling down; the reason carries the
+ * cooldown end and the remaining time so callers can tell this apart from a fetch failure.
+ */
+function coolingDownReason(engine: SearchEngine, at: number): string | null {
+  const strategies = ENGINE_STRATEGIES[engine]
+  const cooling = coolingStrategies(engine, at)
+  if (cooling.length < strategies.length) return null
+  return `skipped: ${cooldownDetail(cooling, at)}`
+}
+
+/**
+ * Reason to report when only part of an engine's paths are cooling down and the engine is still
+ * queried through the remaining ones (e.g. Google's browser path after the HTTP path was blocked).
+ */
+function partialCooldownReason(engine: SearchEngine, at: number): string | null {
+  const cooling = coolingStrategies(engine, at)
+  if (cooling.length === 0 || cooling.length === ENGINE_STRATEGIES[engine].length) return null
+  const names = cooling.map(({ strategy }) => strategy).join(', ')
+  return `skipped ${names}: ${cooldownDetail(cooling, at)}`
 }
 
 function googleUrl(opts: SearchOptions, start: number): string {
@@ -94,16 +168,18 @@ async function searchGoogle(opts: SearchOptions): Promise<SearchResult[]> {
   const pages = Math.min(5, Math.ceil(opts.limit / GOOGLE_PAGE_SIZE))
   const starts = Array.from({ length: pages }, (_, i) => i * GOOGLE_PAGE_SIZE)
 
-  let strategies: Strategy[] = (['google-http', 'google-browser'] as const).filter((s) => !isCoolingDown(s))
-  // Everything cooling down: the HTTP path is cheap enough to probe anyway
-  if (strategies.length === 0) strategies = ['google-http']
+  const strategies = (['google-http', 'google-browser'] as const).filter((s) => !isStrategyCoolingDown(s))
+  // Both paths cooling down: report the cooldown instead of probing the block again
+  if (strategies.length === 0) {
+    throw new SearchBlockedError(coolingDownReason('google', clock()) ?? 'Google is cooling down after a bot check')
+  }
 
   let parsed: Awaited<ReturnType<typeof googleHttpPage>>[] | null = null
   for (const s of strategies) {
     const fetchPage = s === 'google-http' ? googleHttpPage : googleBrowserPage
     const attempt = await mapLimit(starts, s === 'google-http' ? 5 : 2, (start) => fetchPage(opts, start))
     if (attempt.every((p) => p.blocked)) {
-      markBlocked(s)
+      markStrategyBlocked(s)
       continue
     }
     blockedUntil.delete(s)
@@ -129,14 +205,16 @@ async function searchGoogle(opts: SearchOptions): Promise<SearchResult[]> {
 }
 
 async function searchDuckDuckGo(opts: SearchOptions): Promise<SearchResult[]> {
-  if (isCoolingDown('duckduckgo')) throw new SearchBlockedError('DuckDuckGo is cooling down after a bot check')
+  if (isStrategyCoolingDown('duckduckgo')) {
+    throw new SearchBlockedError(coolingDownReason('duckduckgo', clock()) ?? 'DuckDuckGo is cooling down after a bot check')
+  }
   const params = new URLSearchParams({ q: opts.query })
   if (opts.country || opts.lang) params.set('kl', `${opts.country ?? 'wt'}-${opts.lang ?? 'wt'}`)
   if (opts.tbs?.startsWith('qdr:')) params.set('df', opts.tbs.slice(4, 5))
   const { html } = await fetchHttp(`https://html.duckduckgo.com/html/?${params}`, opts.timeout ?? 15000)
   const { results, blocked } = parseDuckDuckGo(html)
   if (blocked) {
-    markBlocked('duckduckgo')
+    markStrategyBlocked('duckduckgo')
     throw new SearchBlockedError('DuckDuckGo returned an anomaly (bot check) page')
   }
   return results.slice(0, opts.limit)
@@ -147,7 +225,8 @@ const ENGINES: Record<SearchEngine, (opts: SearchOptions) => Promise<SearchResul
   duckduckgo: searchDuckDuckGo,
 }
 
-function searchCacheKey(engine: SearchEngine, opts: SearchOptions): string {
+/** Cache key for one engine's answer to a query. Exported for tests that need to seed the cache. */
+export function searchCacheKey(engine: SearchEngine, opts: SearchOptions): string {
   const raw = JSON.stringify([engine, opts.query, opts.limit, opts.lang, opts.country, opts.tbs])
   return `crawlit:search:${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`
 }
@@ -158,6 +237,14 @@ export async function webSearch(opts: SearchOptions): Promise<SearchResponse> {
     ? [primary, ...(Object.keys(ENGINES) as SearchEngine[]).filter((e) => e !== primary)]
     : [primary]
 
+  // Snapshot the clock once so cache and network decisions in one request agree on cooldown state
+  const at = clock()
+  const coolingReasons = new Map<SearchEngine, string>()
+  for (const engine of chain) {
+    const reason = coolingDownReason(engine, at)
+    if (reason) coolingReasons.set(engine, reason)
+  }
+
   const fallbackFrom: { engine: SearchEngine; reason: string }[] = []
   let allBlocked = true
 
@@ -166,12 +253,38 @@ export async function webSearch(opts: SearchOptions): Promise<SearchResponse> {
     const cachedAll = await Promise.all(chain.map((engine) => cacheGet<SearchResult[]>(searchCacheKey(engine, opts))))
     for (const [i, cached] of cachedAll.entries()) {
       const engine = chain[i]
-      if (engine && cached && cached.length > 0) return { results: cached, engine, cached: true }
+      if (!engine || !cached || cached.length === 0) continue
+
+      // The answer is real, but say which engines were passed over to serve it from cache.
+      // A cache hit makes no network attempt at all, so only the cache itself is cited here —
+      // unless the skipped engine is cooling down, which is the more precise reason.
+      const skippedBefore = chain.slice(0, i).map((prior) => ({
+        engine: prior,
+        reason: coolingReasons.get(prior) ?? `skipped: not attempted because a cached answer from ${engine} was available`,
+      }))
+      // The hit engine itself may have a path in cooldown (e.g. Google's HTTP path, browser still fine)
+      const ownNote = coolingReasons.has(engine) ? null : partialCooldownReason(engine, at)
+      const notes = [...skippedBefore, ...(ownNote ? [{ engine, reason: ownNote }] : [])]
+      return {
+        results: cached,
+        engine,
+        cached: true,
+        ...(notes.length > 0 && { fallbackFrom: notes }),
+      }
     }
   }
 
   for (const engine of chain) {
+    const cooling = coolingReasons.get(engine)
+    if (cooling) {
+      // Deliberate skip, not a failed request
+      fallbackFrom.push({ engine, reason: cooling })
+      continue
+    }
+
     const key = searchCacheKey(engine, opts)
+    // Paths that were already in cooldown before this request (not ones blocked by it)
+    const partialBefore = partialCooldownReason(engine, at)
     try {
       const results = await ENGINES[engine](opts)
       if (results.length === 0) {
@@ -180,12 +293,15 @@ export async function webSearch(opts: SearchOptions): Promise<SearchResponse> {
         continue
       }
       if (config.SEARCH_CACHE_TTL_SECONDS > 0) await cacheSet(key, results, config.SEARCH_CACHE_TTL_SECONDS)
+      if (partialBefore) fallbackFrom.push({ engine, reason: partialBefore })
       return { results, engine, ...(fallbackFrom.length && { fallbackFrom }) }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       if (!(err instanceof SearchBlockedError)) allBlocked = false
       logger.warn({ engine, query: opts.query, reason }, 'Search engine failed')
       fallbackFrom.push({ engine, reason })
+      // Keep the pre-existing cooldown skips visible even when the remaining path then failed
+      if (partialBefore) fallbackFrom.push({ engine, reason: partialBefore })
     }
   }
 

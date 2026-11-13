@@ -10,6 +10,9 @@
 - **`crawlit` command** for macOS, Linux and Windows: `start`, `stop`, `restart`, `status`, `logs`, `update`, `uninstall`, `open`.
 - `CRAWLIT_PORT` and `CRAWLIT_BIND` settings to change the API's port and listen address.
 
+### Fixed
+- `/v1/search` now explains its engine chain. A path still cooling down after a CAPTCHA shows up in `fallbackFrom` as a deliberate skip with its cooldown end and remaining time instead of being probed again and reported as a failure. Cache hits set `cached: true` with the `engine` that produced the cached results, and `fallbackFrom` explains why the primary engine was not used.
+
 ## 1.1.0 — 2026-10-18
 
 Faster, and it can search Google now.
