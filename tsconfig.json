@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "allowJs": true,
+        "allowSyntheticDefaultImports": true,
+        "esModuleInterop": true,
+        "inlineSources": true,
+        "lib": ["es2022", "dom", "dom.iterable"],
+        "types": ["@webgpu/types"],
+        "moduleResolution": "bundler",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "resolveJsonModule": true,
+        "sourceMap": true,
+        "target": "es2022",
+        "skipLibCheck": true
+    },
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,88 @@
+import { Panel, Label } from '@playcanvas/pcui';
+import type { PanelArgs } from '@playcanvas/pcui';
+
+import { PixelFormatTable, TextureTypeTable } from './const';
+import type { TextureDoc } from './texture-doc';
+import type { TextureManager } from './texture-manager';
+
+class InfoPanel extends Panel {
+    textureStructure: Label;
+    textureDims: Label;
+    texturePixelFormat: Label;
+    textureType: Label;
+    cursorTexel: Label;
+
+    constructor(textureManager: TextureManager, args: PanelArgs = {}) {
+        Object.assign(args, {
+            headerText: '-',
+            flexGrow: '0',
+            flexShrink: '0'
+        });
+        super(args);
+
+        // footer
+        this.textureStructure = new Label({
+            width: 80,
+            class: 'center-align'
+        });
+
+        this.textureDims = new Label({
+            width: 80,
+            class: 'center-align'
+        });
+
+        this.texturePixelFormat = new Label({
+            width: 80,
+            class: 'center-align'
+        });
+
+        this.textureType = new Label({
+            width: 80,
+            class: 'center-align'
+        });
+
+        this.cursorTexel = new Label({
+            width: 80,
+            class: 'center-align'
+        });
+
+        this.header.append(this.textureStructure);
+        this.header.append(this.textureDims);
+        this.header.append(this.texturePixelFormat);
+        this.header.append(this.textureType);
+        this.header.append(this.cursorTexel);
+
+        textureManager.on('textureDocSelected', (texture: TextureDoc) => {
+            this.setTexture(texture);
+        });
+    }
+
+    setTexture(texture: TextureDoc): void {
+        // no texture selected - clear the info bar back to its empty state
+        if (!texture.resource) {
+            this.headerText = '-';
+            this.textureStructure.text = '';
+            this.textureDims.text = '';
+            this.texturePixelFormat.text = '';
+            this.textureType.text = '';
+            return;
+        }
+
+        // filename
+        this.headerText = texture.url.startsWith('blob:') ? texture.filename : texture.url;
+
+        // texture structure
+        this.textureStructure.text = texture.cubemap ? ' cubemap' : '2d';
+
+        // texture dims
+        this.textureDims.text = `${texture.width}x${texture.height}`;
+
+        // pixel format
+        this.texturePixelFormat.text = `${PixelFormatTable[texture.format!] || '???'}`;
+
+        // texture type
+        this.textureType.text = `${TextureTypeTable[texture.type!] || '???'}`;
+    }
+}
+
+export { InfoPanel };
