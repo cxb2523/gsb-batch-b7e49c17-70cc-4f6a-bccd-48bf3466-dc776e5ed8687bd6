@@ -18,6 +18,7 @@ export async function fetchSessions(params = {}) { return getJSON(`${BASE}/sessi
 export async function fetchCost(params = {}) { return getJSON(`${BASE}/cost${qs(params)}`); }
 export async function fetchCache(params = {}) { return getJSON(`${BASE}/cache${qs(params)}`); }
 export async function fetchStatus() { return getJSON(`${BASE}/status`); }
+export async function fetchSyncHealth() { return getJSON(`${BASE}/sync-health`); }
 export async function fetchQuota() { return getJSON(`${BASE}/quota`); }
 export async function fetchSubscription() { return getJSON(`${BASE}/subscription`); }
 export async function fetchQuotaCycles() { return getJSON(`${BASE}/quota-cycles`); }

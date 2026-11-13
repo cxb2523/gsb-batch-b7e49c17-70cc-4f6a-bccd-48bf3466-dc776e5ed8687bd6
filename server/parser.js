@@ -189,6 +189,11 @@ function parseLogFileCached(filePath, fileCache) {
   if (!fileCache) return parseLogFile(filePath);
 
   const stat = fs.statSync(filePath);
+  // A directory named *.jsonl (or another non-regular entry) reports size 0,
+  // which would skip the read loop below and get cached as a successfully
+  // parsed empty file. Send it through scanRecords instead: opening it throws
+  // EISDIR, and parseFileSafely records it as skipped.
+  if (!stat.isFile()) return parseLogFile(filePath);
   const prev = fileCache.get(filePath);
   const unchanged = prev && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size;
   // Anything other than unchanged or grown (shrunk, or rewritten in place)
@@ -215,7 +220,7 @@ function parseLogFileCached(filePath, fileCache) {
 // per file and error rather than on every refresh.
 const reportedFailures = new Set();
 
-function parseFileSafely(filePath, fileCache) {
+function parseFileSafely(filePath, fileCache, onFailure) {
   try {
     return parseLogFileCached(filePath, fileCache);
   } catch (err) {
@@ -225,8 +230,23 @@ function parseFileSafely(filePath, fileCache) {
       reportedFailures.add(key);
       console.warn(`Skipping unreadable log file ${filePath}: ${err.message}`);
     }
+    // The one-time warning stays quiet on repeat failures, but health-check
+    // callers must be told about the file on every run — invoke the callback
+    // regardless of whether the warning was suppressed above.
+    onFailure?.(filePath, err);
     return [];
   }
+}
+
+// Normalize the legacy `fileCache`-only second argument into
+// { fileCache, onFailure } without breaking existing callers.
+function normalizeParseOptions(options) {
+  if (!options) return { fileCache: null, onFailure: null };
+  if (options instanceof Map) return { fileCache: options, onFailure: null };
+  return {
+    fileCache: options.fileCache || null,
+    onFailure: options.onFailure || null,
+  };
 }
 
 // Array.prototype.push(...items) passes every item as a call argument and
@@ -235,7 +255,17 @@ function appendAll(target, items) {
   for (const item of items) target.push(item);
 }
 
-export function parseLogDirectory(baseDir, fileCache = null) {
+export function parseLogDirectory(baseDir, options = null) {
+  const { fileCache, onFailure } = normalizeParseOptions(options);
+  return dedupByMessageId(collectRawRecords(baseDir, fileCache, onFailure));
+}
+
+// Walk one machine's project directories and return every extracted record
+// BEFORE messageId dedup. This is the single read path shared by normal
+// parsing and by the sync-dir health check — chunked scans, the incremental
+// per-file cache, project-name derivation and unreadable-file handling all
+// live here so neither caller can drift into its own file-reading code.
+function collectRawRecords(baseDir, fileCache, onFailure) {
   const allRecords = [];
 
   let projectDirs;
@@ -260,7 +290,7 @@ export function parseLogDirectory(baseDir, fileCache = null) {
 
     for (const file of files) {
       const filePath = path.join(projectPath, file);
-      const records = parseFileSafely(filePath, fileCache);
+      const records = parseFileSafely(filePath, fileCache, onFailure);
       for (const record of records) {
         record.project = projectName;
         record.projectDirName = dir.name;
@@ -280,7 +310,7 @@ export function parseLogDirectory(baseDir, fileCache = null) {
 
       for (const subFile of subagentFiles) {
         const subFilePath = path.join(subagentsPath, subFile);
-        const subRecords = parseFileSafely(subFilePath, fileCache);
+        const subRecords = parseFileSafely(subFilePath, fileCache, onFailure);
         for (const record of subRecords) {
           record.project = projectName;
           record.projectDirName = dir.name;
@@ -291,7 +321,7 @@ export function parseLogDirectory(baseDir, fileCache = null) {
     }
   }
 
-  return dedupByMessageId(allRecords);
+  return allRecords;
 }
 
 export function parseMultiMachineDirectory(syncDir, fileCache = null) {
@@ -311,4 +341,122 @@ export function parseMultiMachineDirectory(syncDir, fileCache = null) {
   }
 
   return dedupByMessageId(allRecords);
+}
+
+function emptySyncHealth() {
+  return {
+    machines: [],
+    skipped_files: [],
+    totals: {
+      machine_count: 0,
+      record_count: 0,
+      unique_message_count: 0,
+      duplicate_count: 0,
+      skipped_file_count: 0,
+    },
+  };
+}
+
+/**
+ * Health check for a multi-machine sync directory.
+ *
+ * Each machine folder is walked with the shared raw-collection path (same
+ * chunked reads, incremental cache and one-time unreadable-file warning as a
+ * normal parse). Dedup then runs in two passes, reusing dedupByMessageId:
+ *
+ *   1. Per machine — streaming snapshots and same-machine repeats of one
+ *      messageId collapse to the largest output_tokens row; rows without a
+ *      messageId (older log format) pass through untouched.
+ *   2. Globally — the same messageId synced from several machines again keeps
+ *      only the largest output_tokens row, and every extra copy is reported
+ *      as a duplicate against the machine that carried it.
+ *
+ * A missing or unreadable sync dir yields an empty report rather than throwing.
+ *
+ * @param {string} syncDir shared directory containing per-machine subfolders
+ * @param {Map} [fileCache] optional per-file parse cache, shared with normal parses
+ * @returns {{
+ *   machines: Array<{machine: string, record_count: number,
+ *     unique_message_count: number, projects: string[], duplicate_count: number}>,
+ *   skipped_files: Array<{machine: string, file: string, error: string}>,
+ *   totals: {machine_count: number, record_count: number,
+ *     unique_message_count: number, duplicate_count: number, skipped_file_count: number}
+ * }}
+ */
+export function inspectSyncDirectory(syncDir, fileCache = null) {
+  let machineDirs;
+  try {
+    machineDirs = fs.readdirSync(syncDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.isSymbolicLink());
+  } catch {
+    return emptySyncHealth();
+  }
+
+  const machines = [];
+  const skippedFiles = [];
+  // Deduped per-machine records, tagged with the machine they belong to.
+  const perMachineDeduped = [];
+
+  for (const machineDir of machineDirs) {
+    const machine = machineDir.name;
+    const skippedForMachine = [];
+
+    const rawRecords = collectRawRecords(
+      path.join(syncDir, machine),
+      fileCache,
+      (file, err) => skippedForMachine.push({ machine, file, error: err.message })
+    );
+    const dedupedRecords = dedupByMessageId(rawRecords);
+
+    const projectSet = new Set();
+    for (const r of dedupedRecords) {
+      if (r.project) projectSet.add(r.project);
+    }
+
+    machines.push({
+      machine,
+      record_count: rawRecords.length,
+      unique_message_count: dedupedRecords.length,
+      projects: [...projectSet].sort(),
+      // Rows dropped by the per-machine dedup (streaming snapshots, repeats).
+      duplicate_count: rawRecords.length - dedupedRecords.length,
+    });
+    skippedFiles.push(...skippedForMachine);
+
+    for (const record of dedupedRecords) perMachineDeduped.push({ machine, record });
+  }
+
+  // Global pass: one messageId copied across machines survives once (largest
+  // output_tokens — the same rule as dedupByMessageId). Rows without a
+  // messageId pass through and are never duplicates.
+  const bestById = new Map();
+  const globalPassthrough = [];
+  for (const candidate of perMachineDeduped) {
+    const { machine, record } = candidate;
+    if (!record.messageId) { globalPassthrough.push(candidate); continue; }
+    const prev = bestById.get(record.messageId);
+    if (!prev || record.output_tokens > prev.record.output_tokens) {
+      if (prev) {
+        machines.find(m => m.machine === prev.machine).duplicate_count++;
+      }
+      bestById.set(record.messageId, candidate);
+    } else {
+      machines.find(m => m.machine === machine).duplicate_count++;
+    }
+  }
+
+  const globalUnique = bestById.size + globalPassthrough.length;
+  const totalDuplicates = machines.reduce((sum, m) => sum + m.duplicate_count, 0);
+
+  return {
+    machines,
+    skipped_files: skippedFiles,
+    totals: {
+      machine_count: machines.length,
+      record_count: globalUnique,
+      unique_message_count: globalUnique,
+      duplicate_count: totalDuplicates,
+      skipped_file_count: skippedFiles.length,
+    },
+  };
 }

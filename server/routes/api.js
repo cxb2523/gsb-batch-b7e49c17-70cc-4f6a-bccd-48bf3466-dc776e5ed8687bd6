@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import fs from 'fs';
 import os from 'os';
-import { parseLogDirectory, parseMultiMachineDirectory } from '../parser.js';
+import { parseLogDirectory, parseMultiMachineDirectory, inspectSyncDirectory } from '../parser.js';
 import { syncLocalToShared } from '../sync.js';
 import { filterByDateRange, autoGranularity, aggregateByTime, aggregateBySession, aggregateByProject, aggregateByModel, aggregateCache } from '../aggregator.js';
 import { calculateRecordCost, PLAN_DEFAULTS } from '../pricing.js';
@@ -15,6 +15,10 @@ export function createApiRouter(logBaseDir, options = {}) {
   const CACHE_TTL_MS = options.cacheTtlMs ?? 5000;
   let cachedRecords = [];
   let lastRefreshed = null;
+  // Sync-dir health check has the same TTL semantics as the record cache and
+  // reuses the same per-file parse cache.
+  let cachedSyncHealth = null;
+  let syncHealthRefreshed = null;
 
   // Background sync: runs periodically without blocking API requests
   if (options.syncDir) {
@@ -63,6 +67,15 @@ export function createApiRouter(logBaseDir, options = {}) {
   // startup doesn't pay for the initial full parse. In sync mode, warming is
   // chained onto the initial sync above instead.
   if (!options.syncDir) setImmediate(refreshRecords);
+
+  function refreshSyncHealth() {
+    if (syncHealthRefreshed && (Date.now() - syncHealthRefreshed) < CACHE_TTL_MS) return cachedSyncHealth;
+    // inspectSyncDirectory never throws: a missing/unreadable sync dir is an
+    // empty report, so no try/catch is needed here.
+    cachedSyncHealth = inspectSyncDirectory(options.syncDir, fileCache);
+    syncHealthRefreshed = Date.now();
+    return cachedSyncHealth;
+  }
 
   function applyFilters(query) {
     let records = filterByDateRange(refreshRecords(), query.from, query.to);
@@ -257,6 +270,13 @@ export function createApiRouter(logBaseDir, options = {}) {
       cache_ttl_ms: CACHE_TTL_MS,
       machine_count: countMachines(),
     });
+  });
+
+  // Per-machine breakdown of the shared sync dir plus every file that could
+  // not be read, so the page can show where the merged totals come from and
+  // which logs were silently skipped.
+  router.get('/sync-health', (req, res) => {
+    res.json(refreshSyncHealth());
   });
 
   return router;

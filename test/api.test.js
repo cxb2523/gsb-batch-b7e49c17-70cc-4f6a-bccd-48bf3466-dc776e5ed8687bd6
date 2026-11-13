@@ -184,4 +184,67 @@ describe('Multi-machine sync mode', () => {
     expect(data.projects).to.have.length(1);
     expect(data.projects[0].name).to.equal('syncproject');
   });
+
+  it('exposes the sync-dir health check at /api/sync-health', async () => {
+    const res = await fetch(`${syncBaseUrl}/api/sync-health`);
+    expect(res.status).to.equal(200);
+    const data = await res.json();
+    // test-mac (synced from localDir) + other-pc (pre-populated)
+    expect(data.totals.machine_count).to.equal(2);
+    const names = data.machines.map(m => m.machine).sort();
+    expect(names).to.deep.equal(['other-pc', 'test-mac']);
+    const mac = data.machines.find(m => m.machine === 'test-mac');
+    expect(mac.record_count).to.equal(1);
+    expect(mac.unique_message_count).to.equal(1);
+    expect(mac.projects).to.deep.equal(['syncproject']);
+    expect(data.skipped_files).to.deep.equal([]);
+    expect(data.totals.skipped_file_count).to.equal(0);
+  });
+
+  it('reports unreadable files in the sync health payload', async () => {
+    // A directory named *.jsonl fails when opened as a log file.
+    const broken = path.join(
+      syncDir, 'other-pc', '-Users-john-Workspace-syncproject', 'broken.jsonl'
+    );
+    fs.mkdirSync(broken);
+    // cacheTtlMs is 0 on this router, so the next request re-parses.
+    const res = await fetch(`${syncBaseUrl}/api/sync-health`);
+    const data = await res.json();
+    expect(data.skipped_files).to.have.length(1);
+    expect(data.skipped_files[0].machine).to.equal('other-pc');
+    expect(data.skipped_files[0].file).to.equal(broken);
+    expect(data.skipped_files[0].error).to.be.a('string').and.not.be.empty;
+    expect(data.totals.skipped_file_count).to.equal(1);
+  });
+});
+
+describe('GET /api/sync-health without a sync dir', () => {
+  let localApp, localServer, localBaseUrl, localTmpDir;
+
+  before((done) => {
+    localTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'api-nosync-'));
+    fs.mkdirSync(path.join(localTmpDir, '-Users-test-Workspace-p'));
+    localApp = express();
+    localApp.use('/api', createApiRouter(localTmpDir, { cacheTtlMs: 0 }));
+    localServer = localApp.listen(0, () => {
+      localBaseUrl = `http://localhost:${localServer.address().port}`;
+      done();
+    });
+  });
+
+  after((done) => {
+    localServer.close(() => {
+      fs.rmSync(localTmpDir, { recursive: true });
+      done();
+    });
+  });
+
+  it('returns an empty health report rather than failing', async () => {
+    const res = await fetch(`${localBaseUrl}/api/sync-health`);
+    expect(res.status).to.equal(200);
+    const data = await res.json();
+    expect(data.machines).to.deep.equal([]);
+    expect(data.skipped_files).to.deep.equal([]);
+    expect(data.totals.machine_count).to.equal(0);
+  });
 });
