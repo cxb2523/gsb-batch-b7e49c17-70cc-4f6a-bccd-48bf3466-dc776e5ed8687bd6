@@ -9,6 +9,7 @@
 - 适配器单测化：4 平台 fixture JSON 喂 extract()，无需网络/浏览器，CI 直接可跑（unit_adapters）
 - API 任务取消：POST /api/cancel 协作式取消（discover 立即停队列、download 停新分片）；任务状态新增 cancelled
 - 每域名限速：RESOURCES_PER_HOST_INTERVAL（默认 0.05s/域名/请求）软限流，下载并发不再无约束打爆单站点
+- 代理池可观测：`proxy()` 每次记录域名/返回代理/是否复用站点绑定/候选数量（无可用代理也记空结果），`health_check()` 记录每个代理可用性/耗时/是否因探活失败被吊销；记录有容量上限（RESOURCES_PROXY_RECORD_MAX，默认 200），`records()` 只读取出，用于核对「某域名为何选中某个代理」
 
 ## 1.0.8（2026-08-20）无头化批
 

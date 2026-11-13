@@ -13,6 +13,9 @@
 - health_check()：并发探活，死代理提前吊销（避免首个请求撞坏代理），
   成功者记录响应时间供加权挑选；ensure_health_monitor() 起后台线程
   定期探活（GUI / Scrapy 启动时各调一次，幂等）
+- records()：只读取出挑选 / 探活记录（有容量上限，超出丢弃最旧），
+  用于排查「某域名为什么选中某个代理」；记录与真实挑选在同一把锁内
+  写入，不改变挑选顺序与加权规则
 - 与 config.DEFAULT_PROXY 的关系：DEFAULT_PROXY 是「本机中转」，仍优先生效；
   代理池在无默认代理或默认代理失败时接管（保持历史语义，但真正生效）
 """
@@ -25,8 +28,10 @@ import re
 import threading
 import time
 import urllib.request
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, Callable
 
 PROBE_DEFAULT_URL = "http://www.gstatic.com/generate_204"
 
@@ -104,11 +109,21 @@ class ProxyPool:
     线程安全：GUI 多线程下载与 Scrapy 下载器可能并发取代理。
     容量上限：加载/重载时截断到 max_size（默认取 RESOURCES_PROXY_POOL_MAX，
     默认 200），防止代理文件被误写超长导致内存无限增长。
+
+    可观察记录（排查「某域名为何选中某个代理」）：每次 proxy() 在锁内写
+    一条 kind="select" 记录（host / proxy / bound_reuse / candidates，
+    无可用代理时 proxy=None、candidates=0）；每次 health_check() 为每个
+    代理写一条 kind="health" 记录（proxy / available / latency 秒 /
+    revoked，探活失败立即吊销故 revoked=True）。记录总容量上限取
+    record_limit 或 RESOURCES_PROXY_RECORD_MAX（默认 200），超出丢弃最旧，
+    用 records() 只读取出（返回副本，外部改动不影响内部）。
+    记录只写不改挑选顺序与加权规则。
     """
 
     def __init__(self, cool_seconds: int = 300, max_fails: int = 2,
                  proxies: list[str] | None = None, cache_file: str = "",
-                 max_size: int = 0):
+                 max_size: int = 0, record_limit: int = 0,
+                 probe_fn: Callable[[str, str, float], bool] | None = None):
         self._lock = threading.Lock()
         self._cache_file = cache_file  # 非空时从该文件加载（测试注入用）
         self._cool_seconds = cool_seconds      # 吊销后冷却时长（秒）
@@ -122,6 +137,12 @@ class ProxyPool:
         self._site_map: dict[str, str] = {}     # host -> 当前绑定的代理
         self._proxies: list[str] = list(proxies or [])[:self._max_size]
         self._loaded_at = time.time() if proxies else 0.0
+        # 挑选 / 探活记录（有界 deque，锁内追加，只读快照）
+        self._record_limit = max(1, int(record_limit or os.environ.get(
+            "RESOURCES_PROXY_RECORD_MAX", "200")))
+        self._records: deque[dict[str, Any]] = deque(maxlen=self._record_limit)
+        # 探活函数注入点（测试可传可控函数；默认用模块级 _probe_one）
+        self._probe_fn = probe_fn
 
     def _reload_locked(self) -> None:
         # 每 60s 才重读一次文件，避免高频 reload（文件是静态配置）
@@ -177,18 +198,41 @@ class ProxyPool:
             key=lambda p: (self._latency.get(p, -1),
                            self._last_used.get(p, 0.0)))
 
+    def _candidates_count_locked(self) -> int:
+        """可用代理数量（不重载、不排序，仅供记录用）。"""
+        now = time.time()
+        return sum(1 for p in self._proxies if self._revoked_until.get(p, 0) < now)
+
+    def _record_locked(self, entry: dict[str, Any]) -> None:
+        """锁内追加一条记录（调用方必须已持锁）。超出上限自动丢最旧。"""
+        entry.setdefault("time", time.time())
+        self._records.append(entry)
+
     def proxy(self, host: str = "") -> str | None:
-        """取一个代理。host 非空时优先返回该站点已绑定的代理（保持出口稳定）。"""
+        """取一个代理。host 非空时优先返回该站点已绑定的代理（保持出口稳定）。
+
+        每次调用都在锁内写一条挑选记录：域名、返回的代理、是否复用站点
+        绑定、候选数量；无可用代理时同样记录一条空结果（proxy=None）。
+        """
         with self._lock:
             host = (host or "").lower().removeprefix("www.")
             if host and host in self._site_map:
                 bound = self._site_map[host]
                 if self._revoked_until.get(bound, 0) < time.time():
                     self._last_used[bound] = time.time()
+                    self._record_locked({
+                        "kind": "select", "host": host, "proxy": bound,
+                        "bound_reuse": True,
+                        "candidates": self._candidates_count_locked(),
+                    })
                     return bound
                 self._site_map.pop(host, None)  # 绑定代理被吊销，解除绑定
             cands = self._candidates_locked()
             if not cands:
+                self._record_locked({
+                    "kind": "select", "host": host, "proxy": None,
+                    "bound_reuse": False, "candidates": 0,
+                })
                 return None
             # 选最近最少使用的（轮换），避免并发取到同一个
             pick = cands[0]
@@ -196,7 +240,23 @@ class ProxyPool:
             if host:
                 self._site_map[host] = pick
             self._last_used[pick] = time.time()
+            self._record_locked({
+                "kind": "select", "host": host, "proxy": pick,
+                "bound_reuse": False, "candidates": len(cands),
+            })
             return pick
+
+    def records(self, kind: str = "") -> list[dict[str, Any]]:
+        """只读取出挑选 / 探活记录（副本；最新在末尾）。
+
+        kind 为空返回全部；"select" 仅挑选记录；"health" 仅探活记录。
+        外部拿到的 dict 是浅拷贝，改动不影响池内记录。
+        """
+        with self._lock:
+            items = list(self._records)
+        if kind:
+            items = [r for r in items if r.get("kind") == kind]
+        return [dict(r) for r in items]
 
     def revoke(self, proxy: str, reason: str = "", force: bool = False) -> None:
         """吊销一个代理：连续失败达阈值才进入冷却，冷却后可复用。
@@ -206,11 +266,15 @@ class ProxyPool:
         if not proxy:
             return
         with self._lock:
-            fails = self._fails.get(proxy, 0) + 1
-            self._fails[proxy] = fails
-            if force or fails >= self._max_fails:
-                self._revoked_until[proxy] = time.time() + self._cool_seconds
-                self._fails[proxy] = 0
+            self._revoke_locked(proxy, force)
+
+    def _revoke_locked(self, proxy: str, force: bool) -> None:
+        """锁内吊销实现（revoke / health_check 共用，调用方须已持锁）。"""
+        fails = self._fails.get(proxy, 0) + 1
+        self._fails[proxy] = fails
+        if force or fails >= self._max_fails:
+            self._revoked_until[proxy] = time.time() + self._cool_seconds
+            self._fails[proxy] = 0
 
     def success(self, proxy: str) -> None:
         """成功一次：清零失败计数（消除误伤）。"""
@@ -225,24 +289,33 @@ class ProxyPool:
 
         probe_url 为空用默认探针；socks 代理跳过（视为可用）。
         成功探活的代理记录响应时间（供 _candidates_locked 加权挑选）。
+        每个代理写一条 kind="health" 记录：是否可用、耗时（秒）、
+        是否因探活失败被吊销（失败即吊销，故 revoked 与 available 相反）。
+        状态与记录都在 self._lock 内更新，探活线程之间无锁外共享写。
         """
         with self._lock:
             targets = list(self._proxies)
         if not targets:
             return {}
         results: dict[str, bool] = {}
-        res_lock = threading.Lock()
+        probe_fn = self._probe_fn or _probe_one
+        probe_url = probe_url or PROBE_DEFAULT_URL
 
         def probe(p: str) -> None:
             t0 = time.monotonic()
-            ok = _probe_one(p, probe_url or PROBE_DEFAULT_URL, timeout)
+            ok = probe_fn(p, probe_url, timeout)
             latency = time.monotonic() - t0
-            with res_lock:
+            with self._lock:
                 results[p] = ok
                 if ok:
                     self._latency[p] = latency
-            if not ok:
-                self.revoke(p, "health-fail", force=True)
+                else:
+                    self._revoke_locked(p, True)
+                self._record_locked({
+                    "kind": "health", "proxy": p, "available": ok,
+                    "latency": round(latency, 4), "revoked": not ok,
+                    **({"reason": "health-fail"} if not ok else {}),
+                })
 
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
             list(ex.map(probe, targets))
