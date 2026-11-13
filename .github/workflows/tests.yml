@@ -1,0 +1,51 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: windows-latest
+            python: "3.11"
+          - os: macos-latest
+            python: "3.11"
+    # ubuntu-latest is Ubuntu 26.04, which has no Python 3.9 build; keep 3.9 on the newest image that does
+    runs-on: ${{ matrix.python == '3.9' && startsWith(matrix.os, 'ubuntu') && 'ubuntu-24.04' || matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - run: ffprobe -version
+        shell: bash
+      # the optional extra vad (onnxruntime, numpy) so speech_regions is measured, not UNKNOWN (ADR-035)
+      - run: python -m pip install -e ".[vad]" pytest
+      - run: python -m pytest -q
+      - run: python evals/run.py
+      - run: python evals/contract_evals.py
+      - run: media-analysis doctor --json
+      - run: media-analysis contract --json > contract.json
+        shell: bash
+      - run: python -c "import json; json.load(open('contract.json'))"
+      - run: media-analysis contract --check contract.json --json
+      - run: media-analysis conformance --json

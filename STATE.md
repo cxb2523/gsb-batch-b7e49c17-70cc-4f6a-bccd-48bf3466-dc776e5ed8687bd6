@@ -1,0 +1,129 @@
+# Repository state
+
+Last updated: 2026-11-12 for roadmap step 4 (`speech_regions`); sections not touched then were checked on 2026-10-30
+against `main` at `45d07ad` (Release v0.1.3). Every statement below was checked
+against the code, a command run or the GitHub API on that date; anything that could not be checked is marked
+**unverified**.
+
+## Version
+- Single source: `pyproject.toml` `version`. `media_analysis.VERSION` (`src/media_analysis/__init__.py`, PR #17)
+  reads this checkout's `pyproject.toml` when run from source, otherwise the installed `media_analysis_skill-*.dist-info`
+  METADATA; there is no hard-coded constant. `media-analysis --version`, `contract --json` → `version`, every tool /
+  analyzer `version`, `doctor` / `conformance` → `skill.version` and Observation `source` / `analysis.analyzer_version`
+  all report it.
+- The package version is provenance only. The analysis identity, observation id and cache key use each analyzer's
+  own `algorithm_version` (declared in its class, `"1"` for all ten; ADR-028), so a release that does not change an
+  analyzer keeps its cached Observations. Bump an analyzer's `algorithm_version` in the PR that changes its output.
+- On `2d304bf` (Release v0.1.4) it is `0.1.4`, equal to the newest git tag `v0.1.4` (`contract --json` → `version`).
+- The release workflow (`.github/workflows/release.yml` + `.github/scripts/release.py`) bumps `pyproject.toml`, writes
+  `CHANGELOG.md`, tags and creates a GitHub release on **every push to `main`** (patch by default; minor / major from PR
+  labels). So the number above goes stale with the next merge; read the live value with `media-analysis --version`.
+- Tags / GitHub releases: `v0.1.0` … `v0.1.4`. Not on PyPI (`pypi.org/pypi/media-analysis-skill`
+  returns 404; the publish step runs only when a `PYPI_API_TOKEN` secret exists). Install is `pip install -e .` from a clone.
+
+## CURRENT (implemented, tested, on main)
+- CLI `media-analysis` (`media_analysis.cli:main`), subcommands: `probe`, `analyze`, `run` (canonical machine
+  interface: `run <request.json | -> --json`, one response document on stdout), `doctor`, `contract`, `conformance`, `style` (`style profile <input> --out <file>`
+  saves an `edit_style` profile, `style diff <ref> <cand>` compares two; ADR-030), `library` (`library index <folder>
+  --index <file>` / `library search`: a B-roll index with measured metadata and tags, incremental re-scan; ADR-031),
+  `highlights` (candidates of a long recording on sentence boundaries, with reasons; applause / laughter spans come
+  from the caller; ADR-032).
+- Contract `media-analysis/contract@1` (`schema_versions`: contract / request / response / observation all `1`).
+  12 tools, 13 analysis kinds, derived from the analyzer registry:
+
+  | Tool | Kinds | Capability id (`provides`) |
+  |---|---|---|
+  | `media-analysis/probe` | `media_probe` | `measure.media.probe` |
+  | `media-analysis/streams` | `stream_layout` | `measure.media.stream_layout` |
+  | `media-analysis/video` | `video_format` | `measure.video.probe` |
+  | `media-analysis/audio` | `audio_format` | `measure.audio.probe` |
+  | `media-analysis/timing` | `duration`, `timing` | `measure.media.duration`, `measure.video.timing` |
+  | `media-analysis/silence` | `silence` | `measure.audio.silence` |
+  | `media-analysis/loudness` | `loudness` | `measure.audio.loudness` |
+  | `media-analysis/integrity` | `integrity` | `measure.audio.integrity` |
+  | `media-analysis/scenes` | `scene_detection` | `measure.video.scene_detection` |
+  | `media-analysis/noise` | `noise_floor` | `measure.audio.noise_floor` (ADR-029, roadmap step 3) |
+  | `media-analysis/style` | `edit_style` | `measure.video.edit_style` (ADR-030, roadmap step 7) |
+  | `media-analysis/vad` | `speech_regions` | `measure.audio.speech_regions` (ADR-035, roadmap step 4) |
+
+  All 13 `provides` entries are lifecycle `EXPERIMENTAL`. Required environment capabilities (`capability_names`):
+  `ffmpeg`, `ffprobe`, `filter:astats`, `filter:ebur128`, `filter:edgedetect`, `filter:scdet`, `filter:silencedetect`.
+- Acceptance measurements (ADR-029, roadmap step 3): `noise_floor` (window-RMS noise floor / signal level /
+  no-reference SNR estimate, one channel or all) for voice-enhance-skill's ISOLATE / BLEED_REDUCE acceptance, and
+  `timing.av_start_offset` (audio vs video start time, ITU-R BT.1359-1 45 ms default tolerance) for remux / dubbing.
+  `timing`'s, `style`'s and `scenes`' `algorithm_version` is `"2"`, every other analyzer's `"1"`.
+- Editing-style profile (ADR-030, roadmap step 7): `edit_style` (cuts per minute, shot lengths in frames / seconds and
+  their distribution, soft-subtitle events / coverage / position, loudness, silence share); `media-analysis style
+  profile <input> --out <file>` saves it, `media-analysis style diff <ref> <cand>` compares two profiles per metric.
+  Burned-in subtitles are measured since ADR-033 (roadmap step 10: coverage, switches per minute, position, text height,
+  regions / approximate characters, band / outline, from an edge map; no OCR); music-bed presence is listed as
+  `unmeasured`.
+- Speech regions (ADR-035, roadmap step 4): `speech_regions` from the silero-vad ONNX model (MIT, shipped in
+  `media_analysis/models/`, CPU via onnxruntime) — regions with probability, speech share, longest pause. onnxruntime +
+  numpy are the optional extra `vad`; without it the result is `status: UNKNOWN` (not cached), never a guess from
+  level. `doctor` reports `extra:vad`. F1 0.943 (over music) / 0.949 (over noise) against the fixtures' labels.
+- Errors: 12 codes with exit codes 2–13 (`INVALID_INPUT` … `CACHE_MISS`), each with a class `FATAL` / `RETRYABLE` /
+  `BLOCKED` (ADR-023). Execution is `local_subprocess`, ffmpeg / ffprobe found by PATH lookup only, no shell, no
+  network, no generative AI (the one model is the opt-in VAD above). Request denylist (recursive, case-insensitive): `command argv args shell cmd exec filter_complex
+  filter api_key token env` (ADR-024).
+- Deterministic analysis identity, cache (use / bypass / only), budget, process-group timeout (POSIX `setsid` +
+  `killpg`; Windows `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`), verification, path policy.
+- `contract --check <file>` drift detection (22 mutation fixtures in `tests/contract/cases`, ADR-020).
+- `doctor --json` reports per Capability AVAILABLE / MISSING (ADR-025).
+- `conformance --json` runs the 8 AI-video-production-OS `SKILL_SPEC.md` section 8 checks (ADR-027): 6 PASS,
+  2 NOT_IMPLEMENTED as not applicable (`no_clobber_input`: no tool writes output; `dependency_version_ranges`: no
+  `dependencies` field is published).
+- Cross-check with the OS's own registry (read-only, AI-video-production-OS `main` `c476970`, 2026-11-06):
+  `registry.CapabilityRegistry.register_contract(<live contract>)` registers 12 providers (one per `provides` entry),
+  `providers_of("measure.video.edit_style")` resolves `media-analysis/style` (first checked on `3e5bae1`, 2026-10-30,
+  with 10), `providers_of("measure.audio.loudness")` resolves `media-analysis/loudness`, and `registry.conformance`
+  `check_publishes_contract` / `check_lifecycle_declared` both PASS. This is a manual check, not a committed test.
+
+## Who calls it
+- video-production-agent (`kajisho5/video-production-agent`, read-only check of `main` `33d739f`, 2026-10-30):
+  - Adapter `src/video_agent/tools/media_analysis/` (`adapter.py` 297 lines, `locate.py`, pinned
+    `contract_0.1.3.json`). Version gate `SUPPORTED_SKILL_VERSIONS = ("0.1.",)`, `SUPPORTED_CONTRACT_VERSIONS = ("1",)`.
+    Its `check_contract` accepts this repository's live 0.1.3 contract with no errors, and the pinned snapshot's
+    `tools` and `provides` equal the live ones.
+  - Located from `VIDEO_AGENT_MEDIA_ANALYSIS_DIR` / an explicit dir, then `~/.claude/skills/media-analysis-skill`,
+    `./vendor/media-analysis-skill`, `../media-analysis-skill`, then `media-analysis` on PATH. Run as a subprocess;
+    the agent never imports the package.
+  - Registered at startup (`src/video_agent/service.py`: `registry.register_package(MEDIA_ANALYSIS_PACKAGE)`), and all
+    9 tools appear in `src/video_agent/skills/registry.py` (probe / silence / loudness alongside the ffmpeg-skill
+    equivalents; streams / video / audio / timing / integrity / scenes as `*_analysis` skills).
+- No other caller found in the sibling checkouts; whether anything outside them calls it is **unverified**.
+
+## Tests and CI
+- `python -m pytest -q`: **150 passed** locally on 2026-11-12 (Python 3.11, FFmpeg 6.1.1, onnxruntime 1.31.1, Linux) —
+  collected per file: `test_contract.py` 43, `test_integration.py` 46, `test_unit.py` 50, `test_evals.py` 2,
+  `test_release_labels.py` 9.
+- `python evals/run.py` 18/18 measurement evals; `python evals/contract_evals.py` 17/17 contract evals;
+  `python -m pyflakes src tests evals` clean.
+- `.github/workflows/tests.yml` (push to main, every PR), real FFmpeg on every job:
+  Ubuntu Python 3.9 (pinned to `ubuntu-24.04`, which still has 3.9), Ubuntu 3.11, Windows 3.11, macOS 3.11. Each job
+  installs `.[vad]`, runs pytest, both evals, `doctor --json`, `contract --json` + `contract --check`, and `conformance --json`.
+- Other workflows: `codeql.yml` (push / PR to main, weekly), `pr-labeler.yml` (release-drafter autolabeler),
+  `release.yml` (see Version). On `main` at `8a9964f` (the last code commit) `tests`, `codeql` and `release` all succeeded.
+
+## KNOWN LIMITATIONS / GAPS
+- Reading is unrestricted unless `--allowed-input` is given (CLI default: "any readable regular file"); embedders must
+  set roots.
+- `timing` (packet timestamps) parses one dict per packet into memory; no streaming for long files. The earlier
+  "~100 MB for an hour of A/V" figure was not re-measured and is **unverified**.
+- Every Capability is `EXPERIMENTAL`; no STABLE promise yet.
+- No MCP transport (ADR-010: not before a consumer needs one).
+
+## NOT DONE / PLANNED
+See `ECOSYSTEM_ROADMAP.md`. Steps 1–4 and 7–10 are done (step 4: `speech_regions`, ADR-035) (step 3: `noise_floor` and `timing.av_start_offset`, ADR-029). Still
+not measured by anyone, recorded in ADR-029: a reverberation measure (voice-enhance DEREVERB) and picture sharpness /
+exposure (video-production-agent take selection).
+
+## NOT IN SCOPE (by design)
+AI / inference (except the opt-in fixed-weight VAD of `speech_regions`, ADR-035) / decisions, media editing, subtitles, transcription, semantic scene understanding, plugin loading.
+
+## History (merged PRs)
+#1 Skill 0.1.0 + agent-ready contract · #2 sponsor link · #3 README landing page · #4 `provides` · #5 OS conformance
+hardening · #6 UTF-8 JSON protocol (ADR-026) · #8 STATE.md adapter note · #9 release / labeler / Dependabot / CodeQL ·
+#10 README header · #11 Python 3.9 on ubuntu-24.04 · #15 Actions bump + release-drafter v7 · #16 ECOSYSTEM_ROADMAP.md ·
+#17 version single-sourced from pyproject.toml · #18 STATE.md refresh. (#7 is an issue, not a PR; Dependabot PRs #12–#14 were closed
+unmerged, superseded by #15.)
