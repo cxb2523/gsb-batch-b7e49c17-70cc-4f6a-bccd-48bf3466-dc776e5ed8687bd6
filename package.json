@@ -1,0 +1,77 @@
+{
+  "name": "spryte",
+  "version": "0.12.3",
+  "description": "Blazing fast 2D renderer for the web: 2-4x faster than the most popular one, at about a seventh of its size. Verified in an open benchmark.",
+  "keywords": [
+    "2d",
+    "renderer",
+    "webgl2",
+    "canvas",
+    "sprites",
+    "batching",
+    "pixel-art",
+    "gamedev",
+    "html5-game",
+    "browser-game"
+  ],
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/debuffjp",
+  "homepage": "https://debuff.jp/spryte/",
+  "bugs": "https://github.com/debuffjp/spryte/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/debuffjp/debuff.git",
+    "directory": "packages/spryte"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./phaser": {
+      "types": "./dist/phaser.d.ts",
+      "default": "./dist/phaser.js"
+    },
+    "./pixi": {
+      "types": "./dist/pixi.d.ts",
+      "default": "./dist/pixi.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "example": "vite examples/minimal",
+    "example:lens": "vite examples/lens",
+    "example:flow": "vite examples/flow",
+    "example:phaser": "vite examples/phaser",
+    "test:phaser": "node examples/phaser/check.mjs",
+    "example:pixi": "vite examples/pixi",
+    "example:hemoglobin": "vite examples/hemoglobin",
+    "example:ribosome": "vite examples/ribosome",
+    "example:jupiter": "vite examples/jupiter",
+    "example:html": "vite examples/html-in-canvas",
+    "example:mesh": "vite examples/mesh",
+    "test:pixi": "node examples/pixi/check.mjs",
+    "test:browser": "node browser-test/run.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "happy-dom": "^21.0.3",
+    "playwright-core": "1.64.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}
