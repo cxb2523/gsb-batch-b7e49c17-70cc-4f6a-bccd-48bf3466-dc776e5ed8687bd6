@@ -1,0 +1,11 @@
+Architecture.md
+.DS_Store
+
+node_modules
+dist
+.nuxt
+.output
+.cache
+docs/.vitepress/cache
+*.local
+nuxt-modules-issue.md

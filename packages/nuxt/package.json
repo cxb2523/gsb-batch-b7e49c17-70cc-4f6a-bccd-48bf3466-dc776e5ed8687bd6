@@ -1,0 +1,60 @@
+{
+  "name": "@vue-player/nuxt",
+  "version": "0.1.7",
+  "description": "Official Nuxt 4 module for vue-player — auto-imports VideoPlayer and usePlayer",
+  "keywords": [
+    "nuxt",
+    "nuxt-module",
+    "vue",
+    "vue3",
+    "video",
+    "video-player",
+    "player",
+    "hls",
+    "typescript"
+  ],
+  "license": "MIT",
+  "homepage": "https://vue-player.vercel.app/guide/nuxt.html",
+  "bugs": {
+    "url": "https://github.com/VladChernyak/vue-player/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/module.mjs",
+      "types": "./dist/module.d.mts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "prepack": "nuxt-module-build build",
+    "build": "nuxt-module-build build",
+    "dev:prepare": "nuxt-module-build build --stub && nuxi prepare playground",
+    "dev": "nuxi dev playground",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@nuxt/kit": "^4.4.6",
+    "@vue-player/vue": "workspace:*"
+  },
+  "devDependencies": {
+    "@nuxt/module-builder": "^1.0.2",
+    "@nuxt/schema": "^4.4.6",
+    "@nuxt/test-utils": "^4.0.3",
+    "nuxt": "^4.4.6"
+  },
+  "peerDependencies": {
+    "nuxt": ">=4.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VladChernyak/vue-player",
+    "directory": "packages/nuxt"
+  }
+}

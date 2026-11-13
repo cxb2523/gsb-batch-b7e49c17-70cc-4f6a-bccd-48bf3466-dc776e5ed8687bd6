@@ -1,0 +1,98 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.7] — 2026-10-29
+
+### Fixed
+
+- `@vue-player/vue`: exported type declarations are now built correctly
+- `@vue-player/vue`: improved touch handling of the controls on mobile devices
+- `@vue-player/vue`: controls auto-hide is now scheduled when the video starts with autoplay and muted
+
+### Changed
+
+- `@vue-player/nuxt`: package description, keywords and docs now say Nuxt 4 instead of Nuxt 3
+- `@vue-player/nuxt`: `homepage` now points to a working documentation URL
+
+## [0.1.6] — 2026-06-02
+
+### Fixed
+
+- `@vue-player/vue`: controls panel no longer auto-hides while the user is scrubbing the timeline on touch devices — the hide timer is paused for the entire drag gesture and restarted only after `pointerup`/`pointercancel`
+- `@vue-player/vue`: added `touchstart` / `touchmove` handlers on the player root so any touch interaction resets the controls visibility timer on mobile
+- `@vue-player/vue`: loading/error overlay now clips to the player's border-radius instead of rendering with sharp corners
+- `@vue-player/vue`: subtitle position on small players (≤ 500 px) corrected — the bottom offset is now derived from the actual controls bar height at each breakpoint, so subtitles sit just above the visible gradient rather than floating in the middle of the video
+
+## [0.1.5] — 2026-05-27
+
+### Added
+
+- `@vue-player/nuxt`: Nuxt 4 support — upgraded `@nuxt/kit`, `@nuxt/test-utils`, and peer dependency to v4
+
+## [0.1.4] — 2026-05-26
+
+### Changed
+
+- `@vue-player/nuxt`: migrated build tooling to `@nuxt/module-builder` (the official standard for Nuxt modules)
+- `@vue-player/nuxt`: dropped legacy CJS export — Nuxt v3+ uses ESM only
+- `@vue-player/nuxt`: types now use `.d.mts` extension per module-builder convention
+
+### Added
+
+- `@vue-player/nuxt`: integration and unit tests via `@nuxt/test-utils`
+- `@vue-player/nuxt`: playground app for local development (`pnpm dev` inside `packages/nuxt`)
+
+## [0.1.3] — 2026-05-13
+
+### Fixed
+
+- Mobile clipping, iOS fullscreen, and buffering issues
+- Mobile scroll and player corner clipping
+- Horizontal scroll caused by box-shadow overflow on mobile
+
+### Docs
+
+- Added subtitles to live demo
+- Added preview screenshot to README
+
+## [0.1.2] — 2026-05-08
+
+### Fixed
+
+- Package READMEs — corrected links, hls.js install instructions, and type import paths
+
+## [0.1.1] — 2026-05-08
+
+### Added
+
+- GitHub Actions CI workflow (build, test, typecheck)
+- LICENSE, CONTRIBUTING files
+
+### Changed
+
+- Switched `@vue-player/vue` build to Vite library mode
+- Updated package metadata, keywords, and README files
+
+## [0.1.0] — 2026-05-07
+
+### Added
+
+- `VideoPlayer` component with HLS adaptive streaming via `hls.js`
+- `usePlayer` composable for building fully custom player UIs
+- Subtitle and caption support via WebVTT tracks
+- Chapter markers with timeline tooltip labels
+- Thumbnail preview scrubbing from WebVTT sprite sheets
+- Picture-in-Picture support
+- Keyboard shortcuts (play/pause, seek, volume, fullscreen)
+- `controls` slot for replacing the entire controls UI
+- `loading` and `error` slots for custom overlays
+- Quality level selection from HLS manifest
+- Playback speed control
+- Fullscreen support
+- Poster overlay with fade-out transition
+- `@vue-player/nuxt` module with auto-imports
+- TypeScript support with full type exports from `@vue-player/core`
