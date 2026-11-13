@@ -47,6 +47,7 @@
         "fmt:fix": "prettier --write .",
         "lint": "eslint src",
         "lint:fix": "eslint src --fix",
-        "serve": "serve dist"
+        "serve": "serve dist",
+        "test": "node --test tests/*.test.ts"
     }
 }

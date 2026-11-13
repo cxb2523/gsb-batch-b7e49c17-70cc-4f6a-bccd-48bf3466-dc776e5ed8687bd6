@@ -30,6 +30,9 @@ jobs:
             - name: Build PlayCanvas Texture Tool
               run: npm run build
 
+            - name: Run Tests
+              run: npm test
+
     lint:
         name: Lint
         runs-on: ubuntu-latest

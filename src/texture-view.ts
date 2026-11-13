@@ -18,6 +18,16 @@ import {
     SHADERLANGUAGE_GLSL
 } from 'playcanvas';
 
+import {
+    FACE_COUNT,
+    NotACubemapError,
+    buildCubemapUvGLSL,
+    clampOffset,
+    clampScale,
+    pixelToUv as pixelToUvPure,
+    queryCubemapDirection
+} from './cubemap';
+import type { Vec3 } from './cubemap';
 import type { RenderCanvas } from './render-canvas';
 import type { TextureDoc } from './texture-doc';
 
@@ -228,8 +238,8 @@ class TextureView {
     setScale(scale: number, pixelX: number, pixelY: number): void {
         const tex = this.pixelToTexel(pixelX, this.viewportH - pixelY);
 
-        // update scale
-        this.scale = scale; // Math.max(1, Math.min(100, scale));
+        // update scale; clamp() enforces the [MIN_SCALE, MAX_SCALE] range
+        this.scale = scale;
         this.clamp();
 
         // keep pixelX,pixelY under the cursor
@@ -261,21 +271,43 @@ class TextureView {
 
     clamp(): void {
         if (this.texture) {
-            // clamp scale
-            const minScale = 0.2; // Math.min(this.viewportW / this.texture.width, this.viewportH / this.texture.height);
-            const maxScale = 100;
-            this.scale = Math.max(minScale, Math.min(maxScale, this.scale));
+            // clamp scale to the shared [0.2, 100] range
+            this.scale = clampScale(this.scale);
 
-            // clamp offsetX
-            const diffX = this.scale * this.texture.width! - this.viewportW;
-            this.offsetX = diffX < 0 ? diffX * -0.5 : Math.max(-diffX, Math.min(0, this.offsetX));
+            // clamp offsetX so the texture stays inside the viewport
+            this.offsetX = clampOffset(this.offsetX, this.scale * this.texture.width!, this.viewportW);
 
-            // clamp offsetY
-            const diffY = this.scale * this.texture.height! - this.viewportH;
-            this.offsetY = diffY < 0 ? diffY * -0.5 : Math.max(-diffY, Math.min(0, this.offsetY));
+            // clamp offsetY so the texture stays inside the viewport
+            this.offsetY = clampOffset(this.offsetY, this.scale * this.texture.height!, this.viewportH);
 
             this.canvas.render();
         }
+    }
+
+    // Query interface for automated verification.
+    //
+    // Returns the direction vector actually used by the fragment shader for
+    // the given cubemap face and preview uv (u/v in [0, 1], origin at the
+    // top-left of the displayed face, i.e. the same space produced by
+    // pixelToUv). Throws NotACubemapError for a 2D texture and RangeError for
+    // a face outside [0, 5], instead of silently returning a direction.
+    queryFaceDirection(face: number, uv: TexelCoord): Vec3 {
+        const isCubemap = !!(this.texture && this.texture.cubemap);
+        if (!isCubemap) {
+            throw new NotACubemapError();
+        }
+        if (!Number.isInteger(face) || face < 0 || face >= FACE_COUNT) {
+            throw new RangeError(`face must be an integer in [0, 5], got ${face}`);
+        }
+        return queryCubemapDirection(true, face, uv);
+    }
+
+    // Pure screen pixel -> preview uv entry point, callable without rendering.
+    // pixelX/pixelY are physical pixels from the top-left of the viewport.
+    screenPixelToUv(pixelX: number, pixelY: number): TexelCoord {
+        const width = this.texture?.width ?? 1;
+        const height = this.texture?.height ?? 1;
+        return pixelToUvPure(pixelX, pixelY, this.offsetX, this.offsetY, this.scale, width, height, this.viewportH);
     }
 
     // Build the fragment shader source with current settings.
@@ -319,22 +351,7 @@ ${isCubemap ? 'uniform float face;' : ''}
 ${
     isCubemap
         ? `
-vec3 getCubemapUv(vec2 uv, float face) {
-    vec2 st = uv * 2.0 - 1.0;
-    if (face == 0.0) {
-        return vec3(1, -st.y, -st.x);
-    } else if (face == 1.0) {
-        return vec3(-1, -st.y, st.x);
-    } else if (face == 2.0) {
-        return vec3(st.x, 1, st.y);
-    } else if (face == 3.0) {
-        return vec3(st.x, -1, -st.y);
-    } else if (face == 4.0) {
-        return vec3(st.x, -st.y, 1);
-    } else {
-        return vec3(-st.x, -st.y, -1);
-    }
-}
+${buildCubemapUvGLSL()}
 `
         : ''
 }

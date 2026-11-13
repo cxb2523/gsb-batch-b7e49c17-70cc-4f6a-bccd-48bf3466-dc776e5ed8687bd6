@@ -2,8 +2,13 @@ import type { EventHandle } from '@playcanvas/observer';
 import { Panel, Button, Container, LabelGroup, SelectInput, SliderInput, BooleanInput } from '@playcanvas/pcui';
 import type { PanelArgs } from '@playcanvas/pcui';
 
+import { FACE_LABELS } from './cubemap';
 import type { TextureDoc } from './texture-doc';
 import type { TextureManager } from './texture-manager';
+
+// button element id suffix per face, indexed by face number:
+// 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z
+const FACE_ID_SUFFIX = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
 
 class ShowPanel extends Panel {
     constructor(textureManager: TextureManager, args: PanelArgs = {}) {
@@ -16,22 +21,20 @@ class ShowPanel extends Panel {
 
         super(args);
 
-        // cubemap buttons
-        //    +y
-        // -x +z +x -z
-        //    -y
+        // cubemap face buttons, one per face of the six-face convention in
+        // src/cubemap.ts: face 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z
         const faceButtonsContainer = new Container({
             id: 'cubemap-face-buttons-container'
         });
 
-        const faceButtons: Record<string, Button> = {
-            0: new Button({ id: 'cubemap-face-px', class: 'cubemap-face', text: '+x' }),
-            1: new Button({ id: 'cubemap-face-nx', class: 'cubemap-face', text: '-x' }),
-            2: new Button({ id: 'cubemap-face-py', class: 'cubemap-face', text: '+y' }),
-            3: new Button({ id: 'cubemap-face-ny', class: 'cubemap-face', text: '-y' }),
-            4: new Button({ id: 'cubemap-face-pz', class: 'cubemap-face', text: '+z' }),
-            5: new Button({ id: 'cubemap-face-nz', class: 'cubemap-face', text: '-z' })
-        };
+        const faceButtons: Record<string, Button> = {};
+        FACE_LABELS.forEach((label, face) => {
+            faceButtons[face] = new Button({
+                id: `cubemap-face-${FACE_ID_SUFFIX[face]}`,
+                class: 'cubemap-face',
+                text: label
+            });
+        });
 
         Object.keys(faceButtons).forEach((face) => {
             faceButtonsContainer.append(faceButtons[face]);
