@@ -93,14 +93,22 @@ never normalised (ffmpeg-skill/loudness does that).
 
 ## `integrity` (parameter `max_error_lines`)
 
-`status` (PASS / WARN / FAIL), `reasons[]`, `checks{decode, frames, timestamps}`.
+`status` (PASS / WARN / FAIL), `reasons[]`, `verdicts[]`, `checks{decode, frames, timestamps}`.
+
+`verdicts` is the per-check adjudication behind `status`: one entry per check (several for `timestamps` when
+several streams or findings are involved), each with `check` (`decode` / `frames` / `timestamps`), `performed`
+(bool), `contribution` (`fail` / `warn` / `none`) and a human-readable `detail`; timestamp findings also carry the
+`stream` index, the decode verdict the raw `exit_code`. The top-level `status` is the priority reduction over these
+contributions: any `fail` → FAIL, else any `warn` → WARN, else PASS.
 
 - `decode`: full decode of all streams; `exit_code`, `errors{error_line_count, categories{missing_reference,
   corrupt_data, timestamp, packet_submit, other}, samples[]}` (pointer addresses stripped, ≤ `max_error_lines` samples).
-  Any error line or a non-zero exit → FAIL.
+  Any error line or a non-zero exit → FAIL. A non-zero exit whose stderr matches no known error category is still a
+  `decode` fail: the verdict names the raw exit code and says no known category matched.
 - `frames`: `expected_video_frames` (container `nb_frames` of the first video stream), `decoded_video_frames`,
   `decoded_time`; fewer decoded than declared → WARN; `not_performed` without a video stream or without `nb_frames`.
-- `timestamps`: per-stream packet report (as in `timing`); non-monotonic DTS, gaps or missing timestamps → WARN.
+- `timestamps`: per-stream packet report (as in `timing`); non-monotonic DTS, gaps or missing timestamps → WARN,
+  one `verdicts` entry per stream and finding.
 
 A check that was not performed never contributes PASS.
 

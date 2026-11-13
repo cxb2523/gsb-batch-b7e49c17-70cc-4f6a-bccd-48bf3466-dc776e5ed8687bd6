@@ -12,6 +12,18 @@
       "path": "data.checks.decode.errors.error_line_count",
       "op": "gte",
       "value": 1
+    },
+    {
+      "path": "data.verdicts.0.check",
+      "value": "decode"
+    },
+    {
+      "path": "data.verdicts.0.performed",
+      "value": true
+    },
+    {
+      "path": "data.verdicts.0.contribution",
+      "value": "fail"
     }
   ]
 }

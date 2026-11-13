@@ -19,6 +19,42 @@
     {
       "path": "data.checks.timestamps.streams.0.non_monotonic_dts",
       "value": 0
+    },
+    {
+      "path": "data.verdicts.0.check",
+      "value": "decode"
+    },
+    {
+      "path": "data.verdicts.0.performed",
+      "value": true
+    },
+    {
+      "path": "data.verdicts.0.contribution",
+      "value": "none"
+    },
+    {
+      "path": "data.verdicts.1.check",
+      "value": "frames"
+    },
+    {
+      "path": "data.verdicts.1.performed",
+      "value": true
+    },
+    {
+      "path": "data.verdicts.1.contribution",
+      "value": "none"
+    },
+    {
+      "path": "data.verdicts.2.check",
+      "value": "timestamps"
+    },
+    {
+      "path": "data.verdicts.2.performed",
+      "value": true
+    },
+    {
+      "path": "data.verdicts.2.contribution",
+      "value": "none"
     }
   ]
 }

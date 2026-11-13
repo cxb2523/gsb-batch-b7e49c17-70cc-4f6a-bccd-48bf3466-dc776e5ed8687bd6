@@ -87,13 +87,25 @@ def test_integrity_analysis(media, tmp_path):
     assert good["status"] == "PASS" and good["checks"]["decode"]["errors"]["error_line_count"] == 0
     assert good["checks"]["frames"]["decoded_video_frames"] == 150 == good["checks"]["frames"]["expected_video_frames"]
     assert good["checks"]["timestamps"]["streams"]["0"]["non_monotonic_dts"] == 0
+    # a PASS is three performed checks, each with a readable basis and no fail/warn contribution
+    assert {v["check"] for v in good["verdicts"]} == {"decode", "frames", "timestamps"}
+    assert all(v["performed"] and v["contribution"] == "none" and v["detail"] for v in good["verdicts"])
     bad = run(engine(tmp_path), media["corrupt"], "integrity")["data"]
     assert bad["status"] == "FAIL" and bad["checks"]["decode"]["errors"]["error_line_count"] > 0 and bad["reasons"]
     assert bad["checks"]["decode"]["errors"]["categories"].get("corrupt_data", 0) > 0
+    # the FAIL traces to the decode check, with the raw exit code preserved
+    dec = [v for v in bad["verdicts"] if v["check"] == "decode"]
+    assert len(dec) == 1 and dec[0]["performed"] and dec[0]["contribution"] == "fail" and dec[0]["detail"]
+    assert dec[0]["exit_code"] == bad["checks"]["decode"]["exit_code"]
     vo = run(engine(tmp_path), media["video_only"], "integrity")["data"]
     assert vo["status"] == "PASS"
     ao = run(engine(tmp_path), media["mono"], "integrity")["data"]
     assert ao["status"] == "PASS" and ao["checks"]["frames"]["status"] == "not_performed"
+    # audio-only: the frames check is reported as not performed (with the reason), never as a pass or a fail
+    fr = [v for v in ao["verdicts"] if v["check"] == "frames"]
+    assert len(fr) == 1 and fr[0]["performed"] is False and fr[0]["contribution"] == "none"
+    assert "no video stream" in fr[0]["detail"]
+    assert not any(v["contribution"] == "fail" for v in ao["verdicts"])
 
 
 def test_multiple_streams(media, tmp_path):
