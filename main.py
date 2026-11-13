@@ -1,21 +1,78 @@
+import json
 import os
+import queue
 import time
+import traceback
 
 import cv2
 import torch
 import torch.multiprocessing as mp
 
+# 逐路运行结局状态
+STATUS_COMPLETED = "completed"  # 正常读完（点播文件读到末尾）
+STATUS_RECONNECT_EXHAUSTED = "reconnect_exhausted"  # 断流后重连次数耗尽
+STATUS_ERROR = "error"  # 其他异常（解码/推理/编码等）
+STATUS_CRASHED = "crashed"  # 子进程未上报结局即退出（由主进程补记）
+
+_STATUS_LABELS = {
+    STATUS_COMPLETED: "正常读完",
+    STATUS_RECONNECT_EXHAUSTED: "重连耗尽",
+    STATUS_ERROR: "异常",
+    STATUS_CRASHED: "进程崩溃",
+}
+
+
+def _classify_decoder_error(msg):
+    """根据 Decoder 抛出的错误信息归类结束原因。"""
+    if "视频流已结束" in msg:
+        return STATUS_COMPLETED
+    if "重连" in msg or "无信号" in msg:
+        return STATUS_RECONNECT_EXHAUSTED
+    return STATUS_ERROR
+
 
 class Pipeline(mp.Process):
-    def __init__(self, gpu, input_url, output_url):
+    def __init__(self, gpu, input_url, output_url, outcome_queue=None):
         super().__init__()
         self.gpu = gpu
         self.input_url = input_url
         self.output_url = output_url
+        # 主进程传入的队列，用于回传本路运行结局
+        self._outcome_queue = outcome_queue
 
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
     def run(self):
+        status = STATUS_ERROR
+        last_error = ""
+        processed_frames = 0
+        started_at = time.time()
+        try:
+            status, last_error, processed_frames = self._run_pipeline()
+        except Exception as e:
+            # 解码循环之外（模型加载、推理、编码等）的异常也须落成结局记录
+            status = STATUS_ERROR
+            last_error = f"{type(e).__name__}: {e}"
+            traceback.print_exc()
+        finally:
+            outcome = {
+                "pid": os.getpid(),
+                "gpu": self.gpu,
+                "input_url": self.input_url,
+                "output_url": self.output_url,
+                "status": status,
+                "processed_frames": processed_frames,
+                "last_error": last_error,
+                "duration_sec": round(time.time() - started_at, 3),
+            }
+            if self._outcome_queue is not None:
+                try:
+                    self._outcome_queue.put(outcome)
+                except Exception:
+                    pass
+            print(f"[Pipeline] 结局: {json.dumps(outcome, ensure_ascii=False)}")
+
+    def _run_pipeline(self):
 
         import osd
         from yolo26.det import YOLO26DetTRT
@@ -73,6 +130,9 @@ class Pipeline(mp.Process):
         )
 
         frame_count = 0
+        processed_frames = 0  # 本路累计已处理帧数（不随统计日志清零）
+        status = STATUS_ERROR
+        last_error = ""
         sum_wait = 0
         sum_det = 0
         sum_track = 0
@@ -88,9 +148,19 @@ class Pipeline(mp.Process):
             except Exception as e:
                 # Decoder 内部重连已耗尽（流断）或点播文件读完，直接收尾
                 print(f"[Pipeline] {self.input_url} 读取结束: {e}")
+                last_error = str(e)
+                status = _classify_decoder_error(last_error)
+                break
+
+            if frame is None or (isinstance(frame, torch.Tensor) and frame.numel() == 0):
+                # 解码器在连续坏帧且重连恢复失败后返回空帧
+                last_error = "解码器返回空帧（连续坏帧且重连恢复失败）"
+                status = STATUS_RECONNECT_EXHAUSTED
+                print(f"[Pipeline] {self.input_url} 读取结束: {last_error}")
                 break
 
             frame_count += 1
+            processed_frames += 1
 
             t1 = time.time()
 
@@ -151,6 +221,8 @@ class Pipeline(mp.Process):
         # 收尾：冲刷编码器缓冲并写入文件尾，否则输出文件不完整
         encoder.finish()
 
+        return status, last_error, processed_frames
+
 
 if __name__ == "__main__":
     # 你可以将该列表移到独立的 YAML 文件中，并通过 PyYAML 等方式加载。
@@ -194,13 +266,53 @@ if __name__ == "__main__":
     # 多个进程共享同一块 GPU 的计算资源，提升并发效率。
     mp.set_start_method("spawn")
     process_pool = []
+    # 子进程通过该队列回传逐路结局，主进程在 join 后统一汇总
+    outcome_queue = mp.Queue()
 
     for i in args:
-        p = Pipeline(**i)
+        p = Pipeline(outcome_queue=outcome_queue, **i)
         p.start()
-        process_pool.append(p)
-        
+        process_pool.append((i, p))
+
         time.sleep(3)  # 避免同时建立大量 RTSP 连接冲垮网络
 
-    for p in process_pool:
+    for _, p in process_pool:
         p.join()
+
+    # 汇总各路结局：以子进程 pid 关联，缺记录的（如崩溃）按 exitcode 补记
+    outcomes = {}
+    while True:
+        try:
+            o = outcome_queue.get_nowait()
+        except queue.Empty:
+            break
+        outcomes[o["pid"]] = o
+
+    summary = []
+    for cfg, p in process_pool:
+        o = outcomes.get(p.pid)
+        if o is None:
+            o = {
+                "pid": p.pid,
+                "gpu": cfg["gpu"],
+                "input_url": cfg["input_url"],
+                "output_url": cfg["output_url"],
+                "status": STATUS_CRASHED,
+                "processed_frames": -1,
+                "last_error": f"子进程未上报结局即退出, exitcode={p.exitcode}",
+                "duration_sec": None,
+            }
+        summary.append(o)
+
+    print("\n========== Pipeline 运行结局汇总 ==========")
+    for o in summary:
+        frames = o["processed_frames"] if o["processed_frames"] >= 0 else "-"
+        label = _STATUS_LABELS.get(o["status"], o["status"])
+        print(
+            f"  input={o['input_url']}  output={o['output_url']}  "
+            f"状态={label}({o['status']})  已处理帧数={frames}  "
+            f"最后错误={o['last_error'] or '无'}"
+        )
+    ok = sum(1 for o in summary if o["status"] == STATUS_COMPLETED)
+    print(f"  合计: 启动 {len(process_pool)} 路, 汇总 {len(summary)} 条, 正常读完 {ok} 路, 异常 {len(summary) - ok} 路")
+    print("  明细(JSON): " + json.dumps(summary, ensure_ascii=False))
