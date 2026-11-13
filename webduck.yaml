@@ -1,0 +1,33 @@
+# =============================================================================
+#  WebDuck — Configuration
+#  ---------------------------------------------------------------------------
+#  DuckDB-as-a-Service server with REST API and Web UI.
+#  Edit this file to configure server, authentication, and logging.
+#  Initialize with: webduck init
+#
+#  Copyright (c) 2026 autumo GmbH. Licensed under AGPLv3.
+# =============================================================================
+
+version: "1.0.0"
+icon: "icon.svg"
+auth:
+  jwt_algorithm: HS256
+  jwt_expire_minutes: 60
+  jwt_secret: CHANGE-ME-TO-A-SECRET-KEY-IN-PRODUCTION
+logging:
+  file:
+    enabled: true                 # WebDuck file logger (webduck.log)
+    level: error                  # debug | info | warning | error
+    max_files: 5                  # Rotated log files to keep
+    max_size_mb: 10               # Max size per log file
+    query_log: false              # Log every SQL query
+    log_dir: log                  # Log directory (empty = log/)
+  console:
+    enabled: false                # Python logger StreamHandler (stderr)
+    access_log: false             # Uvicorn access log
+    level: warning                # Uvicorn log level
+server:
+  data_dir: data
+  host: 0.0.0.0
+  port: 8998
+  max_upload_mb: 256              # Max upload file size in MB

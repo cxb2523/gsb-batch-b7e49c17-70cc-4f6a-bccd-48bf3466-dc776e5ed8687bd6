@@ -1,0 +1,18 @@
+services:
+  webduck:
+    image: autumoswitzerland/webduck
+    container_name: webduck
+    working_dir: /app
+    ports:
+      - "8998:8998"
+    volumes:
+      - webduck_data:/app/data
+    environment:
+      - WEBDUCK_HOST=0.0.0.0
+      - WEBDUCK_PORT=8998
+      - WEBDUCK_ADMIN_USER=admin
+      - WEBDUCK_ADMIN_PASS=changeme
+    restart: unless-stopped
+
+volumes:
+  webduck_data:

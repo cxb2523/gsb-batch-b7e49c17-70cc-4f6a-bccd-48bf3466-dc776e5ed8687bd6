@@ -1,0 +1,1 @@
+"""WebDuck REST API endpoints."""

@@ -1,0 +1,509 @@
+# English translations for WebDuck.
+# Copyright (C) 2026 autumo GmbH
+# This file is distributed under the same license as the WebDuck package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: WebDuck 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-20 15:00+0000\n"
+"PO-Revision-Date: 2026-07-20 15:00+0000\n"
+"Last-Translator: autumo GmbH <info@autumo.ch>\n"
+"Language-Team: English\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+# General
+msgid "WebDuck"
+msgstr "WebDuck"
+
+msgid "version"
+msgstr "version"
+
+# Navigation
+msgid "dashboard"
+msgstr "Dashboard"
+
+msgid "projects"
+msgstr "Projects"
+
+msgid "databases"
+msgstr "Databases"
+
+msgid "settings"
+msgstr "Settings"
+
+msgid "logout"
+msgstr "Logout"
+
+# Auth
+msgid "login"
+msgstr "Login"
+
+msgid "username"
+msgstr "Username"
+
+msgid "password"
+msgstr "Password"
+
+msgid "login_button"
+msgstr "Sign In"
+
+msgid "logout_button"
+msgstr "Sign Out"
+
+msgid "invalid_credentials"
+msgstr "Invalid username or password"
+
+# Dashboard
+msgid "dashboard_title"
+msgstr "Dashboard"
+
+msgid "total_projects"
+msgstr "Total Projects"
+
+msgid "total_databases"
+msgstr "Total Databases"
+
+msgid "server_status"
+msgstr "Server Status"
+
+msgid "traffic_monitor"
+msgstr "Traffic Monitor"
+
+msgid "queries_per_min"
+msgstr "Queries/min"
+
+msgid "active_sessions"
+msgstr "Active Sessions"
+
+msgid "storage_overview"
+msgstr "Storage Overview"
+
+msgid "size"
+msgstr "Size"
+
+msgid "total"
+msgstr "Total"
+
+msgid "objects"
+msgstr "Objects"
+
+# Projects
+msgid "projects_title"
+msgstr "Projects"
+
+msgid "create_project"
+msgstr "Create Project"
+
+msgid "project_name"
+msgstr "Project Name"
+
+msgid "project_description"
+msgstr "Description"
+
+msgid "delete_project"
+msgstr "Delete Project"
+
+msgid "confirm_delete_project"
+msgstr "Are you sure you want to move this project to the trash?"
+
+# Databases
+msgid "databases_title"
+msgstr "Databases"
+
+msgid "create_database"
+msgstr "Create Database"
+
+msgid "database_name"
+msgstr "Database Name"
+
+msgid "api_password"
+msgstr "API Password"
+
+msgid "optional"
+msgstr "optional"
+
+msgid "generate_password"
+msgstr "Generate Password"
+
+msgid "change_password"
+msgstr "Change Password"
+
+msgid "remove_password"
+msgstr "Remove password"
+
+msgid "confirm_remove_password"
+msgstr "Remove the API password for database '{0}'? API access will be open afterwards."
+
+msgid "password_removed"
+msgstr "Password removed."
+
+msgid "delete_database"
+msgstr "Delete Database"
+
+msgid "confirm_delete_database"
+msgstr "Are you sure you want to move this database to the trash?"
+
+msgid "compress"
+msgstr "Compress"
+
+msgid "compress_database"
+msgstr "Compress database"
+
+msgid "compress_recommended"
+msgstr "Compression recommended — many free blocks in the database"
+
+msgid "confirm_compress_database"
+msgstr "Compress database '{0}'? Current size: {1}. The database will be briefly locked."
+
+msgid "compressing"
+msgstr "Compressing..."
+
+msgid "compress_success"
+msgstr "Database compressed: {0} → {1} (−{2}%)"
+
+msgid "compress_no_gain"
+msgstr "The database was already compact — no space could be reclaimed."
+
+msgid "compress_grew"
+msgstr "The database was already compact and grew slightly when it was rewritten ({0} → {1}, +{2}%). No data was lost — rewriting distributes the data slightly differently across DuckDB's storage blocks, which is normal."
+
+msgid "write_protection"
+msgstr "Write protection (read-only)"
+
+msgid "write_protection_on"
+msgstr "Write protection enabled. The database can now only be read."
+
+msgid "write_protection_off"
+msgstr "Write protection removed. The database is writable again."
+
+msgid "write_protection_hint"
+msgstr "This database is write-protected (read-only). Write operations are blocked."
+
+# SQL Editor
+msgid "sql_editor"
+msgstr "SQL Queries"
+
+msgid "execute_query"
+msgstr "Execute Query"
+
+msgid "query_result"
+msgstr "Query Result"
+
+msgid "no_results"
+msgstr "No results"
+
+msgid "rows_affected"
+msgstr "rows affected"
+
+msgid "row_inserted"
+msgstr "%d row inserted"
+
+msgid "rows_inserted"
+msgstr "%d rows inserted"
+
+msgid "row_updated"
+msgstr "%d row updated"
+
+msgid "rows_updated"
+msgstr "%d rows updated"
+
+msgid "row_deleted"
+msgstr "%d row deleted"
+
+msgid "rows_deleted"
+msgstr "%d rows deleted"
+
+msgid "query_executed"
+msgstr "Query executed successfully"
+
+msgid "query_history"
+msgstr "Query History"
+
+msgid "sql_editor_hint"
+msgstr "Alt+Enter: Run query · Alt+↑/↓: Browse history"
+
+msgid "no_history"
+msgstr "No saved queries yet"
+
+msgid "row_returned"
+msgstr "%d row returned"
+
+msgid "rows_returned"
+msgstr "%d rows returned"
+
+msgid "execution_time"
+msgstr "Execution time"
+
+# Tables
+msgid "tables"
+msgstr "Tables"
+
+msgid "columns"
+msgstr "Columns"
+
+msgid "rows"
+msgstr "Rows"
+
+msgid "import_file"
+msgstr "Import File"
+
+msgid "export_file"
+msgstr "Export File"
+
+# Errors
+msgid "error"
+msgstr "Error"
+
+msgid "success"
+msgstr "Success"
+
+msgid "not_found"
+msgstr "Not found"
+
+msgid "permission_denied"
+msgstr "Permission denied"
+
+msgid "server_error"
+msgstr "Server error"
+
+# Actions
+msgid "save"
+msgstr "Save"
+
+msgid "cancel"
+msgstr "Cancel"
+
+msgid "delete"
+msgstr "Delete"
+
+msgid "edit"
+msgstr "Edit"
+
+msgid "create"
+msgstr "Create"
+
+msgid "close"
+msgstr "Close"
+
+msgid "confirm"
+msgstr "Confirm"
+
+# Language selector
+msgid "language"
+msgstr "Language"
+
+msgid "english"
+msgstr "English"
+
+msgid "german"
+msgstr "German"
+
+msgid "french"
+msgstr "French"
+
+# Additional UI strings
+msgid "navigation"
+msgstr "Navigation"
+
+msgid "online"
+msgstr "Online"
+
+msgid "offline"
+msgstr "Offline"
+
+msgid "no_projects_found"
+msgstr "No projects found"
+
+msgid "select_database"
+msgstr "Select Database"
+
+msgid "sql_queries"
+msgstr "SQL Queries"
+
+msgid "sql_upload"
+msgstr "SQL Upload"
+
+msgid "execute_upload"
+msgstr "Execute SQL File"
+
+msgid "drop_sql_file"
+msgstr "Drop SQL file here or click to select"
+
+msgid "only_sql_allowed"
+msgstr "Only .sql files are allowed"
+
+msgid "file_too_large"
+msgstr "File too large (max {0} MB)"
+
+msgid "file_loaded"
+msgstr "Loaded: %s"
+
+msgid "no_file_loaded"
+msgstr "No file uploaded"
+
+msgid "reserved_name"
+msgstr "This name is reserved by DuckDB and cannot be used"
+
+msgid "statement_executed"
+msgstr "%d statement executed successfully"
+
+msgid "statements_executed"
+msgstr "%d statements executed successfully"
+
+# Browse
+msgid "browse"
+msgstr "Browse"
+
+msgid "database_objects"
+msgstr "Objects"
+
+msgid "views"
+msgstr "Views"
+
+msgid "indexes"
+msgstr "Indexes"
+
+msgid "sequences"
+msgstr "Sequences"
+
+msgid "macros"
+msgstr "Macros"
+
+msgid "no_data_found"
+msgstr "No data found"
+
+msgid "showing_rows"
+msgstr "Showing %d of %d rows"
+
+msgid "all_rows_shown"
+msgstr "All %d rows shown"
+
+msgid "total_rows"
+msgstr "%d rows"
+
+msgid "updated"
+msgstr "Updated"
+
+msgid "invalid_value"
+msgstr "Invalid value '%s' for type %s"
+
+msgid "duckdb_fk_note"
+msgstr "This may be related to DuckDB's limitations regarding updates involving foreign-key relationships."
+
+# Import/Export
+msgid "import_export"
+msgstr "Import/Export"
+
+msgid "csv_import"
+msgstr "Import"
+
+msgid "csv_export"
+msgstr "Export"
+
+msgid "drop_file"
+msgstr "Drop file here or click to select (CSV, Parquet, JSON)"
+
+msgid "table_name"
+msgstr "Table Name"
+
+msgid "table_name_required"
+msgstr "Table name is required"
+
+msgid "select_table"
+msgstr "Select Table"
+
+msgid "importing"
+msgstr "Importing..."
+
+msgid "exporting"
+msgstr "Exporting..."
+
+msgid "import_success"
+msgstr "{0} imported successfully"
+
+msgid "export_success"
+msgstr "{0} exported successfully"
+
+msgid "execute_import"
+msgstr "Import"
+
+msgid "execute_export"
+msgstr "Export"
+
+msgid "import"
+msgstr "Import"
+
+msgid "export"
+msgstr "Export"
+
+msgid "format"
+msgstr "Format"
+
+msgid "import_hint"
+msgstr "Supported formats: CSV, Parquet, JSON (auto-detected by file extension). Max file size: {0} MB."
+
+# Trash
+msgid "trash"
+msgstr "Trash"
+
+msgid "trash_title"
+msgstr "Trash"
+
+msgid "project"
+msgstr "Project"
+
+msgid "empty_trash"
+msgstr "Empty trash"
+
+msgid "confirm_empty_trash"
+msgstr "Are you sure you want to permanently empty the trash? All deleted databases and projects will be removed for good. This cannot be undone."
+
+msgid "trash_empty"
+msgstr "The trash is empty."
+
+msgid "trash_emptied"
+msgstr "Trash emptied ({0} entries removed)."
+
+msgid "moved_to_trash"
+msgstr "Moved to trash."
+
+msgid "restore"
+msgstr "Restore"
+
+msgid "restore_success"
+msgstr "Restored successfully."
+
+msgid "restore_conflict_db"
+msgstr "Database '{0}' already exists in project '{1}'."
+
+msgid "restore_conflict_project"
+msgstr "Project '{0}' already exists."
+
+msgid "restore_conflict_hint"
+msgstr "If you continue, the existing object will be moved to the trash and replaced by the restored version."
+
+msgid "overwrite"
+msgstr "Continue"
+
+msgid "deleted_at"
+msgstr "Deleted at"
+
+msgid "delete_permanently"
+msgstr "Delete permanently"
+
+msgid "confirm_delete_permanently_db"
+msgstr "Permanently delete database '{0}' in project '{1}'?"
+
+msgid "confirm_delete_permanently_project"
+msgstr "Permanently delete project '{0}'?"
+
+msgid "confirm_delete_permanently_hint"
+msgstr "The object will be removed for good. This cannot be undone."
+
+msgid "deleted_permanently"
+msgstr "Permanently deleted."
