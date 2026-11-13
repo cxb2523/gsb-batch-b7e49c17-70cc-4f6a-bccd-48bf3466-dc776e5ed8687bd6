@@ -1,0 +1,66 @@
+{
+  "name": "osv-ui",
+  "version": "2.0.0",
+  "description": "A beautiful, zero-config visual CVE dashboard for npm, Python, Go, Rust, Java, PHP, and Ruby. Run 'npx osv-ui' to scan or 'npx osv-ui -d' to auto-discover services. Repo: https://github.com/toan203/osv-ui",
+  "type": "module",
+  "bin": {
+    "osv-ui": "bin/cli.js"
+  },
+  "exports": {
+    "./cli": "./bin/cli.js",
+    "./scanner": "./src/scanner.js",
+    "./reporters": "./src/reporters.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "scripts": {
+    "start": "node bin/cli.js",
+    "lint": "node scripts/check-syntax.mjs",
+    "test": "node --test tests/*.test.js",
+    "ci": "npm run lint && npm test",
+    "test:fixtures": "node bin/cli.js -d test-fixture --offline --json=/tmp/osv-ui-fixtures.json"
+  },
+  "keywords": [
+    "npm-audit",
+    "pip-audit",
+    "cve",
+    "security-audit",
+    "vulnerability-scanner",
+    "osv-scanner",
+    "dashboard",
+    "osv",
+    "python",
+    "java",
+    "php",
+    "ruby",
+    "sbom",
+    "cyclonedx",
+    "spdx",
+    "monorepo",
+    "audit-ui"
+  ],
+  "author": "Toan Nguyen <mitodng@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/toan203/osv-ui#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toan203/osv-ui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/toan203/osv-ui/issues"
+  },
+  "dependencies": {
+    "compression": "^1.8.1",
+    "express": "^5.2.1",
+    "open": "^11.0.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

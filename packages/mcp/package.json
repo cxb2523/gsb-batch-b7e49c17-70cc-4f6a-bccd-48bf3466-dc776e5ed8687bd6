@@ -1,0 +1,45 @@
+{
+  "name": "osv-ui-mcp",
+  "version": "2.0.0",
+  "description": "MCP server for osv-ui — scan npm, Python, Go, Rust, Java, PHP, and Ruby projects for CVEs with a human-reviewed dashboard",
+  "type": "module",
+  "bin": {
+    "osv-ui-mcp": "bin/osv-ui-mcp.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toan203/osv-ui.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/toan203/osv-ui/tree/main/packages/mcp#readme",
+  "bugs": {
+    "url": "https://github.com/toan203/osv-ui/issues"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "cve",
+    "osv",
+    "npm-audit",
+    "python",
+    "go",
+    "rust",
+    "java",
+    "php",
+    "ruby",
+    "vulnerability",
+    "dependabot"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "open": "^11.0.2",
+    "osv-ui": "2.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

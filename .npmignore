@@ -1,0 +1,17 @@
+# Exclude OS files
+.DS_Store
+Thumbs.db
+
+# Exclude docs folder (screenshots only needed on GitHub)
+docs/
+
+# Exclude repo-only files
+.gitignore
+.npmignore
+LICENSE
+CONTRIBUTING.md
+
+.backlog.md
+.note.md
+test-fixture/
+PROJECT_MEMORY.md

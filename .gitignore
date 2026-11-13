@@ -1,0 +1,11 @@
+node_modules/
+dist/
+# test-fixture/ (Included for v1.1.6 examples)
+.DS_Store
+*.log
+npm-debug.log*
+.env
+.backlog.md
+.note.md
+PROJECT_MEMORY.md
+osv-report.json
