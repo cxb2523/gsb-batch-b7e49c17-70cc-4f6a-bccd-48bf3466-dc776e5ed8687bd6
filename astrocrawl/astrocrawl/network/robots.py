@@ -59,7 +59,7 @@ class AsyncRobotsParser:
         self.allow_all = True
         self.crawl_delay: float | None = None
         self.sitemaps: list[str] = []
-        self.fetch_status: str = "not_checked"  # ok / not_found / fetch_failed / http_NNN
+        self.fetch_status: str = "not_checked"  # ok / http_NNN / fetch_failed / not_checked
 
     @classmethod
     async def from_url(
@@ -272,30 +272,48 @@ class RobotsCache:
             raise
 
     async def _fetch_robots(self, origin: str) -> AsyncRobotsParser:
-        async with self._fetch_semaphore:
-            robots_url = f"{origin}/robots.txt"
-            result = await aiohttp_retry_fetch(
-                url=robots_url,
-                http_session=self._session,
-                proxy_session=self._proxy_session,
-                path_switch=self._path_switch,
-                timeout=ROBOTS_FETCH_TIMEOUT,
-                max_retries=self._max_retries,
-                retry_backoff_base=self._retry_backoff_base,
-                headers=self._build_headers(),
-                max_bytes=ROBOTS_MAX_SIZE,
-            )
-            parser = AsyncRobotsParser(self._ua)
-            if result.content is not None:
-                parser.parse(result.content.decode("utf-8", errors="replace"))
-                parser.fetch_status = "ok"
-            elif result.http_status > 0:
-                parser.allow_all = True
-                parser.fetch_status = f"http_{result.http_status}"
-            else:
-                parser.allow_all = True
-                parser.fetch_status = "fetch_failed"
-                self._log.debug(ErrorEvent.ROBOTS_FETCH_FAILED, origin=origin, fallback="allow_all")
+        try:
+            async with self._fetch_semaphore:
+                robots_url = f"{origin}/robots.txt"
+                # max_bytes 多取 1 字节用于探测超限：超过 ROBOTS_MAX_SIZE 时截断解析，
+                # 状态仍记为 ok，并发出 oversize 告警（与 AsyncRobotsParser.from_url 行为一致）。
+                result = await aiohttp_retry_fetch(
+                    url=robots_url,
+                    http_session=self._session,
+                    proxy_session=self._proxy_session,
+                    path_switch=self._path_switch,
+                    timeout=ROBOTS_FETCH_TIMEOUT,
+                    max_retries=self._max_retries,
+                    retry_backoff_base=self._retry_backoff_base,
+                    headers=self._build_headers(),
+                    max_bytes=ROBOTS_MAX_SIZE + 1,
+                )
+                parser = AsyncRobotsParser(self._ua)
+                if result.content is not None:
+                    raw = result.content
+                    if len(raw) > ROBOTS_MAX_SIZE:
+                        self._log.warning(
+                            ErrorEvent.ROBOTS_TXT_OVERSIZE,
+                            url=robots_url,
+                            max_bytes=ROBOTS_MAX_SIZE,
+                        )
+                        raw = raw[:ROBOTS_MAX_SIZE]
+                    parser.parse(raw.decode("utf-8", errors="replace"))
+                    parser.fetch_status = "ok"
+                elif result.http_status > 0:
+                    parser.allow_all = True
+                    parser.fetch_status = f"http_{result.http_status}"
+                else:
+                    parser.allow_all = True
+                    parser.fetch_status = "fetch_failed"
+                    self._log.debug(ErrorEvent.ROBOTS_FETCH_FAILED, origin=origin, fallback="allow_all")
+        except Exception:
+            # 抓取抛异常（如信号量/会话错误）：状态必须落为 fetch_failed，
+            # 不得停留在 not_checked，随后继续向上抛由调用方走 allow-all 兜底。
+            async with self._status_lock:
+                self._fetch_status[origin] = "fetch_failed"
+            self._log.debug(ErrorEvent.ROBOTS_FETCH_FAILED, origin=origin, fallback="allow_all")
+            raise
         async with self._lock:
             expire = time.monotonic() + self._ttl
             self._cache[origin] = (parser, expire)
@@ -318,6 +336,12 @@ class RobotsCache:
             return []
 
     async def get_fetch_status(self, origin: str) -> str:
-        """返回该源站 robots.txt 的获取状态。"""
+        """返回该源站 robots.txt 的获取状态（固定四态）。
+
+        - ``ok``：成功获取并解析（含超限截断后解析）
+        - ``http_<状态码>``：服务器返回非 200（如 ``http_404``、``http_403``）
+        - ``fetch_failed``：网络异常或重试耗尽
+        - ``not_checked``：该源站从未发起过 robots.txt 请求
+        """
         async with self._status_lock:
             return self._fetch_status.get(origin, "not_checked")

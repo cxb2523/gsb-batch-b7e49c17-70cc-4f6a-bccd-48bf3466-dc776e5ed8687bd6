@@ -698,3 +698,232 @@ class TestRobotsCacheCrawlDelayIntegration:
         state = limiter._tracker._states.get("example.com")
         assert state is not None
         assert state.custom_delay == 3.0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# RobotsCache — get_fetch_status 四态契约 / 并发去重 / 超限截断 / 代理透传
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestRobotsCacheFetchStatusContract:
+    """get_fetch_status 固定四态：ok / http_NNN / fetch_failed / not_checked。"""
+
+    @pytest.mark.asyncio
+    async def test_status_ok_after_200(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        monkeypatch.setattr(
+            "astrocrawl.network.robots.aiohttp_retry_fetch",
+            AsyncMock(
+                return_value=AiohttpFetchResult(
+                    content=b"User-agent: *\nDisallow: /admin/",
+                    http_status=200,
+                )
+            ),
+        )
+        cache = RobotsCache("Bot", MagicMock())
+        assert await cache.get_fetch_status("https://x.com") == "not_checked"
+        assert await cache.is_allowed("https://x.com/admin/panel") is False
+        assert await cache.get_fetch_status("https://x.com") == "ok"
+
+    @pytest.mark.asyncio
+    async def test_status_http_404(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        monkeypatch.setattr(
+            "astrocrawl.network.robots.aiohttp_retry_fetch",
+            AsyncMock(return_value=AiohttpFetchResult(http_status=404)),
+        )
+        cache = RobotsCache("Bot", MagicMock())
+        assert await cache.is_allowed("https://x.com/anything") is True
+        assert await cache.get_fetch_status("https://x.com") == "http_404"
+
+    @pytest.mark.asyncio
+    async def test_status_fetch_failed_on_retry_exhausted(self, monkeypatch):
+        """重试耗尽（空结果）→ fetch_failed，且 allow-all 兜底。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        monkeypatch.setattr(
+            "astrocrawl.network.robots.aiohttp_retry_fetch",
+            AsyncMock(return_value=AiohttpFetchResult()),
+        )
+        cache = RobotsCache("Bot", MagicMock())
+        assert await cache.is_allowed("https://x.com/anything") is True
+        assert await cache.get_fetch_status("https://x.com") == "fetch_failed"
+
+    @pytest.mark.asyncio
+    async def test_status_fetch_failed_on_fetch_exception(self, monkeypatch):
+        """抓取抛异常 → 状态落为 fetch_failed，不得停留在 not_checked。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr(
+            "astrocrawl.network.robots.aiohttp_retry_fetch",
+            AsyncMock(side_effect=RuntimeError("connection reset")),
+        )
+        cache = RobotsCache("Bot", MagicMock())
+        assert await cache.is_allowed("https://x.com/anything") is True
+        assert await cache.get_fetch_status("https://x.com") == "fetch_failed"
+        # get_sitemaps 走同一获取路径，异常兜底为空列表，状态仍为 fetch_failed
+        assert await cache.get_sitemaps("https://x.com") == []
+        assert await cache.get_fetch_status("https://x.com") == "fetch_failed"
+
+
+class TestRobotsCacheOversize:
+    """超限 robots.txt：按 ROBOTS_MAX_SIZE 截断解析，状态 ok，保留 oversize 告警。"""
+
+    @pytest.mark.asyncio
+    async def test_oversize_truncated_parsed_ok_with_warning(self, monkeypatch, caplog):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        monkeypatch.setattr("astrocrawl.network.robots.ROBOTS_MAX_SIZE", 32)
+        # 前 32 字节内包含完整规则，之后是超长填充；截断边界落在规则中间也不得崩溃
+        content = b"User-agent: *\nDisallow: /admin/\n" + b"#" * 4096
+        fetch_mock = AsyncMock(return_value=AiohttpFetchResult(content=content, http_status=200))
+        monkeypatch.setattr("astrocrawl.network.robots.aiohttp_retry_fetch", fetch_mock)
+
+        cache = RobotsCache("Bot", MagicMock())
+        assert await cache.is_allowed("https://x.com/admin/panel") is False
+        assert await cache.get_fetch_status("https://x.com") == "ok"
+        assert "robots_txt_oversize" in caplog.text
+        # 多取 1 字节用于探测超限
+        assert fetch_mock.call_args.kwargs["max_bytes"] == 33
+
+    @pytest.mark.asyncio
+    async def test_oversize_truncation_mid_directive_no_crash(self, monkeypatch):
+        """截断点落在指令行中间时解析器不崩溃，状态仍为 ok。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        monkeypatch.setattr("astrocrawl.network.robots.ROBOTS_MAX_SIZE", 16)
+        content = b"User-agent: *\nDisallow: /admin/\nDisallow: /secret/\n"
+        monkeypatch.setattr(
+            "astrocrawl.network.robots.aiohttp_retry_fetch",
+            AsyncMock(return_value=AiohttpFetchResult(content=content, http_status=200)),
+        )
+        cache = RobotsCache("Bot", MagicMock())
+        assert await cache.is_allowed("https://x.com/anything") is True
+        assert await cache.get_fetch_status("https://x.com") == "ok"
+
+    @pytest.mark.asyncio
+    async def test_exact_max_size_not_oversize(self, monkeypatch, caplog):
+        """恰好等于 ROBOTS_MAX_SIZE 的内容不触发 oversize 告警。"""
+        import logging
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        monkeypatch.setattr("astrocrawl.network.robots.ROBOTS_MAX_SIZE", 32)
+        content = b"User-agent: *\nDisallow: /admin/\n"[:32]
+        assert len(content) == 32
+        monkeypatch.setattr(
+            "astrocrawl.network.robots.aiohttp_retry_fetch",
+            AsyncMock(return_value=AiohttpFetchResult(content=content, http_status=200)),
+        )
+        cache = RobotsCache("Bot", MagicMock())
+        with caplog.at_level(logging.WARNING):
+            assert await cache.is_allowed("https://x.com/admin/x") is False
+        assert await cache.get_fetch_status("https://x.com") == "ok"
+        assert "robots_txt_oversize" not in caplog.text
+
+
+class TestRobotsCacheConcurrentDedup:
+    """同一源站并发 is_allowed / get_sitemaps 只触发一次实际抓取。"""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_calls_single_fetch(self, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        fetch_mock = AsyncMock(
+            return_value=AiohttpFetchResult(
+                content=b"User-agent: *\nDisallow: /admin/\nSitemap: https://x.com/sitemap.xml",
+                http_status=200,
+            )
+        )
+        monkeypatch.setattr("astrocrawl.network.robots.aiohttp_retry_fetch", fetch_mock)
+
+        cache = RobotsCache("Bot", MagicMock())
+        results = await asyncio.gather(
+            cache.is_allowed("https://x.com/admin/panel"),
+            cache.get_sitemaps("https://x.com"),
+            cache.is_allowed("https://x.com/public/page"),
+        )
+        assert results[0] is False
+        assert results[1] == ["https://x.com/sitemap.xml"]
+        assert results[2] is True
+        assert fetch_mock.await_count == 1
+        # 抓取结束后状态可被后续查询读到
+        assert await cache.get_fetch_status("https://x.com") == "ok"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_failure_single_fetch_and_status(self, monkeypatch):
+        """并发调用遇到抓取异常：只抓取一次，状态落为 fetch_failed。"""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        fetch_mock = AsyncMock(side_effect=RuntimeError("boom"))
+        monkeypatch.setattr("astrocrawl.network.robots.aiohttp_retry_fetch", fetch_mock)
+
+        cache = RobotsCache("Bot", MagicMock())
+        allowed, sitemaps = await asyncio.gather(
+            cache.is_allowed("https://x.com/a"),
+            cache.get_sitemaps("https://x.com"),
+        )
+        assert allowed is True
+        assert sitemaps == []
+        assert fetch_mock.await_count == 1
+        assert await cache.get_fetch_status("https://x.com") == "fetch_failed"
+
+
+class TestRobotsCacheProxyPassthrough:
+    """_fetch_robots 将 proxy_session / path_switch 原样透传给 aiohttp_retry_fetch。"""
+
+    @pytest.mark.asyncio
+    async def test_proxy_mode_passes_session_and_switch(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl._path_strategy import PathSwitch
+        from astrocrawl.network._fetch import AiohttpFetchResult
+        from astrocrawl.proxy import ProxyManager
+        from tests._fakes import _pp
+
+        pm = ProxyManager([_pp("http://p1:8080")])
+        path_switch = PathSwitch.for_mode("proxy_only")
+        fetch_mock = AsyncMock(return_value=AiohttpFetchResult(content=b"", http_status=200))
+        monkeypatch.setattr("astrocrawl.network.robots.aiohttp_retry_fetch", fetch_mock)
+
+        cache = RobotsCache("Bot", MagicMock(), proxy_session=pm, path_switch=path_switch)
+        await cache.is_allowed("https://x.com/page")
+
+        kwargs = fetch_mock.call_args.kwargs
+        assert kwargs["proxy_session"] is pm
+        assert kwargs["path_switch"] is path_switch
+
+    @pytest.mark.asyncio
+    async def test_direct_only_proxy_session_is_none(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from astrocrawl._path_strategy import PathSwitch
+        from astrocrawl.network._fetch import AiohttpFetchResult
+
+        path_switch = PathSwitch.for_mode("direct_only")
+        fetch_mock = AsyncMock(return_value=AiohttpFetchResult(content=b"", http_status=200))
+        monkeypatch.setattr("astrocrawl.network.robots.aiohttp_retry_fetch", fetch_mock)
+
+        cache = RobotsCache("Bot", MagicMock(), path_switch=path_switch)
+        await cache.is_allowed("https://x.com/page")
+
+        kwargs = fetch_mock.call_args.kwargs
+        assert kwargs["proxy_session"] is None
+        assert kwargs["path_switch"] is path_switch
