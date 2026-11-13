@@ -51,6 +51,15 @@ export class AIController {
     this.biasTarget = clamp(bias, 0.8, 1.06);
   }
 
+  /**
+   * The multiplier actually in effect this step, smoothed towards the target
+   * set by the race director. Read-only: the only way to move it is
+   * setCatchUp(), and it never jumps.
+   */
+  get catchUpBias(): number {
+    return this.bias;
+  }
+
   /** Diagnostics only. */
   debugBias(): number {
     return this.bias;

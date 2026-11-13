@@ -71,6 +71,30 @@ The easing is deliberately stronger (16%) than the pushing (5%), and only ever
 applies to cars *ahead* of you — so a car in front can still win, and a player
 doing well gets no help at all.
 
+### Observing the catch-up
+
+The mechanism is no longer hidden inside the simulation. `RaceDirector`
+exposes a strictly read-only view, `catchUpStatus()`, with one row per rival
+(the player's own car is never in it). Each row reports:
+
+- `multiplier` — the pace factor the rival's `AIController` is actually
+  driving with after its smoothing, so changes ramp in rather than jump
+  (below 1 = easing off while ahead, above 1 = pressing on from behind);
+- `gap` / `rawGap` — the arc-length difference to the player in metres,
+  positive when the rival is ahead. `gap` is folded across the
+  start/finish line to the shortest way round the lap, while `rawGap`
+  keeps the un-folded number so the wrap itself is auditable;
+- `ahead` and `finished` — the classification the rule used, and whether
+  the car has already taken the flag. Finished cars participate in
+  neither easing nor pushing (their multiplier eases back to 1), and with
+  `catchUp` switched off every row reads 1.
+
+The query changes no race state; it only reports what the director last
+asked of each AI. `npm run verify:catchup` drives the real
+`RaceDirector` and `AIController` headlessly through player-lagging,
+player-leading, finished-car, switch-off, cross-line and smoothing
+scenarios to check every row of that contract.
+
 ## Credits
 
 - **Built by [zham](https://github.com/zhameersheraz).**

@@ -64,6 +64,25 @@ export interface GridRow {
   finished: boolean;
 }
 
+/**
+ * One rival's entry in the catch-up observability view.
+ *
+ * `multiplier` is the smoothed value the AIController is actually driving with
+ * (1 = normal pace, < 1 = easing off while ahead, > 1 = pressing on from
+ * behind). `gap` is the shortest-way-round arc-length difference to the player
+ * in metres; positive means the rival is ahead. `rawGap` is the same
+ * difference before the start/finish fold, so a verifier can see the wrap that
+ * turned a negative number into "ahead".
+ */
+export interface CatchUpRow {
+  name: string;
+  multiplier: number;
+  gap: number;
+  rawGap: number;
+  ahead: boolean;
+  finished: boolean;
+}
+
 /** Optional presentation hook, used by main.ts to drive the menu. */
 export interface RaceEvents {
   onCountdown?(text: string | null): void;
@@ -433,19 +452,37 @@ export class RaceDirector {
    * correctly treated as "behind" rather than "ahead and far away".
    */
   private updateCatchUp(): void {
-    if (!this.catchUp) return;
     const p = this.player;
-    const L = this.env.track.length;
     for (const c of this.cars) {
-      if (c === p || c.finished) continue;
+      if (c === p) continue; // the player never catches up against themselves
       const ai = c.ai as AIController | null;
       if (!ai) continue;
-      let gap = c.totalDist - p.totalDist;
-      if (gap > L / 2) gap -= L;
-      if (gap < -L / 2) gap += L;
+      // With the system switched off, or once a car has taken the flag, no
+      // rival is adjusted: ease its smoothed multiplier back to neutral
+      // instead of leaving a stale target in place.
+      if (!this.catchUp || c.finished) {
+        ai.setCatchUp(1);
+        continue;
+      }
+      const gap = this.catchUpGap(c);
       const t = Math.min(Math.abs(gap) / CATCHUP_RANGE, 1);
       ai.setCatchUp(gap > 0 ? 1 - CATCHUP_EASE * t : 1 + CATCHUP_PUSH * t);
     }
+  }
+
+  /**
+   * Signed arc-length gap from the player to a rival, in metres. Positive means
+   * the rival is AHEAD on the road, negative means behind. The raw difference
+   * of the unwrapped lap distances is folded across the start/finish line to
+   * the shortest way round the loop, so a car just over half a lap away is
+   * never misread as being on the opposite side of the field.
+   */
+  private catchUpGap(car: CarSim): number {
+    const L = this.env.track.length;
+    let gap = car.totalDist - this.player.totalDist;
+    if (gap > L / 2) gap -= L;
+    if (gap < -L / 2) gap += L;
+    return gap;
   }
 
   /**
@@ -630,6 +667,34 @@ export class RaceDirector {
 
   get playerItem(): ItemKind {
     return this.player.item;
+  }
+
+  /**
+   * Read-only catch-up view: every rival's current pace multiplier together
+   * with its arc-length gap to the player and whether it has stopped
+   * participating because it already took the flag.
+   *
+   * This never drives the simulation - it only reports what updateCatchUp()
+   * last asked of each AIController and what the smoothing has converged to.
+   * The player is deliberately absent. A rival without an AI (none in the
+   * shipped game, but possible in harnesses) reports a neutral multiplier.
+   */
+  catchUpStatus(): CatchUpRow[] {
+    return this.cars
+      .filter((c) => c !== this.player)
+      .map((c) => {
+        const ai = c.ai as AIController | null;
+        const rawGap = c.totalDist - this.player.totalDist;
+        const gap = this.catchUpGap(c);
+        return {
+          name: c.name,
+          multiplier: ai ? ai.catchUpBias : 1,
+          gap,
+          rawGap,
+          ahead: gap > 0,
+          finished: c.finished,
+        };
+      });
   }
 
   /** Debug/verification hook: the current grid, for headless assertions. */

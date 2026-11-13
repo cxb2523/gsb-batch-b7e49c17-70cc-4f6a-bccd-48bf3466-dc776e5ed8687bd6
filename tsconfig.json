@@ -20,6 +20,6 @@
     "noUncheckedIndexedAccess": false,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "tools/validate.ts", "tools/race-sim.ts"],
+  "include": ["src", "tools/validate.ts", "tools/race-sim.ts", "tools/verify-catchup.ts"],
   "exclude": ["tools/scratch-*", "tools/playtest.py", "tools/serve.py", "tools/boot-probe.py", "dist", "node_modules"]
 }
