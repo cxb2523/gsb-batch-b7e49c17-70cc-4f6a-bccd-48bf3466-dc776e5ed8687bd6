@@ -27,6 +27,7 @@ from ladon.plugins.models import Expansion, Ref
 from ladon.plugins.protocol import CrawlPlugin, Expander, Sink, Source
 from ladon.runner import (
     CrawlPlan,
+    LeafFailure,
     RunConfig,
     RunResult,
     execute_plan_sync,
@@ -338,7 +339,9 @@ class TestCrawlPlan:
     def test_excluding_removes_matching_leaves(self) -> None:
         refs = [Ref(url=f"https://x.example.com/{i}") for i in range(4)]
         plan = CrawlPlan(record=_DemoRecord(), leaves=tuple(refs), errors=())
-        filtered = plan.excluding(lambda r: r.url.endswith("/1") or r.url.endswith("/3"))  # type: ignore[union-attr]
+        filtered = plan.excluding(
+            lambda r: r.url.endswith("/1") or r.url.endswith("/3")
+        )  # type: ignore[union-attr]
         assert len(filtered.leaves) == 2
         remaining_urls = {r.url for r in filtered.leaves}  # type: ignore[union-attr]
         assert "https://x.example.com/0" in remaining_urls
@@ -858,7 +861,9 @@ class TestExecutePlanSync:
         def on_progress(done: int, total: int) -> None:
             progress_calls.append((done, total))
 
-        execute_plan_sync(plan, plugin, None, RunConfig(), on_progress=on_progress)  # type: ignore[arg-type]
+        execute_plan_sync(
+            plan, plugin, None, RunConfig(), on_progress=on_progress
+        )  # type: ignore[arg-type]
         assert len(progress_calls) == 3
         assert progress_calls[0] == (1, 3)
         assert progress_calls[1] == (2, 3)
@@ -979,7 +984,11 @@ class TestExecutePlanSync:
             raise RuntimeError("progress bar closed")
 
         result = execute_plan_sync(
-            plan, plugin, None, RunConfig(), on_progress=exploding_progress  # type: ignore[arg-type]
+            plan,
+            plugin,
+            None,
+            RunConfig(),
+            on_progress=exploding_progress,  # type: ignore[arg-type]
         )
         assert result.leaves_consumed == 3
 
@@ -1015,6 +1024,256 @@ class TestExecutePlanSync:
 
         assert exc_info.value is interruption
         assert exc_info.value.__context__ is asset_error
+
+
+# ---------------------------------------------------------------------------
+# RunResult.failures — per-leaf failure details
+# ---------------------------------------------------------------------------
+
+
+class _SelectiveFailureSink:
+    """Sink that raises a configured ordinary exception for chosen leaves."""
+
+    def __init__(self, failures: dict[str, Exception]) -> None:
+        self._failures = failures
+
+    def consume(self, ref: object, client: object) -> _DemoLeafRecord:
+        r = ref if isinstance(ref, Ref) else Ref(url=str(ref))
+        for suffix, exc in self._failures.items():
+            if r.url.endswith(suffix):
+                raise exc
+        return _DemoLeafRecord(leaf_id=r.url.split("/")[-1], url=r.url)
+
+
+def _callback_failing_on_leaf_ids(failing_ids: set[str]) -> object:
+    def callback(record: object, second: object) -> None:
+        leaf_id = record.leaf_id  # type: ignore[attr-defined]
+        if leaf_id in failing_ids:
+            raise RuntimeError(f"callback boom-{leaf_id}")
+
+    return callback
+
+
+class TestLeafFailureDetails:
+    def test_leaf_failure_is_frozen(self) -> None:
+        failure = LeafFailure(
+            leaf_ref=Ref(url="https://x.example.com/leaf/1"),
+            phase="consume",
+            error="boom",
+        )
+        with pytest.raises(AttributeError):
+            failure.phase = "callback"  # type: ignore[misc]
+
+    def test_run_result_failures_defaults_to_empty_tuple(self) -> None:
+        result = RunResult(
+            record=_DemoRecord(),
+            leaves_consumed=0,
+            leaves_persisted=0,
+            leaves_failed=0,
+            errors=(),
+        )
+        assert result.failures == ()
+
+    def test_run_crawl_mixed_consume_and_callback_failures(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink({"/2": RuntimeError("boom-2")})
+
+        result = run_crawl(
+            top_ref,
+            plugin,
+            None,  # type: ignore[arg-type]
+            RunConfig(),
+            on_leaf=_callback_failing_on_leaf_ids({"3"}),  # type: ignore[arg-type]
+        )
+
+        assert result.leaves_consumed == 2
+        assert result.leaves_persisted == 1
+        assert result.leaves_failed == 1
+        assert result.leaves_consumed + result.leaves_failed == 3
+        # One entry per failure, in leaf-processing order, carrying the
+        # leaf ref objects themselves.
+        assert len(result.failures) == 2
+        consume_failure, callback_failure = result.failures
+        assert consume_failure.leaf_ref is child_refs[1]
+        assert consume_failure.phase == "consume"
+        assert consume_failure.error == "boom-2"
+        assert callback_failure.leaf_ref is child_refs[2]
+        assert callback_failure.phase == "callback"
+        assert callback_failure.error == "callback boom-3"
+
+    def test_execute_plan_sync_mixed_consume_and_callback_failures(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink({"/1": RuntimeError("boom-1")})
+        plan = plan_crawl_sync(top_ref, plugin, None)  # type: ignore[arg-type]
+
+        result = execute_plan_sync(
+            plan,
+            plugin,
+            None,  # type: ignore[arg-type]
+            RunConfig(),
+            on_planned_leaf=_callback_failing_on_leaf_ids({"3"}),  # type: ignore[arg-type]
+        )
+
+        assert result.leaves_consumed == 2
+        assert result.leaves_persisted == 1
+        assert result.leaves_failed == 1
+        assert result.leaves_consumed + result.leaves_failed == 3
+        assert len(result.failures) == 2
+        consume_failure, callback_failure = result.failures
+        assert consume_failure.leaf_ref is child_refs[0]
+        assert consume_failure.phase == "consume"
+        assert consume_failure.error == "boom-1"
+        assert callback_failure.leaf_ref is child_refs[2]
+        assert callback_failure.phase == "callback"
+        assert callback_failure.error == "callback boom-3"
+
+    def test_run_crawl_all_success_has_empty_failures(
+        self, top_ref: Ref, plugin: _MockPlugin
+    ) -> None:
+        result = run_crawl(top_ref, plugin, None, RunConfig())  # type: ignore[arg-type]
+        assert result.leaves_consumed == 3
+        assert result.leaves_failed == 0
+        assert result.failures == ()
+
+    def test_execute_plan_sync_all_success_has_empty_failures(
+        self, top_ref: Ref, plugin: _MockPlugin
+    ) -> None:
+        plan = plan_crawl_sync(top_ref, plugin, None)  # type: ignore[arg-type]
+        result = execute_plan_sync(plan, plugin, None, RunConfig())  # type: ignore[arg-type]
+        assert result.leaves_consumed == 3
+        assert result.leaves_failed == 0
+        assert result.failures == ()
+
+    def test_run_crawl_fatal_error_still_propagates_after_recorded_failures(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink(
+            {
+                "/1": RuntimeError("boom-1"),
+                "/3": AssetDownloadError("asset gone"),
+            }
+        )
+
+        with pytest.raises(AssetDownloadError, match="asset gone"):
+            run_crawl(top_ref, plugin, None, RunConfig())  # type: ignore[arg-type]
+
+    def test_execute_plan_sync_fatal_error_still_propagates_after_recorded_failures(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink(
+            {
+                "/1": RuntimeError("boom-1"),
+                "/3": AssetDownloadError("asset gone"),
+            }
+        )
+        plan = plan_crawl_sync(top_ref, plugin, None)  # type: ignore[arg-type]
+
+        with pytest.raises(AssetDownloadError, match="asset gone"):
+            execute_plan_sync(plan, plugin, None, RunConfig())  # type: ignore[arg-type]
+
+    def test_run_crawl_keyboard_interrupt_from_callback_still_propagates(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink({"/1": RuntimeError("boom-1")})
+
+        def cancelled_callback(record: object, parent: object) -> None:
+            raise KeyboardInterrupt("cancel persistence")
+
+        with pytest.raises(KeyboardInterrupt, match="cancel persistence"):
+            run_crawl(
+                top_ref,
+                plugin,
+                None,  # type: ignore[arg-type]
+                RunConfig(),
+                on_leaf=cancelled_callback,
+            )
+
+    def test_run_crawl_leaf_limit_restricts_failures_to_processed_leaves(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink(
+            {
+                "/1": RuntimeError("boom-1"),
+                "/3": RuntimeError("boom-3"),
+            }
+        )
+
+        result = run_crawl(
+            top_ref,
+            plugin,
+            None,
+            RunConfig(leaf_limit=2),  # type: ignore[arg-type]
+        )
+
+        assert result.leaves_consumed + result.leaves_failed == 2
+        assert len(result.failures) == 1
+        assert result.failures[0].leaf_ref is child_refs[0]
+        assert result.failures[0].phase == "consume"
+        assert result.failures[0].error == "boom-1"
+
+    def test_execute_plan_sync_leaf_limit_restricts_failures_to_processed_leaves(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink(
+            {
+                "/2": RuntimeError("boom-2"),
+                "/3": RuntimeError("boom-3"),
+            }
+        )
+        plan = plan_crawl_sync(top_ref, plugin, None)  # type: ignore[arg-type]
+
+        result = execute_plan_sync(
+            plan,
+            plugin,
+            None,
+            RunConfig(leaf_limit=2),  # type: ignore[arg-type]
+        )
+
+        assert result.leaves_consumed + result.leaves_failed == 2
+        assert len(result.failures) == 1
+        assert result.failures[0].leaf_ref is child_refs[1]
+        assert result.failures[0].phase == "consume"
+        assert result.failures[0].error == "boom-2"
+
+    def test_run_crawl_failure_ref_is_leaf_not_parent_record(
+        self, top_ref: Ref, two_level_plugin: _MockPlugin
+    ) -> None:
+        two_level_plugin.sink = _SelectiveFailureSink(
+            {"/leaf/1": RuntimeError("leaf boom")}
+        )
+
+        result = run_crawl(top_ref, two_level_plugin, None, RunConfig())  # type: ignore[arg-type]
+
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        assert isinstance(failure.leaf_ref, Ref)
+        assert failure.leaf_ref.url == "https://demo.example.com/leaf/1"  # type: ignore[union-attr]
+        assert failure.phase == "consume"
+        assert failure.error == "leaf boom"
+
+    def test_leaf_unavailable_stays_on_counter_path_without_failure_detail(
+        self, top_ref: Ref, child_refs: list[Ref]
+    ) -> None:
+        plugin = _MockPlugin(child_refs)
+        plugin.sink = _SelectiveFailureSink(
+            {"/2": LeafUnavailableError("missing")}
+        )
+
+        result = run_crawl(top_ref, plugin, None, RunConfig())  # type: ignore[arg-type]
+
+        assert result.leaves_consumed == 2
+        assert result.leaves_failed == 1
+        assert result.errors == ("ref[1] consume failed: missing",)
+        assert result.failures == ()
 
 
 # ---------------------------------------------------------------------------

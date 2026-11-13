@@ -53,6 +53,7 @@ from .plugins import (
 )
 from .runner import (
     CrawlPlan,
+    LeafFailure,
     OnLeafCallback,
     OnPlannedLeafCallback,
     PluginRunResult,
@@ -90,6 +91,7 @@ __all__ = [
     "RunResult",
     "PluginRunResult",
     "CrawlPlan",
+    "LeafFailure",
     "OnLeafCallback",
     "OnPlannedLeafCallback",
     # Runner — async

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, cast
+from typing import Any, Callable, Generic, Literal, cast
 
 from typing_extensions import TypeVar
 
@@ -157,6 +157,27 @@ class RunConfig:
 
 
 @dataclass(frozen=True)
+class LeafFailure:
+    """One per-leaf Phase 3 failure, in leaf-processing order.
+
+    ``leaf_ref`` is the leaf ref itself — never a parent record — so callers
+    can match each failure back to the exact leaf that produced it.
+    ``phase`` is ``"consume"`` when ``sink.consume()`` raised an ordinary
+    exception and ``"callback"`` when the ``on_leaf`` / ``on_planned_leaf``
+    callback raised one.  ``error`` is the exception's text.
+
+    Only ordinary ``Exception`` subclasses produce a ``LeafFailure``.
+    ``LeafUnavailableError`` keeps its dedicated counter path (counted in
+    ``leaves_failed``, recorded in ``errors``) and fatal plugin errors and
+    ``BaseException`` subclasses still propagate, so neither appears here.
+    """
+
+    leaf_ref: object
+    phase: Literal["consume", "callback"]
+    error: str
+
+
+@dataclass(frozen=True)
 class RunResult:
     """Outcome of a crawl run — returned by run_crawl(), execute_plan_sync(), and execute_plan().
 
@@ -184,6 +205,11 @@ class RunResult:
     ``"ref[N] callback failed: ..."``). A result with ``leaves_failed == 0``
     may still contain branch or callback errors — always inspect ``errors``
     for a complete picture of what went wrong.
+
+    ``failures`` is the machine-checkable counterpart to the Phase 3 entries
+    in ``errors``: one :class:`LeafFailure` per leaf whose consume or callback
+    raised an ordinary exception, in leaf-processing order, each carrying the
+    leaf ref itself.  Empty when every leaf succeeded.
     """
 
     record: object
@@ -191,6 +217,7 @@ class RunResult:
     leaves_persisted: int
     leaves_failed: int
     errors: tuple[str, ...]
+    failures: tuple[LeafFailure, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -258,7 +285,9 @@ def run_crawl(
                   etc. Receives (leaf_record, parent_record).
 
     Returns:
-        RunResult with counts and any per-leaf error messages.
+        RunResult with counts and any per-leaf error messages; per-leaf
+        consume/callback failures are additionally itemized in
+        ``RunResult.failures``.
 
     Raises:
         ExpansionNotReadyError:     Raised from any expander or the Sink. The
@@ -341,6 +370,7 @@ def run_crawl(
     leaves_consumed = 0
     leaves_persisted = 0
     leaves_failed = 0
+    failures: list[LeafFailure] = []
 
     for i, (leaf_ref, parent_record) in enumerate(pairs):
         # Bounded repr: large records (e.g. stories with many comment IDs)
@@ -372,6 +402,9 @@ def run_crawl(
         except Exception as exc:
             leaves_failed += 1
             errors.append(f"ref[{i}] consume failed: {exc}")
+            failures.append(
+                LeafFailure(leaf_ref=leaf_ref, phase="consume", error=str(exc))
+            )
             log_leaf_exception(exc, i, plugin.name)
             continue
         except BaseException as exc:
@@ -386,6 +419,11 @@ def run_crawl(
                 leaves_persisted += 1
             except Exception as exc:
                 errors.append(f"ref[{i}] callback failed: {exc}")
+                failures.append(
+                    LeafFailure(
+                        leaf_ref=leaf_ref, phase="callback", error=str(exc)
+                    )
+                )
                 logger.warning(
                     "on_leaf callback failed — ref[%d] parent=%s error=%s",
                     i,
@@ -419,6 +457,7 @@ def run_crawl(
         leaves_persisted=leaves_persisted,
         leaves_failed=leaves_failed,
         errors=tuple(errors),
+        failures=tuple(failures),
     )
 
 
@@ -583,7 +622,9 @@ def execute_plan_sync(
 
     Returns:
         RunResult with counts and any per-leaf error messages.  Phase 1
-        errors from the plan are carried forward into ``RunResult.errors``.
+        errors from the plan are carried forward into ``RunResult.errors``;
+        per-leaf consume/callback failures are additionally itemized in
+        ``RunResult.failures``.
 
     Raises:
         ExpansionNotReadyError: Raised from the Sink and propagates.
@@ -609,6 +650,7 @@ def execute_plan_sync(
     leaves_persisted = 0
     leaves_failed = 0
     errors: list[str] = list(plan.errors)
+    failures: list[LeafFailure] = []
 
     def _fire_progress(done: int, ref_index: int) -> None:
         if on_progress is not None:
@@ -651,6 +693,9 @@ def execute_plan_sync(
         except Exception as exc:
             leaves_failed += 1
             errors.append(f"ref[{i}] consume failed: {exc}")
+            failures.append(
+                LeafFailure(leaf_ref=leaf_ref, phase="consume", error=str(exc))
+            )
             log_leaf_exception(exc, i, plugin.name)
             _fire_progress(leaves_consumed + leaves_failed, i)
             continue
@@ -668,6 +713,11 @@ def execute_plan_sync(
                 leaves_persisted += 1
             except Exception as exc:
                 errors.append(f"ref[{i}] callback failed: {exc}")
+                failures.append(
+                    LeafFailure(
+                        leaf_ref=leaf_ref, phase="callback", error=str(exc)
+                    )
+                )
                 logger.warning(
                     "on_planned_leaf callback failed — ref[%d] error=%s",
                     i,
@@ -704,4 +754,5 @@ def execute_plan_sync(
         leaves_persisted=leaves_persisted,
         leaves_failed=leaves_failed,
         errors=tuple(errors),
+        failures=tuple(failures),
     )
