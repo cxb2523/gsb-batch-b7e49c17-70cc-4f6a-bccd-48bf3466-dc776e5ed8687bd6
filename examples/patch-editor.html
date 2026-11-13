@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patch Editor - libADLMIDI-JS</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #222;
+            --bg-tertiary: #2a2a2a;
+            --text-primary: #e0e0e0;
+            --text-secondary: #999;
+            --accent: #4a9;
+            --accent-hover: #5ba;
+            --border: #3a3a3a;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        h1 {
+            color: var(--text-primary);
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 16px;
+            border: 1px solid var(--border);
+            margin-bottom: 15px;
+        }
+
+        button {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 10px 18px;
+            font-size: 13px;
+            font-weight: 500;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: var(--accent-hover);
+        }
+
+        button:disabled {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            cursor: not-allowed;
+        }
+
+        button.secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        select,
+        input[type="number"] {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            padding: 8px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        input[type="number"] {
+            width: 55px;
+        }
+
+        label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .operator-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px;
+        }
+
+        .operator-card {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+        }
+
+        .operator-card.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
+        .operator-card h3 {
+            margin: 0 0 10px 0;
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .param-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .param {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .param label {
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        .param input[type="range"] {
+            width: 70px;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+        }
+
+        .param input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 10px;
+            height: 10px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .param-value {
+            font-size: 10px;
+            color: var(--accent);
+            font-weight: 500;
+            min-width: 16px;
+            text-align: center;
+        }
+
+        .toggle-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+
+        .toggle {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 10px;
+        }
+
+        .toggle input[type="checkbox"] {
+            width: 12px;
+            height: 12px;
+            accent-color: var(--accent);
+        }
+
+        .waveform-select {
+            display: flex;
+            gap: 2px;
+            margin-top: 4px;
+        }
+
+        .waveform-btn {
+            width: 26px;
+            height: 26px;
+            border-radius: 3px;
+            font-size: 9px;
+            padding: 0;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-family: monospace;
+        }
+
+        .waveform-btn.active {
+            background: rgba(68, 170, 153, 0.2);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .waveform-btn:hover {
+            background: rgba(68, 170, 153, 0.1);
+        }
+
+        .global-params {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .keyboard {
+            display: flex;
+            position: relative;
+            height: 90px;
+            margin-top: 8px;
+        }
+
+        .key {
+            width: 32px;
+            height: 90px;
+            background: linear-gradient(180deg, #f5f5f5, #ddd);
+            border: 1px solid #999;
+            border-radius: 0 0 4px 4px;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+
+        .key:hover {
+            background: linear-gradient(180deg, #fff, #eee);
+        }
+
+        .key.active {
+            background: linear-gradient(180deg, #8cf, #6ad);
+        }
+
+        .key.black {
+            width: 22px;
+            height: 55px;
+            background: linear-gradient(180deg, #333, #111);
+            border-color: #000;
+            margin-left: -11px;
+            margin-right: -11px;
+            z-index: 1;
+            position: relative;
+        }
+
+        .key.black:hover {
+            background: linear-gradient(180deg, #444, #222);
+        }
+
+        .key.black.active {
+            background: linear-gradient(180deg, #456, #234);
+        }
+
+        #status {
+            padding: 10px 12px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .connection-box {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: monospace;
+        }
+
+        .op-label {
+            padding: 3px 6px;
+            background: rgba(68, 170, 153, 0.15);
+            border-radius: 3px;
+        }
+
+        .arrow {
+            color: var(--accent);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <div>
+            <h1>OPL3 Patch Editor</h1>
+            <p style="margin: 0; color: var(--text-secondary); font-size: 12px;">Real-time FM instrument editing</p>
+        </div>
+        <button id="initBtn">Initialize</button>
+    </div>
+
+    <div id="status">Not initialized</div>
+
+    <div class="card">
+        <div class="global-params">
+            <label>
+                Bank:
+                <select id="bankSelect" disabled>
+                    <option value="">Loading banks...</option>
+                </select>
+            </label>
+            <label>
+                Program:
+                <select id="programSelect" disabled></select>
+            </label>
+        </div>
+        <div class="global-params" style="margin-top: 10px;">
+            <label title="4-operator mode uses all 4 operators">
+                <input type="checkbox" id="is4opCheck" disabled> 4-Op Mode
+            </label>
+            <label title="Note offset in semitones">
+                Transpose:
+                <input type="number" id="noteOffset1" min="-24" max="24" value="0" disabled style="width:48px">
+            </label>
+        </div>
+        <div class="global-params" style="margin-top: 10px;">
+            <div
+                style="display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--bg-tertiary); border-radius:4px;">
+                <span style="color:var(--text-secondary); font-size:10px;">Voice 1:</span>
+                <label>FB <input type="number" id="feedback1" min="0" max="7" value="0" disabled
+                        style="width:36px"></label>
+                <label><input type="checkbox" id="connection1Check" disabled> Additive</label>
+            </div>
+            <div id="voice2Controls"
+                style="display:none; align-items:center; gap:8px; padding:6px 10px; background:var(--bg-tertiary); border-radius:4px;">
+                <span style="color:var(--text-secondary); font-size:10px;">Voice 2:</span>
+                <label>FB <input type="number" id="feedback2" min="0" max="7" value="0" disabled
+                        style="width:36px"></label>
+                <label><input type="checkbox" id="connection2Check" disabled> Additive</label>
+            </div>
+        </div>
+        <div style="margin-top: 10px;">
+            <span style="color: var(--text-secondary); font-size: 10px;">Routing: </span>
+            <span class="connection-box" id="connectionDiagram"></span>
+        </div>
+    </div>
+
+    <div class="operator-grid" id="operatorGrid"></div>
+
+    <div class="card">
+        <h3 style="margin: 0 0 6px 0; color: var(--text-primary); font-size: 13px; font-weight: 500;">Test Keyboard</h3>
+        <p style="color: var(--text-secondary); font-size: 10px; margin: 0 0 6px 0;">Click keys or use A-K. Changes
+            apply instantly.</p>
+        <div class="keyboard" id="keyboard"></div>
+    </div>
+
+    <script type="module">
+        let synth = null;
+        let currentInstrument = null;
+        const activeNotes = new Map();
+
+        const WAVEFORMS = ['Sine', '½Sin', '|Sin|', '¼Sin', 'Saw', '|Saw|', 'Sqr', 'Log'];
+
+        const GM_NAMES = [
+            'Acoustic Grand Piano', 'Bright Acoustic Piano', 'Electric Grand Piano', 'Honky-tonk Piano',
+            'Electric Piano 1', 'Electric Piano 2', 'Harpsichord', 'Clavinet',
+            'Celesta', 'Glockenspiel', 'Music Box', 'Vibraphone',
+            'Marimba', 'Xylophone', 'Tubular Bells', 'Dulcimer',
+            'Drawbar Organ', 'Percussive Organ', 'Rock Organ', 'Church Organ',
+            'Reed Organ', 'Accordion', 'Harmonica', 'Tango Accordion',
+            'Nylon Guitar', 'Steel Guitar', 'Jazz Guitar', 'Clean Guitar',
+            'Muted Guitar', 'Overdrive Guitar', 'Distortion Guitar', 'Guitar Harmonics'
+        ];
+
+        function setStatus(msg) {
+            document.getElementById('status').textContent = msg;
+        }
+
+        function populateProgramSelect() {
+            const sel = document.getElementById('programSelect');
+            sel.innerHTML = '';
+            for (let i = 0; i < 128; i++) {
+                const name = GM_NAMES[i] || `Program ${i}`;
+                sel.innerHTML += `<option value="${i}">${i} - ${name}</option>`;
+            }
+        }
+
+        function updateConnectionDiagram() {
+            const is4op = document.getElementById('is4opCheck').checked;
+            const c1 = document.getElementById('connection1Check').checked;
+            const c2 = document.getElementById('connection2Check')?.checked || false;
+            const diag = document.getElementById('connectionDiagram');
+
+            const v2 = document.getElementById('voice2Controls');
+            if (v2) v2.style.display = is4op ? 'flex' : 'none';
+
+            const gridStyle = 'display:grid; grid-template-rows:1fr 1fr; gap:2px 4px; align-items:center; line-height:1.2;';
+
+            if (is4op) {
+                if (!c1 && !c2) {
+                    diag.innerHTML = `<div style="display:flex; align-items:center; gap:4px;">
+                        <span class="op-label">1</span><span class="arrow">→</span>
+                        <span class="op-label">2</span><span class="arrow">→</span>
+                        <span class="op-label">3</span><span class="arrow">→</span>
+                        <span class="op-label">4</span><span class="arrow">→</span>
+                        <span style="color:var(--accent);font-weight:500">OUT</span>
+                    </div>`;
+                } else if (c1 && !c2) {
+                    diag.innerHTML = `<div style="${gridStyle}">
+                        <span style="grid-row:1;grid-column:1" class="op-label">1</span>
+                        <span style="grid-row:1;grid-column:2" class="arrow">↘</span>
+                        <span style="grid-row:1/3;grid-column:3" class="op-label">3</span>
+                        <span style="grid-row:1/3;grid-column:4" class="arrow">→</span>
+                        <span style="grid-row:1/3;grid-column:5" class="op-label">4</span>
+                        <span style="grid-row:1/3;grid-column:6" class="arrow">→</span>
+                        <span style="grid-row:1/3;grid-column:7;color:var(--accent);font-weight:500">OUT</span>
+                        <span style="grid-row:2;grid-column:1" class="op-label">2</span>
+                        <span style="grid-row:2;grid-column:2" class="arrow">↗</span>
+                    </div>`;
+                } else if (!c1 && c2) {
+                    diag.innerHTML = `<div style="${gridStyle}">
+                        <span style="grid-row:1;grid-column:1" class="op-label">1</span>
+                        <span style="grid-row:1;grid-column:2" class="arrow">→</span>
+                        <span style="grid-row:1;grid-column:3" class="op-label">2</span>
+                        <span style="grid-row:1;grid-column:4" class="arrow">↘</span>
+                        <span style="grid-row:1/3;grid-column:5;color:var(--accent);font-weight:500">OUT</span>
+                        <span style="grid-row:2;grid-column:1" class="op-label">3</span>
+                        <span style="grid-row:2;grid-column:2" class="arrow">→</span>
+                        <span style="grid-row:2;grid-column:3" class="op-label">4</span>
+                        <span style="grid-row:2;grid-column:4" class="arrow">↗</span>
+                    </div>`;
+                } else {
+                    diag.innerHTML = `<div style="${gridStyle}">
+                        <span style="grid-row:1;grid-column:1" class="op-label">1</span>
+                        <span style="grid-row:1;grid-column:2" class="arrow">↘</span>
+                        <span style="grid-row:1;grid-column:3" class="op-label">2</span>
+                        <span style="grid-row:1;grid-column:4" class="arrow">↘</span>
+                        <span style="grid-row:1/3;grid-column:5;color:var(--accent);font-weight:500">OUT</span>
+                        <span style="grid-row:2;grid-column:1" class="op-label">3</span>
+                        <span style="grid-row:2;grid-column:2" class="arrow">↗</span>
+                        <span style="grid-row:2;grid-column:3" class="op-label">4</span>
+                        <span style="grid-row:2;grid-column:4" class="arrow">↗</span>
+                    </div>`;
+                }
+            } else {
+                if (c1) {
+                    diag.innerHTML = `<div style="${gridStyle}">
+                        <span style="grid-row:1;grid-column:1" class="op-label">1</span>
+                        <span style="grid-row:1;grid-column:2" class="arrow">↘</span>
+                        <span style="grid-row:1/3;grid-column:3;color:var(--accent);font-weight:500">OUT</span>
+                        <span style="grid-row:2;grid-column:1" class="op-label">2</span>
+                        <span style="grid-row:2;grid-column:2" class="arrow">↗</span>
+                    </div>`;
+                } else {
+                    diag.innerHTML = `<div style="display:flex; align-items:center; gap:4px;">
+                        <span class="op-label">1</span><span class="arrow">→</span>
+                        <span class="op-label">2</span><span class="arrow">→</span>
+                        <span style="color:var(--accent);font-weight:500">OUT</span>
+                    </div>`;
+                }
+            }
+
+            document.querySelectorAll('.operator-card').forEach((card, i) => {
+                card.classList.toggle('disabled', !is4op && i >= 2);
+            });
+        }
+
+        function createOperatorUI() {
+            const grid = document.getElementById('operatorGrid');
+            grid.innerHTML = '';
+
+            for (let i = 0; i < 4; i++) {
+                const card = document.createElement('div');
+                card.className = 'operator-card' + (i >= 2 ? ' disabled' : '');
+                card.id = `op${i}`;
+                card.innerHTML = `
+                    <h3>Operator ${i + 1}</h3>
+                    
+                    <div class="toggle-row">
+                        <div class="toggle"><input type="checkbox" id="op${i}-am" onchange="updateOperator(${i})"><label>AM</label></div>
+                        <div class="toggle"><input type="checkbox" id="op${i}-vibrato" onchange="updateOperator(${i})"><label>Vib</label></div>
+                        <div class="toggle"><input type="checkbox" id="op${i}-sustaining" onchange="updateOperator(${i})"><label>EG</label></div>
+                        <div class="toggle"><input type="checkbox" id="op${i}-ksr" onchange="updateOperator(${i})"><label>KSR</label></div>
+                    </div>
+
+                    <div class="param-row">
+                        <div class="param">
+                            <label>Attack</label>
+                            <div style="display:flex;align-items:center;gap:2px;">
+                                <input type="range" id="op${i}-attack" min="0" max="15" value="12" oninput="updateOperator(${i})">
+                                <span class="param-value" id="op${i}-attack-val">12</span>
+                            </div>
+                        </div>
+                        <div class="param">
+                            <label>Decay</label>
+                            <div style="display:flex;align-items:center;gap:2px;">
+                                <input type="range" id="op${i}-decay" min="0" max="15" value="4" oninput="updateOperator(${i})">
+                                <span class="param-value" id="op${i}-decay-val">4</span>
+                            </div>
+                        </div>
+                        <div class="param">
+                            <label>Sustain</label>
+                            <div style="display:flex;align-items:center;gap:2px;">
+                                <input type="range" id="op${i}-sustain" min="0" max="15" value="2" oninput="updateOperator(${i})">
+                                <span class="param-value" id="op${i}-sustain-val">2</span>
+                            </div>
+                        </div>
+                        <div class="param">
+                            <label>Release</label>
+                            <div style="display:flex;align-items:center;gap:2px;">
+                                <input type="range" id="op${i}-release" min="0" max="15" value="6" oninput="updateOperator(${i})">
+                                <span class="param-value" id="op${i}-release-val">6</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="param-row">
+                        <div class="param">
+                            <label>Level</label>
+                            <div style="display:flex;align-items:center;gap:2px;">
+                                <input type="range" id="op${i}-totalLevel" min="0" max="63" value="20" oninput="updateOperator(${i})">
+                                <span class="param-value" id="op${i}-totalLevel-val">20</span>
+                            </div>
+                        </div>
+                        <div class="param">
+                            <label>Mult</label>
+                            <div style="display:flex;align-items:center;gap:2px;">
+                                <input type="range" id="op${i}-freqMult" min="0" max="15" value="1" oninput="updateOperator(${i})">
+                                <span class="param-value" id="op${i}-freqMult-val">1</span>
+                            </div>
+                        </div>
+                        <div class="param">
+                            <label>KSL</label>
+                            <div style="display:flex;align-items:center;gap:2px;">
+                                <input type="range" id="op${i}-keyScaleLevel" min="0" max="3" value="0" oninput="updateOperator(${i})">
+                                <span class="param-value" id="op${i}-keyScaleLevel-val">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style="font-size:9px;color:var(--text-secondary);margin-bottom:2px;display:block;">WAVEFORM</label>
+                        <div class="waveform-select" id="op${i}-waveforms">
+                            ${WAVEFORMS.map((name, w) => `
+                                <button class="waveform-btn ${w === 0 ? 'active' : ''}" 
+                                        onclick="setWaveform(${i}, ${w})" title="${name}">${name.slice(0, 3)}</button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            }
+        }
+
+        function createKeyboard() {
+            const keyboard = document.getElementById('keyboard');
+            const notes = [
+                { note: 60, black: false }, { note: 61, black: true },
+                { note: 62, black: false }, { note: 63, black: true },
+                { note: 64, black: false }, { note: 65, black: false },
+                { note: 66, black: true }, { note: 67, black: false },
+                { note: 68, black: true }, { note: 69, black: false },
+                { note: 70, black: true }, { note: 71, black: false },
+                { note: 72, black: false }
+            ];
+            notes.forEach(({ note, black }) => {
+                const key = document.createElement('div');
+                key.className = `key ${black ? 'black' : ''}`;
+                key.dataset.note = note;
+                key.addEventListener('mousedown', () => playNote(note));
+                key.addEventListener('mouseup', () => stopNote(note));
+                key.addEventListener('mouseleave', () => stopNote(note));
+                keyboard.appendChild(key);
+            });
+        }
+
+        function playNote(note) {
+            if (!synth) return;
+            synth.noteOn(0, note, 100);
+            document.querySelector(`[data-note="${note}"]`)?.classList.add('active');
+        }
+
+        function stopNote(note) {
+            if (!synth) return;
+            synth.noteOff(0, note);
+            document.querySelector(`[data-note="${note}"]`)?.classList.remove('active');
+        }
+
+        window.setWaveform = function (opIndex, waveform) {
+            const btns = document.querySelectorAll(`#op${opIndex}-waveforms .waveform-btn`);
+            btns.forEach((btn, i) => btn.classList.toggle('active', i === waveform));
+            updateOperator(opIndex);
+        };
+
+        window.updateOperator = async function (opIndex) {
+            if (!synth || !currentInstrument) return;
+
+            const op = currentInstrument.operators[opIndex];
+            if (!op) return;
+
+            op.am = document.getElementById(`op${opIndex}-am`).checked;
+            op.vibrato = document.getElementById(`op${opIndex}-vibrato`).checked;
+            op.sustaining = document.getElementById(`op${opIndex}-sustaining`).checked;
+            op.ksr = document.getElementById(`op${opIndex}-ksr`).checked;
+            op.attack = parseInt(document.getElementById(`op${opIndex}-attack`).value);
+            op.decay = parseInt(document.getElementById(`op${opIndex}-decay`).value);
+            op.sustain = parseInt(document.getElementById(`op${opIndex}-sustain`).value);
+            op.release = parseInt(document.getElementById(`op${opIndex}-release`).value);
+            op.totalLevel = parseInt(document.getElementById(`op${opIndex}-totalLevel`).value);
+            op.freqMult = parseInt(document.getElementById(`op${opIndex}-freqMult`).value);
+            op.keyScaleLevel = parseInt(document.getElementById(`op${opIndex}-keyScaleLevel`).value);
+
+            const activeWaveBtn = document.querySelector(`#op${opIndex}-waveforms .waveform-btn.active`);
+            if (activeWaveBtn) {
+                op.waveform = Array.from(activeWaveBtn.parentElement.children).indexOf(activeWaveBtn);
+            }
+
+            ['attack', 'decay', 'sustain', 'release', 'totalLevel', 'freqMult', 'keyScaleLevel'].forEach(param => {
+                document.getElementById(`op${opIndex}-${param}-val`).textContent =
+                    document.getElementById(`op${opIndex}-${param}`).value;
+            });
+
+            currentInstrument.feedback1 = parseInt(document.getElementById('feedback1').value) || 0;
+            currentInstrument.connection1 = document.getElementById('connection1Check').checked ? 1 : 0;
+            currentInstrument.is4op = document.getElementById('is4opCheck').checked;
+
+            await sendInstrumentUpdate();
+        };
+
+        async function sendInstrumentUpdate() {
+            if (!synth || !currentInstrument) return;
+            const programNumber = parseInt(document.getElementById('programSelect').value);
+            try {
+                await synth.setInstrument({ percussive: false, msb: 0, lsb: 0 }, programNumber, currentInstrument);
+            } catch (error) {
+                console.error('Failed to update instrument:', error);
+                setStatus('Error: ' + error.message);
+            }
+        }
+
+        function populateUIFromInstrument(inst) {
+            currentInstrument = inst;
+
+            document.getElementById('is4opCheck').checked = inst.is4op;
+            document.getElementById('noteOffset1').value = inst.noteOffset1 || 0;
+            document.getElementById('feedback1').value = inst.feedback1 || 0;
+            document.getElementById('connection1Check').checked = inst.connection1 === 1;
+            document.getElementById('feedback2').value = inst.feedback2 || 0;
+            document.getElementById('connection2Check').checked = inst.connection2 === 1;
+
+            for (let i = 0; i < 4; i++) {
+                const op = inst.operators[i];
+                if (!op) continue;
+
+                document.getElementById(`op${i}-am`).checked = op.am;
+                document.getElementById(`op${i}-vibrato`).checked = op.vibrato;
+                document.getElementById(`op${i}-sustaining`).checked = op.sustaining;
+                document.getElementById(`op${i}-ksr`).checked = op.ksr;
+
+                document.getElementById(`op${i}-attack`).value = op.attack;
+                document.getElementById(`op${i}-decay`).value = op.decay;
+                document.getElementById(`op${i}-sustain`).value = op.sustain;
+                document.getElementById(`op${i}-release`).value = op.release;
+                document.getElementById(`op${i}-totalLevel`).value = op.totalLevel;
+                document.getElementById(`op${i}-freqMult`).value = op.freqMult;
+                document.getElementById(`op${i}-keyScaleLevel`).value = op.keyScaleLevel;
+
+                ['attack', 'decay', 'sustain', 'release', 'totalLevel', 'freqMult', 'keyScaleLevel'].forEach(param => {
+                    document.getElementById(`op${i}-${param}-val`).textContent = op[param];
+                });
+
+                const wfBtns = document.querySelectorAll(`#op${i}-waveforms .waveform-btn`);
+                wfBtns.forEach((btn, idx) => btn.classList.toggle('active', idx === op.waveform));
+            }
+
+            updateConnectionDiagram();
+        }
+
+        async function loadPatch() {
+            if (!synth) return;
+            const programNumber = parseInt(document.getElementById('programSelect').value);
+            try {
+                setStatus(`Loading program ${programNumber}...`);
+                const inst = await synth.getInstrument({ percussive: false, msb: 0, lsb: 0 }, programNumber);
+                populateUIFromInstrument(inst);
+                synth.programChange(0, programNumber);
+                setStatus(`Program ${programNumber} loaded`);
+            } catch (error) {
+                setStatus('Error: ' + error.message);
+                console.error(error);
+            }
+        }
+
+        document.getElementById('initBtn').addEventListener('click', async () => {
+            try {
+                setStatus('Loading...');
+                const { AdlMidi } = await import('../dist/libadlmidi.js');
+                synth = new AdlMidi();
+                await synth.init('../dist/libadlmidi.nuked.processor.js');
+
+                // Populate bank list
+                const bankSelect = document.getElementById('bankSelect');
+                try {
+                    const banks = await synth.getEmbeddedBanks();
+                    bankSelect.innerHTML = '';
+                    banks.forEach(bank => {
+                        const option = document.createElement('option');
+                        option.value = bank.id;
+                        option.textContent = `${bank.id} - ${bank.name}`;
+                        if (bank.id === 72) option.selected = true;
+                        bankSelect.appendChild(option);
+                    });
+                    if (banks.length === 0) {
+                        bankSelect.innerHTML = '<option value="">No embedded banks (slim build)</option>';
+                    }
+                } catch (e) {
+                    console.warn('Could not load bank list:', e);
+                    bankSelect.innerHTML = '<option value="72">72 - TMB (Duke 3D)</option>';
+                }
+
+                document.getElementById('initBtn').disabled = true;
+                document.getElementById('programSelect').disabled = false;
+                document.getElementById('bankSelect').disabled = false;
+                document.querySelectorAll('.operator-card input, .operator-card button, .global-params input').forEach(
+                    el => el.disabled = false
+                );
+
+                setStatus('Ready');
+                loadPatch();
+            } catch (error) {
+                setStatus('Error: ' + error.message);
+                console.error(error);
+            }
+        });
+
+        document.getElementById('bankSelect').addEventListener('change', async (e) => {
+            if (!synth) return;
+            try {
+                await synth.setBank(parseInt(e.target.value));
+                loadPatch();
+            } catch (error) {
+                setStatus('Error: ' + error.message);
+            }
+        });
+
+        document.getElementById('programSelect').addEventListener('change', () => loadPatch());
+
+        document.getElementById('is4opCheck').addEventListener('change', () => {
+            updateConnectionDiagram();
+            if (currentInstrument) {
+                currentInstrument.is4op = document.getElementById('is4opCheck').checked;
+                sendInstrumentUpdate();
+            }
+        });
+        document.getElementById('noteOffset1').addEventListener('change', () => {
+            if (currentInstrument) {
+                currentInstrument.noteOffset1 = parseInt(document.getElementById('noteOffset1').value) || 0;
+                sendInstrumentUpdate();
+            }
+        });
+        document.getElementById('connection1Check').addEventListener('change', () => {
+            updateConnectionDiagram();
+            if (currentInstrument) {
+                currentInstrument.connection1 = document.getElementById('connection1Check').checked ? 1 : 0;
+                sendInstrumentUpdate();
+            }
+        });
+        document.getElementById('feedback1').addEventListener('change', () => {
+            if (currentInstrument) {
+                currentInstrument.feedback1 = parseInt(document.getElementById('feedback1').value) || 0;
+                sendInstrumentUpdate();
+            }
+        });
+        document.getElementById('connection2Check').addEventListener('change', () => {
+            updateConnectionDiagram();
+            if (currentInstrument) {
+                currentInstrument.connection2 = document.getElementById('connection2Check').checked ? 1 : 0;
+                sendInstrumentUpdate();
+            }
+        });
+        document.getElementById('feedback2').addEventListener('change', () => {
+            if (currentInstrument) {
+                currentInstrument.feedback2 = parseInt(document.getElementById('feedback2').value) || 0;
+                sendInstrumentUpdate();
+            }
+        });
+
+        const keyMap = { a: 60, w: 61, s: 62, e: 63, d: 64, f: 65, t: 66, g: 67, y: 68, h: 69, u: 70, j: 71, k: 72 };
+        document.addEventListener('keydown', (e) => {
+            if (!synth || e.repeat || e.target.tagName === 'INPUT') return;
+            const note = keyMap[e.key.toLowerCase()];
+            if (note && !activeNotes.has(e.key)) {
+                activeNotes.set(e.key, note);
+                playNote(note);
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (!synth) return;
+            const note = activeNotes.get(e.key);
+            if (note) {
+                activeNotes.delete(e.key);
+                stopNote(note);
+            }
+        });
+
+        populateProgramSelect();
+        createOperatorUI();
+        createKeyboard();
+    </script>
+</body>
+
+</html>

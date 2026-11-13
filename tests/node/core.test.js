@@ -1,0 +1,813 @@
+/**
+ * Tests for AdlMidiCore low-level synthesis interface
+ *
+ * These tests verify the platform-agnostic core API works correctly
+ * for Node.js / non-browser use cases.
+ */
+
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { readFileSync } from 'fs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = join(__dirname, '..', '..', 'dist');
+const CORE_PATH = join(DIST_DIR, 'libadlmidi.nuked.core.js');
+const LIGHT_CORE_PATH = join(DIST_DIR, 'libadlmidi.light.core.js');
+
+// Dynamic import of AdlMidiCore and enums
+let AdlMidiCore;
+let TrackOption;
+beforeAll(async () => {
+    const module = await import('../../src/core.js');
+    AdlMidiCore = module.AdlMidiCore;
+    TrackOption = module.TrackOption;
+});
+
+describe('AdlMidiCore Lifecycle', () => {
+    let synth;
+
+    afterEach(() => {
+        if (synth) {
+            synth.close();
+            synth = null;
+        }
+    });
+
+    it('should create instance with corePath', async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        expect(synth).toBeDefined();
+        expect(synth.module).toBeDefined();
+    });
+
+    it('should throw if no corePath provided', async () => {
+        await expect(AdlMidiCore.create({})).rejects.toThrow('corePath');
+    });
+
+    it('should initialize with sample rate', async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(48000);
+        expect(synth.sampleRate).toBe(48000);
+    });
+
+    it('should throw if not initialized', async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        expect(() => synth.noteOn(0, 60, 100)).toThrow('not initialized');
+    });
+
+    it('should close without error', async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+        synth.close();
+        // Should not throw if closed again
+        synth.close();
+    });
+});
+
+describe('AdlMidiCore Configuration', () => {
+    let synth;
+
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+    });
+
+    afterEach(() => {
+        synth?.reset();
+    });
+
+    it('should get bank count', () => {
+        const count = synth.getBankCount();
+        expect(count).toBeGreaterThan(0);
+    });
+
+    it('should get embedded banks with names', () => {
+        const banks = synth.getEmbeddedBanks();
+        expect(banks.length).toBeGreaterThan(0);
+        expect(banks[0]).toHaveProperty('id');
+        expect(banks[0]).toHaveProperty('name');
+        expect(typeof banks[0].id).toBe('number');
+        expect(typeof banks[0].name).toBe('string');
+        expect(banks[0].id).toBe(0);
+        // Bank 72 should exist and have a name
+        const bank72 = banks.find(b => b.id === 72);
+        expect(bank72).toBeDefined();
+        expect(bank72.name).toBeTruthy();
+    });
+
+    it('should set bank successfully', () => {
+        expect(synth.setBank(72)).toBe(true);
+    });
+
+    it('should set number of chips', () => {
+        expect(synth.setNumChips(4)).toBe(true);
+    });
+
+    it('should set soft pan without error', () => {
+        // setSoftPanEnabled is void — verify it doesn't throw
+        expect(() => synth.setSoftPanEnabled(true)).not.toThrow();
+        expect(() => synth.setSoftPanEnabled(false)).not.toThrow();
+    });
+
+    it('should set deep vibrato', () => {
+        synth.setDeepVibrato(true);
+        synth.setDeepVibrato(false);
+    });
+
+    it('should get/set deep vibrato', () => {
+        synth.setDeepVibrato(true);
+        expect(synth.getDeepVibrato()).toBe(true);
+        synth.setDeepVibrato(false);
+        expect(synth.getDeepVibrato()).toBe(false);
+    });
+
+    it('should set deep tremolo', () => {
+        synth.setDeepTremolo(true);
+        synth.setDeepTremolo(false);
+    });
+
+    it('should get/set deep tremolo', () => {
+        synth.setDeepTremolo(true);
+        expect(synth.getDeepTremolo()).toBe(true);
+        synth.setDeepTremolo(false);
+        expect(synth.getDeepTremolo()).toBe(false);
+    });
+
+    it('should get number of 4-op channels obtained', () => {
+        const obtained = synth.getNumFourOpChannelsObtained();
+        expect(typeof obtained).toBe('number');
+    });
+
+    it('should get number of chips', () => {
+        const chips = synth.getNumChips();
+        expect(typeof chips).toBe('number');
+        expect(chips).toBeGreaterThan(0);
+    });
+
+    it('should get number of chips obtained', () => {
+        const chips = synth.getNumChipsObtained();
+        expect(typeof chips).toBe('number');
+        expect(chips).toBeGreaterThan(0);
+    });
+
+    it('should set and get volume model', () => {
+        synth.setVolumeRangeModel(2); // ADLMIDI_VolumeModel_NativeOPL3
+        const model = synth.getVolumeRangeModel();
+        expect(model).toBe(2);
+    });
+
+    it('should set run at PCM rate', () => {
+        const result = synth.setRunAtPcmRate(true);
+        expect(result).toBe(true);
+        synth.setRunAtPcmRate(false);
+    });
+
+    it('should get error string (static)', async () => {
+        const core = await AdlMidiCore.create({ corePath: CORE_PATH });
+        const err = core.getErrorString();
+        expect(typeof err).toBe('string');
+        core.close();
+    });
+
+    it('should get error info', () => {
+        const err = synth.getErrorInfo();
+        expect(typeof err).toBe('string');
+    });
+
+    it('should get library version strings', () => {
+        const versionStr = synth.getLibraryVersion();
+        expect(typeof versionStr).toBe('string');
+        expect(versionStr).toMatch(/^\d+\.\d+\.\d+/);
+
+        const versionObj = synth.getVersion();
+        expect(versionObj).toHaveProperty('major');
+        expect(versionObj).toHaveProperty('minor');
+        expect(versionObj).toHaveProperty('patch');
+        expect(typeof versionObj.major).toBe('number');
+    });
+
+    it('should handle advanced configuration', () => {
+        // 4-op channels
+        expect(synth.setNumFourOpChannels(2)).toBe(true);
+        expect(synth.getNumFourOpChannels()).toBe(2);
+        synth.setNumFourOpChannels(-1); // Reset to auto
+
+        // Modulators
+        synth.setScaleModulators(true);
+        synth.setScaleModulators(false);
+
+        // Full range brightness
+        synth.setFullRangeBrightness(true);
+        synth.setFullRangeBrightness(false);
+
+        // Auto arpeggio
+        synth.setAutoArpeggio(true);
+        expect(synth.getAutoArpeggio()).toBe(true);
+        synth.setAutoArpeggio(false);
+        expect(synth.getAutoArpeggio()).toBe(false);
+
+        // Channel alloc mode
+        synth.setChannelAllocMode(1); // ADLMIDI_ChanAlloc_OffDelay
+        expect(synth.getChannelAllocMode()).toBe(1);
+    });
+
+    it('should get and set instrument safely', () => {
+        const bankId = { percussive: 0, msb: 0, lsb: 0 };
+        const program = 0;
+
+        // 1. Get initial instrument
+        const originalInst = synth.getInstrument(bankId, program);
+        expect(originalInst).toBeDefined();
+        expect(originalInst.version).toBeDefined();
+        
+        // 2. Modify it
+        const modifiedInst = { ...originalInst };
+        if (modifiedInst.operators && modifiedInst.operators[0]) {
+             modifiedInst.operators[0].attack = (modifiedInst.operators[0].attack + 5) % 16;
+        }
+
+        // 3. Set it back (verify it returns true/success)
+        const result = synth.setInstrument(bankId, program, modifiedInst);
+        expect(result).toBe(true);
+
+        // 4. Get it again (verify no crash and structure is valid)
+        const retrievedInst = synth.getInstrument(bankId, program);
+        expect(retrievedInst).toBeDefined();
+        expect(retrievedInst.operators).toBeDefined();
+    });
+});
+
+describe('AdlMidiCore Real-time Synthesis', () => {
+    let synth;
+
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+        synth.setBank(72);
+    });
+
+    afterEach(() => {
+        synth?.reset();
+    });
+
+    it('should play note and generate audio', () => {
+        synth.noteOn(0, 60, 100);
+
+        // Generate a few buffers to let OPL3 catch up
+        synth.generate(1024);
+        synth.generate(1024);
+        const samples = synth.generate(1024);
+
+        expect(samples).toBeInstanceOf(Float32Array);
+        expect(samples.length).toBe(2048); // 1024 frames * 2 channels
+
+        // Check for non-zero audio
+        let maxSample = 0;
+        for (let i = 0; i < samples.length; i++) {
+            maxSample = Math.max(maxSample, Math.abs(samples[i]));
+        }
+        expect(maxSample).toBeGreaterThan(0);
+    });
+
+    it('should stop note with noteOff', () => {
+        synth.noteOn(0, 60, 100);
+        synth.generate(2048);
+        synth.generate(2048);
+
+        synth.noteOff(0, 60);
+
+        // Let note decay
+        for (let i = 0; i < 20; i++) {
+            synth.generate(2048);
+        }
+
+        const samples = synth.generate(2048);
+        let maxSample = 0;
+        for (let i = 0; i < samples.length; i++) {
+            maxSample = Math.max(maxSample, Math.abs(samples[i]));
+        }
+
+        // Should be mostly silent after decay
+        expect(maxSample).toBeLessThan(0.1);
+    });
+
+    it('should handle pitch bend', () => {
+        synth.noteOn(0, 60, 100);
+        synth.pitchBend(0, 16383); // Max bend up
+        synth.generate(1024);
+        synth.pitchBend(0, 0); // Max bend down
+        synth.generate(1024);
+        // No errors = success
+    });
+
+    it('should handle controller change', () => {
+        synth.controllerChange(0, 7, 100); // Volume
+        synth.controllerChange(0, 10, 64); // Pan
+        // No errors = success
+    });
+
+    it('should handle program change', () => {
+        synth.programChange(0, 1); // Switch to program 1
+        synth.noteOn(0, 60, 100);
+        synth.generate(1024);
+    });
+
+    it('should reset and panic', () => {
+        synth.noteOn(0, 60, 100);
+        synth.noteOn(1, 64, 100);
+        synth.generate(2048);
+
+        synth.panic();
+
+        // After panic, notes should stop
+        for (let i = 0; i < 10; i++) {
+            synth.generate(2048);
+        }
+
+        const samples = synth.generate(2048);
+        let maxSample = 0;
+        for (let i = 0; i < samples.length; i++) {
+            maxSample = Math.max(maxSample, Math.abs(samples[i]));
+        }
+        expect(maxSample).toBeLessThan(0.01);
+    });
+
+    it('should handle bank changes', () => {
+        // These are void functions, just check they don't throw
+        synth.bankChange(0, 100);
+        synth.bankChangeMSB(0, 120);
+        synth.bankChangeLSB(0, 1);
+    });
+
+    it('should handle aftertouch', () => {
+        synth.noteOn(0, 60, 100);
+        synth.noteAfterTouch(0, 60, 50);
+        synth.channelAfterTouch(0, 40);
+        // No errors = success
+    });
+});
+
+describe('AdlMidiCore MIDI Playback', () => {
+    let synth;
+    let midiData;
+
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+        synth.setBank(72);
+
+        // Load test MIDI file
+        midiData = readFileSync(join(__dirname, '..', '..', 'test-files', 'canyon.mid'));
+    });
+
+    afterEach(() => {
+        synth?.rewind();
+    });
+
+    it('should load MIDI data', () => {
+        expect(synth.loadMidi(midiData)).toBe(true);
+    });
+
+    it('should report duration', () => {
+        synth.loadMidi(midiData);
+        expect(synth.duration).toBeGreaterThan(0);
+    });
+
+    it('should play MIDI and generate audio', () => {
+        synth.loadMidi(midiData);
+
+        const samples = synth.play(4096);
+
+        expect(samples).toBeInstanceOf(Float32Array);
+        expect(samples.length).toBe(8192);
+
+        // Should have audio
+        let maxSample = 0;
+        for (let i = 0; i < samples.length; i++) {
+            maxSample = Math.max(maxSample, Math.abs(samples[i]));
+        }
+        expect(maxSample).toBeGreaterThan(0);
+    });
+
+    it('should track position', () => {
+        synth.loadMidi(midiData);
+
+        const startPos = synth.position;
+        synth.play(44100); // 1 second of audio
+        const endPos = synth.position;
+
+        expect(endPos).toBeGreaterThan(startPos);
+    });
+
+    it('should seek', () => {
+        synth.loadMidi(midiData);
+
+        synth.seek(5.0);
+        expect(synth.position).toBeCloseTo(5.0, 0);
+    });
+
+    it('should rewind', () => {
+        synth.loadMidi(midiData);
+
+        synth.play(44100);
+        synth.rewind();
+
+        expect(synth.position).toBe(0);
+    });
+
+    it('should set looping', () => {
+        synth.loadMidi(midiData);
+        synth.setLoopEnabled(true);
+        synth.setLoopEnabled(false);
+    });
+
+    it('should set tempo', () => {
+        synth.loadMidi(midiData);
+        synth.setTempo(2.0); // Double speed
+        synth.setTempo(1.0);
+    });
+
+    it('should get music title', () => {
+        synth.loadMidi(midiData);
+        // canyon.mid typically has "Canyon.mid" or similar as title, or sometimes empty depending on how it's parsed
+        // We just check it's a string and doesn't crash
+        const title = synth.getMusicTitle();
+        expect(typeof title).toBe('string');
+    });
+
+    it('should get music copyright', () => {
+        synth.loadMidi(midiData);
+        const copyright = synth.getMusicCopyright();
+        expect(typeof copyright).toBe('string');
+    });
+});
+
+describe('AdlMidiCore Loop Control', () => {
+    let synth;
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+        const midiData = readFileSync(join(__dirname, '..', '..', 'test-files', 'canyon.mid'));
+        synth.loadMidi(midiData);
+    });
+    afterAll(() => synth?.close());
+
+    it('should set loop count', () => {
+        expect(() => synth.setLoopCount(2)).not.toThrow();
+        expect(() => synth.setLoopCount(-1)).not.toThrow();
+        expect(() => synth.setLoopCount(0)).not.toThrow();
+    });
+
+    it('should set loop hooks only', () => {
+        expect(() => synth.setLoopHooksOnly(true)).not.toThrow();
+        expect(() => synth.setLoopHooksOnly(false)).not.toThrow();
+    });
+
+    it('should get loop start/end time as finite numbers', () => {
+        const start = synth.getLoopStartTime();
+        const end = synth.getLoopEndTime();
+        expect(Number.isFinite(start)).toBe(true);
+        expect(Number.isFinite(end)).toBe(true);
+        // If loop points exist, end >= start; if not, both may be -1
+        if (start >= 0 && end >= 0) {
+            expect(end).toBeGreaterThanOrEqual(start);
+        }
+    });
+});
+
+describe('AdlMidiCore Track/Song Control', () => {
+    let synth;
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+        const midiData = readFileSync(join(__dirname, '..', '..', 'test-files', 'canyon.mid'));
+        synth.loadMidi(midiData);
+    });
+    afterAll(() => synth?.close());
+
+    it('should get songs count', () => {
+        const count = synth.getSongsCount();
+        // Standard MIDI files return 0; XMI/MUS multi-song files return > 0
+        expect(count).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should select song 0 without error', () => {
+        expect(() => synth.selectSongNum(0)).not.toThrow();
+    });
+
+    it('should get track count > 0 for multi-track MIDI', () => {
+        const count = synth.getTrackCount();
+        expect(count).toBeGreaterThan(0);
+    });
+
+    it('should mute and re-enable a track via TrackOption enum', () => {
+        const count = synth.getTrackCount();
+        if (count > 0) {
+            expect(synth.setTrackOptions(0, TrackOption.OFF)).toBe(true);
+            expect(synth.setTrackOptions(0, TrackOption.ON)).toBe(true);
+        }
+    });
+
+    it('should solo a track via TrackOption enum', () => {
+        const count = synth.getTrackCount();
+        if (count > 0) {
+            expect(synth.setTrackOptions(0, TrackOption.SOLO)).toBe(true);
+            // Re-enable all tracks
+            expect(synth.setTrackOptions(0, TrackOption.ON)).toBe(true);
+        }
+    });
+
+    it('should successfully enable/disable MIDI channel', () => {
+        expect(synth.setChannelEnabled(0, true)).toBe(true);
+        expect(synth.setChannelEnabled(0, false)).toBe(true);
+        // Re-enable for subsequent tests
+        synth.setChannelEnabled(0, true);
+    });
+});
+
+describe('AdlMidiCore Metadata', () => {
+    let synth;
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+        const midiData = readFileSync(join(__dirname, '..', '..', 'test-files', 'canyon.mid'));
+        synth.loadMidi(midiData);
+    });
+    afterAll(() => synth?.close());
+
+    it('should get track title count', () => {
+        const count = synth.getTrackTitleCount();
+        expect(typeof count).toBe('number');
+        expect(count).toBeGreaterThanOrEqual(0);
+    });
+    it('should get track title by index', () => {
+        const count = synth.getTrackTitleCount();
+        if (count > 0) {
+            const title = synth.getTrackTitle(0);
+            expect(typeof title).toBe('string');
+        }
+    });
+    it('should get marker count', () => {
+        const count = synth.getMarkerCount();
+        expect(typeof count).toBe('number');
+        expect(count).toBeGreaterThanOrEqual(0);
+    });
+});
+
+describe('AdlMidiCore Emulator Switching', () => {
+    let synth;
+
+    beforeAll(async () => {
+        // Use light profile which has multiple emulators
+        synth = await AdlMidiCore.create({ corePath: LIGHT_CORE_PATH });
+        synth.init(44100);
+    });
+
+    it('should get emulator name', () => {
+        const name = synth.getEmulatorName();
+        expect(typeof name).toBe('string');
+        expect(name.length).toBeGreaterThan(0);
+    });
+
+    it('should switch to DosBox emulator', () => {
+        const result = synth.switchEmulator(2); // ADLMIDI_EMU_DOSBOX
+        expect(result).toBe(true);
+        expect(synth.getEmulatorName()).toContain('DOSBox');
+    });
+
+    it('should switch back to Nuked', () => {
+        const result = synth.switchEmulator(0); // ADLMIDI_EMU_NUKED
+        expect(result).toBe(true);
+        expect(synth.getEmulatorName()).toContain('Nuked');
+    });
+
+    it('should switch to Nuked OPL2 Lite emulator', () => {
+        const result = synth.switchEmulator(11); // ADLMIDI_EMU_NUKED_OPL2_LITE
+        expect(result).toBe(true);
+        expect(synth.getEmulatorName()).toContain('Nuked OPL2 Lite');
+    });
+});
+
+describe('AdlMidiCore Bank Management', () => {
+    let synth;
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+    });
+    afterAll(() => synth?.close());
+
+    it('should reserve banks successfully', () => {
+        const result = synth.reserveBanks(5);
+        expect(result).toBe(true);
+    });
+
+    it('should load embedded bank into custom slot', () => {
+        const bankId = { percussive: false, msb: 0, lsb: 0 };
+        const result = synth.loadEmbeddedBank(bankId, 10);
+        expect(result).toBe(true);
+    });
+
+    it('should get bank ID and round-trip correctly', () => {
+        // Load into a known slot, then read it back
+        const bankId = { percussive: false, msb: 0, lsb: 0 };
+        synth.loadEmbeddedBank(bankId, 10);
+        const id = synth.getBankId(bankId);
+        expect(id).not.toBeNull();
+        expect(id.percussive).toBe(0);
+        expect(id.msb).toBe(0);
+        expect(id.lsb).toBe(0);
+    });
+
+    it('should get bank ID for percussion bank', () => {
+        const bankId = { percussive: true, msb: 0, lsb: 0 };
+        synth.loadEmbeddedBank(bankId, 10);
+        const id = synth.getBankId(bankId);
+        expect(id).not.toBeNull();
+        expect(id.percussive).toBe(1);
+    });
+
+    it('should return null for non-existent bank', () => {
+        const bankId = { percussive: false, msb: 127, lsb: 127 };
+        const id = synth.getBankId(bankId);
+        expect(id).toBeNull();
+    });
+
+    it('should remove a bank that exists', () => {
+        const bankId = { percussive: false, msb: 1, lsb: 0 };
+        synth.loadEmbeddedBank(bankId, 5);
+        const result = synth.removeBank(bankId);
+        expect(result).toBe(true);
+        // Verify it's gone
+        const id = synth.getBankId(bankId);
+        expect(id).toBeNull();
+    });
+
+    it('should fail to remove a non-existent bank', () => {
+        const bankId = { percussive: false, msb: 126, lsb: 126 };
+        const result = synth.removeBank(bankId);
+        expect(result).toBe(false);
+    });
+});
+
+describe('AdlMidiCore System Exclusive', () => {
+    let synth;
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+    });
+    afterAll(() => synth?.close());
+
+    it('should process a valid GM System On SysEx', () => {
+        // GM System On: F0 7E 7F 09 01 F7
+        const sysex = new Uint8Array([0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7]);
+        const result = synth.systemExclusive(sysex);
+        // Should return true (processed) — not false
+        expect(result).toBe(true);
+    });
+
+    it('should accept ArrayBuffer input', () => {
+        const sysex = new Uint8Array([0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7]);
+        const result = synth.systemExclusive(sysex.buffer);
+        expect(result).toBe(true);
+    });
+});
+
+describe('AdlMidiCore Channel Description', () => {
+    let synth;
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+    });
+    afterAll(() => synth?.close());
+
+    it('should describe channels with text and binary attr', () => {
+        const result = synth.describeChannels();
+        expect(typeof result.text).toBe('string');
+        expect(result.attr).toBeInstanceOf(Uint8Array);
+        // text should have content (channel state chars)
+        expect(result.text.length).toBeGreaterThan(0);
+        // attr length should match text length (one byte per channel)
+        expect(result.attr.length).toBe(result.text.length);
+    });
+
+    it('should reflect note activity in channel description', () => {
+        // Play a note and check that describeChannels shows activity
+        synth.noteOn(0, 60, 100);
+        const active = synth.describeChannels();
+        synth.noteOff(0, 60);
+        synth.panic();
+        const silent = synth.describeChannels();
+        // The channel text should differ between active and silent states
+        // (active channels get different display chars than silent ones)
+        expect(active.text).not.toBe(silent.text);
+    });
+});
+
+describe('AdlMidiCore Direct Module Access', () => {
+    let synth;
+
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+    });
+
+    it('should expose raw module', () => {
+        expect(synth.module).toBeDefined();
+        expect(synth.module._adl_init).toBeDefined();
+        expect(synth.module.HEAP16).toBeDefined();
+    });
+
+    it('should expose player pointer', () => {
+        expect(synth.player).toBeGreaterThan(0);
+    });
+});
+
+describe('AdlMidiCore Raw OPL3', () => {
+    let synth;
+
+    beforeAll(async () => {
+        synth = await AdlMidiCore.create({ corePath: CORE_PATH });
+        synth.init(44100);
+    });
+
+    afterAll(() => {
+        if (synth) {
+            synth.close();
+            synth = null;
+        }
+    });
+
+    it('should reserve and read back chip channels', () => {
+        expect(synth.reserveChipChannels(0, 0x7)).toBe(true);
+        expect(synth.getReservedChipChannels(0)).toBe(0x7);
+    });
+
+    it('should release reservation with mask 0', () => {
+        synth.reserveChipChannels(0, 0x7);
+        expect(synth.reserveChipChannels(0, 0)).toBe(true);
+        expect(synth.getReservedChipChannels(0)).toBe(0);
+    });
+
+    it('should return false for invalid chipId on reserve', () => {
+        expect(synth.reserveChipChannels(999, 0)).toBe(false);
+    });
+
+    it('should return 0 for invalid chipId on get', () => {
+        expect(synth.getReservedChipChannels(999)).toBe(0);
+    });
+
+    it('should return false for invalid chipId on rawOPL3', () => {
+        expect(synth.rawOPL3(999, 0, 0)).toBe(false);
+    });
+
+    it('should return true for valid rawOPL3 write', () => {
+        expect(synth.rawOPL3(0, 0x20, 0x01)).toBe(true);
+    });
+
+    it('should produce non-silent audio with raw register writes', async () => {
+        const { noteToFnumBlock, encodeFnumBlock, encodeChannelVoice, channelMask } = await import('../../src/utils/opl3.js');
+        const { defaultOperator } = await import('../../src/utils/struct.js');
+
+        synth.reserveChipChannels(0, channelMask(0));
+
+        const instrument = {
+            is4op: false,
+            isPseudo4op: false,
+            isBlank: false,
+            noteOffset1: 0,
+            connection1: 0,
+            feedback1: 0,
+            operators: [
+                {
+                    am: false, vibrato: false, sustaining: false, ksr: false,
+                    attack: 15, decay: 4, sustain: 2, release: 5,
+                    totalLevel: 0, keyScaleLevel: 0, freqMult: 1, waveform: 0,
+                },
+                {
+                    am: false, vibrato: false, sustaining: false, ksr: false,
+                    attack: 15, decay: 4, sustain: 2, release: 5,
+                    totalLevel: 20, keyScaleLevel: 0, freqMult: 1, waveform: 0,
+                },
+                defaultOperator(),
+                defaultOperator(),
+            ],
+        };
+
+        const writes = encodeChannelVoice(instrument, 0);
+        for (const { reg, value } of writes) {
+            synth.rawOPL3(0, reg, value);
+        }
+
+        const { fnum, block } = noteToFnumBlock(60);
+        const { fnumLo, fnumHiBlock } = encodeFnumBlock(fnum, block);
+        synth.rawOPL3(0, 0xA0, fnumLo);
+        synth.rawOPL3(0, 0xB0, 0x20 | fnumHiBlock);
+
+        const samples = synth.generate(4096);
+        const maxAbs = samples.reduce((max, s) => Math.max(max, Math.abs(s)), 0);
+        expect(maxAbs).toBeGreaterThan(0.01);
+
+        synth.rawOPL3(0, 0xB0, fnumHiBlock);
+        synth.reserveChipChannels(0, 0);
+    });
+});

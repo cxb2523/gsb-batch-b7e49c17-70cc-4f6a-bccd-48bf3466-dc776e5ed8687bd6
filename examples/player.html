@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Player - libADLMIDI-JS</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #252525;
+            --bg-tertiary: #333;
+            --text-primary: #e0e0e0;
+            --text-secondary: #999;
+            --accent: #4a9;
+            --accent-hover: #5ba;
+            --border: #444;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        h1 {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        h3 {
+            color: var(--text-primary);
+            font-weight: 500;
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border: 1px solid var(--border);
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            transition: border-color 0.2s, background 0.2s;
+            cursor: pointer;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.dragover {
+            border-color: var(--accent);
+            background: rgba(68, 170, 153, 0.05);
+        }
+
+        .drop-zone input {
+            display: none;
+        }
+
+        button {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 8px 4px 8px 0;
+        }
+
+        button:hover {
+            background: var(--accent-hover);
+        }
+
+        button:disabled {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            cursor: not-allowed;
+        }
+
+        #status {
+            padding: 12px;
+            margin: 15px 0;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .progress-container {
+            margin: 20px 0;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        .time-display {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        select,
+        input[type="range"] {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        input[type="range"] {
+            width: 120px;
+            -webkit-appearance: none;
+            height: 6px;
+            padding: 0;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .file-name {
+            color: var(--accent);
+            font-weight: 500;
+            margin-top: 10px;
+        }
+
+        .info {
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>OPL3 MIDI Player</h1>
+    <p>Real-time MIDI playback via WebAssembly AudioWorklet</p>
+
+    <div id="status">Not initialized</div>
+
+    <div class="card">
+        <button id="initBtn">Initialize</button>
+
+        <div class="drop-zone" id="dropZone">
+            <p style="font-size: 16px; margin: 0;">Drop MIDI file here or click to browse</p>
+            <p style="color: var(--text-secondary); margin: 10px 0 0; font-size: 13px;">.mid, .midi, .xmi, .mus</p>
+            <input type="file" id="fileInput" accept=".mid,.midi,.xmi,.mus,.imf">
+            <div class="file-name" id="fileName"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="controls">
+            <button id="playBtn" disabled>Play</button>
+            <button id="stopBtn" disabled>Stop</button>
+            <label>
+                <input type="checkbox" id="loopCb"> Loop
+            </label>
+        </div>
+
+        <div id="currentBank" style="padding: 8px 12px; margin: 10px 0; background: var(--bg-secondary); border-radius: 4px; font-size: 13px;">
+            <strong>Bank:</strong> <span id="currentBankName">None</span>
+        </div>
+
+        <div class="progress-container">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress"></div>
+            </div>
+            <div class="time-display">
+                <span id="currentTime">0:00</span>
+                <span id="totalTime">0:00</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Embedded Banks</h3>
+        <div class="controls" style="flex-wrap: wrap;">
+            <label>
+                <select id="bankSelect" disabled>
+                    <option value="">Loading banks...</option>
+                </select>
+            </label>
+            <button id="loadEmbeddedBtn" disabled>Load</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>External Banks</h3>
+        <div class="controls" style="flex-direction: column; align-items: flex-start; gap: 10px;">
+            <div style="display: flex; gap: 10px; width: 100%; flex-wrap: wrap;">
+                <label>
+                    Category:
+                    <select id="bankCategory" disabled>
+                        <option value="">Loading...</option>
+                    </select>
+                </label>
+                <label style="flex: 1;">
+                    Bank File:
+                    <select id="bankFile" disabled style="width: 100%; min-width: 200px;">
+                        <option value="">Select a bank...</option>
+                    </select>
+                </label>
+            </div>
+            <button id="loadBankBtn" disabled>Load</button>
+        </div>
+    </div>
+
+    <script type="module">
+        let synth = null;
+        let duration = 0;
+        let isPlaying = false;
+        let stateInterval = null;
+        let unsubscribeState = null;
+
+        function setStatus(msg) {
+            document.getElementById('status').textContent = msg;
+        }
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        document.getElementById('initBtn').addEventListener('click', async () => {
+            try {
+                setStatus('Loading...');
+
+                const { AdlMidi } = await import('../dist/libadlmidi.js');
+                synth = new AdlMidi();
+
+                setStatus('Initializing AudioWorklet...');
+                await synth.init('../dist/libadlmidi.nuked.processor.js');
+
+                // Populate bank list
+                const bankSelect = document.getElementById('bankSelect');
+                try {
+                    const banks = await synth.getEmbeddedBanks();
+                    bankSelect.innerHTML = '';
+                    banks.forEach(bank => {
+                        const option = document.createElement('option');
+                        option.value = bank.id;
+                        option.textContent = `${bank.id} - ${bank.name}`;
+                        if (bank.id === 72) option.selected = true;
+                        bankSelect.appendChild(option);
+                    });
+                    if (banks.length === 0) {
+                        bankSelect.innerHTML = '<option value="">No embedded banks (slim build)</option>';
+                    }
+                    
+                    // Update the display to show the default bank (id 72)
+                    if (bankSelect.selectedIndex >= 0) {
+                        setCurrentBank(bankSelect.options[bankSelect.selectedIndex].textContent);
+                    }
+                } catch (e) {
+                    console.warn('Could not load bank list:', e);
+                    bankSelect.innerHTML = '<option value="72">72 - TMB (Duke 3D)</option>';
+                    setCurrentBank('72 - TMB (Duke 3D)');
+                }
+
+                setStatus('Ready');
+
+                document.getElementById('initBtn').disabled = true;
+                document.getElementById('bankSelect').disabled = false;
+                document.getElementById('loadEmbeddedBtn').disabled = false;
+                document.getElementById('bankCategory').disabled = false;
+
+            } catch (error) {
+                setStatus('Error: ' + error.message);
+                console.error(error);
+            }
+        });
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                loadFile(e.dataTransfer.files[0]);
+            }
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                loadFile(fileInput.files[0]);
+            }
+        });
+
+        async function loadFile(file) {
+            if (!synth) {
+                setStatus('Initialize synth first');
+                return;
+            }
+
+            setStatus('Loading: ' + file.name);
+            document.getElementById('fileName').textContent = file.name;
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const result = await synth.loadMidi(arrayBuffer);
+
+                duration = result.duration;
+                document.getElementById('totalTime').textContent = formatTime(duration);
+                document.getElementById('progress').style.width = '0%';
+                document.getElementById('playBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = false;
+                setStatus(`Loaded: ${file.name} (${formatTime(duration)})`);
+
+            } catch (error) {
+                setStatus('Error: ' + error.message);
+            }
+        }
+
+        document.getElementById('playBtn').addEventListener('click', () => {
+            if (!synth) return;
+
+            if (isPlaying) {
+                synth.stop();
+                isPlaying = false;
+                document.getElementById('playBtn').textContent = 'Play';
+                clearInterval(stateInterval);
+                if (unsubscribeState) {
+                    unsubscribeState();
+                    unsubscribeState = null;
+                }
+            } else {
+                synth.play();
+                isPlaying = true;
+                document.getElementById('playBtn').textContent = 'Pause';
+                setStatus('Playing...');
+
+                // Subscribe to state updates
+                unsubscribeState = synth.onPlaybackState((state) => {
+                    document.getElementById('currentTime').textContent = formatTime(state.position);
+                    const pct = duration > 0 ? (state.position / duration) * 100 : 0;
+                    document.getElementById('progress').style.width = pct + '%';
+
+                    if (state.atEnd && !document.getElementById('loopCb').checked) {
+                        isPlaying = false;
+                        document.getElementById('playBtn').textContent = 'Play';
+                        clearInterval(stateInterval);
+                        if (unsubscribeState) {
+                            unsubscribeState();
+                            unsubscribeState = null;
+                        }
+                        setStatus('Finished');
+                    }
+                });
+
+                // Poll for state updates
+                stateInterval = setInterval(async () => {
+                    await synth.getPlaybackState();
+                }, 100);
+            }
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            if (!synth) return;
+            synth.stop();
+            isPlaying = false;
+            document.getElementById('playBtn').textContent = 'Play';
+            document.getElementById('currentTime').textContent = '0:00';
+            document.getElementById('progress').style.width = '0%';
+            clearInterval(stateInterval);
+            if (unsubscribeState) {
+                unsubscribeState();
+                unsubscribeState = null;
+            }
+            setStatus('Stopped');
+        });
+
+        document.getElementById('loopCb').addEventListener('change', (e) => {
+            if (synth) {
+                synth.setLoopEnabled(e.target.checked);
+            }
+        });
+
+        function setCurrentBank(name) {
+            document.getElementById('currentBankName').textContent = name;
+        }
+
+        document.getElementById('loadEmbeddedBtn').addEventListener('click', async () => {
+            if (!synth) return;
+            const select = document.getElementById('bankSelect');
+            const bankId = parseInt(select.value);
+            const bankName = select.options[select.selectedIndex].textContent;
+            try {
+                await synth.setBank(bankId);
+                setCurrentBank(bankName);
+                setStatus('Loaded embedded bank');
+            } catch (error) {
+                setStatus('Error: ' + error.message);
+            }
+        });
+
+        let BANK_CATEGORIES = {};
+
+        async function loadBankManifest() {
+            try {
+                const response = await fetch('../dist/fm_banks/manifest.json');
+                if (!response.ok) throw new Error('Failed to load manifest');
+                const manifest = await response.json();
+                BANK_CATEGORIES = manifest.categories || {};
+
+                const categorySelect = document.getElementById('bankCategory');
+                categorySelect.innerHTML = '<option value="">Select category...</option>';
+                for (const category of Object.keys(BANK_CATEGORIES).sort()) {
+                    const option = document.createElement('option');
+                    option.value = category;
+                    const bankCount = BANK_CATEGORIES[category].banks?.length || 0;
+                    option.textContent = `${category} (${bankCount})`;
+                    categorySelect.appendChild(option);
+                }
+                console.log('Bank manifest loaded:', Object.keys(BANK_CATEGORIES).length, 'categories');
+            } catch (error) {
+                console.error('Failed to load bank manifest:', error);
+            }
+        }
+
+        loadBankManifest();
+
+        document.getElementById('bankCategory').addEventListener('change', (e) => {
+            const category = e.target.value;
+            const fileSelect = document.getElementById('bankFile');
+            const loadBtn = document.getElementById('loadBankBtn');
+
+            fileSelect.innerHTML = '<option value="">Select a bank...</option>';
+
+            if (category && BANK_CATEGORIES[category]?.banks) {
+                BANK_CATEGORIES[category].banks.forEach(bank => {
+                    const option = document.createElement('option');
+                    option.value = `${category}/${bank.file}`;
+                    option.textContent = bank.name;
+                    fileSelect.appendChild(option);
+                });
+                fileSelect.disabled = false;
+            } else {
+                fileSelect.disabled = true;
+            }
+            loadBtn.disabled = true;
+        });
+
+        document.getElementById('bankFile').addEventListener('change', (e) => {
+            document.getElementById('loadBankBtn').disabled = !e.target.value;
+        });
+
+        document.getElementById('loadBankBtn').addEventListener('click', async () => {
+            const fileSelect = document.getElementById('bankFile');
+            const file = fileSelect.value;
+            if (!file || !synth) return;
+
+            const bankName = fileSelect.options[fileSelect.selectedIndex].textContent;
+
+            try {
+                setStatus('Loading bank: ' + bankName);
+                const response = await fetch('../dist/fm_banks/' + file);
+                if (!response.ok) throw new Error('Failed to fetch: ' + response.status);
+
+                const bankData = await response.arrayBuffer();
+                await synth.loadBankData(bankData);
+                setCurrentBank('External: ' + bankName);
+                setStatus('Loaded external bank');
+            } catch (error) {
+                setStatus('Error: ' + error.message);
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+
+</html>

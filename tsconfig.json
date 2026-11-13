@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "target": "ES2020",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "allowJs": true,
+        "checkJs": true,
+        "declaration": true,
+        "emitDeclarationOnly": true,
+        "outDir": "dist",
+        "rootDir": "src",
+        "skipLibCheck": true
+    },
+    "include": [
+        "src/libadlmidi.js",
+        "src/core.js",
+        "src/utils/**/*.js",
+        "src/profiles/**/*.js"
+    ]
+}
