@@ -1,0 +1,317 @@
+# AGENTS.md
+
+<!-- agent-contract:start -->
+## Agent contract
+
+Tool-neutral rules for any AI agent or human working in this repository. This block is maintained by the fleet standard; edit outside the markers.
+
+- **Owner boundary:** this repository owns one external system's calls, mappings and MCP tools (spec prefix `CONN-MEDIA-DOWNLOADER-`); it depends on the connector SDK only. Feature routing across repositories: [ecosystem boundaries](https://github.com/Knuckles-Team/pipelines/blob/main/reference/ecosystem-boundaries.md).
+- **Setup:** run `scripts/bootstrap.sh`. It is idempotent and non-interactive: it pins uv and Python, syncs the locked environment, installs the git hooks and prints the gate command.
+- **Gates:** `uvx pre-commit run --all-files` must pass before you push. Do not bypass hooks to get green.
+- **Commits:** one logical change per commit with a `Spec: <ID>` trailer (or `Spec: none (<reason>)`), plus a `Co-Authored-By:` trailer naming the assisting agent. Stage explicit paths only; never `git add -A` or `git add .`. Use your own configured Git identity, never a tool or bot name.
+- **Org rules:** [organization AGENTS.md](https://github.com/Knuckles-Team/.github/blob/main/AGENTS.md).
+<!-- agent-contract:end -->
+
+> Canonical guidance for any AI coding agent or human; tool-specific entry files
+> (for example `CLAUDE.md`) only import this file. Edit this file.
+
+## Tech Stack & Architecture
+- Language/Version: Python 3.10+
+- Core Libraries: `scion-sdk`, `fastmcp`, `pydantic-ai`
+- Key principles: Functional patterns, Pydantic for data validation, asynchronous tool execution.
+- Architecture:
+    - `mcp_server.py`: Main MCP server entry point and tool registration.
+    - `agent.py`: Pydantic AI agent definition and logic.
+    - `skills/`: Directory containing modular agent skills (if applicable).
+
+### Architecture Diagram
+```mermaid
+graph TD
+    User([User/A2A]) --> Server[A2A Server / FastAPI]
+    Server --> Agent[Pydantic AI Agent]
+    Agent --> Skills[Modular Skills]
+    Agent --> MCP[MCP Server / FastMCP]
+    MCP --> Client[API Client / Wrapper]
+    Client --> ExternalAPI([External Service API])
+```
+
+### Workflow Diagram
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant S as Server
+    participant A as Agent
+    participant T as MCP Tool
+    participant API as External API
+
+    U->>S: Request
+    S->>A: Process Query
+    A->>T: Invoke Tool
+    T->>API: API Request
+    API-->>T: API Response
+    T-->>A: Tool Result
+    A-->>S: Final Response
+    S-->>U: Output
+```
+
+## Commands (run these exactly)
+# Installation
+pip install .[all]
+
+# Quality & Linting (run from project root)
+pre-commit run --all-files
+
+# Execution Commands
+# media-downloader\nmedia_downloader.media_downloader:media_downloader\n# media-downloader-mcp\nmedia_downloader.mcp:mcp_server\n# media-downloader-agent\nmedia_downloader.agent:agent_server
+
+## Project Structure Quick Reference
+- MCP Entry Point → `mcp_server.py`
+- Agent Entry Point → `agent.py`
+- Source Code → `media_downloader/`
+- Skills → `skills/` (if exists)
+
+### File Tree
+```text
+├── .bumpversion.cfg\n├── .dockerignore\n├── .env\n├── .gitattributes\n├── .github\n│   └── workflows\n│       └── pipeline.yml\n├── .gitignore\n├── .pre-commit-config.yaml\n├── AGENTS.md\n├── Dockerfile\n├── LICENSE\n├── MANIFEST.in\n├── README.md\n├── compose.yml\n├── debug.Dockerfile\n├── mcp\n│   └── downloads\n├── mcp.compose.yml\n├── media_downloader\n│   ├── __init__.py\n│   ├── __main__.py\n│   ├── agent.py\n│   ├── mcp_server.py\n│   └── media_downloader.py\n├── pyproject.toml\n├── pytest.ini\n├── requirements.txt\n├── scripts\n│   └── validate_a2a_agent.py\n└── tests\n    ├── media_downloader_mcp.log\n    └── test_mcp_server.py
+```
+
+## Code Style & Conventions
+**Always:**
+- Use `scion-sdk` for common patterns (e.g., `create_mcp_server`, `create_agent`).
+- Define input/output models using Pydantic.
+- Include descriptive docstrings for all tools (they are used as tool descriptions for LLMs).
+- Check for optional dependencies using `try/except ImportError`.
+
+**Good example:**
+```python
+from scion_sdk import create_mcp_server
+from mcp.server.fastmcp import FastMCP
+
+mcp = create_mcp_server("my-agent")
+
+
+@mcp.tool()
+async def my_tool(param: str) -> str:
+    """Description for LLM."""
+    return f"Result: {param}"
+```
+
+## Dos and Don'ts
+**Do:**
+- Run `pre-commit` before pushing changes.
+- Use existing patterns from `scion-sdk`.
+- Keep tools focused and idempotent where possible.
+
+**Don't:**
+- Use `cd` commands in scripts; use absolute paths or relative to project root.
+- Add new dependencies to `dependencies` in `pyproject.toml` without checking `optional-dependencies` first.
+- Hardcode secrets; use environment variables or `.env` files.
+
+## Safety & Boundaries
+**Always do:**
+- Run lint/test via `pre-commit`.
+- Use `scion-sdk` base classes.
+
+**Ask first:**
+- Major refactors of `mcp_server.py` or `agent.py`.
+- Removing or renaming public tool functions.
+
+**Never do:**
+- Commit `.env` files or secrets.
+- Modify `scion-sdk` or `universal-skills` files from within this package.
+
+## When Stuck
+- Propose a plan first before making large changes.
+- Check `scion-sdk` documentation for existing helpers.
+
+## Testing with Timeout
+
+To run tests with a timeout to prevent hanging, use the `pytest-timeout` plugin. The operator can combine it with the `-k` flag to run specific tests:
+
+```bash
+uv run pytest --timeout=60 -k "test_name_pattern"
+```
+
+## ⛔ No Scratch or Temporary Files in Repository
+
+**NEVER write any of the following to this repository:**
+- Temporary test scripts (`test_*.py`, `debug_*.py` outside of `tests/`)
+- Scratch scripts or experimental one-off files
+- Log files (`.log`, `.txt` command output)
+- Random text files with command output or debug dumps
+- Any file that is NOT production source code, tests in `tests/`, or documentation
+
+**Why:** These files expose private filesystem paths, credentials, and internal infrastructure details when pushed to GitHub publicly.
+
+**Where to put scratch work instead:**
+- Use `~/workspace/scratch/` for temporary scripts and experiments
+- Use `~/workspace/reports/` for command output and reports
+- Keep test scripts in the `tests/` directory following proper pytest conventions
+
+## ⛔ Keep the Repository Root Pristine — No Scratch / Temp / Debug Files
+
+**The repository ROOT must contain only canonical project files** (packaging,
+config, docs, lockfiles). The only hidden directories allowed at root are
+`.git/`, `.github/`, and `.specify/` (plus a local, git-ignored `.venv/`).
+
+**NEVER write any of the following — anywhere in the repo, and ESPECIALLY at the root:**
+- One-off / debug / migration scripts: `fix_*.py`, `migrate_*.py`, `refactor_*.py`,
+  `replace_*.py`, `update_*.py`, `debug_*.py`, or `test_*.py` **at the root**
+  (real tests live in `tests/` only).
+- Databases / data dumps: `*.db`, `*.db-wal`, `*.sqlite*`, `*.corrupted`.
+- Logs / command output: `*.log`, scratch `*.txt`, `*.orig`, `*.rej`, `*.bak`.
+- Build artifacts: `*.tsbuildinfo`, compiled binaries, coverage files.
+- AI agent scratch directories: `.agent/`, `.agents/`, `.agent_data/`, `.tmp/`,
+  `.hypothesis/`, or any per-tool cache committed to git.
+- Any file that is NOT production source, a test in `tests/`, documentation, or
+  a recognized config/lockfile.
+
+**Why:** scratch at the root leaks private paths/credentials, bloats the tree,
+and erodes a pristine codebase.
+
+**Where scratch goes instead:** `~/workspace/scratch/` (experiments),
+`~/workspace/reports/` (command output); tests go in `tests/` (pytest).
+Before finishing a task, run `git status` and confirm no stray root files were added.
+
+## Working Discipline — think, simplify, stay surgical, check
+
+These four habits cut the most common LLM coding mistakes. For trivial tasks, use
+judgment; the bias here is correctness over speed.
+
+- **Think before coding.** State the operator's assumptions explicitly. If a request has more than
+  one reasonable reading, surface the options instead of silently picking one. If a
+  simpler approach exists, say so and push back when warranted. When something is
+  genuinely unclear, stop and name what's confusing — ask, don't guess.
+- **Simplicity first.** Write the minimum code that solves the stated problem — no
+  speculative features, no abstraction for single-use code, no configurability that
+  wasn't requested, no error handling for impossible states. If the operator wrote 200 lines and
+  it can be 50, rewrite it. (Name code from its purpose, never `wave0`/`phase2`/`v2`.)
+- **Stay surgical.** Every changed line should trace directly to the task. Don't refactor,
+  reformat, or "improve" working code adjacent to the operator's change; match the existing style
+  even where the operator'd do it differently. Remove only the imports/symbols the operator's own change
+  orphaned; if the operator spot unrelated dead code, mention it rather than removing it inline.
+  *Exception — the Quality Bar below:* lint/format/type errors the pre-commit gate flags
+  get fixed in either case of who introduced them. In short: **surgical on behavior, clean on
+  lint.**
+- **Check against a goal.** Turn the task into a checkable outcome before the operator start:
+  "fix the bug" → "write a failing test that reproduces it, then make it pass"; "add
+  validation" → "tests for the invalid inputs pass". For multi-step work, state the short
+  plan and the check for each step, then loop until the checks pass.
+
+## Quality Bar — Leave the Codebase Clean (REQUIRED)
+
+After completing any code change, run the project's pre-commit suite and drive it
+**fully green** before committing:
+
+```bash
+pre-commit run --all-files
+```
+
+Resolve **every** issue it reports — failures, lint errors, type errors, and
+warnings — **including problems that pre-date the operator's change and were not caused by
+the operator's edits**. The standing goal is a clean, working codebase with **no errors and
+no warnings**. Do not silence checks (`# noqa`, `# type: ignore`, `SKIP=`,
+`--no-verify`) to force green unless the exception is already documented in this
+file as a known, unavoidable limitation. Only commit once `pre-commit run
+--all-files` passes cleanly; if a check legitimately cannot pass, stop and explain
+why rather than bypassing it.
+
+## Working with Git Worktrees (multi-session)
+
+Multiple agents/sessions work the `agent-packages/*` repos concurrently. **Do not
+edit the canonical checkout** (`${WORKSPACE_ROOT}/agent-packages/<repo>`) — a
+background `repository-manager` sync can reset its working tree and discard
+uncommitted edits. Take the operator's own git worktree on the operator's own branch instead:
+
+```bash
+# preferred — repository-manager MCP:
+rm_worktree add <repo> <your-branch>      # -> ${WORKTREE_ROOT}/<repo>/<your-branch>
+
+# raw-git fallback:
+git -C agent-packages/<repo> checkout main
+git -C agent-packages/<repo> worktree add ${WORKTREE_ROOT}/<repo>/<branch> -b <branch>
+```
+
+Work in the worktree and **commit often** (commits survive a working-tree reset).
+Each session must use a **distinct branch** — git allows a branch in only one
+worktree, which is what keeps concurrent sessions from colliding. Worktrees live
+under `${WORKTREE_ROOT}/` (outside the workspace scan, so the sync leaves them
+alone).
+
+**Finishing work in a worktree** — run this sequence before calling it done:
+1. **Pre-commit green** — `pre-commit run --all-files`; resolve every issue per the
+   Quality Bar above (including pre-existing), no `--no-verify`.
+2. **Commit** in the worktree.
+3. **Merge to main locally** — `rm_worktree merge <repo> <branch> --into main`
+   (or `git merge --no-ff`). Push only when the user asks.
+4. **Clean up** — remove the worktree and remove the merged branch:
+   `rm_worktree remove <repo> <branch> --delete-branch`; `rm_worktree prune` clears
+   stale entries. (Raw-git: `git worktree remove <path> && git branch -d <branch>`.)
+
+<!-- BEGIN concept-coordination (generated) -->
+## Concept-ID Coordination (multi-session)
+
+Working in parallel with other sessions/worktrees? **Reserve a concept id before you write its `CONCEPT:` marker** so two sessions never collide:
+
+```bash
+scion-sdk --json concept reserve --ns EG-KG.compute.backend   # or a package prefix, e.g. KEY
+```
+
+Full protocol (ledger, merge=union, reconcile, MCP/REST): <https://knuckles-team.github.io/scion-sdk/concept_coordination/>
+<!-- END concept-coordination (generated) -->
+
+## Version & lockfile drift edict (keep the version mirrors AND the lock in sync)
+
+The two most common release-breakers in this fleet are **version drift** (the version in
+`pyproject.toml`/`.bumpversion.cfg` advancing while `README.md`, `docker/Dockerfile`, and the
+module `__version__`s lag) and a **stale `uv.lock`** (shipping known-vulnerable transitive deps).
+A version mismatch makes the next `bump-my-version` throw `VersionNotFoundException`; a stale lock
+is what Dependabot flags. Rules:
+
+1. **Never hand-edit a version string.** Change the version ONLY via
+   `bump-my-version bump {patch|minor|major}` (a.k.a. `bump2version`), which rewrites every file
+   registered in `.bumpversion.cfg` in one atomic, tagged commit. If the operator edited the version in
+   `pyproject.toml` by hand, the operator created drift — revert and use the bumper.
+2. **Every version-bearing file must be registered in `.bumpversion.cfg`** — at minimum
+   `pyproject.toml` AND `README.md`, plus `docker/Dockerfile` and any module `__version__`. Never
+   add a file that embeds the version without a `[bumpversion:file:...]` entry for it.
+3. **Re-lock on every dependency change.** After editing `pyproject.toml` deps/extras, run
+   `uv lock` and commit `uv.lock` in the SAME change. The `uv-lock` pre-commit hook runs with
+   `--locked` and fails on drift — never bypass it. The committed `uv.lock` is the
+   Dependabot/security surface.
+4. **Patch CVEs with a version floor at the source, then re-lock.** `uv` resolves one version
+   graph-wide, so a lower-bound in the extra that pulls a dependency raises it for the whole lock.
+
+## Upstream currency edict — target the newest release; a pin is a hypothesis, not a fact (READ BEFORE capping, deferring, or opt-in-gating an upgrade)
+
+This governs how this repository treat **other people's** releases, deprecations, and version caps in
+this repo (fleet-wide edict, propagated from `scion-sdk/AGENTS.md`).
+
+1. **Latest by default.** Target the newest upstream release -- including a pre-release
+   where the ecosystem has already moved onto it. Sitting on an old major because the
+   upgrade is work is not a reason to defer it.
+2. **A conservative upstream pin is a hypothesis, not a fact -- test it, don't inherit
+   it.** Upstream maintainers cap defensively (an unreleased major, an untested surface)
+   as often as they cap for a known break. Worked example (from `scion-sdk`):
+   `pydantic-ai-slim` 2.18.0 declared `fastmcp-slim[client]>=3.3.0` with no upper bound;
+   2.19.0 added `<4` purely as a defensive guard while fastmcp 4 was still pre-release --
+   not because of an observed incompatibility. Blocking an upgrade on that kind of cap
+   without testing it is the wrong default.
+3. **Forward-fix only.** When an upgrade breaks something, fix the break to proceed --
+   do not pin backwards, vendor a fork, or route around it. If a break is genuinely
+   unfixable inside this repo, say exactly what and why, and carry a plan to unblock it
+   -- never an indefinite pin.
+4. **Deprecations are fixed on sight, in code AND in tests.** A `DeprecationWarning` from
+   an upstream library is a defect to fix now, not noise to filter. **Never** silence one
+   with a warning filter, `# noqa`, or a pytest `filterwarnings` entry to go
+   green.
+5. **Adopt upstream features rather than reimplementing them.** If upstream ships a
+   capability this repo hand-rolled, migrate to theirs and remove the local one.
+6. **Nothing built on an upgrade ships opt-in.** A new capability an upgrade unlocks is
+   default-on unless it genuinely costs compute, in which case it is policy-selected,
+   never flag-gated. An opt-in extra or a dependency-conflict fork is an interim state
+   that must carry a written plan to become the default, never a resting place.
+
+## Specs: extend first
+
+Find the spec row that owns the behavior before any code change. Search with `git grep -n "<term>" -- specs`. Cite the row ID in the commit `Spec:` trailer. Extend the owning spec before any new spec text. Add a child row, a new rollup, or a dated `plan.md` "Amendments" entry. Create a new spec only for a capability that no spec owns. Audits, reviews, and carry-overs land in the owning spec. They never get a spec directory. Reuse an existing function, module, or store before adding one. The rules are the ecosystem [spec standard](https://github.com/Knuckles-Team/pipelines/blob/main/reference/spec-standard.md).

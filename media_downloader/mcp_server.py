@@ -1,0 +1,299 @@
+import warnings
+
+# Filter RequestsDependencyWarning early to prevent log spam
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    try:
+        from requests.exceptions import RequestsDependencyWarning
+
+        warnings.filterwarnings("ignore", category=RequestsDependencyWarning)
+    except ImportError:
+        pass
+
+# General urllib3/chardet mismatch warnings
+warnings.filterwarnings("ignore", message=".*urllib3.*or chardet.*")
+warnings.filterwarnings("ignore", message=".*urllib3.*or charset_normalizer.*")
+"""
+Media Downloader MCP Server.
+
+Wraps the MediaDownloader class using yt-dlp to download video or audio from various platforms.
+"""
+
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from fastmcp import Context, FastMCP
+from fastmcp.utilities.logging import get_logger
+from pydantic import Field
+from scion_sdk.config import load_config
+from scion_sdk.connector import build_server
+from scion_sdk.connector_identity import connector_version
+from scion_sdk.mcp.tool_surface import register_tool_surface
+
+from media_downloader.media_downloader import MediaDownloader
+
+__version__ = connector_version("media_downloader")
+
+logger = get_logger("MediaDownloaderMCPServer")
+logger.setLevel(logging.INFO)
+
+
+def get_client() -> MediaDownloader:
+    """Return a lightweight MediaDownloader client for the tool surface."""
+    return MediaDownloader(links=[])
+
+
+def get_mcp_instance(*, command_args=None) -> tuple[Any, Any, Any, list[str]]:
+    """Initialize and return the MCP instance, args, and middlewares."""
+    load_config()
+
+    args, mcp = build_server("media_downloader", command_args=command_args)
+    return mcp, args, list(mcp.middleware), mcp._media_registered_tags
+
+
+def register_server_surface(mcp: FastMCP) -> list[str]:
+    """Register existing media tools without changing their bodies."""
+
+    @mcp.tool(name="download_media")
+    async def download_media(
+        video_url: str = Field(description="URL of the video/media to download"),
+        download_directory: str = Field(
+            default=".", description="Directory to save downloads"
+        ),
+        audio_only: bool = Field(
+            default=False, description="Extract audio and convert to MP3"
+        ),
+        ctx: Context | None = Field(
+            default=None, description="MCP context for progress reporting"
+        ),
+    ) -> dict:
+        """Download video or audio from supported sites (YouTube, Rumble, etc.)."""
+        if ctx:
+            await ctx.info("Downloading the requested media URL")
+
+        try:
+            from media_downloader.media_downloader import MediaDownloader
+
+            downloader = MediaDownloader(
+                links=[video_url],
+                download_directory=download_directory,
+                audio=audio_only,
+            )
+
+            result_file = downloader.download_all()
+            if result_file and os.path.exists(result_file):
+                relative_file = os.path.relpath(
+                    result_file, downloader.output_root
+                ).replace(os.sep, "/")
+                if ctx:
+                    await ctx.info(f"Download complete: {relative_file}")
+                resp: dict[str, Any] = {"status": "success", "file": relative_file}
+                # Native medulla ingestion result (blob + :MediaAsset), when
+                # a live engine was reachable; None otherwise. CONCEPT:AU-KG.ingest.list-durable-media
+                if downloader.last_kg_asset:
+                    resp["kg_asset"] = downloader.last_kg_asset
+                return resp
+            else:
+                return {
+                    "status": "error",
+                    "message": "Download failed or did not return a valid file path.",
+                }
+        except Exception as e:
+            logger.error("Download error (%s)", type(e).__name__)
+            return {"status": "error", "message": "Download request failed"}
+
+    @mcp.tool(name="watch_media")
+    async def watch_media(
+        video_url: str = Field(description="URL of the video/media to watch"),
+        download_directory: str = Field(
+            default=".", description="Directory to save the watch bundle"
+        ),
+        max_frames: int = Field(
+            default=24, description="Maximum key frames to extract (1-200)"
+        ),
+        scene_threshold: float = Field(
+            default=0.3,
+            description="ffmpeg scene-change sensitivity; lower finds more frames",
+        ),
+        subtitle_languages: str = Field(
+            default="en,en-orig",
+            description="Comma-separated yt-dlp caption language codes",
+        ),
+        ctx: Context | None = Field(
+            default=None, description="MCP context for progress reporting"
+        ),
+    ) -> dict:
+        """Watch a video: download it with captions and extract key frames.
+
+        Returns a manifest describing a bundle on disk - the caption transcript
+        plus scene-change key frames whose filenames carry their timestamp, so
+        what was on screen can be lined up against what was said. Use this to
+        analyse a tutorial, demo, talk, or screen recording rather than merely
+        archive it.
+
+        Check `status` before trusting the bundle: `partial` means the captions
+        or the frames are missing, and `captions.fallback` then names the
+        audio-transcriber skill to recover a transcript.
+        """
+        if ctx:
+            await ctx.info("Watching the requested media URL")
+
+        try:
+            from media_downloader.media_downloader import (
+                DEFAULT_SUBTITLE_LANGS,
+                MediaDownloader,
+            )
+
+            languages = tuple(
+                lang.strip() for lang in subtitle_languages.split(",") if lang.strip()
+            )
+            downloader = MediaDownloader(
+                links=[video_url],
+                download_directory=download_directory,
+            )
+            manifest = downloader.watch(
+                video_url,
+                max_frames=max(1, min(int(max_frames), 200)),
+                scene_threshold=float(scene_threshold),
+                subtitle_langs=languages or DEFAULT_SUBTITLE_LANGS,
+            )
+            if ctx:
+                await ctx.info(f"Watch complete: {manifest['status']}")
+            return manifest
+        except Exception as e:
+            logger.error("Watch error (%s)", type(e).__name__)
+            return {"status": "error", "message": "Watch request failed"}
+
+    @mcp.tool(name="build_watch_skill")
+    async def build_watch_skill(
+        skills_root: str = Field(
+            description="Directory the skill lives in (one subdirectory per skill)"
+        ),
+        name: str = Field(description="Skill name; becomes the directory name"),
+        body: str = Field(
+            description=(
+                "The markdown body you wrote from the bundle, starting with a "
+                "'# Title' heading and ending with a "
+                "'## What would change this skill' section naming the evidence "
+                "that would revise it. Do not include a Sources section - it is "
+                "generated from the manifest."
+            )
+        ),
+        manifest_path: str = Field(
+            description="Path to the watch bundle's manifest.json, for provenance"
+        ),
+        description: str = Field(
+            default="", description="Skill description; required when creating"
+        ),
+        mode: str = Field(
+            default="create",
+            description="'create' a new skill, 'append' a video's findings, or 'replace' the body",
+        ),
+        tags: str = Field(default="", description="Comma-separated frontmatter tags"),
+        ctx: Context | None = Field(
+            default=None, description="MCP context for progress reporting"
+        ),
+    ) -> dict:
+        """Write a video-built skill, or append another video's findings to one.
+
+        You supply the body - reading the transcript and frames is your job, not
+        this tool's. It owns the mechanics: frontmatter, the provenance table
+        every claim stays traceable to, the version bump, and WORKFLOW.md.
+
+        Appending a video the skill already lists is refused rather than
+        duplicated, so re-running a pipeline is safe. Call `list_watch_skills`
+        first to see which skill a new video belongs to.
+
+        Default to `append`. Use `replace` when the new source contradicts the
+        skill, changes a conclusion, supersedes rather than extends it, leaves
+        the body no longer reading as one document, or outgrows the description.
+        A `create` or `replace` without a "What would change this skill" section
+        is refused.
+        """
+        if ctx:
+            await ctx.info(f"Writing skill '{name}' ({mode})")
+
+        try:
+            import json as _json
+
+            from media_downloader.media_downloader import build_skill
+
+            manifest = _json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            return build_skill(
+                skills_root,
+                name=name,
+                body=body,
+                manifest=manifest,
+                description=description or None,
+                tags=[t.strip() for t in tags.split(",") if t.strip()] or None,
+                mode=mode,
+            )
+        except ValueError as e:
+            # Caller-correctable: wrong mode, missing description, skill exists.
+            logger.error("Skill build rejected (%s)", type(e).__name__)
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            logger.error("Skill build error (%s)", type(e).__name__)
+            return {"status": "error", "message": "Skill build failed"}
+
+    @mcp.tool(name="list_watch_skills")
+    async def list_watch_skills(
+        skills_root: str = Field(
+            default="",
+            description="Directory holding video-built skills; empty uses the shared skills directory",
+        ),
+        ctx: Context | None = Field(
+            default=None, description="MCP context for progress reporting"
+        ),
+    ) -> dict:
+        """List video-built skills under a root and the videos each already has.
+
+        Use it before building: it says whether a new video extends an existing
+        skill and whether that skill already covers it.
+        """
+        if ctx:
+            await ctx.info("Listing video-built skills")
+        try:
+            from media_downloader.media_downloader import find_watch_skills
+
+            skills = find_watch_skills(skills_root or None)
+            return {"status": "success", "count": len(skills), "skills": skills}
+        except Exception as e:
+            logger.error("Skill listing error (%s)", type(e).__name__)
+            return {"status": "error", "message": "Skill listing failed"}
+
+    registered_tags = register_tool_surface(
+        mcp,
+        client_cls=MediaDownloader,
+        get_client=get_client,
+        service="media-downloader",
+        tools_module=sys.modules[__name__],
+    )
+
+    return registered_tags
+
+
+def mcp_server() -> None:
+    mcp, args, middlewares, registered_tags = get_mcp_instance()
+    print(f"{'media-downloader'} MCP v{__version__}", file=sys.stderr)
+    print("\nStarting MCP Server", file=sys.stderr)
+    print(f"  Transport: {args.transport.upper()}", file=sys.stderr)
+    print(f"  Auth: {args.auth_type}", file=sys.stderr)
+    print(f"  Dynamic Tags Loaded: {len(set(registered_tags))}", file=sys.stderr)
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    elif args.transport == "streamable-http":
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+    elif args.transport == "sse":
+        mcp.run(transport="sse", host=args.host, port=args.port)
+    else:
+        logger.error("Invalid transport", extra={"transport": args.transport})
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    mcp_server()
