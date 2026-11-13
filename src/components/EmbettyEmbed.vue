@@ -15,7 +15,9 @@ export default {
       embettyLogo: EMBETTY_LOGO,
 
       fetched: false,
-      data: undefined
+      data: undefined,
+      /** @type {?Error} Set when the data request fails (network error, non-2xx status or invalid JSON). */
+      error: null
     };
   },
   computed: {
@@ -46,28 +48,76 @@ export default {
     url: {
       immediate: true,
       /**
+       * Re-fetches whenever the requested URL changes (or becomes empty). Any
+       * data from a previous request is reset immediately, and responses that
+       * resolve after a newer request was started are discarded.
        * @param {?string} url The newly set URL.
        */
       handler(url) {
-        if (url) {
-          this.fetchData();
-        }
+        this.fetchData(url);
       }
     }
+  },
+  /**
+   * Initializes the internal fetch counter used to discard stale responses.
+   * Runs before the immediate `url` watcher so the counter always exists.
+   */
+  beforeCreate() {
+    this._fetchToken = 0;
   },
   methods: {
     /**
      * Calls the API of embetty-server using the url set in the calling (child) component.
+     *
+     * Invalidates any previously fetched data up front so a changed source can
+     * never leave stale data on display. A per-request token ensures that an
+     * older, slow response can never overwrite the result of a newer request.
+     * On network errors, non-2xx status codes or invalid JSON, `error` is set
+     * (exposed to the template) and `data`/`fetched` are not treated as success.
+     * @param {?string} [requestUrl] The URL to fetch; defaults to `this.url`.
      */
-    async fetchData() {
+    async fetchData(requestUrl = this.url) {
       // skip fetching in SSR
       if (typeof window === 'undefined') {
         return;
       }
 
-      const response = await window.fetch(this.url);
-      this.data = await response.json();
-      this.fetched = true;
+      // invalidate the previous request's state immediately
+      const token = ++this._fetchToken;
+      this.fetched = false;
+      this.data = undefined;
+      this.error = null;
+
+      if (!requestUrl) {
+        return;
+      }
+
+      try {
+        const response = await window.fetch(requestUrl);
+
+        if (!response.ok) {
+          throw new Error(`Request to ${requestUrl} failed with status ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // a newer request has superseded this one; discard its response
+        if (token !== this._fetchToken) {
+          return;
+        }
+
+        this.data = data;
+        this.fetched = true;
+      } catch (caughtError) {
+        // a newer request has superseded this one; leave its state untouched
+        if (token !== this._fetchToken) {
+          return;
+        }
+
+        this.data = undefined;
+        this.fetched = false;
+        this.error = caughtError instanceof Error ? caughtError : new Error(String(caughtError));
+      }
     },
 
     /**

@@ -55,6 +55,7 @@
     "build:lib": "vite build",
     "dev": "vite",
     "lint": "eslint",
+    "test": "node --test tests/*.test.mjs",
     "version": "npm run build && git add -A dist"
   },
   "engines": {
@@ -80,6 +81,10 @@
     "sass": "^1.97.3",
     "vite": "^7.3.1",
     "vue": "^2.7.0",
-    "vue-eslint-parser": "^10.4.0"
+    "vue-eslint-parser": "^10.4.0",
+    "vue-server-renderer": "^2.7.16"
+  },
+  "allowScripts": {
+    "esbuild@0.27.3": true
   }
 }
