@@ -36,6 +36,8 @@ class AdlMidiProcessor extends AudioWorkletProcessor {
         this.playMode = 'realtime'; // 'realtime' or 'file'
         this.sampleRate = options.processorOptions?.sampleRate || SAMPLE_RATE;
         this.cachedHeapBuffer = null; // Track heap buffer for view caching
+        this.lastBlockPeak = 0;       // Max |sample| of the most recently generated block
+        this.heldPeak = 0;            // Max |sample| since the last peak query
 
         // Synth settings with defaults (can be overridden via processorOptions or messages)
         this.settings = {
@@ -596,6 +598,20 @@ class AdlMidiProcessor extends AudioWorkletProcessor {
                 });
                 break;
 
+            case 'getOutputPeak': {
+                // Report the peak of the most recently generated sample buffer.
+                // `peak` is that single block's max |sample|; `heldPeak` is the
+                // max since the previous query, so short UI polls never miss it.
+                this.port.postMessage({
+                    type: 'outputPeak',
+                    peak: this.lastBlockPeak,
+                    heldPeak: this.heldPeak,
+                    reqId: msg.reqId
+                });
+                this.heldPeak = 0;
+                break;
+            }
+
             case 'reset':
                 this.adl._adl_reset(this.midi);
                 this.playMode = 'realtime';
@@ -749,6 +765,9 @@ class AdlMidiProcessor extends AudioWorkletProcessor {
             this.adl._free(dataPtr);
 
             if (result === 0) {
+                // A new file means the previous file's peak is no longer valid evidence.
+                this.lastBlockPeak = 0;
+                this.heldPeak = 0;
                 const duration = this.adl._adl_totalTimeLength(this.midi);
                 this.port.postMessage({
                     type: 'midiLoaded',
@@ -854,10 +873,20 @@ class AdlMidiProcessor extends AudioWorkletProcessor {
             }
             const heap16 = new Int16Array(currentBuffer, this.bufferPtr, sampleCount);
 
+            let blockPeak = 0;
             for (let i = 0; i < frames; i++) {
-                left[i] = heap16[i * 2] / 32768.0;
-                right[i] = heap16[i * 2 + 1] / 32768.0;
+                const l = heap16[i * 2] / 32768.0;
+                const r = heap16[i * 2 + 1] / 32768.0;
+                left[i] = l;
+                right[i] = r;
+
+                const absL = l < 0 ? -l : l;
+                const absR = r < 0 ? -r : r;
+                if (absL > blockPeak) blockPeak = absL;
+                if (absR > blockPeak) blockPeak = absR;
             }
+            this.lastBlockPeak = blockPeak;
+            if (blockPeak > this.heldPeak) this.heldPeak = blockPeak;
         } catch (e) {
             // Report errors to main thread instead of silently swallowing
             this.port.postMessage({ type: 'processingError', error: e.message || String(e) });

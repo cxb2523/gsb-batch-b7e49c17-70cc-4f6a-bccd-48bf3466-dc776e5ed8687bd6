@@ -1193,6 +1193,21 @@ export class AdlMidi {
     }
 
     /**
+     * Get the output peak of the most recently generated sample buffer
+     * @returns {Promise<{peak: number, heldPeak: number}>} `peak` is the max |sample|
+     *   of the last audio block, `heldPeak` the max since the previous call
+     */
+    async getOutputPeak() {
+        const reqId = this.#nextRequestId++;
+        return new Promise((resolve) => {
+            this.#onceCorrelatedMessage('outputPeak', reqId, /** @param {{peak: number, heldPeak: number}} msg */(msg) => {
+                resolve({ peak: msg.peak, heldPeak: msg.heldPeak });
+            });
+            this.#send({ type: 'getOutputPeak', reqId });
+        });
+    }
+
+    /**
      * Register a handler for playback state updates
      * Useful for progress tracking during playback
      * @param {function({position: number, duration: number, atEnd: boolean, playMode: string}): void} handler

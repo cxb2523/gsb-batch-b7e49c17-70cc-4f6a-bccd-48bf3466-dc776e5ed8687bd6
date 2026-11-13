@@ -180,6 +180,179 @@
             font-size: 13px;
             margin-top: 10px;
         }
+
+        /* ---- Mixer ---- */
+        .meter-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .meter-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .peak-value {
+            font-family: monospace;
+            font-size: 22px;
+            font-weight: 600;
+            color: var(--accent);
+            min-width: 90px;
+            text-align: right;
+        }
+
+        .peak-value.low {
+            color: var(--text-secondary);
+        }
+
+        .peak-bar {
+            flex: 1;
+            min-width: 120px;
+            height: 10px;
+            background: var(--bg-tertiary);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .peak-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--accent);
+            transition: width 0.1s linear;
+        }
+
+        .mixer-hint {
+            font-size: 13px;
+            color: var(--text-secondary);
+            padding: 8px 10px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            margin-bottom: 12px;
+        }
+
+        .mixer-hint.hidden {
+            display: none;
+        }
+
+        .track-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .track-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            flex-wrap: wrap;
+        }
+
+        .track-row.failed {
+            outline: 1px solid #e06c6c;
+        }
+
+        .track-name {
+            flex: 1;
+            min-width: 140px;
+            font-size: 13px;
+            font-family: monospace;
+            color: var(--text-primary);
+            overflow-wrap: anywhere;
+        }
+
+        .segmented {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .segmented button {
+            margin: 0;
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 0;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+        }
+
+        .segmented button + button {
+            border-left: 1px solid var(--border);
+        }
+
+        .segmented button:hover {
+            background: var(--bg-primary);
+        }
+
+        .segmented button.active[data-option="on"] {
+            background: var(--accent);
+            color: #000;
+        }
+
+        .segmented button.active[data-option="off"] {
+            background: #b05252;
+            color: #fff;
+        }
+
+        .segmented button.active[data-option="solo"] {
+            background: #c9a227;
+            color: #000;
+        }
+
+        .segmented button:disabled {
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+        }
+
+        .track-status {
+            font-size: 12px;
+            font-family: monospace;
+            color: var(--text-secondary);
+            min-width: 40px;
+        }
+
+        .track-status.error,
+        .channel-fail {
+            color: #e06c6c;
+        }
+
+        .channel-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .channel-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-tertiary);
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+            color: var(--text-primary);
+        }
+
+        .channel-toggle.failed {
+            outline: 1px solid #e06c6c;
+        }
+
+        .mixer-errors {
+            font-size: 12px;
+            font-family: monospace;
+            color: #e06c6c;
+            white-space: pre-wrap;
+            margin-top: 4px;
+        }
     </style>
 </head>
 
@@ -224,6 +397,28 @@
         </div>
     </div>
 
+    <div class="card" id="mixerCard">
+        <h3>Mixer</h3>
+
+        <div class="meter-row">
+            <span class="meter-label">Output peak</span>
+            <span class="peak-value low" id="peakValue">--</span>
+            <div class="peak-bar">
+                <div class="peak-fill" id="peakFill"></div>
+            </div>
+            <span class="meter-label" id="peakSource">no audio yet</span>
+        </div>
+
+        <div class="mixer-hint" id="mixerHint">Load a MIDI file to enable mixing controls.</div>
+
+        <div class="track-list" id="trackList"></div>
+
+        <div class="meter-label" style="margin-bottom: 8px;">MIDI channels (0-15)</div>
+        <div class="channel-grid" id="channelGrid"></div>
+
+        <div class="mixer-errors" id="mixerErrors"></div>
+    </div>
+
     <div class="card">
         <h3>Embedded Banks</h3>
         <div class="controls" style="flex-wrap: wrap;">
@@ -264,6 +459,29 @@
         let stateInterval = null;
         let unsubscribeState = null;
 
+        // TrackOption enum from the library (filled in during initialization)
+        let TrackOption = null;
+
+        // "Solo" is a single global flag inside libADLMIDI (not per-track),
+        // so the panel keeps track of which track is currently soloed.
+        const SOLO_CLEAR_SENTINEL = 0xFFFFFFFF;
+
+        const mixer = {
+            loaded: false,
+            trackCount: 0,
+            trackNames: [],
+            trackOptions: [],          // 'on' | 'off' | 'solo' per track
+            preSoloOptions: [],        // option each track had before it was soloed
+            channelEnabled: new Array(16).fill(true),
+            soloTrackIndex: null,
+            lastBlockPeak: 0,          // max |sample| of the most recent generated block
+            meterPeak: 0,              // decaying peak hold shown in the UI
+            errors: [],
+        };
+
+        let peakPollTimer = null;
+        let peakPollBusy = false;
+
         function setStatus(msg) {
             document.getElementById('status').textContent = msg;
         }
@@ -274,11 +492,360 @@
             return `${mins}:${secs.toString().padStart(2, '0')}`;
         }
 
+        // =====================================================================
+        // Mixer panel
+        // =====================================================================
+
+        function setMixerHint(text, visible = true) {
+            const hint = document.getElementById('mixerHint');
+            hint.textContent = text;
+            hint.classList.toggle('hidden', !visible);
+        }
+
+        function setMixerControlsDisabled(disabled) {
+            document.querySelectorAll('#mixerCard button, #mixerCard input')
+                .forEach(el => { el.disabled = disabled; });
+        }
+
+        function trackLabel(index, title) {
+            // Always keep the numeric index visible so untitled tracks stay
+            // distinguishable from each other.
+            return title ? `${index}: ${title}` : `${index}: Track ${index + 1} (untitled)`;
+        }
+
+        function recordMixerError(message) {
+            mixer.errors.push(message);
+            document.getElementById('mixerErrors').textContent = mixer.errors.join('\n');
+        }
+
+        function markTrackFailure(index, message) {
+            const row = document.querySelector(`.track-row[data-track-index="${index}"]`);
+            if (row) {
+                row.classList.add('failed');
+                const status = row.querySelector('.track-status');
+                if (status) {
+                    status.classList.add('error');
+                    status.textContent = 'failed';
+                }
+            }
+            recordMixerError(`${trackLabel(index, mixer.trackNames[index])} — ${message}`);
+        }
+
+        function clearTrackFailure(index) {
+            const row = document.querySelector(`.track-row[data-track-index="${index}"]`);
+            if (row) {
+                row.classList.remove('failed');
+                const status = row.querySelector('.track-status');
+                if (status) {
+                    status.classList.remove('error');
+                    status.textContent = '';
+                }
+            }
+        }
+
+        function markChannelFailure(channel, message) {
+            const el = document.querySelector(`.channel-toggle[data-channel="${channel}"]`);
+            if (el) {
+                el.classList.add('failed');
+                const status = el.querySelector('.channel-status');
+                if (status) status.textContent = 'failed';
+            }
+            recordMixerError(`Channel ${channel} — ${message}`);
+        }
+
+        function clearChannelFailure(channel) {
+            const el = document.querySelector(`.channel-toggle[data-channel="${channel}"]`);
+            if (el) {
+                el.classList.remove('failed');
+                const status = el.querySelector('.channel-status');
+                if (status) status.textContent = '';
+            }
+        }
+
+        function renderMixerState() {
+            document.querySelectorAll('.track-row').forEach(row => {
+                const index = Number(row.dataset.trackIndex);
+                const current = mixer.trackOptions[index] || 'on';
+                row.querySelectorAll('button[data-option]').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.option === current);
+                });
+                const status = row.querySelector('.track-status');
+                if (status && !status.classList.contains('error')) status.textContent = '';
+            });
+
+            document.querySelectorAll('.channel-toggle').forEach(el => {
+                const channel = Number(el.dataset.channel);
+                const cb = el.querySelector('input[type="checkbox"]');
+                if (cb) cb.checked = mixer.channelEnabled[channel];
+            });
+        }
+
+        function trackNameFor(index, titles, offset) {
+            if (offset !== null && titles[index - offset] !== undefined) {
+                return titles[index - offset];
+            }
+            return null;
+        }
+
+        async function refreshTrackControls() {
+            const list = document.getElementById('trackList');
+            list.innerHTML = '';
+            mixer.trackCount = 0;
+            mixer.trackNames = [];
+            mixer.trackOptions = [];
+            mixer.preSoloOptions = [];
+            mixer.soloTrackIndex = null;
+
+            try {
+                mixer.trackCount = await synth.getTrackCount();
+            } catch (error) {
+                mixer.trackCount = 0;
+            }
+
+            // Collect the titles that actually exist. libADLMIDI returns the
+            // literal string "INVALID" for indices past the title list, and the
+            // first track-title meta event becomes the song title, so a title
+            // list of length N usually maps to tracks starting at index 1.
+            let titles = [];
+            try {
+                const titleCount = await synth.getTrackTitleCount();
+                for (let i = 0; i < titleCount; i++) {
+                    const title = await synth.getTrackTitle(i);
+                    if (title && title !== 'INVALID') titles.push(title);
+                }
+            } catch (error) {
+                titles = [];
+            }
+
+            let offset = null;
+            if (titles.length === mixer.trackCount) {
+                offset = 0;
+            } else if (mixer.trackCount > 1 && titles.length === mixer.trackCount - 1) {
+                offset = 1;
+            }
+
+            for (let i = 0; i < mixer.trackCount; i++) {
+                mixer.trackOptions[i] = 'on';
+                mixer.preSoloOptions[i] = 'on';
+                const title = trackNameFor(i, titles, offset);
+                mixer.trackNames[i] = title;
+                list.appendChild(buildTrackRow(i, trackLabel(i, title)));
+            }
+
+            if (mixer.trackCount === 0) {
+                const note = document.createElement('div');
+                note.className = 'mixer-hint';
+                note.textContent = 'This file reports no tracks (the sequencer may not support its format).';
+                list.appendChild(note);
+            }
+
+            renderMixerState();
+        }
+
+        function buildTrackRow(index, label) {
+            const row = document.createElement('div');
+            row.className = 'track-row';
+            row.dataset.trackIndex = String(index);
+
+            const name = document.createElement('span');
+            name.className = 'track-name';
+            name.textContent = label;
+            row.appendChild(name);
+
+            const group = document.createElement('span');
+            group.className = 'segmented';
+            for (const [option, text] of [['on', 'On'], ['off', 'Off'], ['solo', 'Solo']]) {
+                const btn = document.createElement('button');
+                btn.dataset.option = option;
+                btn.textContent = text;
+                btn.addEventListener('click', () => handleTrackOption(index, option));
+                group.appendChild(btn);
+            }
+            row.appendChild(group);
+
+            const status = document.createElement('span');
+            status.className = 'track-status';
+            row.appendChild(status);
+
+            return row;
+        }
+
+        function refreshChannelControls() {
+            const grid = document.getElementById('channelGrid');
+            grid.innerHTML = '';
+            mixer.channelEnabled = new Array(16).fill(true);
+            for (let channel = 0; channel < 16; channel++) {
+                const label = document.createElement('label');
+                label.className = 'channel-toggle';
+                label.dataset.channel = String(channel);
+
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = true;
+                cb.addEventListener('change', () => handleChannelEnabled(channel, cb.checked));
+                label.appendChild(cb);
+
+                const text = document.createElement('span');
+                text.textContent = String(channel);
+                label.appendChild(text);
+
+                const status = document.createElement('span');
+                status.className = 'channel-status';
+                label.appendChild(status);
+
+                grid.appendChild(label);
+            }
+        }
+
+        async function applyTrackOptions(track, option) {
+            const value = TrackOption[option === 'on' ? 'ON' : option === 'off' ? 'OFF' : 'SOLO'];
+            const result = await Promise.resolve(synth.setTrackOptions(track, value));
+            if (result === false) {
+                throw new Error(`setTrackOptions(${track}, ${option.toUpperCase()}) returned false`);
+            }
+        }
+
+        async function clearSoloIfNeeded() {
+            if (mixer.soloTrackIndex === null) return;
+            const previous = mixer.soloTrackIndex;
+            const result = await Promise.resolve(synth.setTrackOptions(SOLO_CLEAR_SENTINEL, TrackOption.SOLO));
+            if (result === false) {
+                throw new Error('setTrackOptions could not clear solo mode (returned false)');
+            }
+            mixer.trackOptions[previous] = mixer.preSoloOptions[previous] || 'on';
+            mixer.soloTrackIndex = null;
+        }
+
+        async function handleTrackOption(track, option) {
+            if (!synth || !mixer.loaded) return;
+            clearTrackFailure(track);
+            try {
+                if (option === 'solo') {
+                    // Solo is global: soloing replaces whatever track was soloed.
+                    const previousSolo = mixer.soloTrackIndex;
+                    const previousSoloState = previousSolo !== null
+                        ? (mixer.preSoloOptions[previousSolo] || 'on')
+                        : null;
+                    const ownState = mixer.trackOptions[track] || 'on';
+
+                    // Only commit local state once the library accepted the call,
+                    // so a rejected call cannot leave the panel out of sync.
+                    await applyTrackOptions(track, 'solo');
+
+                    if (previousSolo !== null && previousSolo !== track) {
+                        mixer.trackOptions[previousSolo] = previousSoloState;
+                    }
+                    if (previousSolo !== track) {
+                        mixer.preSoloOptions[track] = ownState;
+                    }
+                    mixer.trackOptions[track] = 'solo';
+                    mixer.soloTrackIndex = track;
+                } else {
+                    // Choosing On/Off for any track means leaving solo mode.
+                    await clearSoloIfNeeded();
+                    await applyTrackOptions(track, option);
+                    mixer.trackOptions[track] = option;
+                    mixer.preSoloOptions[track] = option;
+                }
+                setStatus(`Track ${track + 1}: ${option}`);
+            } catch (error) {
+                markTrackFailure(track, error.message);
+            }
+            renderMixerState();
+        }
+
+        async function handleChannelEnabled(channel, enabled) {
+            if (!synth || !mixer.loaded) return;
+            clearChannelFailure(channel);
+            try {
+                const result = await Promise.resolve(synth.setChannelEnabled(channel, enabled));
+                if (result === false) {
+                    throw new Error(`setChannelEnabled(${channel}, ${enabled}) returned false`);
+                }
+                mixer.channelEnabled[channel] = enabled;
+            } catch (error) {
+                markChannelFailure(channel, error.message);
+            }
+            renderMixerState();
+        }
+
+        function renderPeakMeter() {
+            const value = document.getElementById('peakValue');
+            const fill = document.getElementById('peakFill');
+            const source = document.getElementById('peakSource');
+
+            value.textContent = mixer.loaded ? mixer.meterPeak.toFixed(3) : '--';
+            value.classList.toggle('low', !mixer.loaded || mixer.meterPeak < 0.005);
+            fill.style.width = `${Math.min(100, (mixer.meterPeak / 0.5) * 100)}%`;
+
+            if (!mixer.loaded) {
+                source.textContent = 'no file loaded';
+            } else if (isPlaying) {
+                source.textContent = 'playing · recent blocks';
+            } else {
+                source.textContent = 'stopped · recent blocks';
+            }
+        }
+
+        async function pollOutputPeak() {
+            if (!synth || !synth.ready || peakPollBusy) return;
+            peakPollBusy = true;
+            try {
+                const reading = await synth.getOutputPeak();
+                mixer.lastBlockPeak = Number(reading.peak) || 0;
+                // `heldPeak` covers every buffer generated since the previous
+                // poll, so a transient between polls is not missed.
+                const observed = Math.max(mixer.lastBlockPeak, Number(reading.heldPeak) || 0);
+                // Decaying peak hold over recent generated buffers.
+                mixer.meterPeak = Math.max(observed, mixer.meterPeak * 0.7);
+                renderPeakMeter();
+            } catch (error) {
+                // Older processor bundles have no getOutputPeak; leave the meter at zero.
+            } finally {
+                peakPollBusy = false;
+            }
+        }
+
+        function resetMixerForFile() {
+            mixer.loaded = true;
+            mixer.errors = [];
+            document.getElementById('mixerErrors').textContent = '';
+            mixer.meterPeak = 0;
+            mixer.lastBlockPeak = 0;
+            setMixerHint('', false);
+            setMixerControlsDisabled(false);
+        }
+
+        function clearMixerForFailedLoad() {
+            mixer.loaded = false;
+            mixer.trackCount = 0;
+            mixer.trackNames = [];
+            mixer.trackOptions = [];
+            mixer.channelEnabled = new Array(16).fill(true);
+            mixer.soloTrackIndex = null;
+            mixer.meterPeak = 0;
+            mixer.lastBlockPeak = 0;
+            document.getElementById('trackList').innerHTML = '';
+            refreshChannelControls();
+            setMixerControlsDisabled(true);
+            setMixerHint('Load a MIDI file to enable mixing controls.');
+            renderPeakMeter();
+        }
+
+        // Peak polling is independent of the transport so muted/disabled output
+        // can be verified while the song is still playing.
+        function startPeakPolling() {
+            if (peakPollTimer) return;
+            peakPollTimer = setInterval(pollOutputPeak, 100);
+            pollOutputPeak();
+        }
+
         document.getElementById('initBtn').addEventListener('click', async () => {
             try {
                 setStatus('Loading...');
 
-                const { AdlMidi } = await import('../dist/libadlmidi.js');
+                const { AdlMidi, TrackOption: enumTrackOption } = await import('../dist/libadlmidi.js');
+                TrackOption = enumTrackOption;
                 synth = new AdlMidi();
 
                 setStatus('Initializing AudioWorklet...');
@@ -316,6 +883,11 @@
                 document.getElementById('bankSelect').disabled = false;
                 document.getElementById('loadEmbeddedBtn').disabled = false;
                 document.getElementById('bankCategory').disabled = false;
+
+                // Poll the processor for the peak of the most recently generated
+                // sample buffer, even when stopped, so the meter stays auditable.
+                clearMixerForFailedLoad();
+                startPeakPolling();
 
             } catch (error) {
                 setStatus('Error: ' + error.message);
@@ -363,9 +935,19 @@
                 document.getElementById('progress').style.width = '0%';
                 document.getElementById('playBtn').disabled = false;
                 document.getElementById('stopBtn').disabled = false;
+
+                // The new file resets track/solo/channel state inside libADLMIDI;
+                // rebuild every control so nothing from the previous song lingers.
+                resetMixerForFile();
+                await refreshTrackControls();
+                refreshChannelControls();
+                setMixerControlsDisabled(false);
+                renderPeakMeter();
+
                 setStatus(`Loaded: ${file.name} (${formatTime(duration)})`);
 
             } catch (error) {
+                clearMixerForFailedLoad();
                 setStatus('Error: ' + error.message);
             }
         }
@@ -524,6 +1106,13 @@
                 console.error(error);
             }
         });
+
+        // Expose the live synth and the real mixer handlers for automated tests
+        // and debugging. The handlers are the exact ones the buttons call.
+        window.playerSynth = () => synth;
+        window.playerMixer = mixer;
+        window.playerHandleTrackOption = handleTrackOption;
+        window.playerHandleChannelEnabled = handleChannelEnabled;
     </script>
 </body>
 

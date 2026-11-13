@@ -150,7 +150,7 @@ To opt back to the original Nuked 1.8, pass `{ emulator: Emulator.NUKED }` as th
 ## Documentation
 
 See the `examples/` directory for advanced usage, including:
-- `player.html`: MIDI file playback.
+- `player.html`: MIDI file playback, with per-track on/off/solo and per-channel mixing.
 - `keyboard.html`: Real-time interaction.
 - `patch-editor.html`: Live OPL3 patch editing.
 - `opl-breaker.html`: Raw OPL3 + MIDI playback integration.

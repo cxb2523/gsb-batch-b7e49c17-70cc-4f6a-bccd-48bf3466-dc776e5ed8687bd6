@@ -135,6 +135,8 @@ describe('TypeScript Definitions', () => {
             'getTrackTitleCount(): Promise<number>',
             'getTrackTitle(index: number',
             'getMarkerCount(): Promise<number>',
+            // Output diagnostics
+            'getOutputPeak(): Promise<',
             // Error
             'getErrorInfo(): Promise<string>',
             // Volume
