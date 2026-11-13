@@ -77,6 +77,36 @@ export default {
   }
 }
 </script>
+```
+
+## ⏱️ Progress & seeking
+
+The progress bar always reports the whole sequence:
+
+```
+playedTime = sum(duration of previous fragments) + played offset inside the current fragment
+```
+
+`duration = end - start`, where `start` / `end` may be strings (`"3.120000"`), they are parsed as numbers.
+A fragment whose `start > end` contributes `0` seconds (never negative), and is skipped when seeking or advancing.
+
+Seeking (clicking or dragging the bar) locates the target fragment from the cumulative-time table and starts
+playing from `start + offset` inside it. A time exactly on a fragment boundary belongs to the **next** fragment;
+a time at (or beyond) the total duration is treated as **playback finished**.
+
+### 🧪 Tests
+
+Pure logic lives in `src/sequence.js` (timeline + seeking math) and `src/playbackSequence.js` (playback state),
+so it can be tested locally with Node.js (>= 18) without installing dependencies:
+
+```bash
+npm test            # node --test
+# or run a single file
+node --test test/sequence.test.js
+```
+
+The suites cover normal fragment switching, cross-fragment seeking, fragment boundaries, the end of the sequence,
+a single-fragment list, an illegal `start > end` fragment, and seeking back to the very first fragment.
 
 🗺️ Roadmap
 [x] Deep plugin support for Vue 2.x
