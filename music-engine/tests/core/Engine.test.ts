@@ -217,3 +217,164 @@ describe('MusicEngine (headless with mock AudioContext)', () => {
     await engine.dispose();
   });
 });
+
+/**
+ * "Last request wins" across interrupted transitions.
+ *
+ * A switch while playing is deferred to the next musical boundary; users often
+ * re-click (A → B, then change the seed) and may pause/stop/restart before the
+ * crossfade lands. None of those intents may be silently lost, and each
+ * confirmed style/seed change must surface exactly once.
+ */
+describe('MusicEngine: last-request-wins through interrupted transitions', () => {
+  it('two useStyle calls while a transition is in flight merge, and the last styleId wins', async () => {
+    const mock = new MockAudioContext();
+    const log: { id: string; event: MusicalEvent; at: number }[] = [];
+    const engine = makeEngine(mock, log);
+    await engine.start();
+    play(engine, mock, 0.5);
+
+    const styleLanded: string[] = [];
+    engine.eventBus.on('style', ({ styleId }) => styleLanded.push(styleId));
+
+    engine.useStyle('zen'); // begins a transition
+    expect((engine as any).transitioning).toBe(true);
+    engine.useStyle('pulse'); // re-click before the boundary — must not be dropped
+    // Field-level merge keeps the freshest value for the style field.
+    expect((engine as any).pendingTarget).toMatchObject({ styleId: 'pulse' });
+
+    // Boundary arrives (clamped to ≤ 4 s audio); let the real timer fire.
+    mock.advance(4.0);
+    await sleep(4200);
+    play(engine, mock, 1.0);
+
+    expect(engine.getState().styleId).toBe('pulse');
+    expect(engine.getState().status).toBe('playing');
+    // Only the final target emits a confirmed style event — no duplicate UI notice.
+    expect(styleLanded).toEqual(['pulse']);
+    await engine.dispose();
+  }, 15000);
+
+  it('a seed requested mid-transition survives pause and is applied on resume', async () => {
+    const mock = new MockAudioContext();
+    const log: { id: string; event: MusicalEvent; at: number }[] = [];
+    const engine = makeEngine(mock, log);
+    await engine.start();
+    play(engine, mock, 0.5);
+
+    const seedLanded: string[] = [];
+    engine.eventBus.on('seed', ({ seed, pending }) => {
+      if (!pending) seedLanded.push(seed);
+    });
+
+    engine.useStyle('zen'); // transition in flight
+    engine.setSeed('9999'); // merged into the pending target
+    engine.pause(); // interrupts the transition before it lands
+    expect(engine.getState().status).toBe('paused');
+    // The un-landed target (style + seed) is retained, not discarded.
+    expect((engine as any).pendingTarget).toMatchObject({ styleId: 'zen', seed: '9999' });
+    await sleep(180); // let the pause suspend timer settle
+
+    await engine.resume();
+    expect(engine.getState().status).toBe('playing');
+    expect(engine.getState().seed).toBe('9999');
+    expect(engine.getState().styleId).toBe('zen');
+    expect(seedLanded).toEqual(['9999']);
+
+    // The rebuilt instance generates deterministically from the current position.
+    const before = log.length;
+    play(engine, mock, 1.0);
+    expect(log.length).toBeGreaterThan(before);
+    await engine.dispose();
+  });
+
+  it('a target whose transition is interrupted by stop is still applied on the next start', async () => {
+    const mock = new MockAudioContext();
+    const log: { id: string; event: MusicalEvent; at: number }[] = [];
+    const engine = makeEngine(mock, log);
+    await engine.start();
+    play(engine, mock, 0.5);
+
+    engine.useStyle('zen'); // transition in flight, then the user stops
+    expect((engine as any).transitioning).toBe(true);
+    engine.stop();
+    expect(engine.getState().status).toBe('idle');
+    // Interrupting the transition keeps its target pending.
+    expect((engine as any).pendingTarget).toMatchObject({ styleId: 'zen' });
+
+    // Replay before the stop wind-down elapses — ▶ must still honour the target.
+    await engine.start();
+    expect(engine.getState().styleId).toBe('zen');
+    expect(engine.getState().status).toBe('playing');
+
+    // Rebuilding the style resets the generation cursor: the new style must
+    // actually produce music rather than leaving the engine silent.
+    const before = log.length;
+    play(engine, mock, 1.2);
+    expect(engine.getState().status).toBe('playing');
+    expect(log.length).toBeGreaterThan(before);
+    expect(log.slice(before).some((l) => l.event.metadata?.sourcePlugin === 'zen')).toBe(true);
+    await engine.dispose();
+  });
+
+  it('an unknown style requested mid-transition throws EngineError without breaking playback', async () => {
+    const mock = new MockAudioContext();
+    const log: { id: string; event: MusicalEvent; at: number }[] = [];
+    const engine = makeEngine(mock, log);
+    await engine.start();
+    play(engine, mock, 0.5);
+
+    engine.useStyle('zen'); // transition in flight
+    expect((engine as any).transitioning).toBe(true);
+
+    expect(() => engine.useStyle('does-not-exist')).toThrow(/Unknown style/);
+    // The invalid request is rejected up front and never staged.
+    expect((engine as any).pendingTarget ?? {}).not.toHaveProperty('styleId');
+    // Current playback and the already-running transition are untouched.
+    expect(engine.getState().status).toBe('playing');
+    expect(engine.getState().styleId).toBe('pulse');
+    expect((engine as any).transitioning).toBe(true);
+
+    // The original transition still lands cleanly on its real target.
+    mock.advance(4.0);
+    await sleep(4200);
+    play(engine, mock, 1.0);
+    expect(engine.getState().styleId).toBe('zen');
+    expect(engine.getState().status).toBe('playing');
+    await engine.dispose();
+  }, 15000);
+
+  it('a direct change made while paused supersedes the interrupted transition target', async () => {
+    const mock = new MockAudioContext();
+    const log: { id: string; event: MusicalEvent; at: number }[] = [];
+    const engine = makeEngine(mock, log);
+    await engine.start();
+    play(engine, mock, 0.5);
+
+    const seedLanded: string[] = [];
+    engine.eventBus.on('seed', ({ seed, pending }) => {
+      if (!pending) seedLanded.push(seed);
+    });
+
+    engine.useStyle('zen'); // transition in flight, then pause interrupts it
+    engine.setSeed('1111');
+    engine.pause();
+    expect((engine as any).pendingTarget).toMatchObject({ styleId: 'zen', seed: '1111' });
+
+    // While still paused, the user picks a newer seed directly. That is the
+    // authoritative last request; the queued seed must not come back on resume.
+    engine.setSeed('2222');
+    expect(engine.getState().seed).toBe('2222');
+    expect((engine as any).pendingTarget).not.toHaveProperty('seed');
+    // The style field requested before the interruption is still retained.
+    expect((engine as any).pendingTarget).toMatchObject({ styleId: 'zen' });
+
+    await engine.resume();
+    expect(engine.getState().status).toBe('playing');
+    expect(engine.getState().seed).toBe('2222');
+    expect(engine.getState().styleId).toBe('zen');
+    // Exactly one confirmed event per seed — no stale re-emit of '1111'.
+    expect(seedLanded).toEqual(['2222']);
+    await engine.dispose();
+  });
+});

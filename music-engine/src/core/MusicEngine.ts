@@ -285,6 +285,10 @@ export class MusicEngine {
     this.seed = s;
     this.teardownInstance(); // fresh deterministic replay from t=0
     if (this.state.status === 'paused') this.generatedUntil = this.pausedPosition();
+    // A direct seed change is immediately authoritative: do not let a target
+    // left pending by an interrupted transition resurrect an older seed on the
+    // next resume (last request wins, with no duplicate event).
+    this.clearPendingField('seed');
     this.eventBus.emit('seed', { seed: s });
   }
 
@@ -303,6 +307,10 @@ export class MusicEngine {
     this.params.init(plugin.id, plugin.parameters);
     this.teardownInstance();
     if (this.state.status === 'paused') this.generatedUntil = this.pausedPosition();
+    // Same last-request-wins guarantee as setSeed(): an authoritative, immediate
+    // switch supersedes any style field still pending from an interrupted
+    // transition, so resume() cannot flip the engine back to the old style.
+    this.clearPendingField('styleId');
     this.eventBus.emit('style', { styleId: plugin.id });
   }
 
@@ -787,8 +795,30 @@ export class MusicEngine {
       this.seed = target.seed;
       this.eventBus.emit('seed', { seed: this.seed });
     }
+    // Rebuild the style instance for the new target and reset the generation
+    // cursor to the current transport position. The old instance had already
+    // generated up to `generatedUntil`; leaving that marker ahead of the
+    // timeline would make generate() believe the freshly rebuilt style is fully
+    // generated and keep playback silent until that horizon is reached. This is
+    // especially important when stop() cancelled a transition:
+    // teardownInstance() already cleared the queue, so generation must restart
+    // from here (or from 0 when the transport was reset by a completed stop
+    // wind-down).
     this.teardownInstance();
-    if (this.state.status === 'paused') this.generatedUntil = this.pausedPosition();
+    this.generatedUntil = this.pausedPosition();
+  }
+
+  /**
+   * Drop a single field from the pending target (used when a direct,
+   * authoritative change supersedes what an interrupted transition had queued).
+   * Removes the whole target once it has no fields left.
+   */
+  private clearPendingField(field: 'styleId' | 'seed'): void {
+    if (!this.pendingTarget) return;
+    delete this.pendingTarget[field];
+    if (this.pendingTarget.styleId === undefined && this.pendingTarget.seed === undefined) {
+      this.pendingTarget = null;
+    }
   }
 
   private cancelTransition(immediate: boolean): void {
