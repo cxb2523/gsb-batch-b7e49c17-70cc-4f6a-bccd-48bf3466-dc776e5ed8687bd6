@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "geofeed-harvester"
+version = "0.1.0"
+description = "Harvest, validate, and publish RFC 8805 geofeed datasets discovered via RIR data."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx[http2]>=0.27",
+  "pyarrow>=16",
+  "pycountry>=24",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "respx>=0.21",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+geofeed-harvester = "geofeed_harvester.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

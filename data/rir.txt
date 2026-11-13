@@ -1,0 +1,3 @@
+# Put normalized RIR bulk/RDAP-style records here for the default GitHub Actions run.
+# Production deployments should replace this file or generate it before running
+# geofeed-harvester.
