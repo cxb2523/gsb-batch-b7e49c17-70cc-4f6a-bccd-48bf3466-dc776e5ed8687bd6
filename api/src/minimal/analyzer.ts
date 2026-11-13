@@ -27,6 +27,13 @@ interface OsvVulnerability {
   references?: Array<{ type: string; url: string }>;
 }
 
+// Result of a vulnerability lookup for a single library. Unlike a bare array,
+// this makes "query failed" distinguishable from "queried, no vulnerabilities".
+type VulnerabilityQueryResult =
+  | { status: 'success'; vulnerabilities: OsvVulnerability[] }
+  | { status: 'failed'; error: string }
+  | { status: 'not_queried'; reason: string };
+
 async function fetchWithTimeout(url: string, options: any, timeoutMs: number) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -38,8 +45,9 @@ async function fetchWithTimeout(url: string, options: any, timeoutMs: number) {
   }
 }
 
-async function fetchLibraryVulnerabilitiesFromOsv(name: string, version?: string): Promise<OsvVulnerability[]> {
-  if (!name || !OSV_API_URL) return [];
+async function queryLibraryVulnerabilitiesFromOsv(name: string, version?: string): Promise<VulnerabilityQueryResult> {
+  if (!name) return { status: 'not_queried', reason: 'missing library name' };
+  if (!OSV_API_URL) return { status: 'not_queried', reason: 'OSV API URL is not configured' };
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OSV_TIMEOUT_MS);
@@ -61,18 +69,39 @@ async function fetchLibraryVulnerabilitiesFromOsv(name: string, version?: string
 
     if (!resp.ok) {
       logger.warn('OSV query failed', { library: name, status: resp.status });
-      return [];
+      return { status: 'failed', error: `OSV responded with HTTP ${resp.status}` };
     }
 
     const data: any = await resp.json();
-    return Array.isArray(data?.vulns) ? (data.vulns as OsvVulnerability[]) : [];
+    // A successful response with no vulnerabilities is still a successful query.
+    const vulns = Array.isArray(data?.vulns) ? (data.vulns as OsvVulnerability[]) : [];
+    return { status: 'success', vulnerabilities: vulns };
   } catch (err) {
     if ((err as any)?.name === 'AbortError') {
       logger.warn('OSV query timeout', { library: name });
-      return [];
+      return { status: 'failed', error: `OSV query timed out after ${OSV_TIMEOUT_MS}ms` };
     }
-    logger.warn('OSV query error', { library: name, error: err instanceof Error ? err.message : String(err) });
-    return [];
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('OSV query error', { library: name, error: message });
+    return { status: 'failed', error: message };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Fetches the content of an external script. Throws on failure so callers can
+// record the script as "content missing" instead of treating it as an empty script.
+async function fetchExternalScriptContent(src: string, pageUrl: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const absoluteUrl = new URL(src, pageUrl).toString();
+    const safeUrl = await validateTargetUrl(absoluteUrl);
+    const resp = await fetch(safeUrl.toString(), { signal: controller.signal } as any);
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    return await resp.text();
   } finally {
     clearTimeout(timeout);
   }
@@ -361,6 +390,49 @@ function analyzeHtmlSurface(
       } as Finding);
     }
   }
+}
+
+// Merge libraries detected from multiple scripts by name. The detection with
+// the highest confidence is kept as the primary record (including its version);
+// related scripts and heuristic vulnerabilities are merged across detections.
+function mergeLibrariesByName(libs: Array<Omit<Library, 'id'>>): Array<Omit<Library, 'id'>> {
+  const byName = new Map<string, Omit<Library, 'id'>>();
+
+  for (const lib of libs) {
+    const existing = byName.get(lib.name);
+    if (!existing) {
+      byName.set(lib.name, lib);
+      continue;
+    }
+
+    const keepNew = (lib.confidence ?? 0) > (existing.confidence ?? 0);
+    const primary = keepNew ? lib : existing;
+    const secondary = keepNew ? existing : lib;
+
+    primary.relatedScripts = Array.from(
+      new Set([...(primary.relatedScripts || []), ...(secondary.relatedScripts || [])]),
+    );
+
+    if (!primary.detectedVersion && secondary.detectedVersion) {
+      primary.detectedVersion = secondary.detectedVersion;
+    }
+
+    const primaryVulns = primary.vulnerabilities || [];
+    const seenVulnIds = new Set(primaryVulns.map((v) => v.id));
+    for (const v of secondary.vulnerabilities || []) {
+      if (!seenVulnIds.has(v.id)) {
+        primaryVulns.push(v);
+        seenVulnIds.add(v.id);
+      }
+    }
+    primary.vulnerabilities = primaryVulns;
+
+    primary.riskScore = Math.max(primary.riskScore || 0, secondary.riskScore || 0);
+
+    byName.set(lib.name, primary);
+  }
+
+  return Array.from(byName.values());
 }
 
 export async function minimalAnalyzeAndPersist(database: Database, scan: any): Promise<{ libraries: Library[]; findings: Finding[] }> {
@@ -740,6 +812,42 @@ export async function minimalAnalyzeAndPersist(database: Database, scan: any): P
       // ignore
     }
 
+    // Retrieve the external script content. If it cannot be read, the script is
+    // still recorded (with its source URL and fingerprint) but is explicitly
+    // marked as content-missing instead of being silently treated as an empty script.
+    let scriptContent: string | null = null;
+    let scriptContentError: string | undefined;
+    try {
+      scriptContent = await fetchExternalScriptContent(src, scan.url);
+    } catch (error) {
+      scriptContentError = error instanceof Error ? error.message : String(error);
+      logger.warn('Minimal analyzer: failed to fetch external script content', {
+        scanId: scan.id,
+        src,
+        error: scriptContentError,
+      });
+    }
+
+    if (scriptContentError) {
+      findings.push({
+        scanId: scan.id,
+        type: 'ERROR' as any,
+        title: 'External script content unavailable',
+        description: `Could not retrieve the content of external script ${src}: ${scriptContentError}. The script was still recorded, but content-based analysis was skipped for it.`,
+        severity: RiskLevel.LOW,
+        location: { scriptType: 'external', src } as any,
+        evidence: src,
+      } as Finding);
+    }
+
+    // Content-based version detection (only when the URL did not yield a version).
+    if (!detectedVersion && scriptContent) {
+      const fromContent = PatternUtils.extractVersionFromComment(scriptContent.slice(0, 5000));
+      if (fromContent.version) {
+        detectedVersion = fromContent.version;
+      }
+    }
+
     if (isThirdParty) {
       thirdPartyCount += 1;
       if (thirdPartyExamples.length < 5) thirdPartyExamples.push(src);
@@ -797,7 +905,11 @@ export async function minimalAnalyzeAndPersist(database: Database, scan: any): P
       vulnerabilities,
       riskScore,
       confidence: isThirdParty || isInsecure ? 70 : 50,
-    };
+      // Until the vulnerability query completes, the score is not based on
+      // complete vulnerability data.
+      vulnerabilityQueryStatus: 'not_queried',
+      riskScorePartial: true,
+    } as any;
 
     scriptsToInsert.push({
       scanId: scan.id,
@@ -808,10 +920,16 @@ export async function minimalAnalyzeAndPersist(database: Database, scan: any): P
       detectedPatterns: [],
       estimatedVersion: detectedVersion,
       confidence: isThirdParty || isInsecure ? 70 : 50,
+      contentFetched: scriptContent !== null,
+      contentError: scriptContentError,
     } as any);
 
     libsToInsert.push(lib);
   }
+
+  // Merge detections that refer to the same library name, keeping the
+  // highest-confidence version and associating all related scripts.
+  const mergedLibsToInsert = mergeLibrariesByName(libsToInsert);
 
   if (scriptsToInsert.length > 0) {
     try {
@@ -835,18 +953,18 @@ export async function minimalAnalyzeAndPersist(database: Database, scan: any): P
     }
   }
 
-  if (libsToInsert.length > 0) {
+  if (mergedLibsToInsert.length > 0) {
     try {
-      const ids = await database.createLibrariesBatch(libsToInsert as any);
-      for (let i = 0; i < libsToInsert.length; i++) {
-        libraries.push({ ...(libsToInsert[i] as any), id: ids?.[i] });
+      const ids = await database.createLibrariesBatch(mergedLibsToInsert as any);
+      for (let i = 0; i < mergedLibsToInsert.length; i++) {
+        libraries.push({ ...(mergedLibsToInsert[i] as any), id: ids?.[i] });
       }
     } catch (error) {
       logger.warn('Minimal analyzer: failed to batch create libraries, falling back to individual inserts', {
         scanId: scan.id,
         error: error instanceof Error ? error.message : String(error),
       });
-      for (const lib of libsToInsert) {
+      for (const lib of mergedLibsToInsert) {
         const libId = await database.createLibrary(lib as any);
         libraries.push({ ...(lib as any), id: libId });
       }
@@ -881,11 +999,39 @@ export async function minimalAnalyzeAndPersist(database: Database, scan: any): P
             const riskFromCache = RiskCalculator.calculateLibraryRisk(riskInputsFromCache, lib.confidence ?? 50, false);
             lib.riskScore = Math.round(riskFromCache);
           }
+          // Cache hit with vulnerability data counts as a successful query.
+          lib.vulnerabilityQueryStatus = 'success';
+          lib.vulnerabilityQueryError = undefined;
+          lib.riskScorePartial = false;
           continue;
         }
       }
 
-      const osvVulns = await fetchLibraryVulnerabilitiesFromOsv(lib.name, lib.detectedVersion);
+      const queryResult = await queryLibraryVulnerabilitiesFromOsv(lib.name, lib.detectedVersion);
+
+      if (queryResult.status === 'not_queried') {
+        // Never queried: must not be treated as "zero vulnerabilities".
+        lib.vulnerabilityQueryStatus = 'not_queried';
+        lib.vulnerabilityQueryError = queryResult.reason;
+        lib.riskScorePartial = true;
+        continue;
+      }
+
+      if (queryResult.status === 'failed') {
+        // Failed query: keep the failure reason and do not treat the library
+        // as vulnerability-free; the heuristic risk score is marked partial.
+        lib.vulnerabilityQueryStatus = 'failed';
+        lib.vulnerabilityQueryError = queryResult.error;
+        lib.riskScorePartial = true;
+        continue;
+      }
+
+      // Successful query (an empty vulnerability list is a valid successful result).
+      lib.vulnerabilityQueryStatus = 'success';
+      lib.vulnerabilityQueryError = undefined;
+      lib.riskScorePartial = false;
+
+      const osvVulns = queryResult.vulnerabilities;
       if (!osvVulns.length) continue;
 
       const newVulns: Vulnerability[] = lib.vulnerabilities ? [...lib.vulnerabilities] : [];
@@ -947,6 +1093,11 @@ export async function minimalAnalyzeAndPersist(database: Database, scan: any): P
         });
       }
     } catch (error) {
+      // Unexpected enrichment failure (e.g. cache read error): mark the query as
+      // failed so the library is not mistaken for a vulnerability-free one.
+      lib.vulnerabilityQueryStatus = 'failed';
+      lib.vulnerabilityQueryError = error instanceof Error ? error.message : String(error);
+      lib.riskScorePartial = true;
       logger.warn('Failed to enrich library with OSV data', {
         library: lib.name,
         version: lib.detectedVersion,

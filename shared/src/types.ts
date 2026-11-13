@@ -74,6 +74,12 @@ export interface Scan {
   error?: string;
 }
 
+// Status of the per-library vulnerability lookup (e.g. OSV query)
+// - 'success': the vulnerability source was queried and returned a result (possibly an empty list)
+// - 'failed': the query was attempted but failed (see vulnerabilityQueryError)
+// - 'not_queried': no query was performed (e.g. skipped because of missing data/configuration)
+export type VulnerabilityQueryStatus = 'success' | 'failed' | 'not_queried';
+
 export interface Library {
   id: string;
   scanId: string;
@@ -83,6 +89,13 @@ export interface Library {
   vulnerabilities: Vulnerability[];
   riskScore: number;
   confidence?: number;
+  // Verifiable status of the vulnerability query for this library.
+  vulnerabilityQueryStatus?: VulnerabilityQueryStatus;
+  // Failure/skip reason when the vulnerability query did not succeed.
+  vulnerabilityQueryError?: string;
+  // True when riskScore is NOT based on complete vulnerability data
+  // (i.e. the vulnerability query failed or was never performed).
+  riskScorePartial?: boolean;
 }
 
 export interface Vulnerability {
@@ -161,6 +174,11 @@ export interface Script {
   detectedPatterns: string[];
   estimatedVersion?: string;
   confidence: number;
+  // False when the external script content could not be retrieved; the record
+  // is kept (with source URL and fingerprint) but content-based analysis was skipped.
+  contentFetched?: boolean;
+  // Reason the script content could not be retrieved, when contentFetched is false.
+  contentError?: string;
 }
 
 // Detection emitted by analyzer's library detector
