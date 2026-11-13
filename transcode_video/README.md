@@ -17,9 +17,14 @@ During execution, the application extensively logs various details including ass
 - `--gpu_id`: The ID of the GPU to use for transcoding. Default is 0.
 - `--in_file_path`: The file path of the input video.
 - `--out_file_path`: The file path where the transcoded video will be saved.
-- `--codec`: The codec to use for encoding (e.g., h264, hevc, av1).
-- `--preset`: The encoding preset to use (e.g., P1, P2, P3, P4, P5, P6, P7). Default is None.
-- `--config_file`: path of json config file. Various encoding properties can be set via this config file like FPS, Bitrate. Default is None.
+- `--codec`: The codec to use for encoding (e.g., h264, hevc, av1). Required only when no `--config_file` is given; when both are supplied the command-line value overrides the file's `codec`.
+- `--preset`: The encoding preset to use (e.g., P1, P2, P3, P4, P5, P6, P7). When `--config_file` is given, this overrides the file's `preset`; otherwise the file value is used.
+- `--config_file`: path of json config file. Various encoding properties can be set via this config file like FPS, Bitrate, GOP, B-frames and rate control. The file must be valid JSON and must contain both `preset` (one of P1-P7) and `codec` keys; all other keys (e.g. `bitrate`, `gop`, `bf`, `rc`) are passed to the encoder unchanged. Without a config file the previous behaviour is preserved: `codec` is lower-cased and `preset` upper-cased.
+
+## Errors
+
+- Invalid or incomplete `--config_file` (bad JSON, missing `preset`/`codec`, or a preset outside P1-P7) is reported before the output file is opened, naming the config file and offending key, and the process exits non-zero.
+- If decoding the input yields zero frames, the encoder is never flushed, the output file is removed (or remains empty), and the process exits non-zero with a "did not decode any frames" message.
 
 ## Example
 ```bash
