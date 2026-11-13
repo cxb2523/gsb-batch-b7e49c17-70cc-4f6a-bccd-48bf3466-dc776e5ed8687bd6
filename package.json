@@ -1,0 +1,44 @@
+{
+  "name": "canvas-video-player",
+  "version": "1.0.4",
+  "private": false,
+  "description": "使用canvas渲染的视频混剪播放器,无缝拼接不同的视频源",
+  "author": "ledtwo",
+  "main": "lib/canvas-player.umd.min.js",
+  "scripts": {
+    "serve": "vue-cli-service serve",
+    "build": "vue-cli-service build --target lib --name canvas-player --dest lib ./src/index.js",
+    "lint": "vue-cli-service lint"
+  },
+  "keywords": [
+    "video",
+    "video-player",
+    "canvas",
+    "canvas-player"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:ledtwo/canvas-video-player.git"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "eslintConfig": {
+    "root": true,
+    "env": {
+      "node": true
+    },
+    "extends": [
+      "plugin:vue/essential",
+      "eslint:recommended"
+    ],
+    "parserOptions": {
+      "parser": "babel-eslint"
+    },
+    "rules": {}
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead"
+  ]
+}
