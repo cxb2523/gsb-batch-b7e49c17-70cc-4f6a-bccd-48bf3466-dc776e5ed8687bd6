@@ -1,0 +1,259 @@
+from datetime import date
+
+import pandas as pd
+import pytest
+
+from gameprice_index import cli, storage
+from gameprice_index.cli import load_cache, write_cache
+from gameprice_index.processor import build_frame
+from gameprice_index.scrapers import ScrapeError
+
+
+def test_write_cache_refuses_empty_dataset(tmp_path):
+    """Regression: a failed scrape used to replace good cached data with an empty file."""
+    path = tmp_path / "processed_nintendo.csv"
+    path.write_text("name,price\nMario Kart World,66.99\n", encoding="utf-8")
+
+    with pytest.raises(ScrapeError):
+        write_cache(pd.DataFrame(), str(path))
+
+    assert "Mario Kart World" in path.read_text(encoding="utf-8")
+
+
+def test_load_cache_reports_empty_file(tmp_path):
+    """Regression: an empty cached file used to crash --cached with EmptyDataError."""
+    path = tmp_path / "processed_nintendo.csv"
+    path.write_text("\n", encoding="utf-8")
+
+    with pytest.raises(ScrapeError, match="is empty"):
+        load_cache(str(path))
+
+
+def test_load_cache_reports_missing_file(tmp_path):
+    with pytest.raises(ScrapeError, match="No cached file"):
+        load_cache(str(tmp_path / "missing.csv"))
+
+
+def test_load_cache_keeps_ids_as_strings(tmp_path):
+    """A missing id must not turn the whole column into floats like 70010000096802.0."""
+    path = tmp_path / "processed_nintendo.csv"
+    path.write_text("name,product_code\nMario Kart World,70010000096802\nNo Id,\n", encoding="utf-8")
+
+    df = load_cache(str(path))
+
+    assert df["product_code"][0] == "70010000096802"
+    assert pd.isna(df["product_code"][1])
+
+
+def test_main_returns_error_code_when_scrape_fails(monkeypatch):
+    """A failed source must surface as a non-zero exit code for cron and CI."""
+
+    def failing_pipeline(**kwargs):
+        raise ScrapeError("No Nintendo games found")
+
+    monkeypatch.setattr(cli, "run_pipeline", failing_pipeline)
+
+    assert cli.main([]) == 1
+
+
+def test_scrape_sources_skips_a_failing_storefront(monkeypatch):
+    def fake_scrape(source, limit):
+        if source == "playstation-direct":
+            raise ScrapeError("403 Forbidden")
+        return pd.DataFrame({"source": [source]})
+
+    monkeypatch.setattr(cli, "scrape_source", fake_scrape)
+
+    frames = cli.scrape_sources(["nintendo", "playstation-direct", "steam"], limit=10)
+
+    assert list(frames) == ["nintendo", "steam"]
+
+
+def test_scrape_sources_fails_when_every_storefront_fails(monkeypatch):
+    def failing_scrape(source, limit):
+        raise ScrapeError("403 Forbidden")
+
+    monkeypatch.setattr(cli, "scrape_source", failing_scrape)
+
+    with pytest.raises(ScrapeError, match="Every storefront failed"):
+        cli.scrape_sources(["nintendo", "steam"], limit=10)
+
+
+def test_main_defaults(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "run_pipeline", lambda **kwargs: seen.update(kwargs))
+
+    assert cli.main([]) == 0
+    assert seen == {
+        "use_cache": False,
+        "sources": cli.SOURCES,
+        "make_plots": True,
+        "output_dir": ".",
+        "db_path": None,
+        "limit": 1000,
+    }
+
+
+def test_main_passes_options(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "run_pipeline", lambda **kwargs: seen.update(kwargs))
+
+    args = ["--cached", "--source", "nintendo", "--no-plots", "--output-dir", "out", "--db", "prices.db"]
+    args += ["--limit", "25"]
+
+    assert cli.main(args) == 0
+    assert seen == {
+        "use_cache": True,
+        "sources": ("nintendo",),
+        "make_plots": False,
+        "output_dir": "out",
+        "db_path": "prices.db",
+        "limit": 25,
+    }
+
+
+def test_limit_zero_means_everything(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "run_pipeline", lambda **kwargs: seen.update(kwargs))
+
+    assert cli.main(["--limit", "0"]) == 0
+    assert seen["limit"] is None
+
+
+def test_main_rejects_negative_limit():
+    with pytest.raises(SystemExit):
+        cli.main(["--limit", "-5"])
+
+
+def test_main_rejects_unknown_source():
+    with pytest.raises(SystemExit):
+        cli.main(["--source", "sega"])
+
+
+NINTENDO_CACHE = (
+    "source,platform,product_code,name,price,price_old,discount_amount,discount_pct,badge,out_of_stock,url\n"
+    "Nintendo,Nintendo Switch 2,70010000096802,Mario Kart World,66.99,,,,,,https://example.test/mk\n"
+    "Nintendo,Nintendo Switch,70010000126803,Kero Kero Cowboy,7.64,8.99,1.35,15.0,,,https://example.test/kk\n"
+)
+
+
+def _seed_nintendo_cache(output_dir):
+    data_dir = output_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "processed_nintendo.csv").write_text(NINTENDO_CACHE, encoding="utf-8")
+    return data_dir
+
+
+def test_cached_single_source_run_without_plots(tmp_path):
+    """--cached --source nintendo --no-plots only needs the Nintendo cache and writes no plots."""
+    data_dir = _seed_nintendo_cache(tmp_path)
+
+    assert cli.main(["--cached", "--source", "nintendo", "--no-plots", "--output-dir", str(tmp_path)]) == 0
+
+    df = pd.read_csv(data_dir / "data.csv")
+    assert df["source"].unique().tolist() == ["Nintendo"]
+    assert df["discount_amount"].dropna().tolist() == [pytest.approx(1.35)]
+    assert not (tmp_path / "plots").exists()
+    assert not (data_dir / "game_prices.db").exists()
+
+
+def test_cached_run_writes_plots_under_output_dir(tmp_path):
+    _seed_nintendo_cache(tmp_path)
+
+    assert cli.main(["--cached", "--source", "nintendo", "--output-dir", str(tmp_path)]) == 0
+
+    plots = sorted(p.name for p in (tmp_path / "plots").iterdir())
+    assert plots == [
+        "cross_store_prices.png",
+        "platform_distribution.png",
+        "price_analysis.png",
+        "price_vs_discount.png",
+    ]
+
+
+@pytest.fixture
+def history_db(tmp_path):
+    """A database with two days of prices: Kero Kero Cowboy is on sale and dropped in price."""
+
+    def frame(kero_price):
+        return build_frame(
+            [
+                {"source": "Nintendo", "product_code": "70010000096802", "name": "Mario Kart World", "price": 66.99},
+                {
+                    "source": "Nintendo",
+                    "product_code": "70010000126803",
+                    "name": "Kero Kero Cowboy",
+                    "price": kero_price,
+                    "price_old": 8.99,
+                },
+            ]
+        )
+
+    db_path = tmp_path / "prices.db"
+    with storage.open_db(str(db_path)) as conn:
+        storage.record_prices(conn, frame(7.64), date(2026, 9, 1))
+        storage.record_prices(conn, frame(4.49), date(2026, 9, 2))
+    return str(db_path)
+
+
+def test_deals_command(history_db, capsys):
+    assert cli.main(["deals", "--db", history_db]) == 0
+
+    output = capsys.readouterr().out
+    assert "Kero Kero Cowboy" in output
+    assert "50.1" in output
+    assert "Mario Kart World" not in output
+
+
+def test_drops_command(history_db, capsys):
+    assert cli.main(["drops", "--db", history_db, "--top", "5"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Kero Kero Cowboy" in output
+    assert "7.64" in output and "4.49" in output
+
+
+def test_history_command(history_db, capsys):
+    assert cli.main(["history", "70010000126803", "--db", history_db]) == 0
+
+    output = capsys.readouterr().out
+    assert "2026-09-01" in output and "2026-09-02" in output
+
+
+def test_history_command_for_unknown_product(history_db, capsys):
+    assert cli.main(["history", "nope", "--db", history_db]) == 0
+    assert "Nothing to show." in capsys.readouterr().out
+
+
+def test_query_without_a_database(tmp_path):
+    """A missing file must be reported, not silently created as an empty database."""
+    missing = tmp_path / "missing.db"
+
+    assert cli.main(["deals", "--db", str(missing)]) == 1
+    assert not missing.exists()
+
+
+def test_serve_command_starts_the_api(history_db, monkeypatch):
+    import uvicorn
+
+    started = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, host, port: started.update(title=app.title, host=host, port=port))
+
+    assert cli.main(["serve", "--db", history_db, "--port", "9001"]) == 0
+    assert started == {"title": "GamePrice-Index API", "host": "127.0.0.1", "port": 9001}
+
+
+def test_dashboard_command_launches_streamlit(history_db, monkeypatch):
+    launched = {}
+
+    def fake_call(command, env):
+        launched.update(command=command, db=env["GAMEPRICE_DB"])
+        return 0
+
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+
+    assert cli.main(["dashboard", "--db", history_db, "--port", "8600"]) == 0
+    assert launched["command"][1:4] == ["-m", "streamlit", "run"]
+    assert launched["command"][4].endswith("dashboard.py")
+    assert launched["command"][-2:] == ["--server.port", "8600"]
+    assert launched["db"] == history_db
