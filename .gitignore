@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / Packaging
+dist/
+build/
+*.egg-info/
+_version.py
+
+# Virtual Environments
+venv/
+env/
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# Fetchez specific
+# Ignore the "FRED" index if it's generated locally during runs,
+# src/fetchez/fred/data/*.geojson
+
+# Sphinx documentation
+docs/build/
+docs/source/modules/catalog_table.md
+docs/source/api/*.rst

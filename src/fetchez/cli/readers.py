@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+fetchez.cli.streams.readers
+~~~~~~~~~~~~~~~~
+
+Discoverability and documentation for stream readers.
+
+:copyright: (c) 2010-2026 Regents of the University of Colorado
+:license: MIT, see LICENSE for more details.
+"""
+
+import sys
+import click
+
+from fetchez.api import search_readers
+from fetchez.registry import ReaderRegistry, ProfileRegistry
+from fetchez.cli.utils import (
+    filter_registry,
+    get_class_arguments,
+    group_registry_by_key,
+    print_grouped_registry,
+    FetchezMainGroup,
+    FetchezMainCommand,
+)
+
+
+@click.group(
+    cls=FetchezMainGroup,
+    name="readers",
+    fetchez_commands=["list", "info", "update-cache"],
+)
+def readers_group():
+    """Discover, search, and learn about stream format readers.
+
+    \b
+    Readers are the underlying Python classes (like 'rasterio-point-reader' or
+    'csvreader') that open downloaded files and convert them into standard
+    streams or chunks for processing.
+
+    \b
+    Usage:
+      You rarely call Readers directly. They are automatically triggered by the
+      `stream-init` hook based on the file extension or the data's 'Profile',
+      defined by the modules' entry['data_type'].
+
+    \b
+      Format reader streams can be initiated with the `stream-init` hook which
+      will populate entry['stream'] and entry['stream-type'] in the pipeline.
+    """
+
+    pass
+
+
+@readers_group.command("list", cls=FetchezMainCommand)
+@click.option(
+    "--group-by",
+    type=click.Choice(["provider", "category", "stage", "effects"]),
+    default="provider",
+    help="Group results by type.",
+)
+@click.option("--search", help="Filter results by search term.")
+@click.option(
+    "--provider",
+    multiple=True,
+    help="Filter by provider (repeat to include multiple providers).",
+)
+def readers_list(group_by, search, provider):
+    """List all available stream readers grouped by category."""
+
+    registry = search_readers(search)
+
+    registry = filter_registry(
+        registry,
+        {
+            "provider": provider,
+        },
+    )
+
+    group_key = "provider" if group_by == "provider" else group_by
+
+    grouped_readers = group_registry_by_key(registry, group_key)
+    print_grouped_registry(grouped_readers, "Stream Readers", group_by.title())
+    click.echo(
+        "\nRun 'fetchez streams readers info <name>' for arguments and recipe examples.\n"
+    )
+
+
+@readers_group.command("info", cls=FetchezMainCommand)
+@click.argument("name")
+def readers_info(name):
+    """Show arguments and YAML recipe examples for a specific reader."""
+
+    ReaderRegistry.load_all()
+    schema_cls = ReaderRegistry.get_class(name)
+    meta = ReaderRegistry.get_info(name)
+
+    if not schema_cls:
+        click.secho(f"Error: Reader '{name}' not found.", fg="red")
+        sys.exit(1)
+
+    click.secho(f"\n🌐 READER: {name}", fg="cyan", bold=True)
+    click.echo("=" * 60)
+    click.echo(f"  Description : {meta.get('desc', 'N/A')}")
+    click.echo(f"  Category    : {meta.get('category', 'N/A')}\n")
+
+    # print_class_arguments(schema_cls)
+    args_dict = get_class_arguments(schema_cls)
+    if args_dict:
+        click.secho("  Arguments:", fg="yellow", bold=True)
+        for key, val in args_dict.items():
+            click.echo(f"    - {click.style(key, bold=True)} {val['default']}")
+
+    ProfileRegistry.load_all()
+    profile_registry = ProfileRegistry.get_registry()
+    click.secho("\n  Available Profiles:", fg="yellow", bold=True)
+    for profile in profile_registry:
+        profile_meta = ProfileRegistry.get_yaml(profile)
+        profile_reader = profile_meta.get("reader").get("name")
+        if profile_reader == name:
+            click.echo(f"    - {click.style(profile_meta.get('name'), bold=True)}")
+
+    click.echo("\n" + "-" * 40 + "\n")

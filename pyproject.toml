@@ -1,0 +1,188 @@
+[build-system]
+requires = ["hatchling>=1.5.0", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fetchez"
+description = "Geo-Spatial Data Fetching"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dynamic = ["version"]
+authors = [
+    {name = "Matthew Love", email = "matthew.love@colorado.edu"},
+    {name = "Christopher Amante", email = "christopher.amante@colorado.edu"},
+    {name = "Elliot Lim", email = "elliot.lim@colorado.edu"},
+    {name = "Michael MacFerrin", email = "michael.macferrin@colorado.edu"},
+    {name = "Matt Fisher", email = "mfisher87@gmail.com"},
+]
+maintainers = [
+    {name = "Matthew Love", email = "matthew.love@colorado.edu"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+dependencies = [
+    "requests[security]>=2.31.0",
+    "lxml>=4.9.3",
+    "tqdm>=4.66.0",
+    "pyyaml>=6.0.1",
+    "click>=8.1.7",
+    "filelock>=3.12.4",
+    "pyproj>=3.6.1",
+    "shapely>=2.0.3",
+    "pyogrio>=0.8.0",
+]
+
+keywords = ["Geospatial"]
+
+[project.optional-dependencies]
+raster = ["rasterio"]
+aws = ["boto3"]
+bing = ["mercantile"]
+earthdata = ["earthaccess>=0.9.0"]
+stac = ["pystac", "pystac_client", "planetary_computer"]
+marine = ["copernicusmarine"]
+# jupyter = ["jupyterlab", "ipyleaflet", "ipywidgets"]
+
+full = ["fetchez[aws,bing,earthdata,stac]"]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "mypy",
+    "types-requests>=2.31.0.6",
+    "types-tqdm>=4.67.0.20241221",
+    # "yamllint"
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "rasterio",
+]
+docs = [
+    "sphinx<9.0.0",  # temp pin for sphinx-click
+    "sphinx-autodoc-typehints>=2.0.1",
+    # "sphinx-argparse-cli",
+    "sphinx-click>=6.0",
+    "pydata-sphinx-theme",
+    "myst-parser",
+]
+
+[project.scripts]
+# CLI Entry Points
+fetchez_cli = "fetchez._cli:fetchez_cli"
+fetchez = "fetchez.cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/ciresdem/fetchez"
+Issues = "https://github.com/ciresdem/fetchez/issues"
+
+
+# --- Build configuration ---
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.version]
+path = "src/fetchez/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fetchez"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/fetchez",
+  "tests",
+  "CHANGELOG.md",
+  "CITATION.cff",
+  "CONTRIBUTING.md",
+  "AUTHORS.md",
+]
+exclude = [
+  ".github",
+  "examples",
+  "scripts",
+]
+
+
+# --- Devtools configuration ---
+
+[tool.mypy]
+mypy_path = "src"
+packages = ["fetchez"]
+python_version = "3.12"
+exclude = ["^build/", "^dist/", "^\\.venv/"]
+# allow_untyped_globals = true
+# strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "rasterio.*",
+    "shapely.*",
+    "lxml.*",
+    "boto3",
+    "botocore.*",
+    "mercantile",
+    "osgeo",
+    "filelock",
+    "pyogrio.*",
+    "pyogrio.raw",
+    "pyproj",
+    "sentinelsat",
+    "shapefile",
+    "yaml",
+    "earthaccess.*",
+    "pystac",
+    "pystac_client",
+    "planetary_computer",
+    "copernicusmarine",
+    "fsspec",
+    "fsspec.*",
+    "affine",
+]
+ignore_missing_imports = true
+# disable_error_code = ["import-not-found"]
+
+[tool.ruff.lint]
+# Keep the lint policy explicit. Do not use `extend-select` here:
+# Ruff's default rule set may change between releases, which can otherwise
+# introduce new lint requirements during routine dependency updates.
+select = [
+    "E4",  # import-related pycodestyle errors
+    "E7",  # statement-related pycodestyle errors
+    "E9",  # runtime/syntax-ish pycodestyle errors
+    "F",   # Pyflakes
+    "B",   # flake8-bugbear
+    "PTH100",  # os.path.abspath
+    "PTH102",  # os.mkdir
+    "PTH103",  # os.mkdirs
+    "PTH110",  # os.path.exists
+    "PTH112",  # os.path.isdir
+    "PTH120",  # os.path.dirname
+    "T20",  # flake8-print
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Allow print() statements in CLI module where they are expected
+"src/fetchez/_cli.py" = ["T201"]
+"examples/**/*.py" = ["T201"]
+"src/fetchez/hooks/stream_dump.py" = ["T203"] # allow pprint here
+"tests/**/*.py" = ["S"]
+
+[tool.ruff.format]
+# Keep documentation examples under manual control.
+exclude = ["*.md"]
+
+[tool.pytest.ini_options]
+markers = [
+    "health: marks tests that require live network access to external APIs (run with '-m health')"
+]
+filterwarnings = [
+    "ignore::pydantic.warnings.PydanticDeprecatedSince20",
+    "ignore:.*Support for class-based `config` is deprecated.*",
+    "ignore::DeprecationWarning:planetary_computer.*"
+]

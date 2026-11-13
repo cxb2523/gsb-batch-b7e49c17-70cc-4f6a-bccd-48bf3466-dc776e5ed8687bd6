@@ -1,0 +1,111 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+fetchez.cli.schemas
+~~~~~~~~~~~~~~~~
+
+Discoverability and documentation for processing schemas.
+
+:copyright: (c) 2010-2026 Regents of the University of Colorado
+:license: MIT, see LICENSE for more details.
+"""
+
+import sys
+import click
+
+from fetchez.api import search_schemas
+from fetchez.registry import SchemaRegistry
+from fetchez.cli.utils import (
+    filter_registry,
+    get_class_arguments,
+    group_registry_by_key,
+    print_grouped_registry,
+    FetchezMainGroup,
+    FetchezMainCommand,
+)
+
+
+@click.group(
+    cls=FetchezMainGroup,
+    name="schemas",
+    fetchez_commands=["list", "info", "update-cache"],
+)
+def schemas_group():
+    """Discover, search, and learn about recipe schemas.
+
+    \b
+    Schemas are strict validation rulesets that can be applied to Recipes.
+    They ensure that any data flowing through the pipeline adheres to specific
+    domain standards (e.g., forcing all output to be in EPSG:4326, or requiring
+    mandatory metadata tags).
+    """
+
+    pass
+
+
+@schemas_group.command("list", cls=FetchezMainCommand)
+@click.option(
+    "--group-by",
+    type=click.Choice(["provider", "category", "stage", "effects"]),
+    default="provider",
+    help="Group results by type.",
+)
+@click.option("--search", help="Filter results by search term.")
+@click.option(
+    "--provider",
+    multiple=True,
+    help="Filter by provider (repeat to include multiple providers).",
+)
+def schemas_list(group_by, search, provider):
+    """List all available processing schemas grouped by category."""
+
+    registry = search_schemas(search)
+    registry = filter_registry(
+        registry,
+        {
+            "provider": provider,
+        },
+    )
+
+    group_key = "provider" if group_by == "provider" else group_by
+
+    grouped_schemas = group_registry_by_key(registry, group_key)
+    print_grouped_registry(grouped_schemas, "Schemas", group_by.title())
+    click.echo(
+        "\nRun 'fetchez recipes schemas info <name>' for arguments and recipe examples.\n"
+    )
+
+
+@schemas_group.command("info", cls=FetchezMainCommand)
+@click.argument("name")
+def schemas_info(name):
+    """Show arguments and YAML recipe examples for a specific hook."""
+
+    SchemaRegistry.load_all()
+    schema_cls = SchemaRegistry.get_class(name)
+    meta = SchemaRegistry.get_info(name)
+
+    if not schema_cls:
+        click.secho(f"Error: Schema '{name}' not found.", fg="red")
+        sys.exit(1)
+
+    click.secho(f"\n🏛️ SCHEMA: {name}", fg="cyan", bold=True)
+    click.echo("=" * 60)
+    click.echo(f"  Description : {meta.get('desc', 'N/A')}")
+    click.echo(f"  Category    : {meta.get('category', 'N/A')}\n")
+
+    # print_class_arguments(schema_cls)
+    args_dict = get_class_arguments(schema_cls)
+    if args_dict:
+        click.secho("  Arguments:", fg="yellow", bold=True)
+        for key, val in args_dict.items():
+            click.echo(f"    - {click.style(key, bold=True)} {val['default']}")
+
+    # Generate the YAML Snippet
+    click.secho("\n  YAML Recipe Example:", fg="green", bold=True)
+    click.echo("-" * 40)
+
+    click.echo(f"schema: {name}")
+
+    click.echo("-" * 40 + "\n")

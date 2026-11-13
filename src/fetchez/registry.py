@@ -1,0 +1,1287 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+fetchez.registry
+~~~~~~~~~~~~~~~~
+
+A unified, dynamic registry system for discovering and loading
+Fetchez Modules, Hooks, Schemas, and other plugins.
+
+Current Registries:
+
+ModuleRegistry
+HookRegistry
+RecipeRegistry
+StreamRegistry
+ReaderRegistry
+BundleRegistry
+PresetRegistry
+ModifierRegistry
+SchemaRegistry
+ProfileRegistry
+DataTypeRegistry
+DetectorRegistry
+
+:copyright: (c) 2010-2026 Regents of the University of Colorado
+:license: MIT, see LICENSE for more details.
+"""
+
+import os
+import sys
+import yaml
+import copy
+import pkgutil
+import importlib
+import importlib.util
+import importlib.metadata
+import importlib.resources
+import inspect
+import logging
+from pathlib import Path
+from typing import Dict, Any, Type, Optional, List
+
+from fetchez.modules import FetchModule
+from fetchez.hooks import FetchHook
+from fetchez.recipes.modifiers import BaseModifier
+from fetchez.recipes.schemas import BaseSchema
+from fetchez.streams import BaseStream
+from fetchez.streams.readers import BaseReader
+from fetchez.utils import get_class_arguments
+from fetchez.datatypes.detectors import BaseDetector, Detection
+
+logger = logging.getLogger(__name__)
+
+
+class PluginRegistry:
+    """Base class for dynamically discovering and registering plugins."""
+
+    _registry: Dict[str, Any]
+    _loaded_registry: Optional[Dict[str, Any]] = None
+
+    # These must be defined by the subclasses
+    base_class: Optional[Type] = None
+    builtin_pkg: str = ""
+    entry_point_group: str = ""
+    user_folder: str = ""
+
+    @classmethod
+    def get_registry(cls, clear_registry: bool = False) -> Dict[str, Any]:
+        """Initialization of the class-level registry dictionary."""
+
+        if not hasattr(cls, "_registry") or clear_registry:
+            cls._registry = {}
+
+        return cls._registry
+
+    @classmethod
+    def load_builtins(cls):
+        """Recursively scan and load all built-in plugins."""
+
+        registry = cls.get_registry(clear_registry=True)
+        if registry:
+            return
+
+        try:
+            builtin_module = importlib.import_module(cls.builtin_pkg)
+
+            for _, modname, ispkg in pkgutil.walk_packages(
+                path=builtin_module.__path__,
+                prefix=builtin_module.__name__ + ".",
+            ):
+                if not ispkg:
+                    try:
+                        mod = importlib.import_module(modname)
+                        cls._register_from_module(mod)
+                    except Exception as e:
+                        logger.warning(f"Failed to load built-in {modname}: {e}")
+        except ImportError:
+            logger.warning(f"Built-in package {cls.builtin_pkg} not found.")
+
+    @classmethod
+    def load_user_plugins(cls):
+        """Scan local directories for user-provided plugins."""
+
+        home = Path.home()
+
+        search_dirs = [
+            str(home / ".fetchez" / cls.user_folder),
+            str(Path.cwd() / ".fetchez" / cls.user_folder),
+        ]
+
+        for p_dir in search_dirs:
+            if not Path(p_dir).exists():
+                continue
+
+            for f in os.listdir(p_dir):
+                if f.endswith(".py") and not f.startswith("_"):
+                    filepath = Path(p_dir) / f
+                    mod_name = f"fetchez_user_{cls.user_folder}_{f[:-3]}"
+
+                    try:
+                        spec = importlib.util.spec_from_file_location(
+                            mod_name, str(filepath)
+                        )
+                        if spec and spec.loader:
+                            mod = importlib.util.module_from_spec(spec)
+                            sys.modules[mod_name] = mod
+                            spec.loader.exec_module(mod)
+                            cls._register_from_module(mod)
+                    except Exception as e:
+                        logger.warning(f"Failed to load user plugin {filepath}: {e}")
+
+    @classmethod
+    def load_installed_plugins(cls):
+        """Load external pip-installed extensions via entry_points."""
+
+        try:
+            eps = importlib.metadata.entry_points(group=cls.entry_point_group)
+            for ep in eps:
+                try:
+                    plugin_module = ep.load()
+                    # Load single plugin or scan the loaded extension for submodules
+                    if not hasattr(plugin_module, "__path__"):
+                        try:
+                            cls._register_from_module(plugin_module)
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to load external plugin {plugin_module.__name__}: {e}"
+                            )
+                    else:
+                        for _, modname, ispkg in pkgutil.walk_packages(
+                            path=plugin_module.__path__,
+                            prefix=plugin_module.__name__ + ".",
+                        ):
+                            if not ispkg:
+                                try:
+                                    mod = importlib.import_module(modname)
+                                    cls._register_from_module(mod)
+                                except Exception as e:
+                                    logger.error(
+                                        f"Failed to load external plugin {modname}: {e}"
+                                    )
+                except Exception:
+                    logger.exception(f"Failed to load entry point: {ep}")
+                    continue
+
+        except Exception as e:
+            logger.error(
+                f"Error checking entry points for {cls.entry_point_group}: {e}"
+            )
+
+    @classmethod
+    def load_all(cls):
+        """Load all plugins: builtins, user plugins, and pip extensions."""
+
+        registry = cls.get_registry()
+
+        if cls.__dict__.get("_loaded_registry") is registry:
+            return registry
+
+        cls.load_builtins()
+        cls.load_user_plugins()
+        cls.load_installed_plugins()
+
+        registry = cls.get_registry()
+        cls._loaded_registry = registry
+        return registry
+
+    load_fast = load_all  # temp in case we forgot to update any calls to the depreciated `load_fast`
+
+    @classmethod
+    def reload_all(cls):
+        "Force rediscovery of all plugin sources."
+
+        cls.load_builtins()
+        cls.load_user_plugins()
+        cls.load_installed_plugins()
+
+        registry = cls.get_registry()
+        cls._loaded_registry = registry
+        return registry
+
+    @classmethod
+    def _register_from_module(cls, module, use_namespaces=False):
+        """Inspect a module and dynamically extract its metadata."""
+
+        registry = cls.get_registry()
+
+        is_core = module.__name__.startswith(cls.builtin_pkg)
+        is_local = module.__name__.startswith("fetchez_user_")
+
+        prefix = ""
+        if not is_core:
+            if is_local:
+                prefix = "local"
+            else:
+                # e.g., 'globato.modules.bato' -> 'globato'
+                # prefix = ".".join(module.__name__.split(".")[:-1])
+                prefix = module.__name__.split(".")[0]
+
+        local_classes = [
+            (name, obj)
+            for name, obj in inspect.getmembers(module, inspect.isclass)
+            if obj.__module__ == module.__name__
+        ]
+        for name, obj in local_classes:
+            if issubclass(obj, cls.base_class) and obj is not cls.base_class:
+                raw_mod_key = getattr(obj, "name", name.lower())
+                base_name = getattr(cls.base_class, "name", None)
+                if raw_mod_key == base_name:
+                    continue
+
+                # --- Plugin Namespaces ---
+                mod_key = raw_mod_key
+                if not is_core:
+                    if not raw_mod_key.startswith(f"{prefix}.") and use_namespaces:
+                        mod_key = f"{prefix}.{raw_mod_key}"
+
+                    # logger.debug(
+                    #     f"🧩 Loaded external plugin: '{mod_key}' from {prefix}"
+                    # )
+
+                    if raw_mod_key in registry:
+                        mod_key = f"{prefix}.{raw_mod_key}"
+                        logger.debug(
+                            f"⚠️ Blocked plugin '{prefix}' from clobbering module '{raw_mod_key}'. "
+                            f"It has been safely sandboxed as '{mod_key}'."
+                        )
+                    # Maybe check `cls.builtin_pkg` here too instead of hard-coding the
+                    # `fetchez` namespace, to make this more generic.
+                    # if raw_mod_key in registry and registry[raw_mod_key].get(
+                    #     "import_path", ""
+                    # ).startswith("fetchez."):
+                    #     mod_key = f"{prefix}.{raw_mod_key}"
+                    #     logger.debug(
+                    #         f"⚠️ Blocked plugin '{prefix}' from hijacking core module '{raw_mod_key}'. "
+                    #         f"It has been safely sandboxed as '{mod_key}'."
+                    #     )
+
+                meta = {
+                    "mod": module.__name__,
+                    "cls": name,
+                    "_class_obj": obj,
+                    "aliases": obj.__dict__.get("meta_aliases", []),
+                }
+
+                # --- Metadata Extraction ---
+                # Modules must define `meta_` atrributes
+                for attr_name in dir(obj):
+                    if attr_name.startswith("meta_"):
+                        clean_key = attr_name.replace("meta_", "")
+                        meta[clean_key] = getattr(obj, attr_name)
+
+                # --- Fallbacks for the CLI ---
+                meta.setdefault("category", "Generic")
+                meta.setdefault("desc", "No description provided.")
+                meta.setdefault("domain", "Universal (Files)")
+                meta.setdefault("requires", "any")
+
+                meta["import_path"] = f"{obj.__module__}.{obj.__name__}"
+
+                if hasattr(module, "__file__") and module.__file__:
+                    meta["file_path"] = module.__file__
+
+                # --- CLI Metadata ---
+                cli_help_text = getattr(obj, "_cli_help_text", None)
+                if cli_help_text:
+                    meta["cli_help_text"] = cli_help_text
+
+                meta["cli_args"] = get_class_arguments(obj)
+
+                registry[mod_key] = meta
+
+                # --- Register the raw_key if it doesn't exist (for backward compatibility) ---
+                # if not is_core and raw_mod_key not in registry:
+                #    registry[raw_mod_key] = meta
+
+                for alias in meta["aliases"]:
+                    alias_key = alias if is_core else f"{prefix}.{alias}"
+                    registry[alias_key] = meta
+
+                    if not is_core and alias not in registry:
+                        registry[alias] = meta
+
+    @classmethod
+    def get_info(cls, mod_key: str) -> Dict[str, Any]:
+        return copy.deepcopy(cls.get_registry().get(mod_key, {}))
+
+    @classmethod
+    def list_all(cls) -> Dict[str, Any]:
+        return copy.deepcopy(cls.get_registry())
+
+    @classmethod
+    def get_class(cls, name: str):
+        """Returns the class if cached, or lazily imports it on demand."""
+
+        meta = cls.get_registry().get(name)
+        if not meta:
+            return None
+
+        if "import_path" in meta:
+            mod_path, class_name = meta["import_path"].rsplit(".", 1)
+            try:
+                # Standard import for pip-installed and built-in modules
+                module = importlib.import_module(mod_path)
+            except ModuleNotFoundError:
+                # Fallback for dynamic local user plugins
+                file_path = meta.get("file_path")
+                if file_path and Path(file_path).exists():
+                    spec = importlib.util.spec_from_file_location(mod_path, file_path)
+                    if spec and spec.loader:
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules[mod_path] = module
+                        spec.loader.exec_module(module)
+                    else:
+                        return None
+                else:
+                    return None
+
+            actual_cls = getattr(module, class_name)
+            return actual_cls
+
+        return None
+
+    load_module = get_class  # alias for backward compatability
+
+    @classmethod
+    def search_modules(cls, term: str):
+        """Search modules by name, description, agency, or tags."""
+
+        term = term.lower()
+        results = []
+
+        for key, meta in cls.get_registry().items():
+            if (
+                term in key.lower()
+                or term in meta.get("desc", "").lower()
+                or term in meta.get("agency", "").lower()
+                or any(term in tag.lower() for tag in meta.get("tags", []))
+                or any(term in alias.lower() for alias in meta.get("aliases", ""))
+            ):
+                if key not in results:
+                    results.append(key)
+
+        return results
+
+
+class YamlRegistry:
+    """A registry for discovering and loading yaml configuration files (recipes and hook presets)."""
+
+    _registry: Dict[str, Any]
+    _loaded_registry: Optional[Dict[str, Any]] = None
+    _MISSING = object()
+
+    # These must be defined by the subclasses
+    base_class: Optional[Type] = None
+    builtin_pkg: str = ""
+    entry_point_group: str = ""
+    user_folder: str = ""
+
+    @classmethod
+    def get_registry(cls, clear_registry: bool = False) -> Dict[str, Any]:
+        if not hasattr(cls, "_registry") or clear_registry:
+            cls._registry = {}
+        return cls._registry
+
+    @classmethod
+    def load_all(cls):
+        registry = cls.get_registry()
+
+        if cls.__dict__.get("_loaded_registry") is registry:
+            return registry
+
+        try:
+            eps = importlib.metadata.entry_points(group=cls.entry_point_group)
+        except TypeError:
+            eps = importlib.metadata.entry_points().get(cls.entry_point_group, [])
+
+        for ep in eps:
+            pkg_name = ep.value
+            prefix = pkg_name.split(".")[0].lower()
+            try:
+                for file_path in importlib.resources.files(pkg_name).iterdir():
+                    if file_path.name.endswith((".yaml", ".yml")):
+                        cls._register_yaml(
+                            prefix,
+                            file_path.read_text(encoding="utf-8"),
+                            str(file_path),
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to load yamls from package {pkg_name}: {e}")
+
+        builtin_module = importlib.import_module(cls.builtin_pkg)
+        builtin_path = list(builtin_module.__path__)
+        home_dir = Path.home() / ".fetchez" / cls.user_folder
+        builtin_path.append(home_dir)
+        for fdir in builtin_path:
+            if Path(fdir).exists():
+                for fn in os.listdir(fdir):
+                    if fn.endswith((".yaml", ".yml")):
+                        try:
+                            f_dir = Path(fdir) / fn
+                            with open(f_dir, "r", encoding="utf-8") as f:
+                                cls._register_yaml("fetchez", f.read(), f_dir)
+                        except Exception as e:
+                            logger.warning(f"Failed to load yaml {fn}: {e}")
+
+        registry = cls.get_registry()
+        cls._loaded_registry = registry
+        return registry
+
+    @classmethod
+    def reload_all(cls):
+        cls.get_registry(clear_registry=True)
+        cls._loaded_registry = None
+        return cls.load_all()
+
+    load_fast = load_all  # temp for lingering load_fast calls
+
+    @classmethod
+    def _register_yaml(cls, provider, yaml_content: str, file_path: str):
+        registry = cls.get_registry()
+
+        try:
+            config = yaml.safe_load(yaml_content)
+            if not config or config is None:
+                return
+
+            if not isinstance(config, dict):
+                raise ValueError(
+                    f"Invalid YAML definition in {file_path}: expected a mapping."
+                )
+
+            config["provider"] = provider
+
+            if "name" in config:
+                registry[config["name"]] = config
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.debug(f"Failed to parse YAML {file_path}: {e}")
+
+    @classmethod
+    def get_yaml(cls, name: str) -> Optional[Dict[str, Any]]:
+        return copy.deepcopy(cls.get_registry().get(name))
+
+    @classmethod
+    def exists(cls, name: str) -> bool:
+        _registry = cls.load_all()
+        if cls.get_registry().get(name, None) is None:
+            return False
+        return True
+
+    @classmethod
+    def _get_path(cls, item, path):
+        """Return a dotted path value from a nested mapping."""
+        value = item
+
+        for part in str(path).split("."):
+            if not isinstance(value, dict) or part not in value:
+                return cls._MISSING
+            value = value[part]
+        return value
+
+    @staticmethod
+    def _selection_values(value):
+        """Normalize one or several requested selection values."""
+        if isinstance(value, (list, tuple, set)):
+            return list(value)
+        return [value]
+
+    @classmethod
+    def _selection_matches(cls, actual, requested):
+        """Return True when an existing value satisfies the selector."""
+        requested_values = cls._selection_values(requested)
+
+        if isinstance(actual, (list, tuple, set)):
+            return any(value in requested_values for value in actual)
+
+        return actual in requested_values
+
+    @classmethod
+    def _get_selector_value(cls, item, path):
+        if "." in path:
+            return cls._get_path(item, path)
+
+        # Prefer an explicit top-level field.
+        if isinstance(item, dict) and path in item:
+            return item[path]
+
+        # Convenience fallback for component arguments.
+        return cls._get_path(item, f"args.{path}")
+
+    @classmethod
+    def select_items(cls, items, selectors, *, context="YAML definition"):
+        """Filter YAML items using dotted-path selectors.
+
+        Items that do not define a selector path pass that selector.
+        A selector path that is absent from every item is considered invalid.
+        """
+        if not selectors:
+            return copy.deepcopy(items)
+
+        if not isinstance(selectors, dict):
+            raise TypeError("select must be a mapping of path: value selectors")
+
+        items = copy.deepcopy(items)
+
+        # Catch misspelled/useless selector paths while still allowing helper
+        # items that do not participate in a particular selector.
+        for path in selectors:
+            if not any(
+                cls._get_selector_value(item, path) is not cls._MISSING
+                for item in items
+                if isinstance(item, dict)
+            ):
+                raise ValueError(
+                    f"{context} selection field '{path}' does not exist on any member"
+                )
+
+        selected = []
+
+        for item in items:
+            matches = True
+
+            for path, requested in selectors.items():
+                actual = cls._get_selector_value(item, path)
+
+                # Missing fields are non-participating.
+                if actual is cls._MISSING:
+                    continue
+
+                if not cls._selection_matches(actual, requested):
+                    matches = False
+                    break
+
+            if matches:
+                selected.append(item)
+
+        return selected
+
+    # Temporary for backwards compatibility
+    get_preset = get_yaml
+    get_recipe = get_yaml
+    get_info = get_yaml
+
+
+# =============================================================================
+# The Registries
+# =============================================================================
+class ModuleRegistry(PluginRegistry):
+    base_class = FetchModule
+    builtin_pkg = "fetchez.modules"
+    entry_point_group = "fetchez.modules"
+    user_folder = "modules"
+
+
+class HookRegistry(PluginRegistry):
+    base_class = FetchHook
+    builtin_pkg = "fetchez.hooks"
+    entry_point_group = "fetchez.hooks"
+    user_folder = "hooks"
+
+
+# Modifiers modify recipes and Schemas validate them.
+class ModifierRegistry(PluginRegistry):
+    base_class = BaseModifier
+    builtin_pkg = "fetchez.recipes.modifiers"
+    entry_point_group = "fetchez.recipes.modifiers"
+    user_folder = "recipes/modifiers"
+
+
+class SchemaRegistry(PluginRegistry):
+    base_class = BaseSchema
+    builtin_pkg = "fetchez.recipes.schemas"
+    entry_point_group = "fetchez.recipes.schemas"
+    user_folder = "recipes/schemas"
+
+
+class StreamRegistry(PluginRegistry):
+    base_class = BaseStream
+    builtin_pkg = "fetchez.streams"
+    entry_point_group = "fetchez.streams"
+    user_folder = "streams"
+
+
+class ReaderRegistry(PluginRegistry):
+    base_class = BaseReader
+    builtin_pkg = "fetchez.streams.readers"
+    entry_point_group = "fetchez.streams.readers"
+    user_folder = "streams/readers"
+
+    @classmethod
+    def get_reader(cls, src, term: str, region=None, **kwargs):
+        ProfileRegistry.load_all()
+        if term:
+            profile = ProfileRegistry.get_yaml(term)
+            if profile:
+                logger.debug(f"Using reader-profile {profile}")
+                profile_reader = profile.get("reader", {})
+                reader_name = profile_reader.get("name", "")
+                reader = cls.get_class(reader_name)
+                if reader:
+                    profile_args = profile_reader.get("args", {})
+                    return reader(src, region=region, **{**profile_args, **kwargs})
+            else:
+                logger.debug(f"No reader profile found, checking `{term}` data-type")
+                reader = cls.get_reader_for_dtype(term)
+                if reader:
+                    logger.debug(f"Found `{reader.name}` for data-type: `{term}`")
+                    return reader(src, region=region, **kwargs)
+
+        _ext = src.split(".")[-1]
+        logger.debug(f"No reader dtype found, checking `{_ext}` in extensions")
+        reader = cls.get_reader_for_ext(_ext)
+        if reader:
+            return reader(src, region=region, **kwargs)
+
+        return None
+
+    @classmethod
+    def get_reader_for_ext(cls, ext: str):
+        """Iterate through registered readers to find one that supports this extension."""
+
+        for name, meta in cls.get_registry().items():
+            if ext.lower() in meta.get("extensions", []):
+                return cls.get_class(name)
+        return None
+
+    @classmethod
+    def get_reader_for_dtype(cls, dtype: str):
+        """Find reader by exact dtype match."""
+
+        for name, meta in cls.get_registry().items():
+            target_dtype = meta.get("dtype", "")
+
+            if isinstance(target_dtype, str):
+                if dtype.lower() == target_dtype.lower():
+                    return cls.get_class(name)
+            elif isinstance(target_dtype, list):
+                if dtype.lower() in [t.lower() for t in target_dtype]:
+                    return cls.get_class(name)
+
+        return None
+
+    @classmethod
+    def get_reader_from_entry(cls, entry, region=None, **kwargs):
+        """Resolve and initialize a reader from a Fetchez entry.
+
+        Resolution priority:
+          1. Explicit entry profile (registered name or inline dict).
+          2. Default profile associated with entry data_type.
+          3. Legacy reader dtype/extension resolution.
+
+        Explicit profiles are authoritative: invalid profiles or missing
+        readers do not silently fall back to a different reader.
+
+        Additional kwargs provide execution context and explicit overrides
+        to profile reader arguments.
+        """
+        cls.load_all()
+
+        src = entry.get("dst_fn")
+        if not src:
+            logger.warning("Cannot initialize reader: entry has no dst_fn.")
+            return None
+
+        profile_ref = entry.get("profile")
+        data_type = entry.get("data_type")
+
+        # -------------------------------------------------------------
+        # Resolve an explicitly selected profile.
+        # -------------------------------------------------------------
+        if profile_ref is not None:
+            profile = ProfileRegistry.resolve(profile_ref)
+
+            if profile is None:
+                logger.warning(
+                    "Reader profile %r could not be resolved.",
+                    profile_ref,
+                )
+                return None
+
+        # -------------------------------------------------------------
+        # Resolve the data type's default profile.
+        # -------------------------------------------------------------
+        elif data_type:
+            profile = DataTypeRegistry.get_default_profile(data_type)
+
+        else:
+            profile = None
+
+        # -------------------------------------------------------------
+        # Instantiate a reader from the resolved profile.
+        # -------------------------------------------------------------
+        if profile is not None:
+            reader_def = profile.get("reader", {})
+            reader_name = reader_def.get("name")
+
+            if not reader_name:
+                logger.warning(
+                    "Resolved profile has no reader name: %r",
+                    profile,
+                )
+                return None
+
+            reader_cls = cls.get_class(reader_name)
+
+            if reader_cls is None:
+                logger.warning(
+                    "Reader '%s' referenced by profile is not registered.",
+                    reader_name,
+                )
+                return None
+
+            reader_args = profile.get("reader", {}).get("args") or {}
+
+            logger.debug(
+                "Initializing reader '%s' for %s.",
+                reader_name,
+                src,
+            )
+
+            return reader_cls(
+                src,
+                region=region,
+                **{**reader_args, **kwargs},
+            )
+
+        # -------------------------------------------------------------
+        # Legacy fallback for entries without a resolved profile.
+        # -------------------------------------------------------------
+        return cls.get_reader(
+            src,
+            data_type,
+            region=region,
+            **kwargs,
+        )
+
+
+class RecipeRegistry(YamlRegistry):
+    """A registry for discovering and loading YAML recipes."""
+
+    # _registry = {}
+    builtin_pkg = "fetchez.recipes"
+    entry_point_group = "fetchez.recipes"
+    user_folder = "recipes"
+
+    @classmethod
+    def _register_yaml(cls, provider, yaml_content: str, file_path: str):
+        registry = cls.get_registry()
+
+        try:
+            config = yaml.safe_load(yaml_content)
+            if not config or "project" not in config:
+                return
+
+            # Use the project name from the YAML, fallback to the filename
+            name = config["project"].get(
+                "name", Path(file_path).name.replace(".yaml", "")
+            )
+            desc = config["project"].get("description", "No description available.")
+            tags = config["project"].get("tags", [])
+
+            registry[name] = {
+                "name": name,
+                "desc": desc,
+                "config": config,
+                "path": file_path,
+                "tags": tags,
+                "provider": provider,
+            }
+        except Exception as e:
+            logger.debug(f"Failed to parse recipe YAML {file_path}: {e}")
+
+
+# Presets extend Hooks
+class PresetRegistry(YamlRegistry):
+    builtin_pkg = "fetchez.hooks.presets"
+    entry_point_group = "fetchez.hooks.presets"
+    user_folder = "hooks/presets"
+
+    @classmethod
+    def _register_yaml(cls, provider, yaml_content: str, file_path: str):
+        registry = cls.get_registry()
+
+        try:
+            config = yaml.safe_load(yaml_content)
+            if not config:
+                return
+
+            if "presets" in config:
+                for p_name, p_def in config.get("presets", {}).items():
+                    p_def["provider"] = provider
+                    registry[p_name] = p_def
+            else:
+                if "name" in config and "hooks" in config:
+                    config["provider"] = provider
+                    registry[config["name"]] = config
+        except Exception as e:
+            logger.debug(f"Failed to parse preset YAML {file_path}: {e}")
+
+    @classmethod
+    def expand_hooks(cls, hook_defs, parent_hooks=None):
+        cls.load_all()
+        return cls._expand_hooks(hook_defs, parent_hooks=parent_hooks)
+
+    @classmethod
+    def _expand_hooks(
+        cls,
+        hook_defs: List[Dict[str, Any]],
+        parent_hooks: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Recursively expands preset references in a list of hook definitions into a flat list of hook dictionary configs."""
+
+        expanded_list = []
+        parent_hooks = parent_hooks or []
+
+        for h in hook_defs:
+            if isinstance(h, str):
+                h = {"name": h}
+
+            h = copy.deepcopy(h)
+            name = h.get("name")
+            is_preset = h.get("preset")
+
+            if parent_hooks and name:
+                # Convert parent_hooks (list) into a map for fast lookup
+                hook_map = {
+                    hook.get("name"): hook
+                    for hook in parent_hooks
+                    if isinstance(hook, dict) and "name" in hook
+                }
+                if name in hook_map:
+                    h_args = h.get("args", {}).copy()
+                    h_args.update(hook_map[name].get("args", {}))
+                    h["args"] = h_args
+
+            if is_preset:
+                user_args = h.get("args", [])
+                selectors = h.get("select", {})
+
+                if isinstance(user_args, dict):
+                    # Convert dict format to list-of-dicts if user passed it that way
+                    user_args = [
+                        {"name": k, "args": v.get("args", v)}
+                        for k, v in user_args.items()
+                    ]
+
+                preset_def = cls.get_yaml(is_preset)
+
+                if preset_def:
+                    preset_hooks = copy.deepcopy(preset_def.get("hooks", []))
+
+                    preset_hooks = [
+                        {"name": hook} if isinstance(hook, str) else hook
+                        for hook in preset_hooks
+                    ]
+
+                    if selectors:
+                        preset_hooks = cls.select_items(
+                            preset_hooks,
+                            selectors,
+                            context=f"Preset '{is_preset}'",
+                        )
+
+                    # Merge user_args and parent_hooks to pass down the chain
+                    combined_overrides = copy.deepcopy(parent_hooks)
+                    for u_arg in user_args:
+                        u_name = u_arg.get("name")
+                        existing = next(
+                            (p for p in combined_overrides if p.get("name") == u_name),
+                            None,
+                        )
+                        if existing:
+                            existing.setdefault("args", {}).update(
+                                u_arg.get("args", {})
+                            )
+                        else:
+                            combined_overrides.append(u_arg)
+
+                    expanded_child_hooks = cls._expand_hooks(
+                        preset_hooks,
+                        parent_hooks=combined_overrides,
+                    )
+                    expanded_list.extend(expanded_child_hooks)
+                else:
+                    logger.error(f"Preset '{is_preset}' not found in registry.")
+            else:
+                expanded_list.append(h)
+
+        return expanded_list
+
+    @classmethod
+    def hook_list_from_preset(cls, preset_def_or_name: Any) -> List[Any]:
+        """Convert a preset name or dictionary into an expanded list of instantiated Hook objects."""
+
+        from .registry import HookRegistry
+
+        if isinstance(preset_def_or_name, str):
+            hook_defs = cls.expand_hooks([{"preset": preset_def_or_name}])
+        elif isinstance(preset_def_or_name, dict):
+            raw_hooks = preset_def_or_name.get("hooks", [])
+            hook_defs = cls.expand_hooks(raw_hooks)
+        else:
+            return []
+
+        HookRegistry.load_all()
+        hooks = []
+        for h_def in hook_defs:
+            name = h_def.get("name")
+            kwargs = h_def.get("args", {})
+
+            hook_cls = HookRegistry.get_class(str(name))
+            if hook_cls:
+                try:
+                    hooks.append(hook_cls(**kwargs))
+                except Exception as e:
+                    logger.error(f"Failed to init hook '{name}' from preset: {e}")
+            else:
+                logger.warning(f"Hook '{name}' not found in registry.")
+
+        return hooks
+
+
+# Bundles extend Modules
+class BundleRegistry(YamlRegistry):
+    """A registry for discovering and loading Module Bundles (Data Packages)."""
+
+    builtin_pkg = "fetchez.modules.bundles"
+    entry_point_group = "fetchez.modules.bundles"
+    user_folder = "modules/bundles"
+
+    @staticmethod
+    def get_module_signature(mod_dict: Any) -> str:
+        """Creates a unique signature for a module configuration to allow deduplication."""
+
+        if isinstance(mod_dict, str):
+            return mod_dict
+
+        module_name = mod_dict.get("module")
+        module_cls = ModuleRegistry.get_class(module_name)
+
+        if module_cls:
+            signature = module_cls._module_id_from_config(mod_dict)
+        else:
+            signature = str(mod_dict)
+
+        return signature
+
+    @staticmethod
+    def _apply_bundle_hooks(child_hooks, user_hooks):
+        """Apply bundle-level hooks to a child module.
+
+        Existing hooks with the same name receive argument overrides.
+        Hooks not already present are appended to the module hook chain.
+        """
+
+        merged = PresetRegistry.expand_hooks(
+            child_hooks,
+            parent_hooks=user_hooks,
+        )
+
+        existing_names = {hook.get("name") for hook in merged if isinstance(hook, dict)}
+
+        for user_hook in user_hooks:
+            hook_name = user_hook.get("name")
+
+            if hook_name and hook_name not in existing_names:
+                merged.extend(PresetRegistry.expand_hooks([user_hook]))
+                existing_names.add(hook_name)
+
+        return merged
+
+    @staticmethod
+    def _append_bundle_hooks(child_hooks, append_hooks):
+        merged = PresetRegistry.expand_hooks(child_hooks)
+
+        existing_names = {hook.get("name") for hook in merged if isinstance(hook, dict)}
+
+        for hook in append_hooks:
+            hook = copy.deepcopy(hook)
+
+            if isinstance(hook, str):
+                hook = {"name": hook}
+
+            name = hook.get("name")
+
+            if name in existing_names:
+                # Explicit addition of an existing hook can still act as an override.
+                merged = PresetRegistry.expand_hooks(
+                    merged,
+                    parent_hooks=[hook],
+                )
+            else:
+                merged.extend(PresetRegistry.expand_hooks([hook]))
+                existing_names.add(name)
+
+        return merged
+
+    @classmethod
+    def expand_modules(
+        cls,
+        raw_modules: List[Any],
+        parent_weight: float = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """Expand bundles/recipes into concrete module definitions."""
+
+        cls.load_all()
+        RecipeRegistry.load_all()
+        PresetRegistry.load_all()
+
+        return cls._expand_modules(raw_modules, parent_weight)
+
+    @classmethod
+    def _expand_modules(
+        cls,
+        raw_modules: List[Any],
+        parent_weight: float = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """Recursive implementation; assumes registries are already loaded."""
+
+        expanded_dict: dict[str, Any] = {}
+
+        for mod_dict in raw_modules:
+            if isinstance(mod_dict, str):
+                bundle_def = cls.get_yaml(mod_dict)
+                if bundle_def:
+                    mod_dict = {"bundle": mod_dict}
+                else:
+                    expanded_dict[mod_dict] = {"module": mod_dict}
+                    continue
+
+            target = mod_dict.get("bundle") or mod_dict.get("recipe")
+
+            if target:
+                user_args = mod_dict.get("args", {})
+                override_hooks = mod_dict.get("hooks", [])
+                append_hooks = mod_dict.get("append_hooks", [])
+                selectors = mod_dict.get("select", {})
+                current_weight = float(user_args.get("weight", 1.0)) * parent_weight
+
+                bundle_def = cls.get_yaml(target)
+
+                if not bundle_def:
+                    recipe_meta = RecipeRegistry.get_yaml(target)
+                    if recipe_meta:
+                        bundle_def = recipe_meta.get("config", {})
+
+                if bundle_def:
+                    child_modules = copy.deepcopy(bundle_def.get("modules", []))
+                    child_expanded = cls._expand_modules(
+                        child_modules,
+                        current_weight,
+                    )
+                    if selectors:
+                        child_expanded = cls.select_items(
+                            child_expanded,
+                            selectors,
+                            context=f"Bundle '{target}'",
+                        )
+
+                    for child_mod in child_expanded:
+                        hooks = child_mod.get("hooks", [])
+
+                        if override_hooks:
+                            hooks = PresetRegistry.expand_hooks(
+                                hooks,
+                                parent_hooks=override_hooks,
+                            )
+
+                        if append_hooks:
+                            hooks = cls._append_bundle_hooks(
+                                hooks,
+                                append_hooks,
+                            )
+
+                        if hooks:
+                            child_mod["hooks"] = hooks
+
+                        sig = cls.get_module_signature(child_mod)
+                        expanded_dict[sig] = child_mod
+
+            elif "module" in mod_dict:
+                sig = cls.get_module_signature(mod_dict)
+
+                args = mod_dict.get("args", {}).copy()
+                local_weight = float(args.get("weight", 1.0))
+                args["weight"] = local_weight * parent_weight
+                mod_dict["args"] = args
+
+                if sig in expanded_dict and isinstance(expanded_dict[sig], dict):
+                    existing = expanded_dict[sig]
+
+                    merged_args = existing.get("args", {}).copy()
+                    merged_args.update(mod_dict.get("args", {}))
+
+                    merged_hooks = mod_dict.get(
+                        "hooks",
+                        existing.get("hooks", []),
+                    )
+
+                    expanded_dict[sig] = {
+                        "module": mod_dict["module"],
+                        "args": merged_args,
+                        "hooks": merged_hooks,
+                    }
+                else:
+                    expanded_dict[sig] = mod_dict
+
+            else:
+                logger.error(f"Invalid module definition: {mod_dict}")
+
+        return list(expanded_dict.values())
+
+
+# Profiles extend Streams
+class ProfileRegistry(YamlRegistry):
+    """A registry for discovering and loading Format Profiles."""
+
+    builtin_pkg = "fetchez.streams.profiles"
+    entry_point_group = "fetchez.streams.profiles"
+    user_folder = "streams/profiles"
+
+    @classmethod
+    def get_for_data_type(cls, data_type):
+        cls.load_all()
+
+        return [
+            name
+            for name, profile in cls.get_registry().items()
+            if profile.get("data_type") == data_type
+        ]
+
+    @classmethod
+    def resolve(cls, profile, overrides=None):
+        """Resolve a registered or inline reader profile.
+
+        Overrides apply only to reader.args.
+        """
+
+        if isinstance(profile, str):
+            cls.load_all()
+            config = cls.get_yaml(profile)
+
+            if config is None:
+                return None
+
+        elif isinstance(profile, dict):
+            config = copy.deepcopy(profile)
+
+        else:
+            return None
+
+        if not isinstance(config.get("reader"), dict):
+            logger.warning("Invalid profile: missing reader definition.")
+            return None
+
+        if not config["reader"].get("name"):
+            logger.warning("Invalid profile: missing reader.name.")
+            return None
+
+        if overrides:
+            config.setdefault("reader", {}).setdefault("args", {}).update(overrides)
+
+        return config
+
+    # @classmethod
+    # def reader_args_from_profile(cls, profile_def):
+    #     """Convert yaml definition to list of Hook Objects."""
+
+    #     readers = {}
+    #     profile_id = profile_def.get("profile")
+    #     for p_def in profile_def.get("reader", []):
+    #         name = p_def.get("name")
+    #         kwargs = p_def.get("args", {})
+    #         readers[name] = kwargs
+    #     return readers
+
+
+class DataTypeRegistry(YamlRegistry):
+    """A registry for formal data-types"""
+
+    builtin_pkg = "fetchez.datatypes"
+    entry_point_group = "fetchez.datatypes"
+    user_folder = "datatypes"
+
+    @classmethod
+    def exists(cls, name):
+        cls.load_all()
+        return cls.get_yaml(name) is not None
+
+    @classmethod
+    def get_default_profile(cls, name):
+        cls.load_all()
+        data_type_config = cls.get_yaml(name)
+        if not data_type_config:
+            return None
+
+        default_profile = data_type_config.get("default_profile")
+        if not default_profile:
+            return None
+
+        ProfileRegistry.load_all()
+        return ProfileRegistry.resolve(default_profile)
+
+
+class DetectorRegistry(PluginRegistry):
+    """Discover and execute data-type detectors."""
+
+    base_class = BaseDetector
+    builtin_pkg = "fetchez.datatypes.detectors"
+    entry_point_group = "fetchez.datatypes.detectors"
+    user_folder = "datatypes/detectors"
+
+    @classmethod
+    def detect(cls, entry):
+        cls.load_all()
+        DataTypeRegistry.load_all()
+
+        results = []
+        seen = set()
+
+        for name in sorted(cls.get_registry()):
+            detector_cls = cls.get_class(name)
+
+            if detector_cls is None or detector_cls in seen:
+                continue
+
+            seen.add(detector_cls)
+
+            try:
+                result = detector_cls().detect(entry)
+            except (OSError, ValueError) as exc:
+                logger.debug("Detector %s failed: %s", name, exc)
+                continue
+
+            if not isinstance(result, Detection):
+                continue
+
+            if not isinstance(result.data_type, str):
+                continue
+
+            if not 0.0 <= result.confidence <= 1.0:
+                continue
+
+            if not DataTypeRegistry.exists(result.data_type):
+                continue
+
+            results.append(
+                (
+                    result.confidence,
+                    getattr(detector_cls, "meta_priority", 100),
+                    name,
+                    result,
+                )
+            )
+
+        if not results:
+            return None
+
+        # Higher confidence first; lower priority value wins ties,
+        # followed by the canonical registry name.
+        return sorted(
+            results,
+            key=lambda item: (-item[0], item[1], item[2]),
+        )[0][3]

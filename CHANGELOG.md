@@ -1,0 +1,548 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### ADDED
+- Added ensure-hook modifier to conditially inject hooks into a recipe when another hook requests it.
+- Introduced the finalize hook stage for post-collection operations such as reporting, validation, metadata generation, publishing, and notifications.
+- Added support for scope-specific finalization: module-local hooks operate on post-file/stream source entries, while global hooks operate on completed collection outputs and their artifacts.
+- Added finalize-stage lifecycle and regression tests covering execution ordering, failure handling, cancellation, entry preservation, and teardown.
+- Added documentation in the identity_guide for the new `make_id` utility function.
+- Added per-occurrence module `instance_id` labels in recipes, with explicit YAML id values, Python-instance support, collision-free generated display labels, and compiled-plan lookup through PipelinePlan.modules_by_id.
+- Added shared pipeline execution context for modules and hooks, exposing the compiled plan and cooperative cancellation controls.
+- Added regression coverage for module identity, recipe compilation, discovery lifecycle, cancellation, and context cleanup.
+- Introduced fetchez.utils.identity with make_id(), canonicalize(), and canonical_json() for deterministic, namespaced identity generation across Fetchez and its extensions.
+- `p_f_extract()` (and `p_f_unzip()`, `p_f_untar()`, `p_f_gunzip()`) accept optional keyword-only `max_members` and `max_total_size` limits for untrusted archives. Both default to no limit. The size limit is enforced on the bytes actually decompressed, not only on header sizes (#530).
+- Added `fetchez.utils.UnsafeArchiveError`, a `ValueError` subclass raised when an archive fails a safety check. The `extract` hook now logs these instead of passing the archive through silently as an unsupported format (#530).
+
+### CHANGED
+- Refactored core `run_fetchez` with re-usable stage functions and acquisition.
+- Updated the base FetchHook class to normalize the incoming stage and allow for hooks to set `meta_stages` to declare compatible stages they can run in.
+- Updated hook lifecycle handling and documentation to support five stages (manifest, file, stream, collection, finalize) while preserving existing hook interfaces and execution semantics.
+- Centralized module discovery in `run_fetchez()` before manifest hooks; PipelinePlan.execute() now delegates to the common core execution path. This is opt-in, so the engine supports `discover=True` to perform discovery in `run_fetchez`, previous behavior is maintained.
+- Kept workflow instance labels separate from deterministic module/cache identity and source, dataset, and contribution provenance.
+- Improved failure cleanup and cancellation propagation across discovery, fetching, and hooks.
+- Introduced fetchez.utils.identity with make_id(), canonicalize(), and canonical_json() for deterministic, namespaced identity generation across Fetchez and its extensions.
+- Reorganized the monolithic utils.py into a modular fetchez.utils package, separating archive handling, CLI utilities, file operations, logging, output management, parsing, and general helpers.
+- Consolidated logging utilities under fetchez.utils.logging, preserving backward compatibility with existing imports.
+- Maintained the existing fetchez.utils interface through explicit compatibility exports, allowing extensions to adopt categorized imports incrementally.
+- Refactored core HTTP acquisition with centralized request execution, retry management, and consistent error handling.
+- Standardized acquisition exceptions (`FetchError`, `FetchRetryExhausted`, `FetchCancelled`, `FetchLockTimeout`) and preserved underlying failure causes for improved downstream diagnostics.
+- Improved resumable downloads with byte-range and file-size validation, recovery from interrupted transfers, and reliable partial-file handling.
+- Improved pipeline cancellation and executor shutdown, allowing Ctrl+C to abort workflows without requiring repeated interrupts.
+- Added structured per-entry failure reporting for workflows using `ignore_failures=True`.
+- Expanded core regression tests covering HTTP failures, retry exhaustion, cancellation, download resumption, and error propagation.
+- **Breaking Change** Acquisition failures that previously returned nonzero status codes now raise exceptions. Downstream integrations should handle the appropriate `FetchError` subclasses or `FetchCancelled`. Successful file fetches continue to return `0`.
+
+### FIXED
+- `p_f_extract()` (and `p_f_unzip()`, `p_f_untar()`, `p_f_gunzip()`) now re-extracts every selected member when `overwrite=True`. ZIP and TAR previously kept existing files whose size matched, and GZIP ignored `overwrite` (#530).
+- With `overwrite=False`, an existing ZIP output is reused only when its size and CRC32 match the archive entry, and an existing GZIP output only when its size and CRC32 match the GZIP trailer; otherwise it is extracted again. TAR outputs are still matched on size alone, since TAR stores no content checksum (#530).
+- `p_f_extract()` now rejects an archive whose selected members map to the same output path (duplicate names, names that normalise to the same path, a file and a directory with the same name, and case-only collisions where the destination filesystem folds case) before publishing anything. Previously it crashed with `FileNotFoundError` part-way through publishing (#530).
+- `p_f_extract()` no longer follows an existing symlink at a member's own output path. The symlink is replaced by the extracted file and is never reused as a cached output. Previously the member was written through a symlink that pointed inside the output directory, and rejected if it pointed outside. Symlinked directories that point outside the output directory are still rejected (#530).
+- `p_f_extract()` rejects members such as `dir/..` that name a directory, instead of failing with `IsADirectoryError` (#530).
+- `p_unzip()` writes each file to a temporary file and moves it into place, so it no longer writes through an existing symlink (which could point outside `outdir`) or replace an existing file with bad data when a member fails its CRC check. Backslashes in member names now count as separators. When members flatten to the same file the last one still wins, but a warning is logged and the path is listed once (#530).
+- GZIP extraction now stages and publishes its output the same way as ZIP and TAR. The output gets the usual umask-derived permissions instead of `0600`, no temporary file is left behind when decompression is interrupted (for example by Ctrl+C), and the returned path is resolved like ZIP and TAR member paths (#530).
+- An empty `.gz` file now raises `gzip.BadGzipFile` instead of publishing an empty output, and a `.gz` file with no name before the suffix (such as `.gz`) raises `ValueError` instead of replacing the source with its own decompressed contents (#530).
+
+## [0.12.3 - 11-01-26]
+
+### ADDED
+- Added `modifiers.md` and `schemas.md` to the RTD docs `user_guide`.
+- Added CLI command `fetchez recipes compile` to allow for CLI recipe compilation and inspection.
+- Support parenthesized fractional grid increments (e.g., (1/9)s, (1/3)s) using exact rational parsing before conversion to floating point, avoiding truncated decimal approximations.
+- Support fractional x/y increment pairs (e.g., (1/9)s/(1/3)s) while preserving existing GMT-style increment syntax and backward compatibility.
+- Added `spatial.parse_increment_list` to parse `/`-separated increment lists of any length (e.g., `(1/9)s/(1/3)s/1s`). It raises ValueError on a malformed list or an invalid item.
+- Added module `thredds` as a generic thredds fetch module.
+- Added module `http_index` as a generic http fetch module.
+- Added module `rest.py` as a generic REST API fetch module.
+- Added `to_arcgis_envelope` in spatial.Region to support arcgis rest apis.
+- Added ValueError to `to_*` sptaial.Region functions to raise on invalid geometries.
+
+### CHANGED
+- Missing modifiers and schemas raise and exception by default.
+- RTD Contributor Guide update.
+- RTD Documentation re-write.
+- Renamed `spatial.parse_increments` to `spatial.parse_increment`; the old name remains as an alias.
+- `spatial.parse_increment_pair` now wraps `parse_increment_list`. An invalid increment now raises ValueError instead of returning `(None, None)`.
+- Updated options and features in the `stac` module and added tests and docs.
+- Updated the generic `stac` module to be more robust and ready for expansion
+
+### FIXED
+- Fixed region parsing on malformed region.
+- Fixed recipe receipts being written to the starting directory instead of each batch's tile directory (regression from #490).
+
+## [0.12.2 - 10-23-26]
+### FIXED
+- Fixed regression bug in recipe regarding config and context differing if modifiers get applied.
+
+## [0.12.1 - 10-22-26]
+### ADDED
+- Added standardized contribution identity support through the contribution_id entry field, allowing hooks to distinguish processed variants of the same dataset.
+- Added `set_contribution_id()` and support for consumer-specific keyword arguments in `dataset_id()` to generate deterministic contribution identifiers.
+- Added a Pipeline Entries user guide documenting entry structure, lifecycle, validation, streams, artifacts, and identity management.
+- Added a `py.typed` marker, so type checkers read fetchez's type annotations in code that uses it.
+- Added execution-scoped cancellation contexts for independent and concurrent Fetchez workflows.
+- Added FetchModule.make_fetch() to create cancellation-aware fetchers from module implementations.
+- Added --ignore-failures to recipe and pipeline CLI commands to explicitly enable tolerant execution.
+- Expanded core and API regression tests covering failure propagation, hook lifecycle management, stream processing, and execution-context cleanup.
+- Added recipe tests
+- Added registry tests
+- Added Documentation page for the `exec` hook.
+- Added raster hooks, ported from globato; raster-write, raster-clamp, raster-limits.
+- Added raster reader documentation page.
+- Added output utils for atomic file writing and naming.
+- Added conftest.py to tests to reset the fetchez logger for `propagate=True`
+
+### CHANGED
+- `utils.str2inc` is replaced by `spatial.parse_increments` and now points there. This gives us better unit coverage and CRS awareness for increment parsing.
+- Extended the Fetchez entry vocabulary to formalize contribution identity while preserving the existing dictionary-based entry interface.
+- Improved dataset identity handling to support multiple independent processing contributions without requiring consumer-specific identifier logic.
+- **Breaking change**: Pipeline execution now defaults to strict failure handling across the core, API, and CLI. Use ignore_failures=True or --ignore-failures to continue processing after recoverable errors.
+- fetchez.get() now propagates module initialization and discovery failures by default instead of returning an empty result. Explicit tolerant mode preserves the previous behavior.
+- Deprecated the CLI --fail-fast option, retaining it temporarily for backward compatibility.
+- Replaced the global STOP_EVENT with per-execution cancellation contexts to prevent unrelated pipelines from interfering with one another.
+- Updated HTTP Range recovery to retry HTTP 416 responses without the invalid range while preserving the original request headers.
+- Ensure external aliases don't clobber builtin registry items.
+- Updated registry `_get_class` to protect existing registry names from external plugins
+- Raise `ValueError` in yamlregistry when config is non dict.
+- Updated `exec` hook to be more functional and record the command output in the entry dict.
+- Updated raster stream reader to inlcude the 'context' of the full raster in each chunk.
+- Categorized and re-organized the test suite.
+
+### FIXED
+- `Recipe.compile()` now builds the modules and pipeline plan on the region the recipe modifiers leave in `config["region"]` (e.g. the buffered tile from globato's `buffer-and-cut`), instead of the unmodified batch region; batch naming still uses the batch region.
+- Prevented unsupported contribution identity values from silently producing ambiguous identifiers.
+- Corrected hook lifecycle ordering and cleanup across manifest, file, stream, and collection stages, including failure paths and shared hooks.
+- Ensured active download workers complete or stop before file/stream hook teardown, and processing streams are exhausted before finalization.
+- Fixed inconsistent error handling for malformed manifest entries, missing hooks, and empty pipeline results.
+- Improved HTTP/FTP transfer error reporting, resource cleanup, cancellation handling, and FTP overwrite protection.
+- Fixed local file source/destination comparison and prevented XML retrieval failures from silently producing empty documents.
+- `run_fetchez` now returns [] on empty results, instead of None.
+- Raise on malformed dict in `run_fetchez` when `ignore_failures` is False
+- Fix api.get to raise on errors instead of logging when `ignore_failures` is False.
+- Modidier init in recipe now uses the constructor_kwargs
+- Schema failure in recipe compile now correctly honors the ignore_failures flag and raises when False
+
+## [0.11.1 - 10-16-26]
+### FIXED
+- Fixed recipe-relative path resolution for home-directory paths (`~/...`), ensuring user paths are expanded before resolving against the recipe directory.
+- Improved consistency of local-file source normalization and path resolution across Recipe and streaming workflows.
+
+## [0.11.0 - 10-16-26]
+### ADDED
+
+- Added Recipe.compile(), RecipeContext, and PipelinePlan for preparing, inspecting, and executing workflows programmatically without invoking the full batch runner.
+- Added fetchez.logging to hold the logging configuration.
+- Integrated `DataTypeRegistry` with the existing profile and reader infrastructure, supporting explicit profile selection and optional default profiles for generic data type.
+- Added entry-aware reader resolution through ReaderRegistry.get_reader_from_entry(), preserving legacy reader dtype and file-extension fallbacks.
+- Added support for explicit reader output metadata (meta_produces) with backward-compatible meta_category fallback.
+- Added 'resolve' to ProfileRegistry to allow for inline profile definitions outside of the main registry.
+- Added `set-entry` hook as a generic/arbitrary module entry setter. This supersedes the individual setters such as `set-datatype` and `set-srs` (those are still available).
+- Added Documentation sections for individual hooks and modules.
+- Added `DetectorRegistry` for data-type detection.
+- Added `detect_data_type` to the `enrich` hook.
+- Added a generic Rasterio reader supporting windowed single-band and multiband raster-stream output, including optional masks, CRS, geotransforms, and band metadata.
+- Added the rasterio reader profile for explicit raster-stream initialization.
+- Added `Region.to_window()` for numerically stable raster window selection and source-grid alignment.
+- Added a standard CSV reader profile.
+- Added `meta_effetcts` to all builtin hooks.
+
+### CHANGED
+
+- Refactored api.read to use the refactored recipe.py for workflow compilation.
+- Refactored the Recipe engine to separate workflow compilation, component initialization, execution, and batch orchestration.
+- Improved support for Python-defined modules and hooks, including unregistered classes, preconfigured instances, and mixed declarative/runtime recipes.
+- Simplified Recipe.run() while preserving multi-region execution, shared caching, execution receipts, and batch resumption.
+- Consolidated legacy path argument resolution into shared helpers, with explicit handling of recipe-relative inputs and batch-relative outputs.
+- Expanded Recipe documentation and regression tests, including successful validation against existing Globato DEM-building workflows.
+- **BREAKING** Moved logging setup from cli to fetchez.logging.
+- Update the cli discovery tools to improve discoverablity through metadata.
+- Every dependency now has a minimum version that installs on Python 3.12, fetchez's oldest supported Python: the first release with Python 3.12 wheels for compiled packages, or a release from around Python 3.12's own (fall 2023) for pure-Python ones. `shapely>=2.0.3` and `pyogrio>=0.8.0` are a little past their first Python 3.12 wheels, since the earlier releases install alongside numpy 2 but fail to import. CI now also runs the tests with each dependency at its minimum, and on Python 3.14.
+- Refactored stream-init to separate reader selection, configuration, spatial metadata handling, and stream initialization.
+- Update `ProfileRegistry.get_reader_from_entry` to accept inline profiles via the new `.resolve`.
+- Improved `fetchez.read()` documentation to clarify source configuration, lazy stream execution, and composable `.pipe()` workflows.
+- Documented explicit reader configuration through `stream-init` and registered or inline profiles.
+- Expanded the Streams guide with practical Python examples, multi-source workflows, reader development, and extension integration.
+- Clarified the separation between module acquisition arguments, reader profiles, and stream processing while retaining legacy argument support for compatibility.
+- **BREAKING** - reader args passed through module entries are no longer supported by default, to recover this usage set `legacy_entry_kwargs=True` in `stream-init`.
+- Updated documentation cli references to align with modern cli usage.
+- Extended `stream-init` with optional data-type detection and normalization using `DetectorRegistry`.
+- Updated extraction to treat extracted files as independent artifacts, clearing inherited data-type and reader-profile assignments.
+- Removed point-specific .inf generation from the generic reader base.
+- Expanded spatial and reader-profile regression tests.
+- Updated cli `hooks` command for better grouping and discovery.
+- **BREAKING** - Moved cli related utils from `fetchez.utils` to `fetchez.cli.utils`
+
+### FIXED
+
+- `api.get(..., dry_run=True)` no longer fails with a ValueError on every module; it returns the URLs of the module's entries (#414).
+- A failed CMR granule search in the Earthdata modules (the `EarthData` class and its `IceSat2`, `SWOT` and `MUR_SST` subclasses) raises `EarthdataSearchError` instead of logging an error and returning no results (#470). A search that couldn't reach CMR, got an HTTP error, or got back an answer it couldn't read looked the same as one that found no granules, so code that runs a module directly took an outage for missing data; globato's lookup of the ATL08 and ATL24 granules for an ATL03 granule, for one, went on without them. fetchez's own command line, `fetchez.get()` and recipes catch the error as they catch any module failure, so they behave as before: the failure is logged and the module gives no results. Passing `strict_search=False` to the module turns the error off: the failure is logged as a warning and the search gives no results.
+- A stream (`BaseStream`, and so `globato.read()`) whose reader raises partway through a file raises that same exception to the code iterating it, after the chunks read before the failure (#472). The exception was lost in the stream's background thread, so the stream just ended early, the same as a file with no more data. This changes what callers see: with `ignore_failures` off, the default, iterating a stream can now raise where it used to stop quietly. With `ignore_failures=True` a failed stream still ends early, with the error logged.
+
+## [0.10.0 - 2026-10-06]
+
+### ADDED
+
+- modules.base identity pops the default non-set arguments from the sub-module
+- Add `module_allowed` and `bundle_allowed` in cli.pipeline, so extensions can use the common commands and restrict modules by tag/cat/etc.
+- Allow hooks on bundles; applied to every child module.
+- Added positional Hook/Preset scoping: processing components before the first source are global, while those following a Module or Bundle are attached to that source.
+- Added dynamic component-specific CLI options from registry metadata.
+- Added Bundle member selection with `--select KEY=VALUE`.
+- Added Bundle `append_hooks` semantics while preserving `hooks` as sparse overrides of existing child hooks.
+- Added `PipelineExecutor` filtering hooks so extensions can expose domain-specific subsets of registered Modules, Bundles, Hooks, and Presets.
+
+### CHANGED
+
+- Slight refactor of pipeline (run) click cli
+- Refactor cli commands. `run` -> `build`; `recipe run` -> `run`: build pipelines, run recipes.
+- Expanded `fetchez build` into a registry-driven pipeline composer supporting Modules, Bundles, Hooks, and Presets as dynamic chained commands.
+- Simplified and accelerated `fetchez build --help` by moving dynamic component discovery to the dedicated registry listing commands.
+- Update the mbdb modules entries to include the mb survey id.
+
+### FIXED
+
+- Resotre discovery of cli decorator's help_text in the registry.
+- `ReaderRegistry.get_reader` lets reader kwargs override a profile's reader args instead of raising `TypeError` when both set the same argument.
+
+## [0.9.3 - 2026-10-02]
+
+### ADDED
+
+- Added generic select filtering for module bundles and hook presets using dotted YAML paths such as args.products.
+- Bundle and preset members can now be filtered by existing configuration values without introducing component-specific selector syntax.
+- Members that do not define a selected field are retained so helper modules/hooks can pass through unchanged.
+- Invalid selector paths now raise a clear configuration error.
+- Added user-guide examples for bundle and preset selection.
+
+### CHANGED
+
+- Constructor arguments are captured automatically and included in the module's identity configuration.
+
+## [0.9.2 - 2026-10-01]
+
+### ADDED
+
+- Added deterministic `module_id` generation based on a canonical representation of module configuration.
+- Unified module identity across discovery caching and bundle deduplication, removing the need for bundle-specific lists of identifying module arguments.
+- Added `_update_module_config()` for modules to declare subclass-specific options that affect discovery or provided data.
+- Module identity now excludes runtime state while normalizing configuration defaults and aliases for stable IDs.
+- Added contributor documentation and regression coverage for canonical module identity.
+- Added a formal, extensible Fetchez entry contract while retaining entries as ordinary dictionaries.
+- Added deterministic `entry_id`, `source_id`, and `dataset_id` helpers with distinct identity semantics.
+- Added `profile` as a standardized entry field for separating generic data representation from reader/profile interpretation.
+- Added the extensible `DataTypeRegistry` with initial `archive`, `raster`, and `vector` data types.
+- Added API and CLI discovery for registered data types, including `fetchez datatypes`.
+- Added tests covering entry validation and identity semantics, data-type discovery, dynamic registration, and registry behavior.
+- Established data types as generic representations independent of domain-specific interpretation or reader selection.
+- Added new `_update_module_config` to mbdb module.
+
+### FiXED
+
+- `nos_hydro` no longer loses every survey when one request fails. A missing (404) survey directory or file is skipped; other failures are retried, then logged, files that cannot be checked are kept, and the list is not cached.
+- File and directory checks in `mbdb` and `nos_hydro` (shared `core.url_status` / `core.get_html_page`) retry only failures a retry can fix (timeouts, connection errors, 408, 429, 5xx). Other client errors and impossible requests are final, so a healthy server can no longer keep a list from being cached; a server that refuses HEAD is asked for one byte with GET.
+- Fixed modules.base cache json race condition during concurrency.
+- `mbdb` now pages its MapServer query, so regions with more than 2000 surveys get all of them instead of the first 2000. A failed page is logged and the partial list is not cached.
+- `mbdb` no longer drops a survey when its file check times out or the server errors; only a 404/410 counts as missing. Failed checks are retried, and a file that still cannot be checked is listed, logged, and keeps the list from being cached.
+- Fix base module region cache bug.
+
+## [0.9.1 - 2026-09-27]
+
+### ADDED
+- Add concurrency-safe `p_f_extract` utility for ZIP, TAR, TAR.GZ, TGZ, and GZIP archives, with inter-process locking, staged extraction, and atomic file publication.
+- Add `p_f_untar` and `p_f_gunzip` convenience utilities alongside the existing `p_f_unzip` interface.
+- Add the generalized `extract` file hook, with `unzip` retained as a backwards-compatible alias.
+
+### CHANGED
+- Refactor archive extraction utilities and hooks around a common implementation so concurrent processes cannot observe partially extracted files.
+- Existing completed archive members are now reused where possible instead of being unnecessarily re-extracted.
+
+## [0.9.0 - 2026-09-24]
+
+### ADDED
+- Add readable TNM elevation aliases while keeping the existing numeric selectors.
+- Preserve TNM source metadata and allow `dedupe=false` to retain overlapping products.
+- Add usgs_ds704 and usgs_of2005_1170 modules
+- Added explicit registry reload support while preserving dynamic plugin registrations and safely detecting registries that have been rebuilt or cleared.
+- Added explicit yaml registry reload support in line with the PluginRegistry reload functionality.
+
+### CHANGED
+- Change the recipe batch_state output to live in `base_outdir` instead of `cwd`
+- Improved registry performance by avoiding repeated plugin discovery when an already fully loaded registry is reused.
+- Reduced redundant registry loading during nested bundle and preset expansion.
+- Improved expansion safety so recursive bundle processing does not modify registry-owned YAML definitions.
+- Expanded registry lifecycle and YAML composition tests to protect dynamic loading, recursive expansion, and cache invalidation behavior.
+- api.py uses deepcopy to return loaded registry.
+
+
+### BUGFIX
+- Never cache the empty result of a Harmony job that did not succeed. A job that failed, was canceled, completed with errors, stopped on an unrecognised status, or was never created left an empty entry in the results cache, and every later run of the same request replayed that empty answer instead of polling the job again.
+- Skip the preview of a large Harmony job instead of abandoning it. Harmony answers a job over its preview threshold with the status `previewing`, which the poll did not recognise, so it stopped and the request came back empty; the job now has its preview skipped and is polled to completion.
+- Keep download resume headers from leaking into other requests or caller-provided headers.
+- Report a TNM API outage as an error instead of zero products, and never cache the results of a failed TNM query.
+- Spatial cull corrects invalid geometries incorrectly read from shapefiles.
+- Fix unzip hook checking for .tar.gz and .tgz compression.
+
+## [0.8.5 - 2026-08-19]
+### ADDED
+- Sandbox (namespace) loaded external registry entries if they conflict with builtins.
+
+### CHANGED
+- Removed registry cache system
+
+## [0.8.2 - 2026-08-09]
+### CHANGED
+- Update example scripts/etc.
+- Allow readers.base to generate generic inf files
+- local_fs module correctly parses Readers
+
+### BUGFIX
+- recipe.py would kill all fetching when one failed (even on ignore_failures).
+
+## [0.8.1 - 2026-08-09]
+
+### ADDED
+- Use tags to search for recipes
+- Add streams docs
+
+### CHANGED
+- Merged local_fs and path modules
+
+### BUGFIX
+- exclude_modules dict input fix
+
+## [0.8.0 - 2026-08-06]
+### ADDED
+- Add new ModifierRegistry to intercept recipes and modify them before running
+- Add `filelock` as dependency and include it's use in fetchez.core to prevent multiple processes from trying to fetch the same data.
+- Add `filelock` to the copernicus_marine module (this uses a third-party library for fetching, so we wrap it in filelock).
+- Add `cache` command cli to clear cache info
+- Add `--refresh` option to refresh cache at runtime
+- Add `--ignore-failures` option to ignore module and hook exceptions
+- Add `Pipeline` and `read` functions to the api
+- Add `BaseStream` class to fetchez.streams to yield chunks from `Readers`
+
+### CHANGED
+- Schemas are now for pure validation, mutations happen with modifiers instead
+- Update recipe._generate_receipt to give some more useful information
+- Update the use of paths in modules.base so that we use relative paths
+- Update modules.base cached_run to use relative paths in cache instead of absolute paths
+- Upgrade Exception handling for 'fail-fast' defaults
+- Update most code to use pathlib, ongoing...
+- Changed `--ignore-failures` to `--fail-fast` (may change back)
+- Moved module/hook expansion from Recipe to registry
+
+### BUGFIX
+ - keyboard interrupt wouldn't correctly get passed to the concurrent threads and got looped into the logging library; moving the try/except to inside the with concurrent and adding a logging.debug in the keyboardinterrupt solves this and now is responsive and acting as expected.
+
+## [0.7.0 - 2026-07-22]
+### ADDED
+- Refactor for better srs support
+- Recipes translate command to output recipe as json
+- New modules, including UHSLC, etc.
+- Vector region support
+- Recusrive bundle support
+- Recipe 'translate' to dump a valid cli from a yaml
+- Ensure `stream-init` gets set as the first hook in the `stream` stage.
+- Add --region and --region-srs options to the `recipes run` cli
+- Recursive preset support
+- Added regions cli (from globato)
+
+### CHANGED
+- Modules must now use self.wgs_region to ensure valid wgs api requests, while self.region stays in original srs.
+- Dropped fiona for pyogrio.
+- Promoted pyogrio, shapely and pyproj to standard dependencies.
+- Refresh readthedocs documentation.
+- Refresh CLI documentation and help messages.
+- Moved `yield_parsed_regions` from globato.utils to fetchez.spatial
+- Refactor fetchez.recipe - moved a lot of stuff from globato, incl. batching, shared-cache
+
+### BUGFIX
+- fix to authentication in fetchez.core, now uses custom sessions
+- enforce stream-init as first stream hook to run
+- removed duplicate FetchModule from fetchez.core
+
+## [0.6.4 - 2026-05-12]
+### ADDED
+- `stream` hook stage in core
+- Moved compile_source function from globato.utils to utils
+
+### CHANGED
+- Updates gmrt module to use urls? endpoint for large regions
+
+### BUGFIX
+- typo in setsrs
+
+## [0.6.3 - 2026-05-07]
+### CHANGED
+- Update gebco fetchez module to fetch new 2026 grid, and allow subsetting!
+- Moved recipe validation from cli to fetchez.recipe
+- Updated verbosity in fetchez.core
+
+
+## [0.6.2 - 2026-04-30]
+### ADDED
+- ProfileRegistry - streams
+- ReaderRegistry - streams
+- copernicusmarine module (SDB)
+- SYSU module (gravity based bathymetry)
+
+### CHANGED
+- Re-structure directories
+-- 'macros' go in their parent directories
+- Use click instead of argparse for CLI
+- core.run_fetchez now returns the final list of entries for use in the api and elsewhere.
+- Update run cli to allow for inherited options for modules.
+
+### BUGFIX
+- fix bug in earthdata.icesat2 for harmony fetching.
+
+## [0.5.5 - 2026-04-24]
+### ADDED
+- BundleRegistry: bundle multiple modules + hooks in a yaml registry.
+
+### CHANGED
+- Update CDSE module to get B08 (IR)
+- Change logging from name->module
+
+## [0.5.5 - 2026-04-22]
+### ADDED
+- SYSU_topo dataset
+- Add utility functions for dataset_id parsing
+
+### CHANGED
+- read_timeout in fetchez.core from None->120
+- Descriptions in tqdm updated to be more useful
+- Allow for POST in fetch_file
+
+### BUGFIX
+- fetchez_cache records empty results
+
+## [0.5.4 - 2026-04-16]
+### ADDED
+- Added PresetRegistry into registry
+- Add audit_full builtin preset
+- Add GSHHG module (shorelines)
+- Add CUSP module (shorelines (US))
+
+### CHANGED
+- Update recipe.py to use the new PresetRegistry
+- Update nos_hydro for new API
+- Update CLI for PresetRegistry
+- Removed obsolete presets.py
+
+## [0.5.3] - 2026-04-09
+### ADDED
+- Added parse_source_string and parse_hook_string in utils
+- Added spatial.regions_intersect from cudem.regions
+
+### CHANGED
+- re-arranged cli help
+
+### BUGFIX
+- spatial region parsing of geojson files, returns all regions.
+
+## [0.5.2] - 2026-04-02
+### ADDED
+- Add "lidarbc" fetchez modules (canada)
+- Add .fetchez_cache to save module results for re-use
+- Add RecipeRegistry to registry.py
+- Add --list-recipes to cli
+
+### CHANGED
+- FetchModule is now in fetchez.modules
+- fetchez.registry combines all registries (modules/hooks for now)
+- Hooks are moved out of builtins to flat directory
+- Now load extensions/plugins automatically
+- Module metadata is prefixed with "meta_"
+- Stage names: "pre" -> "manifest"; "post" -> "collection"
+- Schema is now Schemas and uses global registry.
+- Update to vdatum.geojson fred index of the vdatum module
+
+### BUGFIX
+- Update to fbt reading, accounting for heading; fix!
+
+## [0.4.3] - 2026-03-02
+- Breaks hooks into individual files, out of topical ones.
+- Hooks are now auto-detected from 'builtins', so we don't have to maintain a registry.
+- Adds 'focus' and 'datatype' builtin hooks.
+- The 'unzip' hook now supports tar and gz.
+- Post-hooks in fetchez.core was ignoring entry changes, this fixes that.
+- We now use yaml files for config, including presets
+- Fixed https (now url_fetcher) module bug.
+- Add 'schemas' and 'recipe'.
+- All builtin hooks in hooks.builtins.
+- Add documentation.
+- Some new modules.
+
+## [0.4.2] - 2026-02-21
+### Added
+- Hook system for fetchez! (--list, --inventory, --pipe-path are now hooks)
+- Users can add their own hooks in ~/.fetchez/hooks
+- 'file' module to send local data through hooks
+- --outdir option in CLI (global and per-module).
+- Each entry now gets a 'history' key that keeps track of the hooks it passed through.
+
+### Changed
+- groupded parsers in argparse
+- updated pyproject.toml for optional deps.
+
+### BUGFIX
+- pyproj/pyshp error msg in dav.py
+- name conflict with cudem/coned/dav
+- double path.join in core fixed. (this resulted in duplicated outdirs)
+- unzip hook would send a bad entry record if the unzip files already existed
+
+## [0.3.0] - 2026-02-01
+### Added
+- fetchez.spatial region_from_place centered on place
+- Add TIGER
+- Add arcticdem
+- Add DAV
+- fetchez.utils p_unzip from cudem.utils
+- examples dir for examples, workflows, scripts using fetchez
+- bing and tides examples
+- sphinx auto-docs
+- inventory option in the cli
+- Most old fetches modules are now ported to fetchez
+
+### Changed
+- README updates
+- CLI description (geospatial vs elevation)
+- concurent.futures testing for threads
+- STOP_EVENT in fetchez.core threads
+- logger uses tqdm.write to not clobber progress bars
+- spatial.parse_regions will now output all the regions found in a geojson
+
+## [0.2.0] - 2026-01-27
+### Added
+- Initial standalone release of Fetchez.
+- Decoupled from CUDEM project.
+- New `fetchez.spatial` module for lightweight region parsing.
+- New `fetchez.registry` for lazy module loading.
+- Modernized CLI with logging support.
+- FRED index now uses GeoJSON and Shapely directly (removed OGR dependency).
+- csb module
+- fetchez.spatial 'region_to_wkt' method
+- fetchez.core fetch_req now supports 'method' arg
+- fetchez.spatial 'region_center' method
+- buouy module
+- gmrt module
+- fetchez.spatial 'region_to_bbox' method
+- waterservices module
+- etopo module
+- fetchez.spatial 'region_to_geojson_geom'
+- chs module
+- bluetopo module
+- user plugins
+- add emodnet
+
+### Changed
+- Renamed project from `fetches` to `fetchez`.
+- Refactored some old cudem.fetches modules to inherit from `fetchez	.core.FetchModule`.
+- In fetchez.core, allow for transparent gzip (local size is larger than remote size)

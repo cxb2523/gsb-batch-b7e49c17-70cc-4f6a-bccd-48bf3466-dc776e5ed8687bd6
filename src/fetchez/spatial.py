@@ -1,0 +1,1388 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+fetchez.spatial
+~~~~~~~~~~~~~~~~
+
+Lightweight spatial utilities for parsing region strings and files into
+standard bounding boxes. Adaptded from CUDEM.
+
+:copyright: (c) 2012 - 2026 CIRES Coastal DEM Team
+:license: MIT, see LICENSE for more details.
+"""
+
+import json
+import math
+import logging
+import warnings
+from pathlib import Path
+from typing import Union, List, Tuple, Optional
+from fractions import Fraction
+
+from shapely.geometry import shape, box
+from shapely import from_wkb
+from pyproj import CRS, Transformer
+from pyproj.exceptions import CRSError
+from pyogrio.raw import read
+from pyogrio import read_info
+
+from fetchez.utils import str_or, _linspace
+
+logger = logging.getLogger(__name__)
+
+
+def region_help_msg():
+    return """\b
+Region Formats:
+  xmin/xmax/ymin/ymax      : Bounding box
+  loc:"City,State"         : Geocode place name
+  file.geojson             : Bounding box(es) of vector file
+    """
+
+
+def _snap_pixel_boundary(value, tol=1e-9):
+    """Remove floating-point noise near integer pixel boundaries."""
+    nearest = round(value)
+
+    if abs(value - nearest) <= tol:
+        return float(nearest)
+
+    return value
+
+
+# =============================================================================
+# Increment parsing and CRS-aware conversion
+# =============================================================================
+
+_INCREMENT_NUMBER = r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_LINEAR_METERS = {
+    "e": 1.0,  # meters
+    "f": 0.3048,  # international feet
+    "k": 1000.0,  # kilometers
+    "M": 1609.344,  # statute miles
+    "n": 1852.0,  # nautical miles
+    "u": 1200.0 / 3937.0,  # US survey feet
+    "t": 1.0,  # legacy approximate meter unit
+}
+
+
+def _parse_fraction(text):
+    """Parse a parenthesized positive number or ratio."""
+    text = text.strip()
+
+    if not (text.startswith("(") and text.endswith(")")):
+        return None
+
+    try:
+        parts = [part.strip() for part in text[1:-1].split("/")]
+
+        if len(parts) == 1:
+            result = Fraction(parts[0])
+        elif len(parts) == 2:
+            result = Fraction(parts[0]) / Fraction(parts[1])
+        else:
+            return None
+
+        number = float(result)
+        return number if math.isfinite(number) and number > 0 else None
+    except (ValueError, OverflowError, ZeroDivisionError):
+        return None
+
+
+def _parse_increment_value(value):
+    """Return (positive magnitude, unit) or None for an invalid increment."""
+    if value is None:
+        return None
+
+    if isinstance(value, Fraction):
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
+        return (number, None) if math.isfinite(number) and number > 0 else None
+
+    text = str(value).strip()
+    if not text or text.lower() == "none":
+        return None
+
+    unit = None
+
+    if text[-1] in "dmscefkMnut":
+        unit = text[-1]
+        text = text[:-1].strip()
+
+    try:
+        if text.startswith("("):
+            number = _parse_fraction(text)
+        else:
+            number = float(text)
+    except (ValueError, OverflowError):
+        return None
+
+    if number is None or not math.isfinite(number) or number <= 0:
+        return None
+
+    return number, unit
+
+
+def parse_increment(value, crs="EPSG:4326", *, at=None, axis="x"):
+    """Parse one positive GMT-style increment into coordinate units of *crs*.
+
+    Supports ordinary numeric increments (``1s``, ``0.5m``) and
+    parenthesized numbers or fractions (``(1)s``, ``(1/9)s``,
+    ``(1/3)m``). Parentheses distinguish fractions from the
+    ``x/y`` increment-pair separator.
+
+    Unsuffixed values are already in target CRS coordinate units. Geographic
+    suffixes d/m/s/c denote degrees, minutes, and seconds; linear suffixes
+    e/f/k/M/n/u denote meters, feet, km, miles, nautical miles, survey feet.
+    Legacy ``t`` also denotes meters.
+
+    ``at`` is a (longitude, latitude) tuple in degrees, NOT target CRS units.
+    Angular-to-projected conversion requires ``at``. For linear-to-geographic
+    conversion, the default reference is (0, 0), where the result approximates
+    the displacement at the equator. ``axis`` specifies X/east or Y/north.
+
+    Returns None if *value* is not a valid positive increment (including
+    ``x/y`` lists; use `parse_increment_list` or `parse_increment_pair`).
+
+    Raises:
+        ValueError: If *crs*, *at* or *axis* is invalid, or a valid increment
+            cannot be converted at the given location.
+    """
+    parsed = _parse_increment_value(value)
+    if parsed is None:
+        return None
+
+    number, unit = parsed
+    if axis not in ("x", "y"):
+        raise ValueError("axis must be 'x' or 'y'")
+
+    try:
+        target = CRS.from_user_input(crs)
+    except CRSError as exc:
+        raise ValueError(f"Invalid increment CRS: {crs!r}") from exc
+
+    if not (target.is_geographic or target.is_projected):
+        raise ValueError("Increment CRS must be geographic or projected")
+
+    if unit is None:
+        return number
+
+    if at is not None:
+        if len(at) != 2 or not all(math.isfinite(float(v)) for v in at):
+            if str(at).lower().startswith(("loc:", "place:")):
+                lon, lat = point_from_place(at)
+            else:
+                raise ValueError(
+                    "at must be a finite (longitude, latitude) pair or a 'loc:' place name."
+                )
+        else:
+            lon, lat = map(float, at)
+
+        if not (-90 <= lat <= 90):
+            raise ValueError("reference latitude must be between -90 and 90")
+    else:
+        lon, lat = 0.0, 0.0
+
+    if unit in "dmsc":
+        degrees = number / (60.0 if unit == "m" else 3600.0 if unit in "sc" else 1.0)
+        if target.is_geographic:
+            # CRS angular axis coordinate units might not be degrees.
+            units_to_radians = target.axis_info[
+                0 if axis == "x" else 1
+            ].unit_conversion_factor
+            return math.radians(degrees) / units_to_radians
+
+        if at is None:
+            raise ValueError(
+                "at=(longitude, latitude) required for angular-to-projected increments"
+            )
+
+        transformer = Transformer.from_crs("EPSG:4326", target, always_xy=True)
+        x0, y0 = transformer.transform(lon, lat)
+        x1, y1 = transformer.transform(
+            lon + degrees if axis == "x" else lon,
+            lat + degrees if axis == "y" else lat,
+        )
+        result = abs((x1 - x0) if axis == "x" else (y1 - y0))
+        if not math.isfinite(result) or result <= 0:
+            raise ValueError(
+                "Cannot calculate a positive projected increment at this location"
+            )
+
+        return result
+
+    meters = number * _LINEAR_METERS[unit]
+    if target.is_projected:
+        # Coordinate increments.
+        unit_factor = target.axis_info[0 if axis == "x" else 1].unit_conversion_factor
+        return meters / unit_factor
+
+    geod = target.get_geod()
+    azimuth = 90 if axis == "x" else 0
+    lon2, lat2, _ = geod.fwd(lon, lat, azimuth, meters)
+    delta = abs((lon2 - lon) if axis == "x" else (lat2 - lat))
+    unit_factor = target.axis_info[0 if axis == "x" else 1].unit_conversion_factor
+
+    return math.radians(delta) / unit_factor
+
+
+# Older name, public since 0.12.0.
+parse_increments = parse_increment
+
+
+def _split_increment_list(value):
+    """Split a '/'-separated increment list, ignoring slashes inside parentheses.
+
+    Returns the items as stripped strings.
+
+    Raises:
+        ValueError: If parentheses are unbalanced or nested.
+    """
+    depth = 0
+    start = 0
+    items = []
+
+    for i, char in enumerate(value):
+        if char == "(":
+            depth += 1
+            if depth > 1:
+                raise ValueError("Nested parentheses are not supported")
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("Unbalanced increment parentheses")
+        elif char == "/" and depth == 0:
+            items.append(value[start:i].strip())
+            start = i + 1
+
+    if depth != 0:
+        raise ValueError("Unbalanced increment parentheses")
+
+    items.append(value[start:].strip())
+    return items
+
+
+def parse_increment_list(value, crs="EPSG:4326", *, at=None, axis="x"):
+    """Return a list of increments from a '/'-separated string or a sequence.
+
+    Accepts any number of increments, e.g. ``1s``, ``1s/3s/9s`` or
+    ``(1/9)s/(1/3)s/1s``. Slashes inside parentheses are fractions; slashes
+    outside parentheses separate items. A list or tuple is parsed item by
+    item, and any other scalar is a one-item list. Each item is parsed with
+    `parse_increment`.
+
+    ``axis`` is either one axis ('x' or 'y') for every item, or a sequence
+    with one axis per item.
+
+    Raises:
+        ValueError: If the list is malformed (unbalanced or nested
+            parentheses, empty items), any item is not a valid increment,
+            ``axis`` does not match the number of items, or `parse_increment`
+            raises.
+    """
+    if isinstance(value, (tuple, list)):
+        items = list(value)
+    elif isinstance(value, str):
+        items = _split_increment_list(value)
+    else:
+        items = [value]
+
+    if not items:
+        raise ValueError("Increment list is empty")
+
+    if isinstance(axis, str):
+        axes = [axis] * len(items)
+    else:
+        axes = list(axis)
+        if len(axes) != len(items):
+            raise ValueError(
+                f"Got {len(axes)} axes for {len(items)} increments in {value!r}"
+            )
+
+    increments = []
+    for item, item_axis in zip(items, axes, strict=True):
+        inc = parse_increment(item, crs=crs, at=at, axis=item_axis)
+        if inc is None:
+            raise ValueError(f"Invalid increment {item!r} in {value!r}")
+        increments.append(inc)
+
+    return increments
+
+
+def parse_increment_pair(value, crs="EPSG:4326", *, at=None):
+    """Return (x_increment, y_increment) from a single value or an x/y pair.
+
+    A single value applies to both axes. Slashes inside parentheses
+    represent fractions; slashes outside parentheses separate x/y. This is
+    `parse_increment_list` limited to one or two items.
+
+    Raises:
+        ValueError: If there are more than two increments, or for any reason
+            `parse_increment_list` raises.
+    """
+    if isinstance(value, (tuple, list)):
+        items = list(value)
+    elif isinstance(value, str):
+        items = _split_increment_list(value)
+    else:
+        items = [value]
+
+    if len(items) == 1:
+        items = items * 2
+    if len(items) != 2:
+        raise ValueError(f"Expected a single increment or x/y pair, got {value!r}")
+
+    x, y = parse_increment_list(items, crs=crs, at=at, axis=("x", "y"))
+    return x, y
+
+
+# =============================================================================
+# The Region Class
+# =============================================================================
+
+
+class Region:
+    """A geospatial bounding box object.
+
+    Behaves like a tuple (xmin, xmax, ymin, ymax) for backward compatibility,
+    but provides methods for manipulation and format conversion.
+    """
+
+    def __init__(self, w=None, e=None, s=None, n=None, srs=None):
+        self.xmin = float(w) if w is not None else None
+        self.xmax = float(e) if e is not None else None
+        self.ymin = float(s) if s is not None else None
+        self.ymax = float(n) if n is not None else None
+        self.srs = srs
+
+    # --- Tuple Compatibility  ---
+    def __iter__(self):
+        """Unpacks as: w, e, s, n = region"""
+
+        yield self.xmin
+        yield self.xmax
+        yield self.ymin
+        yield self.ymax
+
+    def __getitem__(self, index):
+        """Allows indexing: region[0]"""
+
+        return [self.xmin, self.xmax, self.ymin, self.ymax][index]
+
+    def __len__(self):
+        """Allows len(region), always returns 4."""
+
+        return 4
+
+    def __repr__(self):
+        srs_str = f", srs='{self.srs}'" if self.srs else ""
+        return f"Region({self.xmin}, {self.xmax}, {self.ymin}, {self.ymax}{srs_str})"
+
+    def __eq__(self, other):
+        if isinstance(other, (list, tuple)) and len(other) == 4:
+            return list(self) == list(other)
+        if isinstance(other, Region):
+            return (
+                self.xmin == other.xmin
+                and self.xmax == other.xmax
+                and self.ymin == other.ymin
+                and self.ymax == other.ymax
+            )
+        return False
+
+    # --- Properties ---
+    @property
+    def w(self):
+        return self.xmin
+
+    @property
+    def e(self):
+        return self.xmax
+
+    @property
+    def s(self):
+        return self.ymin
+
+    @property
+    def n(self):
+        return self.ymax
+
+    @property
+    def width(self):
+        return abs(self.xmax - self.xmin) if self.valid_p() else 0
+
+    @property
+    def height(self):
+        return abs(self.ymax - self.ymin) if self.valid_p() else 0
+
+    @property
+    def xy_region(self):
+        return [self.xmin, self.xmax, self.ymin, self.ymax]
+
+    # --- Validation ---
+    def valid_p(self, check_xy: bool = True) -> bool:
+        """Check if region is valid."""
+
+        if None in [self.xmin, self.xmax, self.ymin, self.ymax]:
+            return False
+
+        try:
+            if check_xy:
+                if self.xmin >= self.xmax:
+                    return False
+                if self.ymin >= self.ymax:
+                    return False
+            else:
+                if self.xmin > self.xmax:
+                    return False
+                if self.ymin > self.ymax:
+                    return False
+        except (ValueError, TypeError):
+            return False
+        return True
+
+    is_valid = valid_p
+
+    # --- Manipulation ---
+    def copy(self):
+        return Region(self.xmin, self.xmax, self.ymin, self.ymax, srs=self.srs)
+
+    def buffer(
+        self,
+        pct: float = 5,
+        x_bv: float | None = None,
+        y_bv: float | None = None,
+        x_inc: float | None = None,
+        y_inc: float | None = None,
+    ):
+        """Buffer the region in place."""
+
+        if not self.valid_p(check_xy=False):
+            return self
+
+        if x_bv is None and y_bv is None:
+            x_span = self.xmax - self.xmin
+            y_span = self.ymax - self.ymin
+            x_bv = x_span * (pct / 100.0)
+            y_bv = y_span * (pct / 100.0)
+            # Average buffer if not specified separately
+            avg_buf = (x_bv + y_bv) / 2.0
+            x_bv = avg_buf
+            y_bv = avg_buf
+
+        x_bv = x_bv if x_bv else 0
+        y_bv = y_bv if y_bv else 0
+
+        if x_inc is not None:
+            if y_inc is None:
+                y_inc = x_inc
+
+            tmp_x_bv = int(x_bv / x_inc) * float(x_inc)
+            tmp_y_bv = int(y_bv / y_inc) * float(y_inc)
+            if tmp_x_bv != 0:
+                x_bv = tmp_x_bv
+            if tmp_y_bv != 0:
+                y_bv = tmp_y_bv
+
+        self.xmin -= x_bv
+        self.xmax += x_bv
+        self.ymin -= y_bv
+        self.ymax += y_bv
+        return self
+
+    def center(self):
+        """Return center (x, y)."""
+
+        if not self.valid_p(check_xy=False):
+            return (None, None)
+        return ((self.xmin + self.xmax) / 2.0, (self.ymin + self.ymax) / 2.0)
+
+    def chunk(self, chunk_size: float = 1.0) -> List["Region"]:
+        """Split into smaller sub-regions."""
+
+        if not self.valid_p():
+            return []
+
+        chunks = []
+        cur_w = self.xmin
+        while cur_w < self.xmax:
+            next_w = cur_w + chunk_size
+            if next_w > self.xmax:
+                next_w = self.xmax
+
+            cur_s = self.ymin
+            while cur_s < self.ymax:
+                next_s = cur_s + chunk_size
+                if next_s > self.ymax:
+                    next_s = self.ymax
+
+                # Check for tiny slivers
+                if (next_w - cur_w > 1e-9) and (next_s - cur_s > 1e-9):
+                    chunks.append(Region(cur_w, next_w, cur_s, next_s, srs=self.srs))
+
+                cur_s = next_s
+            cur_w = next_w
+        return chunks
+
+    def densify_edges(self, density=20):
+        """Generate a list of points along the perimeter of the region.
+
+        Args:
+            region (Region): Input region.
+            density (int): Number of points per edge.
+
+        Returns:
+            list: A list of (x, y) tuples representing the densified perimeter.
+        """
+
+        if not self.valid_p():
+            return []
+
+        xs = []
+        ys = []
+
+        ys.extend(_linspace(self.ymin, self.ymax, density))
+        xs.extend([self.xmin] * density)
+
+        xs.extend(_linspace(self.xmin, self.xmax, density))
+        ys.extend([self.ymax] * density)
+
+        ys.extend(_linspace(self.ymax, self.ymin, density))
+        xs.extend([self.xmax] * density)
+
+        xs.extend(_linspace(self.xmax, self.xmin, density))
+        ys.extend([self.ymin] * density)
+
+        # return list(zip(xs, ys))
+        return xs, ys
+
+    # --- Export Formats ---
+    def to_bbox(self):
+        """Export as standard (w, s, e, n) bbox used by many GIS tools."""
+        if not self.valid_p():
+            raise ValueError(f"Cannot export invalid region geometry: {self}")
+        return (self.xmin, self.ymin, self.xmax, self.ymax)
+
+    def to_list(self):
+        """Export as [w, e, s, n] list."""
+        return [self.xmin, self.xmax, self.ymin, self.ymax]
+
+    def to_shapely(self):
+        if not self.valid_p():
+            raise ValueError(f"Cannot export invalid region geometry: {self}")
+        return box(self.xmin, self.ymin, self.xmax, self.ymax)
+
+    def to_wkt(self):
+        return self.to_shapely().wkt
+
+    def to_geojson_geometry(self):
+        return self.to_shapely().__geo_interface__
+
+    # def to_geojson_geometry(self):
+    #     return {
+    #         "type": "Polygon",
+    #         "coordinates": [
+    #             [
+    #                 [self.xmin, self.ymin],
+    #                 [self.xmin, self.ymax],
+    #                 [self.xmax, self.ymax],
+    #                 [self.xmax, self.ymin],
+    #                 [self.xmin, self.ymin],
+    #             ]
+    #         ],
+    #     }
+
+    def to_arcgis_envelope(self):
+        """Return an ArcGIS REST envelope geometry."""
+        if not self.valid_p():
+            raise ValueError(f"Cannot export invalid region geometry: {self}")
+        wkid = None
+
+        if self.srs:
+            wkid = CRS.from_user_input(self.srs).to_epsg()
+
+        envelope = {
+            "xmin": self.w,
+            "ymin": self.s,
+            "xmax": self.e,
+            "ymax": self.n,
+        }
+
+        if wkid is not None:
+            envelope["spatialReference"] = {"wkid": wkid}
+
+        return envelope
+
+    def format(self, style="gmt"):
+        """String representation."""
+        if style == "gmt":
+            return f"-R{self.xmin}/{self.xmax}/{self.ymin}/{self.ymax}"
+        elif style == "bbox":
+            return f"{self.xmin},{self.ymin},{self.xmax},{self.ymax}"
+        elif style == "bbox_wesn":
+            return f"{self.xmin},{self.xmax},{self.ymin},{self.ymax}"
+        elif style == "region":
+            return f"{self.xmin},{self.xmax},{self.ymin},{self.ymax}"
+        elif style == "fn":
+            ns = "s" if self.ymax < 0 else "n"
+            ew = "e" if self.xmin > 0 else "w"
+            return (
+                f"{ns}{abs(int(self.ymax)):02d}x{abs(int(self.ymax * 100)) % 100:02d}_"
+                f"{ew}{abs(int(self.xmin)):03d}x{abs(int(self.xmin * 100)) % 100:02d}"
+            )
+        elif style == "fn2":
+            # filename safe string
+            return f"w{self.xmin}_e{self.xmax}_s{self.ymin}_n{self.ymax}".replace(
+                ".", "p"
+            ).replace("-", "")
+        elif style == "delivery":
+            import datetime
+
+            ns = "s" if self.ymax < 0 else "n"
+            ew = "e" if self.xmin > 0 else "w"
+            year = datetime.datetime.now().year
+
+            coord_str = (
+                f"{ns}{abs(int(self.ymax)):02d}x{abs(int(self.ymax * 100)) % 100:02d}_"
+                f"{ew}{abs(int(self.xmin)):03d}x{abs(int(self.xmin * 100)) % 100:02d}"
+            )
+            return f"{coord_str}_{year}_v1"
+        elif style == "wkt":
+            return self.to_wkt()
+
+        elif style == "geojson":
+            return json.dumps(self.to_geojson_geometry())
+
+        elif style == "arcgis":
+            return json.dumps(self.to_arcgis_envelope())
+
+        return str(self)
+
+    def srcwin(self, geo_transform, x_count, y_count, node="grid"):
+        """Output the appropriate GDAL srcwin (xoff, yoff, xsize, ysize)."""
+
+        ul = _geo2pixel(self.xmin, self.ymax, geo_transform, node=node)
+        lr = _geo2pixel(self.xmax, self.ymin, geo_transform, node=node)
+
+        x_indices = sorted([ul[0], lr[0]])
+        y_indices = sorted([ul[1], lr[1]])
+
+        x_start = max(0, x_indices[0])
+        x_stop = min(x_count, x_indices[1] + 1)
+
+        y_start = max(0, y_indices[0])
+        y_stop = min(y_count, y_indices[1] + 1)
+
+        x_size = x_stop - x_start
+        y_size = y_stop - y_start
+
+        if x_size <= 0 or y_size <= 0:
+            return 0, 0, 0, 0
+
+        return int(x_start), int(y_start), int(x_size), int(y_size)
+
+    def geo_transform(
+        self, x_inc: float = 0, y_inc: Optional[float] = None, node: str = "grid"
+    ):
+        """Return raster dimensions and geotransform for a region.
+
+        Notes
+        -----
+        ``node="grid"`` is the historical/default convention used when deriving
+        raster dimensions from geographic extents. It applies the grid-node
+        rounding behavior in ``_geo2pixel`` and avoids losing a row or column when
+        an extent that is mathematically an exact multiple of the resolution is
+        represented slightly below that integer by floating-point arithmetic.
+
+        ``node="pixel"`` performs direct pixel-index truncation and should not be
+        substituted when calculating the dimensions of Globato processing grids.
+        """
+
+        if y_inc is None:
+            y_inc = -x_inc
+        elif y_inc > 0:
+            y_inc = -y_inc
+
+        dst_gt = (self.xmin, x_inc, 0, self.ymax, 0, y_inc)
+        this_origin = _geo2pixel(self.xmin, self.ymax, dst_gt, node=node)
+        this_end = _geo2pixel(self.xmax, self.ymin, dst_gt, node=node)
+
+        return (
+            int(this_end[0] - this_origin[0]),
+            int(this_end[1] - this_origin[1]),
+            dst_gt,
+        )
+
+    def geo_transform_from_count(self, x_count: int = 0, y_count: int = 0):
+        x_inc = (self.xmax - self.xmin) / x_count
+        y_inc = (self.ymin - self.ymax) / y_count
+        dst_gt = (self.xmin, x_inc, 0, self.ymax, 0, y_inc)
+        return dst_gt
+
+    def to_geo_transform(self, nx: int, ny: int):
+        """Generate a GDAL-style GeoTransform from extent and dimensions.
+
+        Args:
+        region (tuple): (min_x, min_y, max_x, max_y) - 'te' format.
+        nx (int): Number of columns (x count).
+        ny (int): Number of rows (y count).
+
+        Returns:
+        tuple: (top_left_x, x_res, 0, top_left_y, 0, -y_res)
+        """
+
+        x_res = (self.xmax - self.xmin) / float(nx)
+        y_res = (self.ymax - self.ymin) / float(ny)
+        return (self.xmin, x_res, 0, self.ymax, 0, -y_res)
+
+    def to_window(
+        self,
+        transform,
+        width=None,
+        height=None,
+        tol=1e-9,
+    ):
+        """Convert geographic bounds to an integer pixel window.
+
+        The returned tuple is (col_off, row_off, width, height).
+
+        Pixel selection includes every source pixel intersecting the
+        region's bounding box. Values extremely close to integer pixel
+        boundaries are snapped to those boundaries before rounding.
+
+        The original raster grid is preserved; no resampling,
+        reprojection, or half-pixel shift is performed.
+
+        Parameters
+        ----------
+        transform : Affine or tuple
+            Rasterio Affine or six-element GDAL geotransform.
+        width, height : int, optional
+            Raster dimensions used to clip the resulting window.
+        tol : float
+            Numerical snapping tolerance in pixel units.
+        """
+        import math
+        from affine import Affine
+
+        if not self.valid_p():
+            raise ValueError("Cannot calculate window for invalid region.")
+
+        if isinstance(transform, Affine):
+            affine = transform
+        else:
+            affine = Affine.from_gdal(*transform)
+
+        inverse = ~affine
+
+        # Transform all four corners to pixel coordinates.
+        corners = (
+            (self.xmin, self.ymin),
+            (self.xmin, self.ymax),
+            (self.xmax, self.ymin),
+            (self.xmax, self.ymax),
+        )
+
+        pixel_coords = [inverse * (x, y) for x, y in corners]
+
+        def snap(value):
+            nearest = round(value)
+            return nearest if abs(value - nearest) <= tol else value
+
+        col_min = snap(min(p[0] for p in pixel_coords))
+        col_max = snap(max(p[0] for p in pixel_coords))
+        row_min = snap(min(p[1] for p in pixel_coords))
+        row_max = snap(max(p[1] for p in pixel_coords))
+
+        col_start = math.floor(col_min)
+        col_stop = math.ceil(col_max)
+        row_start = math.floor(row_min)
+        row_stop = math.ceil(row_max)
+
+        if width is not None:
+            col_start = max(0, col_start)
+            col_stop = min(width, col_stop)
+
+        if height is not None:
+            row_start = max(0, row_start)
+            row_stop = min(height, row_stop)
+
+        return (
+            col_start,
+            row_start,
+            max(0, col_stop - col_start),
+            max(0, row_stop - row_start),
+        )
+
+    # --- Constructors ---
+    @classmethod
+    def from_list(cls, r_list):
+        if len(r_list) < 4:
+            return None
+        return cls(r_list[0], r_list[1], r_list[2], r_list[3])
+
+    @classmethod
+    def from_string(cls, r_str):
+        if not r_str:
+            return None
+        if r_str.startswith("-R"):
+            r_str = r_str[2:]
+        elif r_str.startswith("--region="):
+            r_str = r_str.split("=")[1]
+
+        parts = r_str.split("/")
+        if len(parts) < 4:
+            return None
+        try:
+            return cls(*[float(x) for x in parts[:4]])
+        except ValueError:
+            return None
+
+    # gtl is (geo-transform, xcount, ycount)
+    def from_geo_transform(cls, gtl):
+        """Import a region from a geotransform list and dimensions."""
+
+        geo_transform, x_count, y_count = gtl
+        if geo_transform is not None and x_count is not None and y_count is not None:
+            xmin = geo_transform[0]
+            xmax = geo_transform[0] + geo_transform[1] * x_count
+            ymin = geo_transform[3] + geo_transform[5] * y_count
+            ymax = geo_transform[3]
+
+            return cls(xmin, xmax, ymin, ymax)
+        return None
+
+    # --- Tranforms ---
+    def transform_densify(self, transformer=None, transform_direction="FORWARD"):
+        if transformer is None or not self.valid_p():
+            logger.error(f"Could not perform region transformation; {self}")
+            return self
+
+        points_x, points_y = self.densify_edges(20)
+        trans_points_x, trans_points_y = transformer.transform(
+            points_x, points_y, direction=transform_direction
+        )
+
+        self.xmin = min(trans_points_x)
+        self.xmax = max(trans_points_x)
+        self.ymin = min(trans_points_y)
+        self.ymax = max(trans_points_y)
+
+        # set the new SRS
+        # self.src_srs = d_srs.ExportToWkt()
+
+        return self
+
+    def transform(self, transformer=None, transform_direction="FORWARD"):
+        if transformer is None or not self.valid_p():
+            logger.error(f"Could not perform region transformation; {self}")
+            return self
+
+        self.xmin, self.ymin = transformer.transform(
+            self.xmin, self.ymin, direction=transform_direction
+        )
+        self.xmax, self.ymax = transformer.transform(
+            self.xmax, self.ymax, direction=transform_direction
+        )
+
+        return self
+
+    def warp(self, dst_srs="epsg:4326"):
+        """Transform region horizontally to a new CRS."""
+
+        if str_or(self.srs) is None:
+            logger.warning(f"Region has no valid associated srs: {self.srs}")
+            return self
+
+        if isinstance(self.srs, str) and isinstance(dst_srs, str):
+            if self.srs.upper() == dst_srs.upper():
+                return self
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # always_xy=True ensures we don't get tripped up by strict EPSG axis orders
+            transformer = Transformer.from_crs(self.srs, dst_srs, always_xy=True)
+
+            # Densify the edges before transforming to account for CRS curvature!
+            points_x, points_y = self.densify_edges(20)
+            trans_x, trans_y = transformer.transform(points_x, points_y)
+
+            self.xmin, self.xmax = min(trans_x), max(trans_x)
+            self.ymin, self.ymax = min(trans_y), max(trans_y)
+            self.srs = dst_srs
+
+            # return self.transform_densify(transformer)
+
+        return self
+
+
+# =============================================================================
+# Helper / Parser Functions
+# =============================================================================
+def region_from_vector(fn: str, single_region: bool = False) -> Optional[List[Region]]:
+    """Parse the bounding box of any OGR-supported vector file using pygorio."""
+
+    if not Path(fn).exists():
+        return None
+
+    regions = []
+    try:
+        # --- Single Region for entire file ---
+        if single_region:
+            info = read_info(fn)
+            minx, miny, maxx, maxy = info["total_bounds"]
+            global_region = Region(minx, maxx, miny, maxy)
+
+            if info.get("crs"):
+                global_region.srs = info.get("crs")
+                global_region.warp()
+
+            return [global_region]
+
+        meta, fids, geometry_wkb, fields = read(fn, columns=[])
+        # --- Region for each feature in vector: ---
+        if len(geometry_wkb) > 0:
+            # Convert WKB directly to shapely geometries
+            for geom in from_wkb(geometry_wkb):
+                if geom:
+                    minx, miny, maxx, maxy = geom.bounds
+                    original_region = Region(minx, maxx, miny, maxy)
+
+                    if meta.get("crs"):  # and meta.get("crs").to_epsg() != 4326:
+                        original_region.srs = meta.get("crs")
+                        original_region.warp()
+
+                    regions.append(original_region)
+
+    except Exception as e:
+        logger.exception(f"Failed to parse vector bounds from {fn}: {e}")
+
+    return regions
+
+
+def region_from_geojson(fn: str) -> Optional[List[Region]]:
+    """Parse the bounding box(es) of a GeoJSON file."""
+
+    if not Path(fn).exists():
+        return None
+
+    regions = []
+    try:
+        with open(fn, "r") as f:
+            data = json.load(f)
+
+        features = data.get("features", [data])
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        valid = False
+
+        for feat in features:
+            geom = feat.get("geometry", feat)
+            if not geom:
+                continue
+
+            b = shape(geom).bounds  # (minx, miny, maxx, maxy)
+            # min_x, min_y = min(min_x, b[0]), min(min_y, b[1])
+            # max_x, max_y = max(max_x, b[2]), max(max_y, b[3])
+            min_x, min_y, max_x, max_y = b
+            valid = True
+
+            if not valid and "coordinates" in geom:
+                xs, ys = [], []
+                for x, y in _extract_coords(geom["coordinates"]):
+                    xs.append(x)
+                    ys.append(y)
+                if xs and ys:
+                    min_x, min_y = min(min_x, min(xs)), min(min_y, min(ys))
+                    max_x, max_y = max(max_x, max(xs)), max(max_y, max(ys))
+                    valid = True
+                xs, ys = [], []
+
+            if valid:
+                regions.append(Region(min_x, max_x, min_y, max_y))
+
+        return regions
+    except Exception as e:
+        logger.warning(f"Failed to parse GeoJSON {fn}: {e}")
+    return None
+
+
+def point_from_place(query: str) -> Optional[tuple]:
+    from .modules.nominatim import Nominatim
+
+    clean_q = query.split(":", 1)[1] if ":" in query else query
+    nom = Nominatim(query=clean_q)
+    nom.run()
+
+    if nom.results:
+        res = nom.results[0]
+        x, y = res.get("x"), res.get("y")
+        if x is None or y is None:
+            return None
+
+        return (x, y)
+    return None
+
+
+def region_from_place(query: str, centered: bool = True) -> Optional[Region]:
+    """Resolve 'loc:PlaceName' to a bounding box."""
+
+    from .modules.nominatim import Nominatim
+
+    clean_q = query.split(":", 1)[1] if ":" in query else query
+    nom = Nominatim(query=clean_q)
+    nom.run()
+
+    if nom.results:
+        res = nom.results[0]
+        x, y = res.get("x"), res.get("y")
+        if x is None or y is None:
+            return None
+
+        if centered:
+            return Region(x - 0.125, x + 0.125, y - 0.125, y + 0.125)
+        else:
+            x_min = math.floor(x * 4) / 4
+            x_max = math.ceil(x * 4) / 4
+            y_min = math.floor(y * 4) / 4
+            y_max = math.ceil(y * 4) / 4
+            return Region(x_min, x_max, y_min, y_max)
+    return None
+
+
+def parse_region(input_r: Union[str, List, None]) -> List[Region]:
+    """Main function to parse region input into a list of Region objects."""
+
+    def _parse_crs(r_string: str) -> tuple[str, str | None]:
+        # Parse the crs; either appended with `@` or `,`
+        r_string = r_string
+        target_crs = None
+        if "@" in r_string:
+            r_string, target_crs = r_string.split("@", 1)
+        elif "," in r_string and "EPSG" in r_string.upper():
+            r_string, target_crs = r_string.split(",", 1)
+        return r_string, target_crs
+
+    if not input_r:
+        return []
+
+    target_crs = None
+    regions = []
+
+    # Single String
+    if isinstance(input_r, str):
+        input_r, target_crs = _parse_crs(input_r)
+        s_lower = input_r.lower()
+        if s_lower.endswith((".json", ".geojson")):
+            rs = region_from_geojson(input_r)
+            if rs:
+                regions.extend(rs)
+        elif s_lower.endswith((".shp", ".gpkg", ".kml", ".gdb")):
+            rs = region_from_vector(input_r)
+            if rs:
+                regions.extend(rs)
+        elif s_lower.startswith(("loc:", "place:")):
+            r = region_from_place(input_r)
+            if r:
+                r.srs = "EPSG:4326"
+                regions.append(r)
+        else:
+            r = Region.from_string(input_r)
+            if r is not None:
+                r.srs = target_crs
+                regions.append(r)
+
+    # List/Tuple (Coordinate list OR List of strings)
+    elif isinstance(input_r, (list, tuple)):
+        # Check if it is a single Coordinate List [w, e, s, n]
+        if len(input_r) == 4 and all(isinstance(n, (int, float)) for n in input_r):
+            regions.append(Region.from_list(input_r))
+        else:
+            # Recursive parse for list of identifiers
+            for item in input_r:
+                regions.extend(parse_region(item))
+    elif isinstance(input_r, Region):
+        regions.append(input_r.copy())
+
+    if not regions:
+        # Don't warn on None input, only on failed parse of actual input
+        if input_r is not None:
+            logger.warning(f"Failed to parse region {input_r}")
+
+    return regions
+
+
+def yield_parsed_regions(region_str):
+    """Parses a region string, location, or vector file.
+
+    Yields (Region, feature_name) for every region found.
+    """
+
+    if not region_str:
+        yield None, None
+        return
+
+    try:
+        raw_regions = parse_region(region_str)
+    except Exception as e:
+        logger.error(f"Error parsing region '{region_str}': {e}")
+        raise
+
+    is_batch = len(raw_regions) > 1
+    for _i, r in enumerate(raw_regions):
+        t_reg = Region(*r)
+        # feat_name = f"tile_{i:03d}" if is_batch else None
+        feat_name = t_reg.format("fn") if is_batch else None
+        yield t_reg, feat_name
+
+
+# =============================================================================
+# Legacy / CLI Helper Functions
+# =============================================================================
+def fix_argparse_region(raw_argv):
+    """Argument Pre-processing for negative coordinates."""
+
+    fixed_argv = []
+    i = 0
+    while i < len(raw_argv):
+        arg = raw_argv[i]
+        if arg in ["-R", "--region", "--aoi"] and i + 1 < len(raw_argv):
+            next_arg = raw_argv[i + 1]
+            if next_arg.startswith("-"):
+                sep = "" if arg == "-R" else "="
+                fixed_argv.append(f"{arg}{sep}{next_arg}")
+                i += 2
+                continue
+        fixed_argv.append(arg)
+        i += 1
+    return fixed_argv
+
+
+def region_valid_p(region, check_xy=True):
+    """Legacy wrapper for validity check."""
+
+    if isinstance(region, Region):
+        return region.valid_p(check_xy)
+
+    # Handle tuples via temporary Region object
+    return Region.from_list(region).valid_p(check_xy) if region else False
+
+
+def region_center(region: Tuple[float, float, float, float]):
+    """Calculate the center of a region."""
+
+    w, e, s, n = region
+    center_lon = (w + e) / 2
+    center_lat = (s + n) / 2
+
+    return center_lon, center_lat
+
+
+def region_to_shapely(region: Tuple[float, float, float, float]):
+    """Convert a fetchez region (xmin, xmax, ymin, ymax) to a shapely box.
+
+    fetchez regions are like GMT: (west, east, south, north) while
+    shapely regions are not: (minx, miny, maxx, maxy)
+    """
+
+    if not region:
+        return None
+
+    west, east, south, north = region
+    return box(west, south, east, north)
+
+
+def region_to_wkt(region: Tuple[float, float, float, float]):
+    """Convert a fetchez region (xmin, xmax, ymin, ymax) to WKT (via shapely)"""
+
+    polygon = region_to_shapely(region)
+    if polygon:
+        return polygon.wkt
+    else:
+        w, e, s, n = region
+        return f"POLYGON (({w} {s}, {w} {n}, {e} {n}, {e} {s}, {w} {s}))"
+
+
+def _extract_coords(coords):
+    """Recursively flatten any GeoJSON coordinate array into (x, y) tuples."""
+
+    if not isinstance(coords, list) or not coords:
+        return
+
+    if isinstance(coords[0], (int, float)):
+        yield coords[0], coords[1]
+    else:
+        for item in coords:
+            yield from _extract_coords(item)
+
+
+def region_to_bbox(region: Tuple[float, float, float, float]):
+    """Convert a fetchez region to a `bbox`"""
+
+    w, e, s, n = region
+    return (w, s, e, n)
+
+
+def region_to_geojson_geom(region: Tuple[float, float, float, float]):
+    w, e, s, n = region
+    return {
+        "type": "Polygon",
+        "coordinates": [[[w, s], [w, n], [e, n], [e, s], [w, s]]],
+    }
+
+
+# Backwards compatibility aliases
+region_from_list = Region.from_list
+region_from_string = Region.from_string
+# chunk_region = lambda r, s=1.0: Region.from_list(r).chunk(s) if r else []
+# buffer_region = lambda r, p=5: Region.from_list(r).buffer(p) if r else None
+
+
+def chunk_region(r, s=1.0):
+    if r:
+        return Region.from_list(r).chunk(s)
+    else:
+        return []
+
+
+def buffer_region(r, p=5):
+    if r:
+        return Region.from_list(r).buffer(p)
+    else:
+        return None
+
+
+def regions_reduce(region_a: Region, region_b: Region) -> Region:
+    """Combine two regions and find their minimum overlapping region."""
+
+    region_c = Region()
+
+    if region_a.is_valid() and region_b.is_valid():
+        # Helper to get the inner bounds (max of mins, min of maxes)
+        def _get_overlap(val_a, val_b, func):
+            if val_a is not None and val_b is not None:
+                return func(val_a, val_b)
+            return None
+
+        # Helper to merge optional fields (using first available)
+        def _merge_optional(val_a, val_b, func):
+            if val_a is not None and val_b is not None:
+                return func(val_a, val_b)
+            return val_a if val_a is not None else val_b
+
+        region_c.xmin = _get_overlap(region_a.xmin, region_b.xmin, max)
+        region_c.xmax = _get_overlap(region_a.xmax, region_b.xmax, min)
+        region_c.ymin = _get_overlap(region_a.ymin, region_b.ymin, max)
+        region_c.ymax = _get_overlap(region_a.ymax, region_b.ymax, min)
+
+    return region_c
+
+
+def regions_intersect_p(region_a: Region, region_b: Region) -> bool:
+    """Check if two regions intersect."""
+
+    if region_a.is_valid() and region_b.is_valid():
+        reduced_region = regions_reduce(region_a, region_b)
+        # Check if the overlap is valid
+        if any(reduced_region.xy_region) and not reduced_region.is_valid():
+            return False
+
+    return True
+
+
+# --- Geotransforms and Transformations ---
+def _geo2pixel(geo_x, geo_y, geo_transform, node="grid"):
+    """Convert a geographic x,y value to a pixel location."""
+
+    if geo_transform[2] + geo_transform[4] == 0:
+        pixel_x = (geo_x - geo_transform[0]) / geo_transform[1]
+        pixel_y = (geo_y - geo_transform[3]) / geo_transform[5]
+        if node == "grid":
+            pixel_x += 0.5
+            pixel_y += 0.5
+    else:
+        pixel_x, pixel_y = _apply_gt(geo_x, geo_y, _invert_gt(geo_transform))
+
+    return int(pixel_x), int(pixel_y)
+
+
+def _apply_gt(in_x, in_y, geo_transform, node="pixel"):
+    """Apply geotransform to in_x, in_y."""
+
+    offset = 0.5 if node == "pixel" else 0
+
+    out_x = (
+        geo_transform[0]
+        + (in_x + offset) * geo_transform[1]
+        + (in_y + offset) * geo_transform[2]
+    )
+    out_y = (
+        geo_transform[3]
+        + (in_x + offset) * geo_transform[4]
+        + (in_y + offset) * geo_transform[5]
+    )
+    return out_x, out_y
+
+
+def _invert_gt(geo_transform):
+    """Invert the geo_transform."""
+
+    det = (geo_transform[1] * geo_transform[5]) - (geo_transform[2] * geo_transform[4])
+    if abs(det) < 1e-15:
+        return None
+
+    inv_det = 1.0 / det
+    out_gt = [0.0] * 6
+    out_gt[1] = geo_transform[5] * inv_det
+    out_gt[4] = -geo_transform[4] * inv_det
+    out_gt[2] = -geo_transform[2] * inv_det
+    out_gt[5] = geo_transform[1] * inv_det
+    out_gt[0] = (
+        geo_transform[2] * geo_transform[3] - geo_transform[0] * geo_transform[5]
+    ) * inv_det
+    out_gt[3] = (
+        -geo_transform[1] * geo_transform[3] + geo_transform[0] * geo_transform[4]
+    ) * inv_det
+    return out_gt
+
+
+def x360(x):
+    if x == 0:
+        return -180
+    elif x == 360:
+        return 180
+    else:
+        return ((x + 180) % 360) - 180
+
+
+def transform_increment(dst_inc_x, dst_inc_y, transformer, region_center):
+    """Transform grid increments from Destination SRS to Source SRS.
+
+    Args:
+        dst_inc_x (float): X increment in destination units (e.g. 1/3600 for 1s).
+        dst_inc_y (float): Y increment in destination units.
+        transformer (pyproj.transformer.Transformer): The pipeline transforming Source -> Dest.
+        region_center (tuple): (x, y) center of the region in Source CRS.
+
+    Returns:
+        (float, float): The estimated (src_inc_x, src_inc_y) in source units.
+    """
+
+    if transformer is None:
+        return dst_inc_x, dst_inc_y
+
+    cx, cy = region_center
+    dest_cx, dest_cy = transformer.transform(cx, cy)
+    dest_off_x = dest_cx + dst_inc_x
+    dest_off_y = dest_cy + dst_inc_y
+
+    src_off_x, _ = transformer.transform(dest_off_x, dest_cy, direction="INVERSE")
+    _, src_off_y = transformer.transform(dest_cx, dest_off_y, direction="INVERSE")
+
+    src_inc_x = abs(src_off_x - cx)
+    src_inc_y = abs(src_off_y - cy)
+
+    return src_inc_x, src_inc_y
