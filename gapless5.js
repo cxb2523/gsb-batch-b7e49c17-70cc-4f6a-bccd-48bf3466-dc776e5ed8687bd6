@@ -824,9 +824,19 @@ function Gapless5FileList(parentPlayer, parentLog, inShuffle, inLoadLimit = -1, 
   };
 
   // Remove a song from the FileList object.
+  // `index` is a real index into this.sources (not a playlist/shuffle
+  // position); callers are responsible for adjusting trackNumber first.
   this.remove = (index) => {
     this.sources.splice(index, 1);
-    this.shuffledIndices.splice(this.shuffledIndices.indexOf(index), 1);
+
+    // Keep shuffledIndices a valid permutation of the remaining source
+    // indices: drop the entry for the removed source and renumber every
+    // later source down by one. Never clear the array here, even when
+    // shuffle isn't currently active.
+    const shufflePosition = this.shuffledIndices.indexOf(index);
+    if (shufflePosition !== -1) {
+      this.shuffledIndices.splice(shufflePosition, 1);
+    }
     for (let i = 0; i < this.shuffledIndices.length; i++) {
       if (this.shuffledIndices[i] >= index) {
         this.shuffledIndices[i] = this.shuffledIndices[i] - 1;
@@ -836,20 +846,7 @@ function Gapless5FileList(parentPlayer, parentLog, inShuffle, inLoadLimit = -1, 
     const newLength = this.numTracks();
     if (newLength === 0) {
       this.trackNumber = -1;
-    } else if (index < this.trackNumber) {
-      // Removed a track before the current one — current shifts left.
-      this.trackNumber = this.trackNumber - 1;
-      log.debug(`Decrementing track number to ${this.trackNumber}`);
-    } else if (index === this.trackNumber && this.trackNumber >= newLength) {
-      // Removed the current track AND it was the last in the list —
-      // clamp to the new last track.
-      this.trackNumber = newLength - 1;
-      log.debug(`Clamping track number to ${this.trackNumber}`);
     }
-    // Otherwise trackNumber is unchanged: either the next track slid
-    // into the removed slot (auto-advance when removing current), or
-    // we removed a track after current (current still points at the
-    // same source).
 
     if (this.isShuffled() && !player.canShuffle()) {
       this.setShuffle(false);
@@ -1371,44 +1368,59 @@ function Gapless5(options = {}, deprecated = {}) { // eslint-disable-line no-unu
       log.warn(`Cannot remove missing track: ${pointOrPath}`);
       return;
     }
-    const deletedPlaying = point === this.playlist.trackNumber;
-    const removedCurrentAtTail = deletedPlaying && point === this.playlist.numTracks() - 1;
-
-    const { source: curSource } = this.playlist.getSourceIndexed(point);
+    // `point` is a playlist position; playlist.remove() wants a real
+    // index into sources, so resolve it through the shuffle table.
+    const { index: realIndex, source: curSource } = this.playlist.getSourceIndexed(point);
     if (!curSource) {
       return;
     }
     const deletedPath = curSource.audioPath;
+    const deletedPlaying = point === this.playlist.trackNumber;
+    const wasTail = point === this.playlist.numTracks() - 1;
     let wasPlaying = false;
 
-    if (curSource.state === Gapless5State.Loading) {
-      curSource.unload();
-    } else if (curSource.inPlayState(true)) {
+    if (curSource.inPlayState(true)) {
       wasPlaying = true;
       curSource.stop();
+    } else if (curSource.getState() === Gapless5State.Loading) {
+      curSource.unload();
     }
 
-    this.playlist.remove(point);
-
-    // playlist.remove() already advanced trackNumber to the track that
-    // slid into this slot (or the new last track / -1 if empty). Notify
-    // listeners that the current track silently changed, and resume
-    // playback on the new current track if we were playing before.
-    if (deletedPlaying && this.playlist.numTracks() > 0) {
-      // Removing the currently-playing track when it was the tail has
-      // special semantics:
-      //   - loop on:  wrap to start of playlist, resume playback
-      //   - loop off: clamp to new last, always pause
-      let shouldResume = wasPlaying;
-      if (removedCurrentAtTail) {
+    // Work out where trackNumber should land before the source goes away,
+    // so playlist.remove()'s internal updateLoading() never sees a stale,
+    // out-of-range index.
+    const newLength = this.playlist.numTracks() - 1;
+    let shouldResume = false;
+    let nextTrackNumber = this.playlist.trackNumber;
+    if (newLength === 0) {
+      nextTrackNumber = -1; // playlist.remove() handles this too
+    } else if (deletedPlaying) {
+      if (wasTail) {
+        // Removing the tail while it was current has special semantics:
+        //   - loop on:  wrap to start of playlist, resume if we were playing
+        //   - loop off: clamp to the new last track, always stay paused
         if (this.loop) {
-          this.playlist.trackNumber = 0;
-          this.playlist.updateLoading();
+          nextTrackNumber = 0;
+          shouldResume = wasPlaying;
         } else {
-          shouldResume = false;
+          nextTrackNumber = newLength - 1;
         }
+      } else {
+        // The next track slid into the removed playlist slot, so the
+        // index stays put and points at that next track.
+        nextTrackNumber = point;
+        shouldResume = wasPlaying;
       }
+    } else if (point < this.playlist.trackNumber) {
+      // Removed a track before the current one: the current track slides
+      // left by one playlist position, but playback is unaffected.
+      nextTrackNumber = this.playlist.trackNumber - 1;
+    }
 
+    this.playlist.trackNumber = nextTrackNumber;
+    this.playlist.remove(realIndex);
+
+    if (deletedPlaying && newLength > 0) {
       const newSource = this.currentSource();
       this.onnext(deletedPath, newSource ? newSource.audioPath : '');
       if (shouldResume) {
