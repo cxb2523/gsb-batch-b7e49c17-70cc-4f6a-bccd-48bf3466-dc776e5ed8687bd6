@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
--
+- `MediaDownloader.get_channel_videos_report(channel, limit=-1)`: tries the `user` and `c` channel URLs and returns a `ChannelVideoReport` with the selected URL, deduplicated links and a per-candidate record (URL, parser, success, raw/unique counts, exception type on failure); video IDs are deduplicated within and across candidates and all-failing or all-empty rounds return an empty miss instead of raising.
 
 ### Changed
 -

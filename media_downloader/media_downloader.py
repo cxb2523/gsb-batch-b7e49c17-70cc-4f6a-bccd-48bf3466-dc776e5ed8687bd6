@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import asdict, dataclass, field
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Any
@@ -949,6 +950,33 @@ def _downloaded_path(ydl, info) -> str:
     return ydl.prepare_filename(info)
 
 
+@dataclass
+class ChannelVideoCandidateReport:
+    """One channel URL attempt and what its parser produced."""
+
+    url: str
+    parser: str
+    success: bool
+    raw_count: int
+    unique_count: int
+    error: str | None = None
+
+
+@dataclass
+class ChannelVideoReport:
+    """Outcome of trying every candidate channel URL for one channel."""
+
+    channel: str
+    selected_url: str | None
+    hit: bool
+    links: list[str] = field(default_factory=list)
+    candidates: list[ChannelVideoCandidateReport] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Plain mapping, suitable for the MCP tool result surface."""
+        return asdict(self)
+
+
 class MediaDownloader:
     def __init__(
         self,
@@ -1125,6 +1153,84 @@ class MediaDownloader:
                     return self._append_links(vids, limit)
         self.logger.error("Could not find the requested channel")
         return []
+
+    @staticmethod
+    def _channel_video_identity(link):
+        """Dedup key for a parsed channel video link: its video ID when present."""
+        match = re.search(r"(?:v=|/vi/|/shorts/)([A-Za-z0-9_-]{11})", str(link))
+        return match.group(1) if match else str(link)
+
+    def get_channel_videos_report(self, channel, limit=-1):
+        """Try every candidate channel URL and report how each attempt went.
+
+        The ``user`` URL is tried first and the ``c`` URL second, in the same
+        order as :meth:`get_channel_videos`. Each attempt records the URL, the
+        parser name, whether it raised, the raw parser count and the count after
+        in-candidate deduplication. A failure on one candidate is recorded and
+        the round continues with the next candidate rather than aborting.
+
+        Deduplication by video ID applies within a candidate and across
+        candidates; the first page-order occurrence wins. The first candidate
+        that parses unique videos is the selected URL. Links new to
+        ``self.links`` are appended there; existing links are never queued
+        twice. When every candidate fails or yields nothing, the report is a
+        miss with empty links instead of raising.
+        """
+        self.logger.debug("Building channel video report (limit=%s)", limit)
+        seen_identities = {self._channel_video_identity(link) for link in self.links}
+        merged_links = []
+        candidates = []
+        selected_url = None
+
+        for url, _description, extract_links in self._channel_video_url_candidates(
+            channel, channel
+        ):
+            parser_name = getattr(extract_links, "__name__", str(extract_links))
+            record = ChannelVideoCandidateReport(
+                url=url,
+                parser=parser_name,
+                success=False,
+                raw_count=0,
+                unique_count=0,
+            )
+            try:
+                page = safe_metadata_get(url, timeout=10).content
+                raw_links = extract_links(page) or []
+            except Exception as exc:
+                record.error = type(exc).__name__
+                self.logger.debug("Channel candidate %s failed (%s)", url, record.error)
+                candidates.append(record)
+                continue
+
+            record.success = True
+            record.raw_count = len(raw_links)
+            candidate_identities = set()
+            for link in raw_links:
+                identity = self._channel_video_identity(link)
+                if identity in candidate_identities:
+                    continue
+                candidate_identities.add(identity)
+                record.unique_count += 1
+                if selected_url is None:
+                    selected_url = url
+                if identity not in seen_identities:
+                    seen_identities.add(identity)
+                    merged_links.append(link)
+            candidates.append(record)
+
+        hit = selected_url is not None
+        links = merged_links if limit < 0 else merged_links[:limit]
+        if hit:
+            self.links.extend(links)
+        else:
+            self.logger.error("Could not find the requested channel")
+        return ChannelVideoReport(
+            channel=channel,
+            selected_url=selected_url,
+            hit=hit,
+            links=links,
+            candidates=candidates,
+        )
 
     def _progress_hook(self, d):
         if self.progress_callback and d["status"] == "downloading":

@@ -6,3 +6,4 @@ Each task line reads `- [ ] T001 [P] [US1] <ID>-R012.4 description`. Tasks run p
 
 - [x] T001 [US1] CONN-MEDIA-DOWNLOADER-R001 Channel video links returned.
 - [x] T002 [US2] CONN-MEDIA-DOWNLOADER-R001.1 Embedded video IDs read.
+- [x] T003 [US3] CONN-MEDIA-DOWNLOADER-R001.2 Channel video candidate report returned.

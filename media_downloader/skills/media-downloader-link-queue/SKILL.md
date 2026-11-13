@@ -33,6 +33,7 @@ Each workflow is a tool-use contract in the connector ontology. Run the steps in
 ### `media-downloader-inspect-channel`
 
 1. `media_downloader_get_channel_videos` (`channel`, `limit`) - Run media downloader get channel videos.
+2. `media_downloader_get_channel_videos_report` (`channel`, `limit`) - Run media downloader get channel videos report: per-candidate URLs, parsers, counts and errors, with cross-candidate deduplication.
 
 ## Guardrails
 

@@ -45,6 +45,14 @@ The fleet operator and the engine rely on this behaviour of `media-downloader`: 
 
 1. **Given** the `media-downloader` connector built from the default branch, **When** `tests/test_coverage_booster.py::test_get_channel_videos_reads_embedded_video_ids` runs, **Then** `test_get_channel_videos_reads_embedded_video_ids` in `tests/test_coverage_booster.py` must show two unique watch links for `limit=2`.
 
+### User Story 3 - Channel candidate report returned (Priority: P1)
+
+The fleet operator and the engine rely on this behaviour of `media-downloader`: `MediaDownloader.get_channel_videos_report` in `media_downloader/media_downloader.py` must try the `user` then `c` channel URLs, record per-candidate URL, parser, success, raw and unique counts (plus the exception type on failure), deduplicate video IDs within and across candidates, and return the selected URL, deduplicated links and candidate records without raising when every candidate misses. It is proven independently of the other stories.
+
+**Acceptance Scenarios**:
+
+1. **Given** the `media-downloader` connector built from the default branch, **When** the tests in `tests/test_channel_video_report.py` run, **Then** they must show a normal hit with per-candidate records, a fallback to the `c` URL with cross-candidate deduplication, a recorded parser exception that does not interrupt the round, and an empty flagged miss when every candidate is empty or failing.
+
 ### Edge Cases
 
 - The vendor service is unreachable or rejects the credential: the connector returns the SDK typed error and never a partial result.
@@ -54,11 +62,13 @@ The fleet operator and the engine rely on this behaviour of `media-downloader`: 
 
 - **FR-001**: Channel video links returned. Rows: `CONN-MEDIA-DOWNLOADER-R001`.
 - **FR-002**: Embedded video IDs read. Rows: `CONN-MEDIA-DOWNLOADER-R001.1`.
+- **FR-003**: Channel video candidate report returned. Rows: `CONN-MEDIA-DOWNLOADER-R001.2`.
 
 ## Success Criteria
 
 - **SC-001**: `test_get_channel_videos_returns_links` in `tests/test_coverage_booster.py` must show two returned links for `limit=2`, equal to `self.links`. Rows: `CONN-MEDIA-DOWNLOADER-R001`.
 - **SC-002**: `test_get_channel_videos_reads_embedded_video_ids` in `tests/test_coverage_booster.py` must show two unique watch links for `limit=2`. Rows: `CONN-MEDIA-DOWNLOADER-R001.1`.
+- **SC-003**: the tests in `tests/test_channel_video_report.py` must show per-candidate records and the selected URL on a normal hit and fallback, the exception type when a parser or fetch raises, and an empty flagged miss when every candidate fails or is empty. Rows: `CONN-MEDIA-DOWNLOADER-R001.2`.
 
 ## Assumptions
 
@@ -71,3 +81,4 @@ The fleet operator and the engine rely on this behaviour of `media-downloader`: 
 |---|---|---|---|---|
 | FR-001 | `CONN-MEDIA-DOWNLOADER-R001` | plan.md Production caller chain | T-001 | tests/test_coverage_booster.py::test_get_channel_videos_returns_links |
 | FR-002 | `CONN-MEDIA-DOWNLOADER-R001.1` | plan.md Production caller chain | T-002 | tests/test_coverage_booster.py::test_get_channel_videos_reads_embedded_video_ids |
+| FR-003 | `CONN-MEDIA-DOWNLOADER-R001.2` | plan.md Production caller chain | T-003 | tests/test_channel_video_report.py |

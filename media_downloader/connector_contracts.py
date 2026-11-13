@@ -78,6 +78,20 @@ CONTRACTS = (
                     Refusal("NOT_FOUND", "the requested record does not exist"),
                 ),
             ),
+            ToolStep(
+                "media_downloader_get_channel_videos_report",
+                params=(
+                    "channel",
+                    "limit",
+                ),
+                result=("result",),
+                refusals=(
+                    Refusal(
+                        "ACCESS_DENIED", "the credential lacks access to the operation"
+                    ),
+                    Refusal("NOT_FOUND", "the requested record does not exist"),
+                ),
+            ),
         ),
     ),
     ToolUseContract(
@@ -178,7 +192,10 @@ LINKS = (
     ),
     SurfaceLink(
         "media-downloader-inspect-channel",
-        tools=("media_downloader_get_channel_videos",),
+        tools=(
+            "media_downloader_get_channel_videos",
+            "media_downloader_get_channel_videos_report",
+        ),
         prompts=(
             "media-downloader-media-archivist",
             "media-downloader-operator",
@@ -226,6 +243,7 @@ LINKS = (
         tools=(
             "list_watch_skills",
             "media_downloader_get_channel_videos",
+            "media_downloader_get_channel_videos_report",
         ),
         prompts=("media-downloader-operator",),
         skills=("media-downloader-operations",),

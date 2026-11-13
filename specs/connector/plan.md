@@ -300,3 +300,13 @@ None. The constitution check passed.
 ## Cross-repo seams
 
 None. The rows depend only on the published `scion-sdk` package, which the connector imports.
+
+## Amendments
+
+### 2026-11-13 - CONN-MEDIA-DOWNLOADER-R001.2 channel candidate report
+
+`MediaDownloader.get_channel_videos_report` (`media_downloader/media_downloader.py`) reuses `_channel_video_url_candidates` to try the `user` then `c` URLs, always attempting both so the report stays complete. Each attempt is recorded with its URL, parser name, success flag, raw parser count, in-candidate unique count and, when the fetch or parser raises, the exception type; a failed candidate never interrupts the round.
+
+`_channel_video_identity` derives a video-ID key from each parsed link (falling back to the link itself), so deduplication by ID applies inside one candidate and across candidates with the first page-order occurrence winning. The first candidate contributing a new link is the selected URL. The returned `ChannelVideoReport` carries the selected URL, `hit` flag, limited deduplicated links and every `ChannelVideoCandidateReport`; `to_dict` renders it for the MCP tool surface. Only links not already on `self.links` are appended. All-empty or all-failing rounds return an empty miss instead of raising. `get_channel_videos` is untouched and keeps its retry, append and return behaviour.
+
+Production caller chain: the SDK tool surface registers the public method as `media_downloader_get_channel_videos_report`, bound in `media_downloader/connector_contracts.py` under the `media-downloader-inspect-channel` contract. Proving tests live in `tests/test_channel_video_report.py` (normal hit, candidate fallback, parser/fetch exception, all-empty and all-failing).
