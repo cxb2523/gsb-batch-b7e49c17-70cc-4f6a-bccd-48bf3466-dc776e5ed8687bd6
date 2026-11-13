@@ -20,7 +20,7 @@ An automated ETL (Extract, Transform, Load) and market intelligence pipeline tha
 * **Five Storefronts, One Interface:** Every source implements the same `Scraper` contract and returns the same record shape, so adding a storefront is one class. Catalogues are read from the JSON services behind each site, with no browser automation.
 * **Resilient Collection:** A shared `requests` session retries timeouts, rate limits and server errors with exponential backoff, paces its requests, and keeps going when one storefront fails: a source that errors or returns nothing is logged and skipped (its last good cache is kept), and the run only exits non-zero when every source fails.
 * **Validated ETL:** Records are cleaned with `pandas` and checked against a `pandera` schema (no negative prices, no sale price above the regular price, no rows without an id) before anything is cached, stored or plotted.
-* **Price History:** A normalised `SQLite` schema keeps one price per game per day with upserts, and answers questions such as current deals, price drops and all-time lows.
+* **Price History:** A normalised `SQLite` schema keeps one price per game per day with upserts, so a repeated same-day run overwrites rather than appends. Drops are compared with the last price actually recorded, not with the calendar day before, so a missed scrape never invents a price change. Answers current deals, price drops and all-time lows with their dates.
 * **Like-for-Like Comparison:** Titles are normalised and matched across stores, so the same game can be compared on regular price rather than comparing different catalogues.
 * **Alerts:** A watchlist raises an alert when a game reaches a target price or a new all-time low, printed to the terminal and optionally posted to a Discord webhook.
 * **API & Dashboard:** A read-only `FastAPI` service and a `Streamlit` dashboard sit on top of the same database.
@@ -118,7 +118,7 @@ uv run gameprice-index serve
 | --- | --- |
 | `GET /games?source=&q=&limit=&offset=` | Games with their latest price. |
 | `GET /games/{id}` | One game. |
-| `GET /games/{id}/history` | Every recorded price of a game and its all-time low. |
+| `GET /games/{id}/history` | Every recorded price of a game, its all-time low and the date it was first seen. |
 | `GET /deals?source=&min_discount=` | Games on sale now, deepest discount first. |
 | `GET /drops?min_drop=` | Prices that fell since the previous scrape. |
 | `GET /sources` | Games tracked, games on sale and average price per storefront. |

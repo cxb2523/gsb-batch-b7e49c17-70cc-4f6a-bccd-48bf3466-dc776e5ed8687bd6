@@ -233,6 +233,35 @@ def test_query_without_a_database(tmp_path):
     assert not missing.exists()
 
 
+def test_drops_and_history_over_a_gap_and_a_rerun(tmp_path, capsys):
+    """The CLI must show one price per day and compare against the last real record."""
+    db_path = str(tmp_path / "gappy.db")
+
+    def frame(price):
+        return build_frame(
+            [
+                {"source": "Nintendo", "product_code": "70010000126803", "name": "Kero Kero Cowboy", "price": price},
+            ]
+        )
+
+    with storage.open_db(db_path) as conn:
+        storage.record_prices(conn, frame(7.64), date(2026, 9, 1))
+        storage.record_prices(conn, frame(6.99), date(2026, 9, 1))  # repeated run, last price wins
+        storage.record_prices(conn, frame(4.49), date(2026, 9, 4))  # days two and three are missing
+
+    assert cli.main(["history", "70010000126803", "--db", db_path]) == 0
+    history = capsys.readouterr().out
+    assert "2026-09-01" in history and "2026-09-04" in history
+    assert "6.99" in history and "7.64" not in history
+    assert history.count("\n") == 3  # header plus one line per recorded day
+
+    assert cli.main(["drops", "--db", db_path, "--top", "5"]) == 0
+    drops = capsys.readouterr().out
+    assert "Kero Kero Cowboy" in drops
+    assert "6.99" in drops and "4.49" in drops
+    assert "2026-09-04" in drops
+
+
 def test_serve_command_starts_the_api(history_db, monkeypatch):
     import uvicorn
 

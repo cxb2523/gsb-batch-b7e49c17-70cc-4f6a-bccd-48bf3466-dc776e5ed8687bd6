@@ -105,13 +105,46 @@ def test_history(client):
         ("2026-09-02", 29.99),
     ]
     assert body["lowest_price"] == 29.99
+    assert body["lowest_date"] == "2026-09-02"
 
 
 def test_history_of_a_game_that_was_never_priced(client):
     body = client.get(f"/games/{_id(client, 'orange')}/history").json()
 
     assert body["lowest_price"] is None
+    assert body["lowest_date"] is None
     assert len(body["history"]) == 2
+
+
+@pytest.fixture
+def gap_client(tmp_path):
+    """Day two failed and day one ran twice; the low was never below the later price."""
+    db_path = str(tmp_path / "gap.db")
+    with storage.open_db(db_path) as conn:
+        storage.record_prices(conn, _frame(39.99), date(2026, 9, 1))
+        storage.record_prices(conn, _frame(34.99), date(2026, 9, 1))  # a second run the same day
+        storage.record_prices(conn, _frame(49.99, mario_price=49.99, mario_old=66.99), date(2026, 9, 3))
+    return TestClient(create_app(db_path))
+
+
+def test_history_across_a_missing_day(gap_client):
+    """One point per recorded day, oldest first, with the low from its real date."""
+    body = gap_client.get(f"/games/{_id(gap_client, 'astro')}/history").json()
+
+    assert [(point["scrape_date"], point["price"]) for point in body["history"]] == [
+        ("2026-09-01", 34.99),
+        ("2026-09-03", 49.99),
+    ]
+    assert (body["lowest_price"], body["lowest_date"]) == (34.99, "2026-09-01")
+
+
+def test_drops_ignore_the_missing_day(gap_client):
+    """Astro Bot rose on day three with no day in between: that is not a drop."""
+    drops = gap_client.get("/drops").json()
+
+    assert [drop["name"] for drop in drops] == ["Mario Kart World"]
+    assert drops[0]["previous_date"] == "2026-09-01"
+    assert drops[0]["previous_price"] == 66.99
 
 
 def test_deals(client):

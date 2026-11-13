@@ -243,9 +243,13 @@ SELECT g.source, g.product_code, g.name, p.scrape_date, p.price, p.price_old, p.
 FROM prices p
 JOIN games g ON g.id = p.game_id
 WHERE g.product_code = :product_code AND (:source IS NULL OR g.source = :source)
-ORDER BY g.source, p.scrape_date
+ORDER BY p.scrape_date, g.source
 """
 
+# LAG looks at the previous row that exists, not at yesterday's date, so a day
+# the scrape missed simply moves the comparison to the last real observation.
+# The newest row overall must be priced too: a game whose last scrape recorded no
+# price has no current price, so an earlier fall must not be reported as today's.
 PRICE_DROPS = """
 WITH ranked AS (
     SELECT p.game_id, p.scrape_date, p.price,
@@ -261,7 +265,12 @@ SELECT g.source, g.product_code, g.name, g.platform, g.url,
        ROUND(100.0 * (r.previous_price - r.price) / r.previous_price, 1) AS drop_pct
 FROM ranked r
 JOIN games g ON g.id = r.game_id
-WHERE r.recency = 1 AND r.previous_price > r.price AND (r.previous_price - r.price) >= :min_drop
+WHERE r.recency = 1
+  AND NOT EXISTS (
+      SELECT 1 FROM prices later
+      WHERE later.game_id = r.game_id AND later.scrape_date > r.scrape_date
+  )
+  AND r.previous_price > r.price AND (r.previous_price - r.price) >= :min_drop
 ORDER BY drop_pct DESC, g.name
 """
 
@@ -298,7 +307,11 @@ def price_history(conn: sqlite3.Connection, product_code: str, source: str | Non
 
 
 def price_drops(conn: sqlite3.Connection, min_drop: float = 0.01) -> pd.DataFrame:
-    """Returns games whose latest price is below the one recorded before it, biggest cut first."""
+    """Returns games whose latest price is below the last price actually recorded before it.
+
+    Days the pipeline missed are not compared against, so a gap in the history
+    never shows up as a fall that did not happen.
+    """
     return _query(conn, PRICE_DROPS, {"min_drop": min_drop})
 
 

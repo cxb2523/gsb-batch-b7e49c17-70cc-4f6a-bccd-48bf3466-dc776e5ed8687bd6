@@ -49,6 +49,7 @@ class PricePoint(BaseModel):
 class GameHistory(BaseModel):
     game: Game
     lowest_price: float | None
+    lowest_date: str | None = None
     history: list[PricePoint]
 
 
@@ -148,10 +149,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No game with id {game_id}.")
 
         points = storage.game_history(conn, game_id)
-        lowest = points["price"].min()
+        priced = points.dropna(subset=["price"])
+        if priced.empty:
+            lowest_price = lowest_date = None
+        else:
+            # the earliest day the low was seen, matching the lowest_prices() semantics
+            cheapest = priced["price"].min()
+            lowest_price = float(cheapest)
+            lowest_date = str(priced.loc[priced["price"] == cheapest, "scrape_date"].iloc[0])
         return {
             "game": found[0],
-            "lowest_price": None if pd.isna(lowest) else float(lowest),
+            "lowest_price": lowest_price,
+            "lowest_date": lowest_date,
             "history": _records(points),
         }
 

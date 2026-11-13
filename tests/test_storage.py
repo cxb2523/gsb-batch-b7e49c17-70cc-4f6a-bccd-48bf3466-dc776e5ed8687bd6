@@ -311,3 +311,80 @@ def test_source_summary_counts_zero_deals_as_zero(conn):
     storage.record_prices(conn, _frame(price_old=float("nan"), discount_amount=float("nan")), DAY_ONE)
 
     assert storage.source_summary(conn)["on_sale"].tolist() == [0, 0]
+
+
+# --- History queries under a missing day or a repeated same-day run ---
+
+
+def test_same_day_rerun_is_one_change_not_two(conn):
+    """A second run on the same day overwrites the row, so the history stays one point.
+
+    The reported drop must compare with the previous recorded day, not with the
+    price the earlier run of that day happened to write.
+    """
+    storage.record_prices(conn, _frame(price=[59.99, 39.99]), DAY_ONE)
+    storage.record_prices(conn, _frame(price=[54.99, 34.99]), DAY_ONE)
+    storage.record_prices(conn, _frame(price=[49.99, 29.99]), DAY_TWO)
+
+    assert storage.price_history(conn, "70010000096802")["price"].tolist() == [54.99, 49.99]
+    assert storage.price_history(conn, "70010000096802")["scrape_date"].tolist() == ["2026-09-01", "2026-09-02"]
+    assert storage.game_history(conn, 1).shape[0] == 2
+
+    drops = storage.price_drops(conn).set_index("product_code")
+    assert drops.loc["70010000096802", "previous_price"] == 54.99
+    assert drops.loc["70010000096802", "price"] == 49.99
+    assert drops.loc["70010000096802", "previous_date"] == "2026-09-01"
+    # 59.99 was only ever a superseded value from the same day, so one change is reported
+    assert storage.latest_prices(conn)["price"].tolist() == [49.99, 29.99]
+
+
+def test_drop_with_a_missing_day_compares_with_the_last_real_record(conn):
+    """Day two failed, so day three is compared with day one; no invented price in between."""
+    storage.record_prices(conn, _frame(price=[66.99, 39.99]), DAY_ONE)
+    storage.record_prices(conn, _frame(price=[49.99, 34.99]), date(2026, 9, 3))
+
+    drops = storage.price_drops(conn).set_index("product_code")
+
+    assert drops.loc["70010000096802", "previous_price"] == 66.99
+    assert drops.loc["70010000096802", "previous_date"] == "2026-09-01"
+    assert drops.loc["70010000096802", "scrape_date"] == "2026-09-03"
+    assert drops.loc["70010000096802", "drop_amount"] == 17.0
+    assert drops.loc["1000044444-GB", "drop_amount"] == 5.0
+    assert storage.price_history(conn, "70010000096802")["scrape_date"].tolist() == ["2026-09-01", "2026-09-03"]
+
+
+def test_missing_day_alone_reports_no_drops(conn):
+    """A gap with unchanged prices must not produce a drop; there was no fall to compare."""
+    storage.record_prices(conn, _frame(price_old=float("nan"), discount_amount=float("nan")), DAY_ONE)
+    storage.record_prices(conn, _frame(price_old=float("nan"), discount_amount=float("nan")), date(2026, 9, 5))
+
+    assert storage.price_drops(conn).empty
+    assert storage.current_deals(conn).empty
+
+
+def test_lowest_price_keeps_the_earlier_date(conn):
+    """The all-time low was on day two and was not beaten on later days."""
+    storage.record_prices(conn, _frame(price=[66.99, 59.99]), DAY_ONE)
+    storage.record_prices(conn, _frame(price=[66.99, 19.99]), DAY_TWO)
+    storage.record_prices(conn, _frame(price=[66.99, 24.99]), date(2026, 9, 3))
+
+    lowest = storage.lowest_prices(conn).set_index("product_code")
+
+    assert lowest.loc["1000044444-GB", "lowest_price"] == 19.99
+    assert lowest.loc["1000044444-GB", "lowest_date"] == "2026-09-02"
+    assert lowest.loc["70010000096802", "lowest_price"] == 66.99
+    assert lowest.loc["70010000096802", "lowest_date"] == "2026-09-01"
+    # a tie on a later day keeps the first day the low was seen
+    storage.record_prices(conn, _frame(price=[66.99, 19.99]), date(2026, 9, 4))
+    assert storage.lowest_prices(conn).set_index("product_code").loc["1000044444-GB", "lowest_date"] == "2026-09-02"
+
+
+def test_unpriced_latest_run_is_not_reported_as_a_drop(conn):
+    """A scrape that could not read a price leaves a row; the earlier fall is not current news."""
+    storage.record_prices(conn, _frame(price=[66.99, 39.99]), DAY_ONE)
+    storage.record_prices(conn, _frame(price=[49.99, 29.99]), DAY_TWO)
+    storage.record_prices(conn, _frame(price=[float("nan"), float("nan")]), date(2026, 9, 3))
+
+    assert storage.price_drops(conn).empty
+    # the latest record is still reported, with its price as unknown
+    assert storage.latest_prices(conn)["price"].isna().all()
