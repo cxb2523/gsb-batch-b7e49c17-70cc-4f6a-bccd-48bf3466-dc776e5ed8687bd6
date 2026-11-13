@@ -1,0 +1,143 @@
+[project]
+name = "ladon-crawl"
+version = "0.3.2"
+description = "A structured, resumable web crawling framework for AI-ready datasets."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+authors = [
+    {name = "Alessio Pascucci", email = "feeder81@gmail.com"},
+]
+keywords = ["web-crawler", "scraper", "python", "llm", "data-pipeline", "structured-data"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "httpx>=0.27",
+    "requests>=2.28",
+    "typing_extensions>=4.6",
+]
+
+[project.scripts]
+ladon = "ladon.cli:main"
+
+[project.optional-dependencies]
+cffi = [
+    "curl-cffi>=0.11,<1",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov",
+    "pytest-httpx>=0.30",
+    "pre-commit",
+    "pyright>=1.1",
+    "black",
+    "ruff",
+    "isort",
+    "curl-cffi>=0.11,<1",
+]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+    "pillow",
+    "cairosvg",
+]
+
+[project.urls]
+Homepage = "https://github.com/MoonyFringers/ladon"
+Documentation = "https://moonyfringers.github.io/ladon"
+Repository = "https://github.com/MoonyFringers/ladon"
+Issues = "https://github.com/MoonyFringers/ladon/issues"
+
+[tool.setuptools.package-data]
+ladon = ["py.typed"]
+
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ----------------------------------------
+# BLACK
+# ----------------------------------------
+[tool.black]
+line-length = 80
+target-version = ['py311', 'py312', 'py313']
+extend-exclude = '''
+# A regex preceded with ^/ will apply only to files and directories
+# in the root of the project.
+# As this is 'extend', we already exclude everything in .gitignore.
+^/(
+  (
+    resources
+  )/
+)
+'''
+
+# ----------------------------------------
+# ISORT
+# ----------------------------------------
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 80
+extend_skip_glob = ["resources/*"]
+
+# ----------------------------------------
+# RUFF
+# ----------------------------------------
+[tool.ruff]
+line-length = 80
+respect-gitignore = true
+extend-exclude = [
+    "resources/*",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+    "E501",  # Handled by Black
+]
+
+# ----------------------------------------
+# PYRIGHT
+# ----------------------------------------
+[tool.pyright]
+typeCheckingMode = "strict"
+include = ["src", "tests", "examples"]
+extraPaths = ["src"]
+reportMissingImports = "none"
+reportUntypedFunctionDecorator = "none"
+executionEnvironments = [
+    { root = "examples", reportUnknownVariableType = "none", reportUnknownMemberType = "none", reportUnknownArgumentType = "none" },
+    { root = "scripts", reportUnknownVariableType = "none", reportUnknownMemberType = "none", reportUnknownArgumentType = "none" },
+]
+
+# ----------------------------------------
+# PYTEST
+# ----------------------------------------
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+# ----------------------------------------
+# COVERAGE
+# ----------------------------------------
+[tool.coverage.run]
+source = ["ladon"]

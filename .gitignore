@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.env
+.coverage
+coverage.xml
+.pytest_cache/
+.ruff_cache/
+.venv/
+.vscode/
+pyrightconfig.json
+*.egg-info/
+.gemini/
+
+site/
+
+# Environment specific files
+.envrc
+.pre-commit-cache/
+.virtualenv-appdata/
+dist/

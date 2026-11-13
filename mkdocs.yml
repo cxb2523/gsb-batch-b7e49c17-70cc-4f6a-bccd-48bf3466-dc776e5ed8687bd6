@@ -1,0 +1,103 @@
+site_name: Ladon
+site_description: "Resilient, extensible web crawling framework."
+site_url: https://moonyfringers.github.io/ladon/
+repo_url: https://github.com/moonyfringers/ladon
+repo_name: moonyfringers/ladon
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+
+exclude_docs: |
+  README.md
+  decisions/README.md
+  decisions/adr-template.md
+  development.md
+
+plugins:
+  - search
+  - social
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            members_order: source
+            filters: ["!^_"]
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/MoonyFringers/ladon
+      name: Ladon on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/ladon-crawl/
+      name: Ladon on PyPI
+
+copyright: Copyright &copy; 2026 MoonyFringers
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.snippets:
+      base_path: ["."]
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Alternatives: alternatives.md
+  - Changelog: changelog.md
+  - Getting Started: getting-started.md
+  - Guides:
+    - How Ladon Works: guides/how-ladon-works.md
+    - Concepts: guides/concepts.md
+    - Cookbook: guides/cookbook.md
+    - Authoring Plugins: guides/authoring-plugins.md
+    - Cloudflare-Protected Targets: guides/cloudflare-bypass.md
+  - API Reference:
+    - Networking: api/networking.md
+    - Runner: api/runner.md
+    - Plugins: api/plugins.md
+  - Decisions:
+    - Overview: decisions/index.md
+    - ADR-001 Architecture: decisions/adr-001-ladon-architecture.md
+    - ADR-002 HTTP Result Contract: decisions/adr-002-http-status-result-contract.md
+    - ADR-003 Plugin Interface: decisions/adr-003-plugin-adapter-interface.md
+    - ADR-004 SES Protocol Design: decisions/adr-004-ses-protocol-design.md
+    - ADR-005 Asset Storage (`ladon.storage`): decisions/adr-005-asset-storage.md
+    - ADR-006 Persistence Layer: decisions/adr-006-persistence-layer.md
+    - ADR-007 Circuit Breaker: decisions/adr-007-circuit-breaker.md
+    - ADR-008 robots.txt: decisions/adr-008-robots-txt.md
+    - ADR-009 Observability (Structured Logging, Metrics, Alerting): decisions/adr-009-observability.md
+    - ADR-010 Dual-License Model (AGPL-3.0-only + Commercial): decisions/adr-010-dual-license-model.md
+    - ADR-011 curl-cffi as the Cloudflare-Bypass HTTP Backend: decisions/adr-011-curl-cffi-cloudflare-bypass.md
+    - ADR-012 Session Contract Boundary in `SyncPolicyBase`: decisions/adr-012-session-contract-boundary.md
+    - ADR-013 Multi-Source Fetch Resolution: decisions/adr-013-multi-source-fetch-resolution.md
+    - ADR-014 Structural HTTP Client Protocols: decisions/adr-014-http-client-protocols.md
+    - ADR-015 Generic SES Protocol Types: decisions/adr-015-generic-ses-protocols.md
+    - ADR-016 Plan/Execute `on_planned_leaf` Contract: decisions/adr-016-plan-execute-on-leaf-contract.md

@@ -1,0 +1,160 @@
+"""Top-level package for Ladon."""
+
+from importlib.metadata import PackageNotFoundError, version
+
+from .async_runner import (
+    AsyncOnLeafCallback,
+    AsyncOnPlannedLeafCallback,
+    async_run_crawl,
+    async_run_plugin,
+    execute_plan,
+    plan_crawl,
+)
+from .mcp import LadonMCPAdapter
+from .networking import make_async_http_client, make_http_client
+from .networking.async_client import AsyncHttpClient
+from .networking.async_curl_client import AsyncCurlHttpClient
+from .networking.client import HttpClient
+from .networking.config import HttpClientConfig
+from .networking.curl_client import CurlHttpClient
+from .networking.errors import (
+    CircuitOpenError,
+    HttpClientError,
+    RateLimitedError,
+    RequestTimeoutError,
+    RobotsBlockedError,
+    TransientNetworkError,
+)
+from .networking.protocols import (
+    AsyncHttpClientProtocol,
+    SyncHttpClientProtocol,
+)
+from .networking.proxy_pool import ProxyPool, RoundRobinProxyPool
+from .networking.types import Result
+from .observability import DecisionEvent, DecisionTracker, NullDecisionTracker
+from .persistence import NullRepository, Repository, RunAudit, RunRecord
+from .plugins import (
+    AssetDownloadError,
+    AsyncCrawlPlugin,
+    AsyncExpander,
+    AsyncSink,
+    AsyncSource,
+    ChildListUnavailableError,
+    CrawlPlugin,
+    Expander,
+    Expansion,
+    ExpansionNotReadyError,
+    LeafUnavailableError,
+    PartialExpansionError,
+    PluginError,
+    Ref,
+    Sink,
+    Source,
+)
+from .runner import (
+    CrawlPlan,
+    OnLeafCallback,
+    OnPlannedLeafCallback,
+    PluginRunResult,
+    RunConfig,
+    RunResult,
+    execute_plan_sync,
+    plan_crawl_sync,
+    run_crawl,
+    run_plugin,
+)
+from .storage import (
+    LocalFileStorage,
+    Storage,
+    StorageError,
+    StorageKeyNotFoundError,
+    StorageReadError,
+    StorageWriteError,
+)
+
+try:
+    __version__ = version("ladon-crawl")
+except PackageNotFoundError:
+    __version__ = (
+        "0.3.2"  # editable install without metadata — bump with every release
+    )
+
+
+__all__ = [
+    # Runner — sync
+    "run_crawl",
+    "run_plugin",
+    "plan_crawl_sync",
+    "execute_plan_sync",
+    "RunConfig",
+    "RunResult",
+    "PluginRunResult",
+    "CrawlPlan",
+    "OnLeafCallback",
+    "OnPlannedLeafCallback",
+    # Runner — async
+    "async_run_crawl",
+    "async_run_plugin",
+    "plan_crawl",
+    "execute_plan",
+    "AsyncOnLeafCallback",
+    "AsyncOnPlannedLeafCallback",
+    # Sync plugin protocols
+    "CrawlPlugin",
+    "Source",
+    "Expander",
+    "Sink",
+    # Async plugin protocols
+    "AsyncCrawlPlugin",
+    "AsyncSource",
+    "AsyncExpander",
+    "AsyncSink",
+    # Plugin models
+    "Ref",
+    "Expansion",
+    # Plugin errors
+    "PluginError",
+    "ExpansionNotReadyError",
+    "PartialExpansionError",
+    "ChildListUnavailableError",
+    "LeafUnavailableError",
+    "AssetDownloadError",
+    # Networking
+    "HttpClient",
+    "AsyncHttpClient",
+    "CurlHttpClient",
+    "AsyncCurlHttpClient",
+    "SyncHttpClientProtocol",
+    "AsyncHttpClientProtocol",
+    "make_http_client",
+    "make_async_http_client",
+    "HttpClientConfig",
+    "Result",
+    "HttpClientError",
+    "RateLimitedError",
+    "RequestTimeoutError",
+    "TransientNetworkError",
+    "CircuitOpenError",
+    "RobotsBlockedError",
+    "ProxyPool",
+    "RoundRobinProxyPool",
+    # Persistence
+    "Repository",
+    "RunAudit",
+    "RunRecord",
+    "NullRepository",
+    # Storage
+    "Storage",
+    "LocalFileStorage",
+    "StorageError",
+    "StorageKeyNotFoundError",
+    "StorageReadError",
+    "StorageWriteError",
+    # Observability
+    "DecisionEvent",
+    "DecisionTracker",
+    "NullDecisionTracker",
+    # MCP adapter protocol
+    "LadonMCPAdapter",
+    "__version__",
+]

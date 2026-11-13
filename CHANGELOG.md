@@ -1,0 +1,267 @@
+# Changelog
+
+All notable changes to `ladon-crawl` are documented here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased]
+
+### Added
+
+- **Generic SES protocol types** — `Ref[RawT]`,
+  `Expansion[RecordT, ChildRawT]`, `Source`, `Expander`, `Sink`,
+  `CrawlPlugin`, and `CrawlPlan` now preserve concrete adapter types under
+  strict type checking. New `OnLeafCallback` / `OnPlannedLeafCallback` type
+  aliases and async equivalents let adapter authors annotate callbacks
+  precisely.
+- **`SyncHttpClientProtocol` / `AsyncHttpClientProtocol`** — public structural
+  HTTP client contracts implemented by both native and curl-cffi backends.
+- **`run_plugin()` / `async_run_plugin()`** — source-driven whole-plugin
+  entry points. They discover roots once, preserve one `RunResult` per root,
+  and return aggregate counts and source-indexed errors in `PluginRunResult`.
+- **`Verdict` and `FetchPredicate.evaluate()`** — three-valued predicate
+  results make `ACCEPT`, `CONTINUE`, and `REJECT` explicit. Rejected candidates
+  are excluded from acceptance and fallback selection while remaining sources
+  are searched; `AllOf`, `AnyOf`, and `Not` preserve `REJECT` as an absolute
+  veto.
+- **`rejection_info()`** — optional duck-typed extension point on
+  `FetchPredicate` implementations for adding predicate-specific diagnostics
+  to `predicate_rejected` decision-event metadata.
+
+### Deprecated
+
+- **`FetchPredicate.accepts() -> bool`** — use `evaluate() -> Verdict` instead.
+  The boolean API remains supported for one full minor release and emits a
+  `DeprecationWarning` on every legacy invocation.
+
+### Removed
+
+- **`RetryableHttpError`** — the deprecated alias for `TransientNetworkError`
+  announced for removal in v0.1.0. Three minor releases past that
+  announcement, it is removed in this release. Use `TransientNetworkError`
+  directly.
+
+### Fixed
+
+- **Backend-agnostic adapter and runner typing** — `Source`, `Expander`,
+  `Sink`, their async counterparts, and runner signatures now accept either
+  native or curl-cffi factory results under strict type checking.
+- **Polite retry pacing** — retries now enforce per-host rate limits, including
+  robots.txt `Crawl-delay` overrides, on every attempt and merge that wait with
+  Retry-After or backoff into one sleep. The default backoff is now a safe
+  `0.5` seconds; explicitly setting zero with retries enabled emits a warning.
+- **Consistent runner leaf-exception semantics** — sync crawls now record an
+  unexpected non-fatal `Sink.consume()` exception and continue with remaining
+  leaves instead of aborting and losing the partial result. Async crawls now
+  propagate leaf cancellation instead of silently counting it as a failure.
+  Consequently, the CLI now exits with code 2 for an ordinary
+  `Sink.consume()` exception recorded as a partial leaf failure; exit code 1
+  remains reserved for exceptions the runner does not isolate.
+- **Circuit-breaker HTTP 5xx accounting** — returned 5xx responses now count
+  as origin-health failures without changing their `Ok(...)` result contract;
+  non-retryable 4xx responses remain successful breaker outcomes.
+- **Async politeness under concurrency** — same-host requests now reserve
+  rate-limit slots instead of waking in a batch, and HALF_OPEN circuit
+  breakers admit exactly one probe. Both guards are cancellation-safe and
+  remain independent across hosts.
+
+### Changed
+
+- **Breaking: planned-crawl callback keyword renamed** —
+  `execute_plan_sync(..., on_leaf=...)` and `execute_plan(..., on_leaf=...)`
+  must now use `on_planned_leaf=`, making their `(leaf_record, leaf_ref)`
+  contract distinct from the runners' `(leaf_record, parent_record)` callback.
+
+---
+
+## [0.3.2] — 2026-06-08
+
+### Added
+
+- **`CrawlPlan`** — immutable Phase 1 output carrying `record`, `leaves`,
+  and `errors`.  Filter with `excluding(predicate)` or `limited_to(n)`
+  before passing to `execute_plan_sync` / `execute_plan`.
+- **`plan_crawl_sync` / `plan_crawl`** — Phase 1 only: traverse all
+  expanders and return a `CrawlPlan` without calling the sink.
+- **`execute_plan_sync` / `execute_plan`** — Phase 3 only: consume an
+  existing plan against the sink.  `on_leaf` receives
+  `(leaf_record, leaf_ref)` — the leaf ref, **not** a parent record
+  (ADR-016).  Optional `on_progress(done, total)` callback for real-time
+  progress reporting.
+- **`ladon.observability`** — `DecisionEvent` dataclass, `DecisionTracker`
+  Protocol, and `NullDecisionTracker` no-op default (same pattern as
+  `MetricsBackend` / `NullMetrics` from ADR-009).  All three re-exported
+  from the top-level `ladon` namespace.
+- **`MultiSourceSink.resolve_multi(run_id=)`** — optional correlation key
+  (auto-UUID if omitted) shared across all events from one resolution call.
+  Eight event types emitted at five hook points: `source_skipped`,
+  `source_failed`, `candidate_accepted`, `candidate_rejected`,
+  `predicate_rejected`, `resolved` (`via_fallback=True/False`), `no_result`.
+- **`ladon.contrib.sqlite_tracker.SqliteDecisionTracker`** — append-only
+  SQLite backend with three indexes (run_id, ref, event), `query()` method
+  for post-run SQL analysis, and context-manager support.
+
+### Fixed
+
+- **`MultiSourceSink`** — non-`NotImplementedError` exceptions from
+  `_fetch_from_source` are now caught, recorded as `source_failed`, and
+  the loop continues instead of propagating.  `NotImplementedError` is
+  re-raised to preserve the subclass contract.
+
+---
+
+## [0.3.1] — 2026-05-20
+
+### Added
+
+- **`ladon.mcp.LadonMCPAdapter`** — abstract base class for adapter packages that
+  want to expose data-plane MCP tools via `ladon-nous`. Adapters implement
+  `adapter_name`, `mcp_tools()`, and optionally `mcp_resources()`, then declare
+  themselves via the `ladon.mcp` Python entry-point group. No `fastmcp` import in
+  core — only `ladon-nous` requires that dependency.
+
+---
+
+## [0.3.0] — 2026-05-18
+
+### Added
+
+- **`cffi` optional dependency group** — `pip install ladon-crawl[cffi]` installs
+  `curl-cffi>=0.11,<1`, enabling the `CurlHttpClient` and `AsyncCurlHttpClient`
+  backends for Cloudflare-protected targets (issue #107).
+
+- **`CurlHttpClient` / `AsyncCurlHttpClient`** — sync and async HTTP clients
+  backed by curl-cffi.  Mirror all policies of `HttpClient` / `AsyncHttpClient`
+  (retries, exponential backoff, circuit breaker, proxy rotation, rate limiting)
+  but use TLS fingerprint impersonation (JA3/JA4) to bypass Cloudflare L1+L2
+  challenges without browser automation.  Both are exported from `ladon.networking`
+  and the top-level `ladon` namespace.
+
+- **`HttpClientConfig(backend=, impersonate=)`** — two new fields select the
+  HTTP backend without changing call sites.  `backend="curl-cffi"` (requires
+  `impersonate`) returns a `CurlHttpClient` / `AsyncCurlHttpClient` from the
+  factory helpers.  Default is `backend="requests"` (unchanged behaviour).
+
+- **`make_http_client()` / `make_async_http_client()`** — factory helpers that
+  instantiate the correct sync or async client based on `config.backend`.
+  Exported from `ladon.networking` and the top-level `ladon` namespace.
+
+---
+
+## [0.2.0] — 2026-04-25
+
+### Added
+
+- **Async crawling via `async_run_crawl()`** — asyncio-native counterpart to
+  `run_crawl()`.  Phase 1 (expander traversal) is sequential `await`; Phase 3
+  (sink) issues leaf fetches concurrently behind
+  `asyncio.Semaphore(config.async_concurrency)` (default 10).  Each semaphore
+  slot covers the full `sink.consume()` + `on_leaf` pair so callbacks are
+  naturally isolated.  `LeafUnavailableError` is isolated per leaf (other
+  leaves continue); `ExpansionNotReadyError` remains globally fatal.
+  `RunConfig` gains `async_concurrency: int = 10`; `AsyncHttpClient` and
+  `async_run_crawl` are exported from the top-level `ladon` namespace.
+
+- **`AsyncHttpClient`** — full async HTTP client backed by `httpx`.  Mirrors
+  all policies of `HttpClient` (retries, exponential backoff, full-jitter,
+  429/503 Retry-After, circuit breaker, proxy rotation, HTTP auth,
+  `default_params`, `default_headers`).  `respect_robots_txt=True` raises
+  `NotImplementedError` at construction time (deferred to a later release).
+  Exported from `ladon.networking` and the top-level `ladon` namespace.
+
+- **Async plugin protocols** — `AsyncSource`, `AsyncExpander`, `AsyncSink`,
+  and `AsyncCrawlPlugin` structural protocols (PEP 544, all
+  `@runtime_checkable`).  All four are exported from `ladon.plugins` and the
+  top-level `ladon` namespace.  The sync protocol hierarchy is untouched.
+
+---
+
+## [0.1.0] — 2026-04-25
+
+### Added
+
+- **HTTP authentication** — `HttpClientConfig(auth=("user", "pass"))` for HTTP Basic Auth;
+  `auth=HTTPDigestAuth("user", "pass")` or any `requests.auth.AuthBase` subclass for Digest
+  and custom schemes (HMAC signing, OAuth token injection). Wired directly to
+  `requests.Session.auth`. Tuple length validated at construction. Bearer tokens and static
+  API keys remain in `default_headers` as before.
+
+- **Default query parameters** — `HttpClientConfig(default_params={"api_key": "..."})` injects
+  query parameters into every request. Per-request `params` take precedence on key collision,
+  matching the same override contract as `default_headers`. Frozen via `MappingProxyType`.
+  Useful for API keys that must appear in the query string.
+
+- **`params` kwarg on `post()` and `download()`** — symmetry with `get()` and `head()`;
+  merged with `default_params` in the same way.
+
+- **Proxy rotation via `ProxyPool`** — `HttpClientConfig(proxy_pool=RoundRobinProxyPool([...]))`
+  rotates through a list of proxies on every request attempt. Custom rotation strategies
+  are supported through the `ProxyPool` protocol (`next_proxy()` / `mark_failure()`);
+  `mark_failure()` is called on transport errors and rate-limit responses so
+  implementations can apply cooldowns or exclusions. Mutually exclusive with `proxies`.
+  `validate_proxy(mapping)` is exported from `ladon.networking` as a public helper for
+  custom pool implementations.
+
+- **Static proxy support** — `HttpClientConfig(proxies={"https": "http://proxy:8080"})`
+  routes all session traffic through a proxy. Follows `requests` conventions;
+  SOCKS proxies supported when `requests[socks]` is installed. Proxy URLs are
+  validated at config construction time (scheme must be `http`, `https`, `socks4`,
+  `socks4h`, `socks5`, or `socks5h`).
+
+- **HTTP 429 / 503 with Retry-After respect** — `HttpClientConfig(retry_on_status=...)`
+  automatically retries safe methods on configurable status codes (default `{429, 503}`).
+  The `Retry-After` header is honoured in both delta-seconds and HTTP-date forms (RFC 7231
+  §7.1.3); capped at `max_retry_after_seconds` (default 300 s). Raises `RateLimitedError`
+  when retries are exhausted.
+
+- **Full-jitter exponential backoff** — `HttpClientConfig(backoff_jitter=True)` draws
+  each retry sleep from `uniform(0, base × 2^attempt)` instead of the deterministic cap,
+  preventing thundering-herd spikes when multiple crawlers restart simultaneously.
+
+- **`RateLimitedError`** — new error class (subclass of `HttpClientError`) with
+  `status_code: int` and `retry_after: float | None` attributes; exported at both
+  `ladon.networking` and `ladon` levels.
+
+---
+
+## [0.0.1] — 2026-04-17
+
+First public release.
+
+### Added
+
+- **SES pipeline** — Source / Expander / Sink architecture for structured,
+  typed web crawls (`runner.py`, `run_crawl()`)
+- **`CrawlPlugin` protocol** — typed adapter interface enforcing Source,
+  Expander, and Sink roles (ADR-003); `ladon-hackernews` is the canonical
+  reference implementation
+- **`Repository` + `RunAudit` protocols** — persistence layer with structural
+  subtyping; `NullRepository` for dry runs and testing (ADR-006)
+- **`LocalFileStorage`** — zero-config file storage backend
+- **HTTP client** — circuit breaker, configurable retry/backoff, `robots.txt`
+  support (`--respect-robots-txt` flag)
+- **CLI** — `ladon run` and `ladon info`; exit codes 0 (success) / 1 (leaf
+  errors) / 2 (fatal) / 3 (robots.txt blocked)
+- **`RunResult` counters** — `leaves_consumed`, `leaves_persisted`,
+  `leaves_failed` (renamed from `leaves_fetched` in this release)
+- **`py.typed` marker** — full type checking support (PEP 561)
+- **Dual-license model** — AGPL-3.0-only open source + commercial license
+  option (`LICENSE-COMMERCIAL`); CLA required for contributors (ADR-010)
+
+### Known limitations
+
+- `RunResult` counter semantics are scheduled for redesign in v0.1.0
+  (issue [#62](https://github.com/MoonyFringers/ladon/issues/62)) — the
+  current counters are correct but the model will be simplified
+- Python 3.11, 3.12, and 3.13 supported; 3.10 and below are not
+
+[Unreleased]: https://github.com/MoonyFringers/ladon/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/MoonyFringers/ladon/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/MoonyFringers/ladon/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/MoonyFringers/ladon/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/MoonyFringers/ladon/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/MoonyFringers/ladon/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/MoonyFringers/ladon/releases/tag/v0.0.1

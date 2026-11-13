@@ -1,0 +1,76 @@
+"""Crawl two GitHub issue listing pages and print the crawl outcomes."""
+
+# --8<-- [start:example]
+import json
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+from ladon import (
+    ChildListUnavailableError,
+    Expansion,
+    HttpClient,
+    HttpClientConfig,
+    LeafUnavailableError,
+    PluginRunResult,
+    Ref,
+    RunConfig,
+    SyncHttpClientProtocol,
+    run_plugin,
+)
+
+
+class GitHubIssuesSource:
+    def discover(self, client: SyncHttpClientProtocol) -> Sequence[Ref]:
+        return [
+            Ref(
+                "https://api.github.com/repos/psf/requests/issues?per_page=5"
+                f"&page={page}",
+                {"page": page},
+            )
+            for page in (1, 2)
+        ]
+
+
+class IssueList:
+    def expand(self, ref: Ref, client: SyncHttpClientProtocol) -> Expansion:
+        response = client.get(ref.url)
+        if not response.ok or response.value is None:
+            raise ChildListUnavailableError(f"listing failed: {response.error}")
+        issues = json.loads(response.value)
+        return Expansion(
+            {"page": ref.raw["page"]}, [Ref(issue["url"]) for issue in issues]
+        )
+
+
+class IssueSink:
+    def consume(
+        self, ref: Ref, client: SyncHttpClientProtocol
+    ) -> dict[str, object]:
+        response = client.get(ref.url)
+        if not response.ok or response.value is None:
+            raise LeafUnavailableError(f"issue failed: {response.error}")
+        issue = json.loads(response.value)
+        return {"number": issue["number"], "title": issue["title"]}
+
+
+@dataclass(frozen=True)
+class GitHubIssuesPlugin:
+    name: str = "github-issues"
+    source: GitHubIssuesSource = GitHubIssuesSource()
+    expanders: Sequence[IssueList] = (IssueList(),)
+    sink: IssueSink = IssueSink()
+
+
+def run_example() -> PluginRunResult:
+    plugin = GitHubIssuesPlugin()
+    with HttpClient(
+        HttpClientConfig(user_agent="example-crawler/1.0")
+    ) as client:
+        result = run_plugin(plugin, client, RunConfig())
+        print(result.leaves_consumed, result.errors)
+        return result
+
+
+if __name__ == "__main__":
+    run_example()
+# --8<-- [end:example]
